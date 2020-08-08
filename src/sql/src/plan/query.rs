@@ -37,16 +37,14 @@ use sql_parser::ast::{
 use ::expr::{Id, RowSetFinishing};
 use dataflow_types::Timestamp;
 use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{
-    strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
-};
+use repr::{strconv, ColumnName, Datum, RelationDesc, RelationType, RowArena, ScalarType};
 
 use crate::names::PartialName;
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
-    AggregateExpr, AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef,
-    JoinKind, RelationExpr, ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
+    AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
+    ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
@@ -110,7 +108,7 @@ pub fn plan_root_query(
 /// treated as a WHERE applied to the first column in the result set.
 pub fn plan_show_where(
     scx: &StatementContext,
-    filter: Option<&ShowStatementFilter>,
+    filter: Option<ShowStatementFilter>,
     rows: Vec<Vec<Datum>>,
     desc: &RelationDesc,
 ) -> Result<(RelationExpr, RowSetFinishing), anyhow::Error> {
@@ -1263,7 +1261,13 @@ fn plan_join_operator(
             )
         }
         JoinOperator::CrossJoin => {
-            let join = if left.is_join_identity() {
+            // Suppress no-op joins to keep raw query plans understandable. Note
+            // that LATERAL joins introduce a new inner scope for `right`, so
+            // they can't be trivially elided. (We *could* rewrite all the
+            // column references in `right`, but it doesn't seem worth it just
+            // to make the raw query plans nicer. The optimizer doesn't have
+            // trouble with the extra join.)
+            let join = if left.is_join_identity() && !lateral {
                 right
             } else if right.is_join_identity() {
                 left
@@ -1629,16 +1633,13 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 let start = if let Some(start) = &p.start {
                     plan_expr(ecx, start)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
                 } else {
-                    ScalarExpr::literal(Datum::Int64(1), ColumnType::new(ScalarType::Int64, true))
+                    ScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)
                 };
 
                 let end = if let Some(end) = &p.end {
                     plan_expr(ecx, end)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
                 } else {
-                    ScalarExpr::literal(
-                        Datum::Int64(i64::MAX - 1),
-                        ColumnType::new(ScalarType::Int64, true),
-                    )
+                    ScalarExpr::literal(Datum::Int64(i64::MAX - 1), ScalarType::Int64)
                 };
 
                 exprs.push(start);
@@ -1766,7 +1767,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         }
         FunctionArgs::Args(args) => args,
     };
-    let (mut expr, mut func) = func::select_aggregate_func(ecx, &name, args)?;
+    let (mut expr, func) = func::select_aggregate_func(ecx, &name, args)?;
     if let Some(filter) = &sql_func.filter {
         // If a filter is present, as in
         //
@@ -1774,25 +1775,15 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         //
         // we plan it by essentially rewriting the expression to
         //
-        //     <agg>(CASE WHEN <cond> THEN <expr> ELSE NULL)
+        //     <agg>(CASE WHEN <cond> THEN <expr> ELSE <identity>)
         //
-        // as aggregate functions ignore NULL. The only exception is `count(*)`,
-        // which includes NULLs in its count; we handle that specially by
-        // rewriting to:
-        //
-        //     count(CASE WHEN <cond> THEN TRUE ELSE NULL)
-        //
-        // (Note the `TRUE` in in place of `<expr>`.)
+        // where <identity> is the identity input for <agg>.
         let cond = plan_expr(&ecx.with_name("FILTER"), filter)?.type_as(ecx, ScalarType::Bool)?;
-        if func == AggregateFunc::CountAll {
-            func = AggregateFunc::Count;
-            expr = ScalarExpr::literal_true();
-        }
         let expr_typ = ecx.scalar_type(&expr);
         expr = ScalarExpr::If {
             cond: Box::new(cond),
             then: Box::new(expr),
-            els: Box::new(ScalarExpr::literal_null(expr_typ)),
+            els: Box::new(ScalarExpr::literal(func.identity_datum(), expr_typ)),
         };
     }
 
@@ -2016,9 +2007,7 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> 
         Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
         Value::Null => return Ok(CoercibleScalarExpr::LiteralNull),
     };
-    let nullable = datum == Datum::Null;
-    let typ = ColumnType::new(scalar_type, nullable);
-    let expr = ScalarExpr::literal(datum, typ);
+    let expr = ScalarExpr::literal(datum, scalar_type);
     Ok(expr.into())
 }
 

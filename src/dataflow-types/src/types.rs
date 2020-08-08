@@ -37,16 +37,6 @@ use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType};
 /// System-wide timestamp type.
 pub type Timestamp = u64;
 
-/// Specifies when a `Peek` should occur.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum PeekWhen {
-    /// The peek should occur at the latest possible timestamp that allows the
-    /// peek to complete immediately.
-    Immediately,
-    /// The peek should occur at the specified timestamp.
-    AtTimestamp(Timestamp),
-}
-
 /// The response from a `Peek`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PeekResponse {
@@ -290,17 +280,12 @@ impl DataflowDesc {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataEncoding {
     Avro(AvroEncoding),
-    Csv(CsvEncoding),
-    Regex {
-        #[serde(with = "serde_regex")]
-        regex: Regex,
-    },
+    AvroOcf(AvroOcfEncoding),
     Protobuf(ProtobufEncoding),
+    Csv(CsvEncoding),
+    Regex(RegexEncoding),
     Bytes,
     Text,
-    AvroOcf {
-        reader_schema: String,
-    },
 }
 
 impl DataEncoding {
@@ -334,7 +319,7 @@ impl DataEncoding {
         // Add columns for the data, based on the encoding format.
         Ok(match self {
             DataEncoding::Bytes => key_desc.with_nonnull_column("data", ScalarType::Bytes),
-            DataEncoding::AvroOcf { reader_schema } => {
+            DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
                 avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
                     .context("validating avro ocf reader schema")?
                     .into_iter()
@@ -369,7 +354,7 @@ impl DataEncoding {
                 let d = decode_descriptors(descriptors)?;
                 validate_descriptors(message_name, &d)?
             }
-            DataEncoding::Regex { regex } => regex
+            DataEncoding::Regex(RegexEncoding { regex }) => regex
                 .capture_names()
                 .enumerate()
                 // The first capture is the entire matched string. This will
@@ -414,6 +399,18 @@ pub struct AvroEncoding {
     pub schema_registry_config: Option<ccsr::ClientConfig>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AvroOcfEncoding {
+    pub reader_schema: String,
+}
+
+/// Encoding in Protobuf format.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProtobufEncoding {
+    pub descriptors: Vec<u8>,
+    pub message_name: String,
+}
+
 /// Encoding in CSV format, with `n_cols` columns per row, with an optional header.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CsvEncoding {
@@ -422,11 +419,10 @@ pub struct CsvEncoding {
     pub delimiter: u8,
 }
 
-/// Encoding in Protobuf format.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ProtobufEncoding {
-    pub descriptors: Vec<u8>,
-    pub message_name: String,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RegexEncoding {
+    #[serde(with = "serde_regex")]
+    pub regex: Regex,
 }
 
 /// A source of updates for a relational collection.
@@ -526,6 +522,14 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
         }
     }
+
+    /// Returns whether or not persistence is enabled for this connector
+    pub fn persistence_enabled(&self) -> bool {
+        match self {
+            ExternalSourceConnector::Kafka(k) => k.enable_persistence,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -597,6 +601,7 @@ pub struct KafkaSourceConnector {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
+    pub enable_persistence: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

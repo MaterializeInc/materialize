@@ -37,8 +37,9 @@ use rusoto_kinesis::KinesisClient;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
-    Consistency, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
-    KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector, TimestampSourceUpdate,
+    AvroOcfEncoding, Consistency, DataEncoding, Envelope, ExternalSourceConnector,
+    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector,
+    TimestampSourceUpdate,
 };
 use expr::{PartitionId, SourceInstanceId};
 use ore::collections::CollectionExt;
@@ -724,14 +725,16 @@ fn is_ts_valid(
 ///
 fn identify_consistency_format(enc: DataEncoding, env: Envelope) -> ConsistencyFormatting {
     if let Envelope::Debezium(_) = env {
-        if let DataEncoding::AvroOcf { reader_schema: _ } = enc {
+        if let DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema: _ }) = enc {
             ConsistencyFormatting::DebeziumOcf
         } else {
             ConsistencyFormatting::DebeziumAvro
         }
     } else {
         match enc {
-            DataEncoding::AvroOcf { reader_schema: _ } => ConsistencyFormatting::ByoAvroOcf,
+            DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema: _ }) => {
+                ConsistencyFormatting::ByoAvroOcf
+            }
             DataEncoding::Avro(_) => ConsistencyFormatting::ByoAvro,
             _ => ConsistencyFormatting::ByoBytes,
         }

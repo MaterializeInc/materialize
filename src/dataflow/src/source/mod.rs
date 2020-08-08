@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
@@ -26,6 +26,7 @@ use dataflow_types::{
     Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError, Timestamp,
 };
 use expr::{PartitionId, SourceInstanceId};
+use futures::sink::Sink;
 use lazy_static::lazy_static;
 use log::error;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -42,6 +43,7 @@ use super::source::util::source;
 use crate::operator::StreamExt;
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
+    WorkerPersistenceData,
 };
 
 mod file;
@@ -83,7 +85,11 @@ pub struct SourceConfig<'a, G> {
     pub active: bool,
     /// Data encoding
     pub encoding: DataEncoding,
+    /// Channel to send persistence information to persister thread
+    pub persistence_tx: Option<PersistenceSender>,
 }
+
+type PersistenceSender = Pin<Box<dyn Sink<WorkerPersistenceData, Error = comm::Error> + Send>>;
 
 #[derive(Clone, Serialize, Deserialize)]
 /// A record produced by a source
@@ -203,7 +209,7 @@ pub trait SourceConstructor<Out> {
         active: bool,
         worker_id: usize,
         worker_count: usize,
-        consumer_activator: Arc<Mutex<SyncActivator>>,
+        consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         encoding: DataEncoding,
@@ -297,6 +303,16 @@ pub trait SourceInfo<Out> {
 
     /// Buffer a message that cannot get timestamped
     fn buffer_message(&mut self, message: SourceMessage<Out>);
+
+    /// Persist a message
+    fn persist_message(
+        &self,
+        _persistence_tx: &mut Option<PersistenceSender>,
+        _message: &SourceMessage<Out>,
+        _timestamp: Timestamp,
+    ) {
+        // Default implementation is to do nothing
+    }
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
@@ -732,6 +748,7 @@ where
         timestamp_frequency,
         active,
         encoding,
+        mut persistence_tx,
         ..
     } = config;
 
@@ -765,7 +782,7 @@ where
             active,
             worker_id,
             worker_count,
-            Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
+            scope.sync_activator_for(&info.address[..]),
             source_connector.clone(),
             &mut consistency_info,
             encoding,
@@ -832,6 +849,7 @@ where
                                     return SourceStatus::Alive;
                                 }
                                 Some(ts) => {
+                                    source_info.persist_message(&mut persistence_tx, &message, ts);
                                     // Note: empty and null payload/keys are currently
                                     // treated as the same thing.
                                     let key = message.key.unwrap_or_default();
@@ -847,6 +865,7 @@ where
                                     bytes_read += key.len() as i64;
                                     bytes_read += out.len().unwrap_or(0) as i64;
                                     let ts_cap = cap.delayed(&ts);
+
                                     output.session(&ts_cap).give(Ok(SourceOutput::new(
                                         key,
                                         out,

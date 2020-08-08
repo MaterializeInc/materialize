@@ -785,29 +785,17 @@ impl ScalarExpr {
         }
     }
 
-    pub fn literal(datum: Datum, column_type: ColumnType) -> ScalarExpr {
+    pub fn literal(datum: Datum, scalar_type: ScalarType) -> ScalarExpr {
         let row = Row::pack(&[datum]);
-        ScalarExpr::Literal(row, column_type)
+        ScalarExpr::Literal(row, ColumnType::new(scalar_type, datum.is_null()))
     }
 
     pub fn literal_true() -> ScalarExpr {
-        ScalarExpr::literal(
-            Datum::True,
-            ColumnType {
-                nullable: false,
-                scalar_type: ScalarType::Bool,
-            },
-        )
+        ScalarExpr::literal(Datum::True, ScalarType::Bool)
     }
 
     pub fn literal_null(scalar_type: ScalarType) -> ScalarExpr {
-        ScalarExpr::literal(
-            Datum::Null,
-            ColumnType {
-                nullable: true,
-                scalar_type,
-            },
-        )
+        ScalarExpr::literal(Datum::Null, scalar_type)
     }
 
     pub fn call_unary(self, func: UnaryFunc) -> Self {

@@ -8,7 +8,15 @@ menu:
 
 `CREATE TABLE` creates a non-streaming, in-memory data source.
 
-**Note that CREATE TABLE is currently only available in the developer (unstable) builds**
+{{< warning >}}
+**Note that CREATE TABLE is currently only available in the [developer](https://mtrlz.dev/) (unstable) builds**
+{{< /warning >}}
+
+{{< warning >}}
+At the moment, tables do not persist any data that is inserted. This means that restarting a
+Materialize instance will lose any data that was previously stored in a table.
+{{< /warning >}}
+
 
 ## Conceptual framework
 

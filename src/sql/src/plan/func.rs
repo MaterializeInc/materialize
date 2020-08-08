@@ -19,7 +19,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
-use repr::{ColumnName, ColumnType, Datum, ScalarType};
+use repr::{ColumnName, Datum, ScalarType};
 use sql_parser::ast::{BinaryOperator, Expr, UnaryOperator};
 
 use super::expr::{
@@ -799,7 +799,7 @@ lazy_static! {
                 params!(List(Box::new(String))) => unary_op(|ecx, e| {
                     ecx.require_experimental_mode("list_ndims")?;
                     let d = ecx.scalar_type(&e).unwrap_list_n_dims();
-                    Ok(ScalarExpr::literal(Datum::Int32(d as i32), ColumnType::new(ScalarType::Int32, false)))
+                    Ok(ScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
                 })
             },
             "list_length" => {
@@ -851,6 +851,9 @@ lazy_static! {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace,
                 params!(String, String) => BinaryFunc::TrimTrailing
             },
+            "split_part" => {
+                params!(String, String, Int64) => VariadicFunc::SplitPart
+            },
             "substr" => {
                 params!(String, Int64) => VariadicFunc::Substr,
                 params!(String, Int64, Int64) => VariadicFunc::Substr
@@ -895,7 +898,7 @@ fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, a
     match ecx.qcx.lifetime {
         QueryLifetime::OneShot => Ok(ScalarExpr::literal(
             Datum::from(ecx.qcx.scx.pcx.wall_time),
-            ColumnType::new(ScalarType::TimestampTz, false),
+            ScalarType::TimestampTz,
         )),
         QueryLifetime::Static => bail!("{} cannot be used in static queries", name),
     }
@@ -1492,14 +1495,8 @@ lazy_static! {
         impls! {
             "count" => {
                 params!() => nullary_op(|_ecx| {
-                    // We have to return *some* expr, even though `CountAll`'s
-                    // implementation won't look at it, so we just provide
-                    // a literal `true`.
-                    //
-                    // TODO(benesch): it would be nice if `CountAll` didn't
-                    // exist, and `count(true)` was physically optimized to be
-                    // as efficient as the current `CountALl` implementation.
-                    Ok((ScalarExpr::literal_true(), AggregateFunc::CountAll))
+                    // COUNT(*) is equivalent to COUNT(true).
+                    Ok((ScalarExpr::literal_true(), AggregateFunc::Count))
                 }),
                 params!(Any) => AggregateFunc::Count
             },
@@ -1534,7 +1531,19 @@ lazy_static! {
                 params!(TimestampTz) => AggregateFunc::MinTimestampTz
             },
             "jsonb_agg" => {
-                params!(JsonbAny) => AggregateFunc::JsonbAgg
+                params!(JsonbAny) => unary_op(|_ecx, e| {
+                    // `AggregateFunc::JsonbAgg` filters out `Datum::Null` (it
+                    // needs to have *some* identity input), but the semantics
+                    // of the SQL function require that `Datum::Null` is treated
+                    // as `Datum::JsonbNull`. This call to `coalesce` converts
+                    // between the two semantics.
+                    let json_null = ScalarExpr::literal(Datum::JsonNull, ScalarType::Jsonb);
+                    let e = ScalarExpr::CallVariadic {
+                        func: VariadicFunc::Coalesce,
+                        exprs: vec![e, json_null],
+                    };
+                    Ok((e, AggregateFunc::JsonbAgg))
+                })
             },
             "sum" => {
                 params!(Int32) => AggregateFunc::SumInt32,

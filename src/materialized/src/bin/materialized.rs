@@ -113,11 +113,22 @@ fn run() -> Result<(), anyhow::Error> {
         "timestamp advancement frequency (default 10ms)",
         "DURATION",
     );
+    opts.optflag(
+        "",
+        "persistence",
+        "enable source persistence (currently requires --experimental as well)",
+    );
     opts.optopt(
         "",
-        "persist-ts",
-        "persists consistency information locally and recovers from local store",
-        "true/false",
+        "persistence-flush-min-records",
+        "minimum number of new records that must be present on a partition before being flushed to persistent storage (default 1000)",
+        "N",
+    );
+    opts.optopt(
+        "",
+        "persistence-flush-interval",
+        "interval between attempts to flush source data to persistent storage (default 60s)",
+        "DURATION",
     );
 
     // Logging options.
@@ -247,6 +258,13 @@ fn run() -> Result<(), anyhow::Error> {
         None => Duration::from_millis(10),
         Some(d) => parse_duration::parse(&d)?,
     };
+    let persistence_enabled = popts.opt_present("persistence");
+    let persistence_flush_min_records =
+        popts.opt_get_default("persistence-flush-min-records", 1000)?;
+    let persistence_flush_interval = match popts.opt_str("persistence-flush-interval").as_deref() {
+        None => Duration::from_secs(60),
+        Some(d) => parse_duration::parse(&d)?,
+    };
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
@@ -261,10 +279,36 @@ fn run() -> Result<(), anyhow::Error> {
         }),
     };
 
+    let experimental_mode = popts.opt_present("experimental");
+
     // Configure storage.
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
     let symbiosis_url = popts.opt_str("symbiosis");
-    fs::create_dir_all(&data_directory).context("creating data directory")?;
+    fs::create_dir_all(&data_directory)
+        .with_context(|| anyhow!("creating data directory {}", data_directory.display()))?;
+
+    // Configure source persistence
+    if persistence_enabled && !experimental_mode {
+        bail!("--persistence requires experimental mode. See https://materialize.io/docs/cli/#experimental-mode");
+    }
+
+    let persistence = if persistence_enabled {
+        let persistence_directory = data_directory.join("persistence/");
+        fs::create_dir_all(&persistence_directory).with_context(|| {
+            anyhow!(
+                "creating persistence directory: {}",
+                persistence_directory.display()
+            )
+        })?;
+
+        Some(coord::PersistenceConfig {
+            flush_interval: persistence_flush_interval,
+            flush_min_records: persistence_flush_min_records,
+            path: persistence_directory,
+        })
+    } else {
+        None
+    };
 
     // Configure tracing.
     {
@@ -320,8 +364,6 @@ environment:{}",
     // Inform the user about what they are using, and how to contact us.
     beta_splash();
 
-    let experimental_mode = popts.opt_present("experimental");
-
     if experimental_mode {
         experimental_mode_splash();
     }
@@ -333,6 +375,7 @@ environment:{}",
         logging_granularity,
         logical_compaction_window,
         timestamp_frequency,
+        persistence,
         listen_addr,
         tls,
         data_directory: Some(data_directory),

@@ -65,11 +65,6 @@ impl ReduceElision {
                                 ),
                             )
                         }
-                        // CountAll is one no matter what the input.
-                        AggregateFunc::CountAll => ScalarExpr::literal_ok(
-                            Datum::Int64(1),
-                            a.typ(&input_type).nullable(false),
-                        ),
                         // All other variants should return the argument to the aggregation.
                         _ => a.expr.clone(),
                     })

@@ -194,10 +194,10 @@ impl Parser {
                 Token::Word(ref w) if w.keyword != "" => match w.keyword.as_ref() {
                     "SELECT" | "WITH" | "VALUES" => {
                         self.prev_token();
-                        Ok(Statement::Select {
+                        Ok(Statement::Select(SelectStatement {
                             query: Box::new(self.parse_query()?),
                             as_of: self.parse_optional_as_of()?,
-                        })
+                        }))
                     }
                     "CREATE" => Ok(self.parse_create()?),
                     "DROP" => Ok(self.parse_drop()?),
@@ -228,10 +228,10 @@ impl Parser {
                 },
                 Token::LParen => {
                     self.prev_token();
-                    Ok(Statement::Select {
+                    Ok(Statement::Select(SelectStatement {
                         query: Box::new(self.parse_query()?),
                         as_of: None, // Only the outermost SELECT may have an AS OF clause.
-                    })
+                    }))
                 }
                 unexpected => self.expected(
                     self.peek_prev_range(),
@@ -1345,19 +1345,19 @@ impl Parser {
     fn parse_create_database(&mut self) -> Result<Statement, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
-        Ok(Statement::CreateDatabase {
+        Ok(Statement::CreateDatabase(CreateDatabaseStatement {
             name,
             if_not_exists,
-        })
+        }))
     }
 
     fn parse_create_schema(&mut self) -> Result<Statement, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
-        Ok(Statement::CreateSchema {
+        Ok(Statement::CreateSchema(CreateSchemaStatement {
             name,
             if_not_exists,
-        })
+        }))
     }
 
     fn parse_format(&mut self) -> Result<Format, ParserError> {
@@ -1517,7 +1517,7 @@ impl Parser {
             Default::default()
         };
 
-        Ok(Statement::CreateSource {
+        Ok(Statement::CreateSource(CreateSourceStatement {
             name,
             col_names,
             connector,
@@ -1526,7 +1526,7 @@ impl Parser {
             envelope,
             if_not_exists,
             materialized,
-        })
+        }))
     }
 
     fn parse_create_sink(&mut self) -> Result<Statement, ParserError> {
@@ -1561,7 +1561,7 @@ impl Parser {
             true
         };
         let as_of = self.parse_optional_as_of()?;
-        Ok(Statement::CreateSink {
+        Ok(Statement::CreateSink(CreateSinkStatement {
             name,
             from,
             connector,
@@ -1570,7 +1570,7 @@ impl Parser {
             with_snapshot,
             as_of,
             if_not_exists,
-        })
+        }))
     }
 
     fn parse_connector(&mut self) -> Result<Connector, ParserError> {
@@ -1622,7 +1622,7 @@ impl Parser {
         self.expect_keyword("AS")?;
         let query = Box::new(self.parse_query()?);
         // Optional `WITH [ CASCADED | LOCAL ] CHECK OPTION` is widely supported here.
-        Ok(Statement::CreateView {
+        Ok(Statement::CreateView(CreateViewStatement {
             name,
             columns,
             query,
@@ -1630,7 +1630,7 @@ impl Parser {
             materialized,
             if_exists,
             with_options,
-        })
+        }))
     }
 
     fn parse_create_index(&mut self) -> Result<Statement, ParserError> {
@@ -1668,12 +1668,12 @@ impl Parser {
             }
         };
 
-        Ok(Statement::CreateIndex {
+        Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
             on_name,
             key_parts,
             if_not_exists,
-        })
+        }))
     }
 
     fn parse_if_exists(&mut self) -> Result<bool, ParserError> {
@@ -1699,10 +1699,10 @@ impl Parser {
             "DATABASE", "SCHEMA", "TABLE", "VIEW", "SOURCE", "SINK", "INDEX",
         ]) {
             Some("DATABASE") => {
-                return Ok(Statement::DropDatabase {
+                return Ok(Statement::DropDatabase(DropDatabaseStatement {
                     if_exists: self.parse_if_exists()?,
                     name: self.parse_identifier()?,
-                });
+                }));
             }
             Some("SCHEMA") => ObjectType::Schema,
             Some("TABLE") => ObjectType::Table,
@@ -1732,12 +1732,12 @@ impl Parser {
                 "Cannot specify both CASCADE and RESTRICT in DROP"
             );
         }
-        Ok(Statement::DropObjects {
+        Ok(Statement::DropObjects(DropObjectsStatement {
             object_type,
             if_exists,
             names,
             cascade,
-        })
+        }))
     }
 
     fn parse_create_table(&mut self) -> Result<Statement, ParserError> {
@@ -1747,13 +1747,13 @@ impl Parser {
         let (columns, constraints) = self.parse_columns()?;
         let with_options = self.parse_with_options()?;
 
-        Ok(Statement::CreateTable {
+        Ok(Statement::CreateTable(CreateTableStatement {
             name: table_name,
             columns,
             constraints,
             with_options,
             if_not_exists,
-        })
+        }))
     }
 
     fn parse_columns(&mut self) -> Result<(Vec<ColumnDef>, Vec<TableConstraint>), ParserError> {
@@ -1933,12 +1933,12 @@ impl Parser {
         self.expect_keywords(&["RENAME", "TO"])?;
         let to_item_name = self.parse_identifier()?;
 
-        Ok(Statement::AlterObjectRename {
+        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
             object_type,
             if_exists,
             name,
             to_item_name,
-        })
+        }))
     }
 
     /// Parse a copy statement
@@ -1948,11 +1948,11 @@ impl Parser {
         self.expect_keywords(&["FROM", "STDIN"])?;
         self.expect_token(&Token::SemiColon)?;
         let values = self.parse_tsv()?;
-        Ok(Statement::Copy {
+        Ok(Statement::Copy(CopyStatement {
             table_name,
             columns,
             values,
-        })
+        }))
     }
 
     /// Parse a tab separated values in
@@ -2297,10 +2297,10 @@ impl Parser {
             None
         };
 
-        Ok(Statement::Delete {
+        Ok(Statement::Delete(DeleteStatement {
             table_name,
             selection,
-        })
+        }))
     }
 
     /// Parse a query expression, i.e. a `SELECT` statement optionally
@@ -2514,15 +2514,15 @@ impl Parser {
                 (Err(_), Some(Token::Word(ident))) => SetVariableValue::Ident(ident.to_ident()),
                 (Err(_), other) => self.expected(self.peek_range(), "variable value", other)?,
             };
-            Ok(Statement::SetVariable {
+            Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some("LOCAL"),
                 variable,
                 value,
-            })
+            }))
         } else if variable.as_str().to_uppercase() == "TRANSACTION" && modifier.is_none() {
-            Ok(Statement::SetTransaction {
+            Ok(Statement::SetTransaction(SetTransactionStatement {
                 modes: self.parse_transaction_modes()?,
-            })
+            }))
         } else {
             self.expected(self.peek_range(), "equals sign or TO", self.peek_token())
         }
@@ -2530,9 +2530,9 @@ impl Parser {
 
     fn parse_show(&mut self) -> Result<Statement, ParserError> {
         if self.parse_keyword("DATABASES") {
-            return Ok(Statement::ShowDatabases {
+            return Ok(Statement::ShowDatabases(ShowDatabasesStatement {
                 filter: self.parse_show_statement_filter()?,
-            });
+            }));
         }
 
         let extended = self.parse_keyword("EXTENDED");
@@ -2572,7 +2572,7 @@ impl Parser {
         } else if let Some(object_type) =
             self.parse_one_of_keywords(&["SCHEMAS", "SOURCES", "VIEWS", "SINKS", "TABLES"])
         {
-            Ok(Statement::ShowObjects {
+            Ok(Statement::ShowObjects(ShowObjectsStatement {
                 object_type: match object_type {
                     "SCHEMAS" => ObjectType::Schema,
                     "SOURCES" => ObjectType::Source,
@@ -2593,7 +2593,7 @@ impl Parser {
                     None
                 },
                 filter: self.parse_show_statement_filter()?,
-            })
+            }))
         } else if self
             .parse_one_of_keywords(&["INDEX", "INDEXES", "KEYS"])
             .is_some()
@@ -2606,11 +2606,11 @@ impl Parser {
                     } else {
                         None
                     };
-                    Ok(Statement::ShowIndexes {
+                    Ok(Statement::ShowIndexes(ShowIndexesStatement {
                         table_name,
                         extended,
                         filter,
-                    })
+                    }))
                 }
                 None => self.expected(
                     self.peek_range(),
@@ -2619,28 +2619,32 @@ impl Parser {
                 ),
             }
         } else if self.parse_keywords(vec!["CREATE", "VIEW"]) {
-            Ok(Statement::ShowCreateView {
+            Ok(Statement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_object_name()?,
-            })
+            }))
         } else if self.parse_keywords(vec!["CREATE", "SOURCE"]) {
-            Ok(Statement::ShowCreateSource {
+            Ok(Statement::ShowCreateSource(ShowCreateSourceStatement {
                 source_name: self.parse_object_name()?,
-            })
+            }))
+        } else if self.parse_keywords(vec!["CREATE", "TABLE"]) {
+            Ok(Statement::ShowCreateTable(ShowCreateTableStatement {
+                table_name: self.parse_object_name()?,
+            }))
         } else if self.parse_keywords(vec!["CREATE", "SINK"]) {
-            Ok(Statement::ShowCreateSink {
+            Ok(Statement::ShowCreateSink(ShowCreateSinkStatement {
                 sink_name: self.parse_object_name()?,
-            })
+            }))
         } else if self.parse_keywords(vec!["CREATE", "INDEX"]) {
-            Ok(Statement::ShowCreateIndex {
+            Ok(Statement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_object_name()?,
-            })
+            }))
         } else {
             let variable = if self.parse_keywords(vec!["TRANSACTION", "ISOLATION", "LEVEL"]) {
                 Ident::new("transaction_isolation")
             } else {
                 self.parse_identifier()?
             };
-            Ok(Statement::ShowVariable { variable })
+            Ok(Statement::ShowVariable(ShowVariableStatement { variable }))
         }
     }
 
@@ -2651,12 +2655,12 @@ impl Parser {
         // allows both FROM <table> FROM <database> and FROM <database>.<table>,
         // while we only support the latter for now.
         let filter = self.parse_show_statement_filter()?;
-        Ok(Statement::ShowColumns {
+        Ok(Statement::ShowColumns(ShowColumnsStatement {
             extended,
             full,
             table_name,
             filter,
-        })
+        }))
     }
 
     fn parse_show_statement_filter(&mut self) -> Result<Option<ShowStatementFilter>, ParserError> {
@@ -2867,11 +2871,11 @@ impl Parser {
         } else {
             InsertSource::Query(Box::new(self.parse_query()?))
         };
-        Ok(Statement::Insert {
+        Ok(Statement::Insert(InsertStatement {
             table_name,
             columns,
             source,
-        })
+        }))
     }
 
     fn parse_update(&mut self) -> Result<Statement, ParserError> {
@@ -2883,11 +2887,11 @@ impl Parser {
         } else {
             None
         };
-        Ok(Statement::Update {
+        Ok(Statement::Update(UpdateStatement {
             table_name,
             assignments,
             selection,
-        })
+        }))
     }
 
     /// Parse a `var = expr` assignment, used in an UPDATE statement
@@ -3010,16 +3014,16 @@ impl Parser {
 
     fn parse_start_transaction(&mut self) -> Result<Statement, ParserError> {
         self.expect_keyword("TRANSACTION")?;
-        Ok(Statement::StartTransaction {
+        Ok(Statement::StartTransaction(StartTransactionStatement {
             modes: self.parse_transaction_modes()?,
-        })
+        }))
     }
 
     fn parse_begin(&mut self) -> Result<Statement, ParserError> {
         let _ = self.parse_one_of_keywords(&["TRANSACTION", "WORK"]);
-        Ok(Statement::StartTransaction {
+        Ok(Statement::StartTransaction(StartTransactionStatement {
             modes: self.parse_transaction_modes()?,
-        })
+        }))
     }
 
     fn parse_transaction_modes(&mut self) -> Result<Vec<TransactionMode>, ParserError> {
@@ -3059,15 +3063,15 @@ impl Parser {
     }
 
     fn parse_commit(&mut self) -> Result<Statement, ParserError> {
-        Ok(Statement::Commit {
+        Ok(Statement::Commit(CommitStatement {
             chain: self.parse_commit_rollback_chain()?,
-        })
+        }))
     }
 
     fn parse_rollback(&mut self) -> Result<Statement, ParserError> {
-        Ok(Statement::Rollback {
+        Ok(Statement::Rollback(RollbackStatement {
             chain: self.parse_commit_rollback_chain()?,
-        })
+        }))
     }
 
     fn parse_commit_rollback_chain(&mut self) -> Result<bool, ParserError> {
@@ -3096,11 +3100,11 @@ impl Parser {
             true
         };
         let as_of = self.parse_optional_as_of()?;
-        Ok(Statement::Tail {
+        Ok(Statement::Tail(TailStatement {
             name,
             with_snapshot,
             as_of,
-        })
+        }))
     }
 
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
@@ -3141,11 +3145,11 @@ impl Parser {
             Explainee::Query(self.parse_query()?)
         };
 
-        Ok(Statement::Explain {
+        Ok(Statement::Explain(ExplainStatement {
             stage,
             explainee,
             options,
-        })
+        }))
     }
 
     /// Checks whether it is safe to descend another layer of nesting in the

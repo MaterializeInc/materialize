@@ -11,7 +11,8 @@
 
 use crate::{RelationExpr, ScalarExpr, TransformArgs};
 
-/// Transform column references in a `Map` into a `Project`.
+/// Transform column references in a `Map` into a `Project`, or repeated
+/// aggregations in a `Reduce` into a `Project`.
 #[derive(Debug)]
 pub struct ProjectionExtraction;
 
@@ -60,6 +61,34 @@ impl ProjectionExtraction {
                     }
                     *relation = relation.take_dangerous().project(outputs);
                 }
+            }
+        } else if let RelationExpr::Reduce {
+            input: _,
+            group_key,
+            aggregates,
+        } = relation
+        {
+            // If any entry of aggregates exists earlier in aggregates, we can remove it
+            // and replace it with a projection that points to the first instance of it.
+            let mut projection = Vec::new();
+            projection.extend(0..group_key.len());
+            let mut finger = 0;
+            let mut must_project = false;
+            while finger < aggregates.len() {
+                if let Some(position) = aggregates[..finger]
+                    .iter()
+                    .position(|x| x == &aggregates[finger])
+                {
+                    projection.push(group_key.len() + position);
+                    aggregates.remove(finger);
+                    must_project = true;
+                } else {
+                    projection.push(group_key.len() + finger);
+                    finger += 1;
+                }
+            }
+            if must_project {
+                *relation = relation.take_dangerous().project(projection);
             }
         }
     }

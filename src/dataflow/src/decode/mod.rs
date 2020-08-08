@@ -24,7 +24,7 @@ use timely::dataflow::{
 
 use ::avro::{types::Value, Schema};
 use dataflow_types::LinearOperator;
-use dataflow_types::{DataEncoding, Envelope, Timestamp};
+use dataflow_types::{DataEncoding, Envelope, RegexEncoding, Timestamp};
 use expr::Diff;
 use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair};
 use log::error;
@@ -470,7 +470,9 @@ where
         (_, Envelope::Debezium(_)) => unreachable!(
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
-        (DataEncoding::Regex { regex }, Envelope::None) => regex_fn(stream, regex, debug_name),
+        (DataEncoding::Regex(RegexEncoding { regex }), Envelope::None) => {
+            regex_fn(stream, regex, debug_name)
+        }
         (DataEncoding::Protobuf(enc), Envelope::None) => decode_values_inner(
             stream,
             protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),

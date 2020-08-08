@@ -568,6 +568,7 @@ pub enum EvalError {
         encoding_name: String,
     },
     InvalidRegex(String),
+    InvalidParameterValue(String),
     NegSqrt,
     UnknownUnits(String),
     UnsupportedDateTimeUnits(DateTimeUnits),
@@ -599,6 +600,7 @@ impl std::fmt::Display for EvalError {
             ),
             EvalError::NegSqrt => f.write_str("cannot take square root of a negative number"),
             EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
+            EvalError::InvalidParameterValue(s) => f.write_str(s),
             EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
             EvalError::UnsupportedDateTimeUnits(units) => {
                 write!(f, "unsupported timestamp units '{}'", units)

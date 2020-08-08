@@ -27,719 +27,884 @@ use crate::ast::{
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Statement {
-    /// `SELECT`
-    Select {
-        query: Box<Query>,
-        as_of: Option<Expr>,
-    },
-    /// `INSERT`
-    Insert {
-        /// TABLE
-        table_name: ObjectName,
-        /// COLUMNS
-        columns: Vec<Ident>,
-        /// A SQL query that specifies what to insert.
-        source: InsertSource,
-    },
-    Copy {
-        /// TABLE
-        table_name: ObjectName,
-        /// COLUMNS
-        columns: Vec<Ident>,
-        /// VALUES a vector of values to be copied
-        values: Vec<Option<String>>,
-    },
-    /// `UPDATE`
-    Update {
-        /// TABLE
-        table_name: ObjectName,
-        /// Column assignments
-        assignments: Vec<Assignment>,
-        /// WHERE
-        selection: Option<Expr>,
-    },
-    /// `DELETE`
-    Delete {
-        /// `FROM`
-        table_name: ObjectName,
-        /// `WHERE`
-        selection: Option<Expr>,
-    },
-    /// `CREATE DATABASE`
-    CreateDatabase {
-        name: Ident,
-        if_not_exists: bool,
-    },
-    /// `CREATE SCHEMA`
-    CreateSchema {
-        name: ObjectName,
-        if_not_exists: bool,
-    },
-    /// `CREATE SOURCE`
-    CreateSource {
-        name: ObjectName,
-        col_names: Vec<Ident>,
-        connector: Connector,
-        with_options: Vec<SqlOption>,
-        format: Option<Format>,
-        envelope: Envelope,
-        if_not_exists: bool,
-        materialized: bool,
-    },
-    /// `CREATE SINK`
-    CreateSink {
-        name: ObjectName,
-        from: ObjectName,
-        connector: Connector,
-        with_options: Vec<SqlOption>,
-        format: Option<Format>,
-        with_snapshot: bool,
-        as_of: Option<Expr>,
-        if_not_exists: bool,
-    },
-    /// `CREATE VIEW`
-    CreateView {
-        /// View name
-        name: ObjectName,
-        columns: Vec<Ident>,
-        with_options: Vec<SqlOption>,
-        query: Box<Query>,
-        if_exists: IfExistsBehavior,
-        temporary: bool,
-        materialized: bool,
-    },
-    /// `CREATE TABLE`
-    CreateTable {
-        /// Table name
-        name: ObjectName,
-        /// Optional schema
-        columns: Vec<ColumnDef>,
-        constraints: Vec<TableConstraint>,
-        with_options: Vec<SqlOption>,
-        if_not_exists: bool,
-    },
-    /// `CREATE INDEX`
-    CreateIndex {
-        /// Optional index name.
-        name: Option<Ident>,
-        /// `ON` table or view name
-        on_name: ObjectName,
-        /// Expressions that form part of the index key. If not included, the
-        /// key_parts will be inferred from the named object.
-        key_parts: Option<Vec<Expr>>,
-        if_not_exists: bool,
-    },
-    /// `ALTER <OBJECT> ... RENAME TO`
-    AlterObjectRename {
-        object_type: ObjectType,
-        if_exists: bool,
-        name: ObjectName,
-        to_item_name: Ident,
-    },
-    DropDatabase {
-        name: Ident,
-        if_exists: bool,
-    },
-    /// `DROP`
-    DropObjects {
-        /// The type of the object to drop: TABLE, VIEW, etc.
-        object_type: ObjectType,
-        /// An optional `IF EXISTS` clause. (Non-standard.)
-        if_exists: bool,
-        /// One or more objects to drop. (ANSI SQL requires exactly one.)
-        names: Vec<ObjectName>,
-        /// Whether `CASCADE` was specified. This will be `false` when
-        /// `RESTRICT` or no drop behavior at all was specified.
-        cascade: bool,
-    },
-    /// `SET <variable>`
-    ///
-    /// Note: this is not a standard SQL statement, but it is supported by at
-    /// least MySQL and PostgreSQL. Not all MySQL-specific syntatic forms are
-    /// supported yet.
-    SetVariable {
-        local: bool,
-        variable: Ident,
-        value: SetVariableValue,
-    },
-    /// `SHOW <variable>`
-    ///
-    /// Note: this is a PostgreSQL-specific statement.
-    ShowVariable {
-        variable: Ident,
-    },
-    /// `SHOW DATABASES`
-    ShowDatabases {
-        filter: Option<ShowStatementFilter>,
-    },
-    /// `SHOW <object>S`
-    ///
-    /// ```sql
-    /// SHOW TABLES;
-    /// SHOW SOURCES;
-    /// SHOW VIEWS;
-    /// SHOW SINKS;
-    /// ```
-    ShowObjects {
-        object_type: ObjectType,
-        from: Option<ObjectName>,
-        extended: bool,
-        full: bool,
-        materialized: bool,
-        filter: Option<ShowStatementFilter>,
-    },
-    /// `SHOW INDEX|INDEXES|KEYS`
-    ///
-    /// Note: this is a MySQL-specific statement
-    ShowIndexes {
-        table_name: ObjectName,
-        extended: bool,
-        filter: Option<ShowStatementFilter>,
-    },
-    /// `SHOW COLUMNS`
-    ///
-    /// Note: this is a MySQL-specific statement.
-    ShowColumns {
-        extended: bool,
-        full: bool,
-        table_name: ObjectName,
-        filter: Option<ShowStatementFilter>,
-    },
-    /// `SHOW CREATE VIEW <view>`
-    ShowCreateView {
-        view_name: ObjectName,
-    },
-    /// `SHOW CREATE SOURCE <source>`
-    ShowCreateSource {
-        source_name: ObjectName,
-    },
-    /// `SHOW CREATE SINK <sink>`
-    ShowCreateSink {
-        sink_name: ObjectName,
-    },
-    /// `SHOW CREATE INDEX <index>`
-    ShowCreateIndex {
-        index_name: ObjectName,
-    },
-    /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
-    StartTransaction {
-        modes: Vec<TransactionMode>,
-    },
-    /// `SET TRANSACTION ...`
-    SetTransaction {
-        modes: Vec<TransactionMode>,
-    },
-    /// `COMMIT [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
-    Commit {
-        chain: bool,
-    },
-    /// `ROLLBACK [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
-    Rollback {
-        chain: bool,
-    },
-    /// `TAIL`
-    Tail {
-        name: ObjectName,
-        with_snapshot: bool,
-        as_of: Option<Expr>,
-    },
-    /// `EXPLAIN ...`
-    Explain {
-        stage: ExplainStage,
-        explainee: Explainee,
-        options: ExplainOptions,
-    },
+    Select(SelectStatement),
+    Insert(InsertStatement),
+    Copy(CopyStatement),
+    Update(UpdateStatement),
+    Delete(DeleteStatement),
+    CreateDatabase(CreateDatabaseStatement),
+    CreateSchema(CreateSchemaStatement),
+    CreateSource(CreateSourceStatement),
+    CreateSink(CreateSinkStatement),
+    CreateView(CreateViewStatement),
+    CreateTable(CreateTableStatement),
+    CreateIndex(CreateIndexStatement),
+    AlterObjectRename(AlterObjectRenameStatement),
+    DropDatabase(DropDatabaseStatement),
+    DropObjects(DropObjectsStatement),
+    SetVariable(SetVariableStatement),
+    ShowDatabases(ShowDatabasesStatement),
+    ShowObjects(ShowObjectsStatement),
+    ShowIndexes(ShowIndexesStatement),
+    ShowColumns(ShowColumnsStatement),
+    ShowCreateView(ShowCreateViewStatement),
+    ShowCreateSource(ShowCreateSourceStatement),
+    ShowCreateTable(ShowCreateTableStatement),
+    ShowCreateSink(ShowCreateSinkStatement),
+    ShowCreateIndex(ShowCreateIndexStatement),
+    ShowVariable(ShowVariableStatement),
+    StartTransaction(StartTransactionStatement),
+    SetTransaction(SetTransactionStatement),
+    Commit(CommitStatement),
+    Rollback(RollbackStatement),
+    Tail(TailStatement),
+    Explain(ExplainStatement),
 }
 
 impl AstDisplay for Statement {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Statement::Select { query, as_of } => {
-                f.write_node(&query);
-                if let Some(as_of) = as_of {
-                    f.write_str(" AS OF ");
-                    f.write_node(as_of);
-                }
-            }
-            Statement::Insert {
-                table_name,
-                columns,
-                source,
-            } => {
-                f.write_str("INSERT INTO ");
-                f.write_node(&table_name);
-                if !columns.is_empty() {
-                    f.write_str(" (");
-                    f.write_node(&display::comma_separated(columns));
-                    f.write_str(")");
-                }
-                f.write_str(" ");
-                f.write_node(source);
-            }
-            Statement::Copy {
-                table_name,
-                columns,
-                values,
-            } => {
-                f.write_str("COPY ");
-                f.write_node(&table_name);
-                if !columns.is_empty() {
-                    f.write_str("(");
-                    f.write_node(&display::comma_separated(columns));
-                    f.write_str(")");
-                }
-                f.write_str(" FROM stdin; ");
-                if !values.is_empty() {
-                    f.write_str("\n");
-                    let mut delim = "";
-                    for v in values {
-                        f.write_str(delim);
-                        delim = "\t";
-                        if let Some(v) = v {
-                            f.write_str(v);
-                        } else {
-                            f.write_str("\\N");
-                        }
-                    }
-                }
-                f.write_str("\n\\.");
-            }
-            Statement::Update {
-                table_name,
-                assignments,
-                selection,
-            } => {
-                f.write_str("UPDATE ");
-                f.write_node(&table_name);
-                if !assignments.is_empty() {
-                    f.write_str(" SET ");
-                    f.write_node(&display::comma_separated(assignments));
-                }
-                if let Some(selection) = selection {
-                    f.write_str(" WHERE ");
-                    f.write_node(selection);
-                }
-            }
-            Statement::Delete {
-                table_name,
-                selection,
-            } => {
-                f.write_str("DELETE FROM ");
-                f.write_node(&table_name);
-                if let Some(selection) = selection {
-                    f.write_str(" WHERE ");
-                    f.write_node(selection);
-                }
-            }
-            Statement::CreateDatabase {
-                name,
-                if_not_exists,
-            } => {
-                f.write_str("CREATE DATABASE ");
-                if *if_not_exists {
-                    f.write_str("IF NOT EXISTS ");
-                }
-                f.write_node(name);
-            }
-            Statement::CreateSchema {
-                name,
-                if_not_exists,
-            } => {
-                f.write_str("CREATE SCHEMA ");
-                if *if_not_exists {
-                    f.write_str("IF NOT EXISTS ");
-                }
-                f.write_node(&name);
-            }
-            Statement::CreateSource {
-                name,
-                col_names,
-                connector,
-                with_options,
-                format,
-                envelope,
-                if_not_exists,
-                materialized,
-            } => {
-                f.write_str("CREATE ");
-                if *materialized {
-                    f.write_str("MATERIALIZED ");
-                }
-                f.write_str("SOURCE ");
-                if *if_not_exists {
-                    f.write_str("IF NOT EXISTS ");
-                }
-                f.write_node(&name);
-                f.write_str(" ");
-                if !col_names.is_empty() {
-                    f.write_str("(");
-                    f.write_node(&display::comma_separated(col_names));
-                    f.write_str(") ");
-                }
-                f.write_str("FROM ");
-                f.write_node(connector);
-                if !with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(with_options));
-                    f.write_str(")");
-                }
-                if let Some(format) = format {
-                    f.write_str(" FORMAT ");
-                    f.write_node(format);
-                }
-                if *envelope != Default::default() {
-                    f.write_str(" ENVELOPE ");
-                    f.write_node(envelope);
-                }
-            }
-            Statement::CreateSink {
-                name,
-                from,
-                connector,
-                with_options,
-                format,
-                with_snapshot,
-                as_of,
-                if_not_exists,
-            } => {
-                f.write_str("CREATE SINK ");
-                if *if_not_exists {
-                    f.write_str("IF NOT EXISTS ");
-                }
-                f.write_node(&name);
-                f.write_str(" FROM ");
-                f.write_node(&from);
-                f.write_str(" INTO ");
-                f.write_node(connector);
-                if !with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(with_options));
-                    f.write_str(")");
-                }
-                if let Some(format) = format {
-                    f.write_str(" FORMAT ");
-                    f.write_node(format);
-                }
-                if *with_snapshot {
-                    f.write_str(" WITH SNAPSHOT");
-                } else {
-                    f.write_str(" WITHOUT SNAPSHOT");
-                }
-
-                if let Some(as_of) = as_of {
-                    f.write_str(" AS OF ");
-                    f.write_node(as_of);
-                }
-            }
-            Statement::CreateView {
-                name,
-                columns,
-                query,
-                temporary,
-                materialized,
-                if_exists,
-                with_options,
-            } => {
-                f.write_str("CREATE");
-                if *if_exists == IfExistsBehavior::Replace {
-                    f.write_str(" OR REPLACE");
-                }
-                if *temporary {
-                    f.write_str(" TEMPORARY");
-                }
-                if *materialized {
-                    f.write_str(" MATERIALIZED");
-                }
-
-                f.write_str(" VIEW");
-
-                if *if_exists == IfExistsBehavior::Skip {
-                    f.write_str(" IF NOT EXISTS");
-                }
-
-                f.write_str(" ");
-                f.write_node(&name);
-
-                if !with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(with_options));
-                    f.write_str(")");
-                }
-
-                if !columns.is_empty() {
-                    f.write_str(" (");
-                    f.write_node(&display::comma_separated(columns));
-                    f.write_str(")");
-                }
-
-                f.write_str(" AS ");
-                f.write_node(&query);
-            }
-            Statement::CreateTable {
-                name,
-                columns,
-                constraints,
-                with_options,
-                if_not_exists,
-            } => {
-                f.write_str("CREATE TABLE ");
-                if *if_not_exists {
-                    f.write_str("IF NOT EXISTS ");
-                }
-                f.write_node(&name);
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(columns));
-                if !constraints.is_empty() {
-                    f.write_str(", ");
-                    f.write_node(&display::comma_separated(constraints));
-                }
-                f.write_str(")");
-
-                if !with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(with_options));
-                    f.write_str(")");
-                }
-            }
-            Statement::CreateIndex {
-                name,
-                on_name,
-                key_parts,
-                if_not_exists,
-            } => {
-                f.write_str("CREATE ");
-                if key_parts.is_none() {
-                    f.write_str("DEFAULT ");
-                }
-                f.write_str("INDEX ");
-                if *if_not_exists {
-                    f.write_str("IF NOT EXISTS ");
-                }
-                if let Some(name) = name {
-                    f.write_node(name);
-                    f.write_str(" ");
-                }
-                f.write_str("ON ");
-                f.write_node(&on_name);
-                if let Some(key_parts) = key_parts {
-                    f.write_str(" (");
-                    f.write_node(&display::comma_separated(key_parts));
-                    f.write_str(")");
-                }
-            }
-            Statement::AlterObjectRename {
-                object_type,
-                if_exists,
-                name,
-                to_item_name,
-            } => {
-                f.write_str("ALTER ");
-                f.write_node(object_type);
-                f.write_str(" ");
-                if *if_exists {
-                    f.write_str("IF EXISTS ");
-                }
-                f.write_node(&name);
-                f.write_str(" RENAME TO ");
-                f.write_node(to_item_name);
-            }
-            Statement::DropDatabase { name, if_exists } => {
-                f.write_str("DROP DATABASE ");
-                if *if_exists {
-                    f.write_str("IF EXISTS ");
-                }
-                f.write_node(name);
-            }
-            Statement::DropObjects {
-                object_type,
-                if_exists,
-                names,
-                cascade,
-            } => {
-                f.write_str("DROP ");
-                f.write_node(object_type);
-                f.write_str(" ");
-                if *if_exists {
-                    f.write_str("IF EXISTS ");
-                }
-                f.write_node(&display::comma_separated(names));
-                if *cascade {
-                    f.write_str(" CASCADE");
-                }
-            }
-            Statement::SetVariable {
-                local,
-                variable,
-                value,
-            } => {
-                f.write_str("SET ");
-                if *local {
-                    f.write_str("LOCAL ");
-                }
-                f.write_node(variable);
-                f.write_str(" = ");
-                f.write_node(value);
-            }
-            Statement::ShowVariable { variable } => {
-                f.write_str("SHOW ");
-                f.write_node(variable);
-            }
-            Statement::ShowDatabases { filter } => {
-                f.write_str("SHOW DATABASES");
-                if let Some(filter) = filter {
-                    f.write_str(" ");
-                    f.write_node(filter);
-                }
-            }
-            Statement::ShowObjects {
-                object_type,
-                filter,
-                full,
-                materialized,
-                from,
-                extended,
-            } => {
-                f.write_str("SHOW");
-                if *extended {
-                    f.write_str(" EXTENDED");
-                }
-                if *full {
-                    f.write_str(" FULL");
-                }
-                if *materialized {
-                    f.write_str(" MATERIALIZED");
-                }
-                f.write_str(" ");
-                f.write_str(match object_type {
-                    ObjectType::Schema => "SCHEMAS",
-                    ObjectType::Table => "TABLES",
-                    ObjectType::View => "VIEWS",
-                    ObjectType::Source => "SOURCES",
-                    ObjectType::Sink => "SINKS",
-                    ObjectType::Index => unreachable!(),
-                });
-                if let Some(from) = from {
-                    f.write_str(" FROM ");
-                    f.write_node(&from);
-                }
-                if let Some(filter) = filter {
-                    f.write_str(" ");
-                    f.write_node(filter);
-                }
-            }
-            Statement::ShowIndexes {
-                table_name,
-                extended,
-                filter,
-            } => {
-                f.write_str("SHOW ");
-                if *extended {
-                    f.write_str("EXTENDED ");
-                }
-                f.write_str("INDEXES FROM ");
-                f.write_node(&table_name);
-                if let Some(filter) = filter {
-                    f.write_str(" ");
-                    f.write_node(filter);
-                }
-            }
-            Statement::ShowColumns {
-                extended,
-                full,
-                table_name,
-                filter,
-            } => {
-                f.write_str("SHOW ");
-                if *extended {
-                    f.write_str("EXTENDED ");
-                }
-                if *full {
-                    f.write_str("FULL ");
-                }
-                f.write_str("COLUMNS FROM ");
-                f.write_node(&table_name);
-                if let Some(filter) = filter {
-                    f.write_str(" ");
-                    f.write_node(filter);
-                }
-            }
-            Statement::ShowCreateView { view_name } => {
-                f.write_str("SHOW CREATE VIEW ");
-                f.write_node(&view_name);
-            }
-            Statement::ShowCreateSource { source_name } => {
-                f.write_str("SHOW CREATE SOURCE ");
-                f.write_node(&source_name);
-            }
-            Statement::ShowCreateSink { sink_name } => {
-                f.write_str("SHOW CREATE SINK ");
-                f.write_node(&sink_name);
-            }
-            Statement::ShowCreateIndex { index_name } => {
-                f.write_str("SHOW CREATE INDEX ");
-                f.write_node(&index_name);
-            }
-            Statement::StartTransaction { modes } => {
-                f.write_str("START TRANSACTION");
-                if !modes.is_empty() {
-                    f.write_str(" ");
-                    f.write_node(&display::comma_separated(modes));
-                }
-            }
-            Statement::SetTransaction { modes } => {
-                f.write_str("SET TRANSACTION");
-                if !modes.is_empty() {
-                    f.write_str(" ");
-                    f.write_node(&display::comma_separated(modes));
-                }
-            }
-            Statement::Commit { chain } => {
-                f.write_str("COMMIT");
-                if *chain {
-                    f.write_str(" AND CHAIN");
-                }
-            }
-            Statement::Rollback { chain } => {
-                f.write_str("ROLLBACK");
-                if *chain {
-                    f.write_str(" AND CHAIN");
-                }
-            }
-            Statement::Tail {
-                name,
-                with_snapshot,
-                as_of,
-            } => {
-                f.write_str("TAIL ");
-                f.write_node(&name);
-
-                if *with_snapshot {
-                    f.write_str(" WITH SNAPSHOT");
-                } else {
-                    f.write_str(" WITHOUT SNAPSHOT");
-                }
-                if let Some(as_of) = as_of {
-                    f.write_str(" AS OF ");
-                    f.write_node(as_of);
-                }
-            }
-            Statement::Explain {
-                stage,
-                explainee,
-                options,
-            } => {
-                f.write_str("EXPLAIN ");
-                if options.typed {
-                    f.write_str("TYPED ");
-                }
-                f.write_node(stage);
-                f.write_str(" FOR ");
-                f.write_node(explainee);
-            }
+            Statement::Select(stmt) => f.write_node(stmt),
+            Statement::Insert(stmt) => f.write_node(stmt),
+            Statement::Copy(stmt) => f.write_node(stmt),
+            Statement::Update(stmt) => f.write_node(stmt),
+            Statement::Delete(stmt) => f.write_node(stmt),
+            Statement::CreateDatabase(stmt) => f.write_node(stmt),
+            Statement::CreateSchema(stmt) => f.write_node(stmt),
+            Statement::CreateSource(stmt) => f.write_node(stmt),
+            Statement::CreateSink(stmt) => f.write_node(stmt),
+            Statement::CreateView(stmt) => f.write_node(stmt),
+            Statement::CreateTable(stmt) => f.write_node(stmt),
+            Statement::CreateIndex(stmt) => f.write_node(stmt),
+            Statement::AlterObjectRename(stmt) => f.write_node(stmt),
+            Statement::DropDatabase(stmt) => f.write_node(stmt),
+            Statement::DropObjects(stmt) => f.write_node(stmt),
+            Statement::SetVariable(stmt) => f.write_node(stmt),
+            Statement::ShowDatabases(stmt) => f.write_node(stmt),
+            Statement::ShowObjects(stmt) => f.write_node(stmt),
+            Statement::ShowIndexes(stmt) => f.write_node(stmt),
+            Statement::ShowColumns(stmt) => f.write_node(stmt),
+            Statement::ShowCreateView(stmt) => f.write_node(stmt),
+            Statement::ShowCreateSource(stmt) => f.write_node(stmt),
+            Statement::ShowCreateTable(stmt) => f.write_node(stmt),
+            Statement::ShowCreateSink(stmt) => f.write_node(stmt),
+            Statement::ShowCreateIndex(stmt) => f.write_node(stmt),
+            Statement::ShowVariable(stmt) => f.write_node(stmt),
+            Statement::StartTransaction(stmt) => f.write_node(stmt),
+            Statement::SetTransaction(stmt) => f.write_node(stmt),
+            Statement::Commit(stmt) => f.write_node(stmt),
+            Statement::Rollback(stmt) => f.write_node(stmt),
+            Statement::Tail(stmt) => f.write_node(stmt),
+            Statement::Explain(stmt) => f.write_node(stmt),
         }
     }
 }
 impl_display!(Statement);
+
+/// `SELECT`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SelectStatement {
+    pub query: Box<Query>,
+    pub as_of: Option<Expr>,
+}
+
+impl AstDisplay for SelectStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_node(&self.query);
+        if let Some(as_of) = &self.as_of {
+            f.write_str(" AS OF ");
+            f.write_node(as_of);
+        }
+    }
+}
+impl_display!(SelectStatement);
+
+/// `INSERT`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InsertStatement {
+    /// TABLE
+    pub table_name: ObjectName,
+    /// COLUMNS
+    pub columns: Vec<Ident>,
+    /// A SQL query that specifies what to insert.
+    pub source: InsertSource,
+}
+
+impl AstDisplay for InsertStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("INSERT INTO ");
+        f.write_node(&self.table_name);
+        if !self.columns.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.columns));
+            f.write_str(")");
+        }
+        f.write_str(" ");
+        f.write_node(&self.source);
+    }
+}
+impl_display!(InsertStatement);
+
+/// `COPY`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CopyStatement {
+    /// TABLE
+    pub table_name: ObjectName,
+    /// COLUMNS
+    pub columns: Vec<Ident>,
+    /// VALUES a vector of values to be copied
+    pub values: Vec<Option<String>>,
+}
+
+impl AstDisplay for CopyStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("COPY ");
+        f.write_node(&self.table_name);
+        if !self.columns.is_empty() {
+            f.write_str("(");
+            f.write_node(&display::comma_separated(&self.columns));
+            f.write_str(")");
+        }
+        f.write_str(" FROM stdin; ");
+        if !self.values.is_empty() {
+            f.write_str("\n");
+            let mut delim = "";
+            for v in &self.values {
+                f.write_str(delim);
+                delim = "\t";
+                if let Some(v) = v {
+                    f.write_str(v);
+                } else {
+                    f.write_str("\\N");
+                }
+            }
+        }
+        f.write_str("\n\\.");
+    }
+}
+impl_display!(CopyStatement);
+
+/// `UPDATE`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UpdateStatement {
+    /// TABLE
+    pub table_name: ObjectName,
+    /// Column assignments
+    pub assignments: Vec<Assignment>,
+    /// WHERE
+    pub selection: Option<Expr>,
+}
+
+impl AstDisplay for UpdateStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("UPDATE ");
+        f.write_node(&self.table_name);
+        if !self.assignments.is_empty() {
+            f.write_str(" SET ");
+            f.write_node(&display::comma_separated(&self.assignments));
+        }
+        if let Some(selection) = &self.selection {
+            f.write_str(" WHERE ");
+            f.write_node(selection);
+        }
+    }
+}
+impl_display!(UpdateStatement);
+
+/// `DELETE`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeleteStatement {
+    /// `FROM`
+    pub table_name: ObjectName,
+    /// `WHERE`
+    pub selection: Option<Expr>,
+}
+
+impl AstDisplay for DeleteStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("DELETE FROM ");
+        f.write_node(&self.table_name);
+        if let Some(selection) = &self.selection {
+            f.write_str(" WHERE ");
+            f.write_node(selection);
+        }
+    }
+}
+impl_display!(DeleteStatement);
+
+/// `CREATE DATABASE`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateDatabaseStatement {
+    pub name: Ident,
+    pub if_not_exists: bool,
+}
+
+impl AstDisplay for CreateDatabaseStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE DATABASE ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+    }
+}
+impl_display!(CreateDatabaseStatement);
+
+/// `CREATE SCHEMA`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSchemaStatement {
+    pub name: ObjectName,
+    pub if_not_exists: bool,
+}
+
+impl AstDisplay for CreateSchemaStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE SCHEMA ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+    }
+}
+impl_display!(CreateSchemaStatement);
+
+/// `CREATE SOURCE`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSourceStatement {
+    pub name: ObjectName,
+    pub col_names: Vec<Ident>,
+    pub connector: Connector,
+    pub with_options: Vec<SqlOption>,
+    pub format: Option<Format>,
+    pub envelope: Envelope,
+    pub if_not_exists: bool,
+    pub materialized: bool,
+}
+
+impl AstDisplay for CreateSourceStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE ");
+        if self.materialized {
+            f.write_str("MATERIALIZED ");
+        }
+        f.write_str("SOURCE ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" ");
+        if !self.col_names.is_empty() {
+            f.write_str("(");
+            f.write_node(&display::comma_separated(&self.col_names));
+            f.write_str(") ");
+        }
+        f.write_str("FROM ");
+        f.write_node(&self.connector);
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+        if let Some(format) = &self.format {
+            f.write_str(" FORMAT ");
+            f.write_node(format);
+        }
+        if self.envelope != Default::default() {
+            f.write_str(" ENVELOPE ");
+            f.write_node(&self.envelope);
+        }
+    }
+}
+impl_display!(CreateSourceStatement);
+
+/// `CREATE SINK`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSinkStatement {
+    pub name: ObjectName,
+    pub from: ObjectName,
+    pub connector: Connector,
+    pub with_options: Vec<SqlOption>,
+    pub format: Option<Format>,
+    pub with_snapshot: bool,
+    pub as_of: Option<Expr>,
+    pub if_not_exists: bool,
+}
+
+impl AstDisplay for CreateSinkStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE SINK ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" FROM ");
+        f.write_node(&self.from);
+        f.write_str(" INTO ");
+        f.write_node(&self.connector);
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+        if let Some(format) = &self.format {
+            f.write_str(" FORMAT ");
+            f.write_node(format);
+        }
+        if self.with_snapshot {
+            f.write_str(" WITH SNAPSHOT");
+        } else {
+            f.write_str(" WITHOUT SNAPSHOT");
+        }
+
+        if let Some(as_of) = &self.as_of {
+            f.write_str(" AS OF ");
+            f.write_node(as_of);
+        }
+    }
+}
+impl_display!(CreateSinkStatement);
+
+/// `CREATE VIEW`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateViewStatement {
+    /// View name
+    pub name: ObjectName,
+    pub columns: Vec<Ident>,
+    pub with_options: Vec<SqlOption>,
+    pub query: Box<Query>,
+    pub if_exists: IfExistsBehavior,
+    pub temporary: bool,
+    pub materialized: bool,
+}
+
+impl AstDisplay for CreateViewStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE");
+        if self.if_exists == IfExistsBehavior::Replace {
+            f.write_str(" OR REPLACE");
+        }
+        if self.temporary {
+            f.write_str(" TEMPORARY");
+        }
+        if self.materialized {
+            f.write_str(" MATERIALIZED");
+        }
+
+        f.write_str(" VIEW");
+
+        if self.if_exists == IfExistsBehavior::Skip {
+            f.write_str(" IF NOT EXISTS");
+        }
+
+        f.write_str(" ");
+        f.write_node(&self.name);
+
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+
+        if !self.columns.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.columns));
+            f.write_str(")");
+        }
+
+        f.write_str(" AS ");
+        f.write_node(&self.query);
+    }
+}
+impl_display!(CreateViewStatement);
+
+/// `CREATE TABLE`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateTableStatement {
+    /// Table name
+    pub name: ObjectName,
+    /// Optional schema
+    pub columns: Vec<ColumnDef>,
+    pub constraints: Vec<TableConstraint>,
+    pub with_options: Vec<SqlOption>,
+    pub if_not_exists: bool,
+}
+
+impl AstDisplay for CreateTableStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE TABLE ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.columns));
+        if !self.constraints.is_empty() {
+            f.write_str(", ");
+            f.write_node(&display::comma_separated(&self.constraints));
+        }
+        f.write_str(")");
+
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display!(CreateTableStatement);
+
+/// `CREATE INDEX`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateIndexStatement {
+    /// Optional index name.
+    pub name: Option<Ident>,
+    /// `ON` table or view name
+    pub on_name: ObjectName,
+    /// Expressions that form part of the index key. If not included, the
+    /// key_parts will be inferred from the named object.
+    pub key_parts: Option<Vec<Expr>>,
+    pub if_not_exists: bool,
+}
+
+impl AstDisplay for CreateIndexStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE ");
+        if self.key_parts.is_none() {
+            f.write_str("DEFAULT ");
+        }
+        f.write_str("INDEX ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        if let Some(name) = &self.name {
+            f.write_node(name);
+            f.write_str(" ");
+        }
+        f.write_str("ON ");
+        f.write_node(&self.on_name);
+        if let Some(key_parts) = &self.key_parts {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(key_parts));
+            f.write_str(")");
+        }
+    }
+}
+impl_display!(CreateIndexStatement);
+
+/// `ALTER <OBJECT> ... RENAME TO`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterObjectRenameStatement {
+    pub object_type: ObjectType,
+    pub if_exists: bool,
+    pub name: ObjectName,
+    pub to_item_name: Ident,
+}
+
+impl AstDisplay for AlterObjectRenameStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("ALTER ");
+        f.write_node(&self.object_type);
+        f.write_str(" ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" RENAME TO ");
+        f.write_node(&self.to_item_name);
+    }
+}
+impl_display!(AlterObjectRenameStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropDatabaseStatement {
+    pub name: Ident,
+    pub if_exists: bool,
+}
+
+impl AstDisplay for DropDatabaseStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("DROP DATABASE ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+    }
+}
+impl_display!(DropDatabaseStatement);
+
+/// `DROP`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropObjectsStatement {
+    /// The type of the object to drop: TABLE, VIEW, etc.
+    pub object_type: ObjectType,
+    /// An optional `IF EXISTS` clause. (Non-standard.)
+    pub if_exists: bool,
+    /// One or more objects to drop. (ANSI SQL requires exactly one.)
+    pub names: Vec<ObjectName>,
+    /// Whether `CASCADE` was specified. This will be `false` when
+    /// `RESTRICT` or no drop behavior at all was specified.
+    pub cascade: bool,
+}
+
+impl AstDisplay for DropObjectsStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("DROP ");
+        f.write_node(&self.object_type);
+        f.write_str(" ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&display::comma_separated(&self.names));
+        if self.cascade {
+            f.write_str(" CASCADE");
+        }
+    }
+}
+impl_display!(DropObjectsStatement);
+
+/// `SET <variable>`
+///
+/// Note: this is not a standard SQL statement, but it is supported by at
+/// least MySQL and PostgreSQL. Not all MySQL-specific syntatic forms are
+/// supported yet.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SetVariableStatement {
+    pub local: bool,
+    pub variable: Ident,
+    pub value: SetVariableValue,
+}
+
+impl AstDisplay for SetVariableStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SET ");
+        if self.local {
+            f.write_str("LOCAL ");
+        }
+        f.write_node(&self.variable);
+        f.write_str(" = ");
+        f.write_node(&self.value);
+    }
+}
+impl_display!(SetVariableStatement);
+
+/// `SHOW <variable>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowVariableStatement {
+    pub variable: Ident,
+}
+
+impl AstDisplay for ShowVariableStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW ");
+        f.write_node(&self.variable);
+    }
+}
+impl_display!(ShowVariableStatement);
+
+/// `SHOW DATABASES`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowDatabasesStatement {
+    pub filter: Option<ShowStatementFilter>,
+}
+
+impl AstDisplay for ShowDatabasesStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW DATABASES");
+        if let Some(filter) = &self.filter {
+            f.write_str(" ");
+            f.write_node(filter);
+        }
+    }
+}
+impl_display!(ShowDatabasesStatement);
+
+/// `SHOW <object>S`
+///
+/// ```sql
+/// SHOW TABLES;
+/// SHOW SOURCES;
+/// SHOW VIEWS;
+/// SHOW SINKS;
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowObjectsStatement {
+    pub object_type: ObjectType,
+    pub from: Option<ObjectName>,
+    pub extended: bool,
+    pub full: bool,
+    pub materialized: bool,
+    pub filter: Option<ShowStatementFilter>,
+}
+
+impl AstDisplay for ShowObjectsStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW");
+        if self.extended {
+            f.write_str(" EXTENDED");
+        }
+        if self.full {
+            f.write_str(" FULL");
+        }
+        if self.materialized {
+            f.write_str(" MATERIALIZED");
+        }
+        f.write_str(" ");
+        f.write_str(match &self.object_type {
+            ObjectType::Schema => "SCHEMAS",
+            ObjectType::Table => "TABLES",
+            ObjectType::View => "VIEWS",
+            ObjectType::Source => "SOURCES",
+            ObjectType::Sink => "SINKS",
+            ObjectType::Index => unreachable!(),
+        });
+        if let Some(from) = &self.from {
+            f.write_str(" FROM ");
+            f.write_node(&from);
+        }
+        if let Some(filter) = &self.filter {
+            f.write_str(" ");
+            f.write_node(filter);
+        }
+    }
+}
+impl_display!(ShowObjectsStatement);
+
+/// `SHOW INDEX|INDEXES|KEYS`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowIndexesStatement {
+    pub table_name: ObjectName,
+    pub extended: bool,
+    pub filter: Option<ShowStatementFilter>,
+}
+
+impl AstDisplay for ShowIndexesStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW ");
+        if self.extended {
+            f.write_str("EXTENDED ");
+        }
+        f.write_str("INDEXES FROM ");
+        f.write_node(&self.table_name);
+        if let Some(filter) = &self.filter {
+            f.write_str(" ");
+            f.write_node(filter);
+        }
+    }
+}
+impl_display!(ShowIndexesStatement);
+
+/// `SHOW COLUMNS`
+///
+/// Note: this is a MySQL-specific statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowColumnsStatement {
+    pub extended: bool,
+    pub full: bool,
+    pub table_name: ObjectName,
+    pub filter: Option<ShowStatementFilter>,
+}
+
+impl AstDisplay for ShowColumnsStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW ");
+        if self.extended {
+            f.write_str("EXTENDED ");
+        }
+        if self.full {
+            f.write_str("FULL ");
+        }
+        f.write_str("COLUMNS FROM ");
+        f.write_node(&self.table_name);
+        if let Some(filter) = &self.filter {
+            f.write_str(" ");
+            f.write_node(filter);
+        }
+    }
+}
+impl_display!(ShowColumnsStatement);
+
+/// `SHOW CREATE VIEW <view>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowCreateViewStatement {
+    pub view_name: ObjectName,
+}
+
+impl AstDisplay for ShowCreateViewStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW CREATE VIEW ");
+        f.write_node(&self.view_name);
+    }
+}
+impl_display!(ShowCreateViewStatement);
+
+/// `SHOW CREATE SOURCE <source>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowCreateSourceStatement {
+    pub source_name: ObjectName,
+}
+
+impl AstDisplay for ShowCreateSourceStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW CREATE SOURCE ");
+        f.write_node(&self.source_name);
+    }
+}
+impl_display!(ShowCreateSourceStatement);
+
+/// `SHOW CREATE TABLE <table>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowCreateTableStatement {
+    pub table_name: ObjectName,
+}
+
+impl AstDisplay for ShowCreateTableStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW CREATE TABLE ");
+        f.write_node(&self.table_name);
+    }
+}
+impl_display!(ShowCreateTableStatement);
+
+/// `SHOW CREATE SINK <sink>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowCreateSinkStatement {
+    pub sink_name: ObjectName,
+}
+
+impl AstDisplay for ShowCreateSinkStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW CREATE SINK ");
+        f.write_node(&self.sink_name);
+    }
+}
+impl_display!(ShowCreateSinkStatement);
+
+/// `SHOW CREATE INDEX <index>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowCreateIndexStatement {
+    pub index_name: ObjectName,
+}
+
+impl AstDisplay for ShowCreateIndexStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW CREATE INDEX ");
+        f.write_node(&self.index_name);
+    }
+}
+impl_display!(ShowCreateIndexStatement);
+
+/// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StartTransactionStatement {
+    pub modes: Vec<TransactionMode>,
+}
+
+impl AstDisplay for StartTransactionStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("START TRANSACTION");
+        if !self.modes.is_empty() {
+            f.write_str(" ");
+            f.write_node(&display::comma_separated(&self.modes));
+        }
+    }
+}
+impl_display!(StartTransactionStatement);
+
+/// `SET TRANSACTION ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SetTransactionStatement {
+    pub modes: Vec<TransactionMode>,
+}
+
+impl AstDisplay for SetTransactionStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SET TRANSACTION");
+        if !self.modes.is_empty() {
+            f.write_str(" ");
+            f.write_node(&display::comma_separated(&self.modes));
+        }
+    }
+}
+impl_display!(SetTransactionStatement);
+
+/// `COMMIT [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CommitStatement {
+    pub chain: bool,
+}
+
+impl AstDisplay for CommitStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("COMMIT");
+        if self.chain {
+            f.write_str(" AND CHAIN");
+        }
+    }
+}
+impl_display!(CommitStatement);
+
+/// `ROLLBACK [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RollbackStatement {
+    pub chain: bool,
+}
+
+impl AstDisplay for RollbackStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("ROLLBACK");
+        if self.chain {
+            f.write_str(" AND CHAIN");
+        }
+    }
+}
+impl_display!(RollbackStatement);
+
+/// `TAIL`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TailStatement {
+    pub name: ObjectName,
+    pub with_snapshot: bool,
+    pub as_of: Option<Expr>,
+}
+
+impl AstDisplay for TailStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("TAIL ");
+        f.write_node(&self.name);
+
+        if self.with_snapshot {
+            f.write_str(" WITH SNAPSHOT");
+        } else {
+            f.write_str(" WITHOUT SNAPSHOT");
+        }
+        if let Some(as_of) = &self.as_of {
+            f.write_str(" AS OF ");
+            f.write_node(as_of);
+        }
+    }
+}
+impl_display!(TailStatement);
+
+/// `EXPLAIN ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainStatement {
+    pub stage: ExplainStage,
+    pub explainee: Explainee,
+    pub options: ExplainOptions,
+}
+
+impl AstDisplay for ExplainStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("EXPLAIN ");
+        if self.options.typed {
+            f.write_str("TYPED ");
+        }
+        f.write_node(&self.stage);
+        f.write_str(" FOR ");
+        f.write_node(&self.explainee);
+    }
+}
+impl_display!(ExplainStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsertSource {

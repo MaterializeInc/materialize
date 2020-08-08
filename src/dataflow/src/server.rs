@@ -150,6 +150,8 @@ pub enum SequencedCommand {
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
+    /// Request that persistence data is streamed to the provided channel.
+    EnablePersistence(comm::mpsc::Sender<WorkerPersistenceData>),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
@@ -161,6 +163,24 @@ pub struct WorkerFeedbackWithMeta {
     pub worker_id: usize,
     /// The feedback itself.
     pub message: WorkerFeedback,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Source data that gets sent to the persistence thread to place in persistent storage.
+/// TODO currently fairly Kafka input-centric.
+pub struct WorkerPersistenceData {
+    /// Global Id of the Source whose data is being persisted.
+    pub source_id: GlobalId,
+    /// Partition the record belongs to.
+    pub partition: i32,
+    /// Offset where we found the message.
+    pub offset: i64,
+    /// Timestamp assigned to the message.
+    pub timestamp: Timestamp,
+    /// The key of the message.
+    pub key: Vec<u8>,
+    /// The data of the message.
+    pub payload: Vec<u8>,
 }
 
 /// Responses the worker can provide back to the coordinator.
@@ -228,6 +248,7 @@ where
                     ts_histories: Default::default(),
                     ts_source_updates: Default::default(),
                     dataflow_tokens: HashMap::new(),
+                    persistence_tx: None,
                 },
                 logging_config: logging_config.clone(),
                 materialized_logger: None,
@@ -705,6 +726,9 @@ where
                     Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
                         |err| panic!("error sending worker feedback: {}", err),
                     )));
+            }
+            SequencedCommand::EnablePersistence(tx) => {
+                self.render_state.persistence_tx = Some(tx);
             }
             SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually

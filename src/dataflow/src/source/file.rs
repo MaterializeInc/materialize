@@ -8,10 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
-use std::io::{BufRead, Read};
+use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Error};
 use log::error;
@@ -21,7 +20,9 @@ use timely::scheduling::{Activator, SyncActivator};
 
 use avro::types::Value;
 use avro::{AvroRead, Schema, Skip};
-use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset};
+use dataflow_types::{
+    AvroOcfEncoding, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
+};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::server::{
@@ -71,7 +72,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
         active: bool,
         _: usize,
         _: usize,
-        consumer_activator: Arc<Mutex<SyncActivator>>,
+        consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         encoding: DataEncoding,
@@ -79,7 +80,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
         let receiver = match connector {
             ExternalSourceConnector::AvroOcf(oc) => {
                 let reader_schema = match &encoding {
-                    DataEncoding::AvroOcf { reader_schema } => reader_schema,
+                    DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => reader_schema,
                     _ => unreachable!(
                         "Internal error: \
                                          Avro OCF schema should have already been resolved.\n\
@@ -127,7 +128,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         active: bool,
         _: usize,
         _: usize,
-        consumer_activator: Arc<Mutex<SyncActivator>>,
+        consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         _: DataEncoding,
@@ -284,7 +285,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
 pub fn read_file_task<Ctor, I, Out, Err>(
     path: PathBuf,
     tx: std::sync::mpsc::SyncSender<Result<Out, anyhow::Error>>,
-    activator: Option<Arc<Mutex<SyncActivator>>>,
+    activator: Option<SyncActivator>,
     read_style: FileReadStyle,
     iter_ctor: Ctor,
 ) where
@@ -395,12 +396,10 @@ struct ForeverTailedFile<Ev, Handle> {
 }
 
 impl<Ev, H> Skip for ForeverTailedFile<Ev, H> {
-    fn skip(&mut self, len: usize) -> Result<(), anyhow::Error> {
+    fn skip(&mut self, len: usize) -> Result<(), io::Error> {
         self.inner.skip(len)
     }
 }
-
-impl<Ev, H> AvroRead for ForeverTailedFile<Ev, H> {}
 
 impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -429,7 +428,7 @@ impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
 fn send_records<I, Out, Err>(
     iter: I,
     tx: std::sync::mpsc::SyncSender<Result<Out, anyhow::Error>>,
-    activator: Option<Arc<Mutex<SyncActivator>>>,
+    activator: Option<SyncActivator>,
 ) where
     I: IntoIterator<Item = Result<Out, Err>>,
     Err: Into<anyhow::Error>,
@@ -446,11 +445,7 @@ fn send_records<I, Out, Err>(
         // appends an address to a list for each activation which
         // looks like it will be per-record in this case.
         if let Some(activator) = &activator {
-            activator
-                .lock()
-                .expect("activator lock poisoned")
-                .activate()
-                .expect("activation failed");
+            activator.activate().expect("activation failed");
         }
     }
 }

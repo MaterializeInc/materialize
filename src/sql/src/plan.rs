@@ -30,7 +30,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
-use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector, Timestamp};
+use dataflow_types::{SinkConnectorBuilder, SourceConnector, Timestamp};
 use repr::{ColumnName, RelationDesc, Row, ScalarType};
 
 use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
@@ -189,6 +189,16 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<::expr::ScalarExpr>,
+}
+
+/// Specifies when a `Peek` should occur.
+#[derive(Debug, PartialEq)]
+pub enum PeekWhen {
+    /// The peek should occur at the latest possible timestamp that allows the
+    /// peek to complete immediately.
+    Immediately,
+    /// The peek should occur at the specified timestamp.
+    AtTimestamp(Timestamp),
 }
 
 #[derive(Debug)]

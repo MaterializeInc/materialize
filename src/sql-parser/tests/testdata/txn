@@ -23,70 +23,70 @@ START TRANSACTION READ ONLY, READ WRITE, ISOLATION LEVEL SERIALIZABLE
 ----
 START TRANSACTION READ ONLY, READ WRITE, ISOLATION LEVEL SERIALIZABLE
 =>
-StartTransaction { modes: [AccessMode(ReadOnly), AccessMode(ReadWrite), IsolationLevel(Serializable)] }
+StartTransaction(StartTransactionStatement { modes: [AccessMode(ReadOnly), AccessMode(ReadWrite), IsolationLevel(Serializable)] })
 
 parse-statement
 START TRANSACTION READ ONLY READ WRITE ISOLATION LEVEL SERIALIZABLE
 ----
 START TRANSACTION READ ONLY, READ WRITE, ISOLATION LEVEL SERIALIZABLE
 =>
-StartTransaction { modes: [AccessMode(ReadOnly), AccessMode(ReadWrite), IsolationLevel(Serializable)] }
+StartTransaction(StartTransactionStatement { modes: [AccessMode(ReadOnly), AccessMode(ReadWrite), IsolationLevel(Serializable)] })
 
 parse-statement
 START TRANSACTION
 ----
 START TRANSACTION
 =>
-StartTransaction { modes: [] }
+StartTransaction(StartTransactionStatement { modes: [] })
 
 parse-statement
 BEGIN
 ----
 START TRANSACTION
 =>
-StartTransaction { modes: [] }
+StartTransaction(StartTransactionStatement { modes: [] })
 
 parse-statement
 BEGIN WORK
 ----
 START TRANSACTION
 =>
-StartTransaction { modes: [] }
+StartTransaction(StartTransactionStatement { modes: [] })
 
 parse-statement
 BEGIN TRANSACTION
 ----
 START TRANSACTION
 =>
-StartTransaction { modes: [] }
+StartTransaction(StartTransactionStatement { modes: [] })
 
 parse-statement
 START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 ----
 START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 =>
-StartTransaction { modes: [IsolationLevel(ReadUncommitted)] }
+StartTransaction(StartTransactionStatement { modes: [IsolationLevel(ReadUncommitted)] })
 
 parse-statement
 START TRANSACTION ISOLATION LEVEL READ COMMITTED
 ----
 START TRANSACTION ISOLATION LEVEL READ COMMITTED
 =>
-StartTransaction { modes: [IsolationLevel(ReadCommitted)] }
+StartTransaction(StartTransactionStatement { modes: [IsolationLevel(ReadCommitted)] })
 
 parse-statement
 START TRANSACTION ISOLATION LEVEL REPEATABLE READ
 ----
 START TRANSACTION ISOLATION LEVEL REPEATABLE READ
 =>
-StartTransaction { modes: [IsolationLevel(RepeatableRead)] }
+StartTransaction(StartTransactionStatement { modes: [IsolationLevel(RepeatableRead)] })
 
 parse-statement
 START TRANSACTION ISOLATION LEVEL SERIALIZABLE
 ----
 START TRANSACTION ISOLATION LEVEL SERIALIZABLE
 =>
-StartTransaction { modes: [IsolationLevel(Serializable)] }
+StartTransaction(StartTransactionStatement { modes: [IsolationLevel(Serializable)] })
 
 parse-statement
 START TRANSACTION ISOLATION LEVEL BAD
@@ -120,130 +120,130 @@ SET TRANSACTION READ ONLY, READ WRITE, ISOLATION LEVEL SERIALIZABLE
 ----
 SET TRANSACTION READ ONLY, READ WRITE, ISOLATION LEVEL SERIALIZABLE
 =>
-SetTransaction { modes: [AccessMode(ReadOnly), AccessMode(ReadWrite), IsolationLevel(Serializable)] }
+SetTransaction(SetTransactionStatement { modes: [AccessMode(ReadOnly), AccessMode(ReadWrite), IsolationLevel(Serializable)] })
 
 parse-statement
 COMMIT
 ----
 COMMIT
 =>
-Commit { chain: false }
+Commit(CommitStatement { chain: false })
 
 parse-statement
 COMMIT AND CHAIN
 ----
 COMMIT AND CHAIN
 =>
-Commit { chain: true }
+Commit(CommitStatement { chain: true })
 
 parse-statement
 COMMIT AND NO CHAIN
 ----
 COMMIT
 =>
-Commit { chain: false }
+Commit(CommitStatement { chain: false })
 
 parse-statement
 COMMIT WORK AND NO CHAIN
 ----
 COMMIT
 =>
-Commit { chain: false }
+Commit(CommitStatement { chain: false })
 
 parse-statement
 COMMIT TRANSACTION AND NO CHAIN
 ----
 COMMIT
 =>
-Commit { chain: false }
+Commit(CommitStatement { chain: false })
 
 parse-statement
 COMMIT WORK AND CHAIN
 ----
 COMMIT AND CHAIN
 =>
-Commit { chain: true }
+Commit(CommitStatement { chain: true })
 
 parse-statement
 COMMIT TRANSACTION AND CHAIN
 ----
 COMMIT AND CHAIN
 =>
-Commit { chain: true }
+Commit(CommitStatement { chain: true })
 
 parse-statement
 COMMIT WORK
 ----
 COMMIT
 =>
-Commit { chain: false }
+Commit(CommitStatement { chain: false })
 
 parse-statement
 COMMIT TRANSACTION
 ----
 COMMIT
 =>
-Commit { chain: false }
+Commit(CommitStatement { chain: false })
 
 parse-statement
 ROLLBACK
 ----
 ROLLBACK
 =>
-Rollback { chain: false }
+Rollback(RollbackStatement { chain: false })
 
 parse-statement
 ROLLBACK AND CHAIN
 ----
 ROLLBACK AND CHAIN
 =>
-Rollback { chain: true }
+Rollback(RollbackStatement { chain: true })
 
 parse-statement
 ROLLBACK AND NO CHAIN
 ----
 ROLLBACK
 =>
-Rollback { chain: false }
+Rollback(RollbackStatement { chain: false })
 
 parse-statement
 ROLLBACK WORK AND NO CHAIN
 ----
 ROLLBACK
 =>
-Rollback { chain: false }
+Rollback(RollbackStatement { chain: false })
 
 parse-statement
 ROLLBACK TRANSACTION AND NO CHAIN
 ----
 ROLLBACK
 =>
-Rollback { chain: false }
+Rollback(RollbackStatement { chain: false })
 
 parse-statement
 ROLLBACK WORK AND CHAIN
 ----
 ROLLBACK AND CHAIN
 =>
-Rollback { chain: true }
+Rollback(RollbackStatement { chain: true })
 
 parse-statement
 ROLLBACK TRANSACTION AND CHAIN
 ----
 ROLLBACK AND CHAIN
 =>
-Rollback { chain: true }
+Rollback(RollbackStatement { chain: true })
 
 parse-statement
 ROLLBACK WORK
 ----
 ROLLBACK
 =>
-Rollback { chain: false }
+Rollback(RollbackStatement { chain: false })
 
 parse-statement
 ROLLBACK TRANSACTION
 ----
 ROLLBACK
 =>
-Rollback { chain: false }
+Rollback(RollbackStatement { chain: false })

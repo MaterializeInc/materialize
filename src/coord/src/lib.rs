@@ -23,6 +23,7 @@
 mod catalog;
 mod command;
 mod coord;
+mod persistence;
 mod sink_connector;
 mod timestamp;
 mod util;
@@ -30,5 +31,6 @@ mod util;
 pub mod session;
 
 pub use self::coord::{dump_catalog, Config, Coordinator};
+pub use self::persistence::PersistenceConfig;
 pub use self::timestamp::TimestampConfig;
 pub use command::{Command, ExecuteResponse, Response, RowsFuture, StartupMessage};
