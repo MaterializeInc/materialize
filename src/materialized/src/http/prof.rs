@@ -106,12 +106,10 @@ mod disabled {
                 mem_prof: MemProfilingStatus::Disabled,
             })),
             &Method::POST => handle_post(req).await,
-            method => {
-                Ok(util::error_response(
-                    StatusCode::BAD_REQUEST,
-                    format!("Unrecognized request method: {:?}", method),
-                ))
-            }
+            method => Ok(util::error_response(
+                StatusCode::BAD_REQUEST,
+                format!("Unrecognized request method: {:?}", method),
+            )),
         }
     }
 
