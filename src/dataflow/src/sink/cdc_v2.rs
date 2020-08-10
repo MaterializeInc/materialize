@@ -52,6 +52,45 @@ pub trait BytesSource {
     fn poll(&mut self) -> Option<&[u8]>;
 }
 
+pub struct YieldingIter<I> {
+    /// When set, a time from which
+    start: Option<std::time::Instant>,
+    after: std::time::Duration,
+    iter: I,
+}
+
+impl<I> YieldingIter<I> {
+    fn new_from(iter: I, yield_after: std::time::Duration) -> Self {
+        Self {
+            start: None,
+            after: yield_after,
+            iter,
+        }
+    }
+}
+
+impl<I: Iterator> Iterator for YieldingIter<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start.is_none() {
+            self.start = Some(std::time::Instant::now());
+        }
+        let start = self.start.as_ref().unwrap();
+        if start.elapsed() > self.after {
+            self.start = None;
+            None
+        } else {
+            match self.iter.next() {
+                Some(x) => Some(x),
+                None => {
+                    self.start = None;
+                    None
+                }
+            }
+        }
+    }
+}
+
 /// A simple sink for byte slices.
 pub trait BytesSink {
     /// Returns an amount of time to wait before retrying, or `None` for success.
@@ -278,7 +317,7 @@ pub mod source {
     /// is invoked with a `SyncActivator` that will re-activate the source.
     pub fn build<G, B, I, D, T, R>(
         scope: G,
-        mut source_builder: B,
+        source_builder: B,
     ) -> (Box<dyn std::any::Any>, Stream<G, (D, T, R)>)
     where
         G: Scope<Timestamp = T>,
@@ -334,6 +373,7 @@ pub mod source {
         // Step 1: The MESSAGES operator.
         let mut messages_op = OperatorBuilder::new("CDCV2_Messages".to_string(), scope.clone());
         let activator = scope.sync_activator_for(&messages_op.operator_info().address);
+        let activator2 = scope.activator_for(&messages_op.operator_info().address);
         let mut source = source_builder(activator);
         let (mut updates_out, updates) = messages_op.new_output();
         let (mut progress_out, progress) = messages_op.new_output();
@@ -357,6 +397,7 @@ pub mod source {
 
                         // We presume the iterator will yield if appropriate.
                         while let Some(message) = source.next() {
+                            // println!("received: {:?}", message);
                             match message {
                                 Message::Updates(mut updates) => {
                                     updates_session.give_vec(&mut updates);
@@ -418,8 +459,8 @@ pub mod source {
                     let mut counts_session = counts.session(&capability);
                     for update in updates.iter() {
                         if frontiers[0].less_equal(&update.1) {
-                            if !pending.insert(update.clone()) {
-                                change_batch.update((update.1).clone(), 1);
+                            if pending.insert(update.clone()) {
+                                change_batch.update((update.1).clone(), -1);
                                 changes_session.give(update.clone());
                             }
                         }
@@ -447,9 +488,9 @@ pub mod source {
             use timely::progress::{frontier::AntichainRef, Antichain};
 
             let mut progress_queue = Vec::new();
-            let mut progress_frontier = Antichain::new();
+            let mut progress_frontier = Antichain::from_elem(T::minimum());
             let mut updates_frontier = MutableAntichain::new();
-            let mut reported_frontier = Antichain::new();
+            let mut reported_frontier = Antichain::from_elem(T::minimum());
 
             move |_frontiers| {
                 let mut frontier = frontier_out.activate();
@@ -551,6 +592,7 @@ pub mod source {
                         capabilities[0] = capset_u;
                         capabilities[1] = capset_p;
                     }
+                    activator2.activate();
                 }
             }
         });
@@ -707,15 +749,58 @@ pub mod sink {
 
 pub mod kafka {
 
-    use std::sync::{Arc, Mutex};
+    use serde::{Serialize, Deserialize};
     use timely::scheduling::SyncActivator;
     use rdkafka::{ClientContext, config::ClientConfig};
     use rdkafka::consumer::{BaseConsumer, ConsumerContext};
     use rdkafka::error::{KafkaError, RDKafkaError};
     use super::BytesSink;
 
+    use std::hash::Hash;
+    use timely::progress::Timestamp;
+    use timely::dataflow::{Scope, Stream};
+    use differential_dataflow::ExchangeData;
+    use differential_dataflow::lattice::Lattice;
+
+    /// Creates a Kafka source from supplied configuration information.
+    pub fn create_source<G, D, T, R>(scope: G, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any>, Stream<G, (D, T, R)>)
+    where
+        G: Scope<Timestamp = T>,
+        D: ExchangeData + Hash + for<'a> serde::Deserialize<'a>,
+        T: ExchangeData + Hash + for<'a> serde::Deserialize<'a> + Timestamp + Lattice,
+        R: ExchangeData + Hash + for<'a> serde::Deserialize<'a>,
+    {
+        super::source::build(scope, |activator| {
+            let source = KafkaSource::new(addr, topic, group, activator);
+            super::YieldingIter::new_from(Iter::<D,T,R>::new_from(source), std::time::Duration::from_millis(10))
+        })
+    }
+
+    pub fn create_sink<G, D, T, R>(stream: &Stream<G, (D, T, R)>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
+    where
+        G: Scope<Timestamp = T>,
+        D: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
+        T: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a> + Timestamp + Lattice,
+        R: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
+    {
+        use std::rc::Rc;
+        use std::cell::RefCell;
+        use differential_dataflow::hashable::Hashable;
+
+        let sink = KafkaSink::new(addr, topic);
+        let result = Rc::new(RefCell::new(sink));
+        let sink_hash = (addr.to_string(), topic.to_string()).hashed();
+        super::sink::build(
+            &stream,
+            sink_hash,
+            Rc::downgrade(&result),
+            Rc::downgrade(&result),
+        );
+        Box::new(result)
+
+    }
+
     pub struct KafkaSource {
-        topic: String,
         consumer: BaseConsumer<ActivationConsumerContext>,
     }
 
@@ -732,27 +817,62 @@ pub mod kafka {
             kafka_config.set("fetch.message.max.bytes", "134217728");
             kafka_config.set("group.id", group);
             kafka_config.set("isolation.level", "read_committed");
-            let activator = ActivationConsumerContext(Arc::new(Mutex::new(activator)));
+            let activator = ActivationConsumerContext(activator);
             let consumer = kafka_config.create_with_context::<_, BaseConsumer<_>>(activator).unwrap();
+            use rdkafka::consumer::Consumer;
+            consumer.subscribe(&[topic]).unwrap();
             Self {
-                topic: topic.to_string(),
                 consumer,
             }
         }
     }
 
+    pub struct Iter<D, T, R> {
+        pub source: KafkaSource,
+        phantom: std::marker::PhantomData<(D, T, R)>,
+    }
+
+    impl<D, T, R> Iter<D, T, R> {
+        /// Constructs a new iterator from a bytes source.
+        pub fn new_from(source: KafkaSource) -> Self {
+            Self {
+                source,
+                phantom: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<D, T, R> Iterator for Iter<D, T, R>
+    where
+        D: for<'a>Deserialize<'a>,
+        T: for<'a>Deserialize<'a>,
+        R: for<'a>Deserialize<'a>,
+    {
+        type Item = super::Message<D, T, R>;
+        fn next(&mut self) -> Option<Self::Item> {
+            use rdkafka::message::Message;
+            self.source
+                .consumer
+                .poll(std::time::Duration::from_millis(0))
+                .and_then(|result| {
+                    // println!("Result: {:?}", result);
+                    result.ok()
+                })
+                .and_then(|message| {
+                    message.payload().and_then(|message| bincode::deserialize::<super::Message<D, T, R>>(message).ok())
+                })
+        }
+    }
+
     /// An implementation of [`ConsumerContext`] that unparks the wrapped thread
     /// when the message queue switches from nonempty to empty.
-    struct ActivationConsumerContext(Arc<Mutex<SyncActivator>>);
+    struct ActivationConsumerContext(SyncActivator);
 
     impl ClientContext for ActivationConsumerContext { }
 
     impl ActivationConsumerContext {
         fn activate(&self) {
-            let activator = self.0.lock().unwrap();
-            activator
-                .activate()
-                .expect("timely operator hung up while Kafka source active");
+            self.0.activate().unwrap();
         }
     }
 
