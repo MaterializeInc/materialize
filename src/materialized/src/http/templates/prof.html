@@ -3,7 +3,7 @@
 {% block title %}Profiling{% endblock %}
 
 {% block content %}
-<h2>Memory profiling</h2>
+<h2>Memory Profiling</h2>
 {% match mem_prof %}
 {% when crate::http::prof::MemProfilingStatus::Enabled with (start_time) %}
   {% match start_time %}
