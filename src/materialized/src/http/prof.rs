@@ -107,7 +107,7 @@ mod disabled {
             })),
             &Method::POST => handle_post(req).await,
             method => {
-                return Ok(util::error_response(
+                Ok(util::error_response(
                     StatusCode::BAD_REQUEST,
                     format!("Unrecognized request method: {:?}", method),
                 ))
