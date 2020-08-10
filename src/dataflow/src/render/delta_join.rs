@@ -332,7 +332,9 @@ where
 
 /// Filters updates on some columns by predicates that are ready to go.
 ///
-/// The `predicates` argument has all applied predicates removed.
+/// Both the `predicates` and `equivalences` arguments will have all applied
+/// predicates removed. Importantly, `equivalences` equates expressions with
+/// the `Datum::eq` method, not `BinaryFunc::eq` which does not equate `Null`.
 pub fn build_filter<G>(
     updates: Collection<G, Row>,
     source_columns: &[usize],
@@ -356,11 +358,15 @@ where
     });
     // Extract equivalences fully supported by available columns.
     // This only happens if at least *two* expressions are fully supported.
+    // Importantly, we should *not* use `BinaryFunc::Eq` to compare these
+    // terms, as this would cause `Datum::Null` to not match.
+    let mut ready_equivalences = Vec::new();
     for equivalence in equivalences.iter_mut() {
         if let Some(pos) = equivalence
             .iter()
             .position(|e| e.support().into_iter().all(|c| source_columns.contains(&c)))
         {
+            let mut should_equate = Vec::new();
             let mut cursor = pos + 1;
             while cursor < equivalence.len() {
                 if equivalence[cursor]
@@ -369,19 +375,20 @@ where
                     .all(|c| source_columns.contains(&c))
                 {
                     // Remove expression and equate with the first bound expression.
-                    ready_to_go.push(ScalarExpr::CallBinary {
-                        func: expr::BinaryFunc::Eq,
-                        expr1: Box::new(equivalence[pos].clone()),
-                        expr2: Box::new(equivalence.remove(cursor)),
-                    })
+                    should_equate.push(equivalence.remove(cursor));
                 } else {
                     cursor += 1;
                 }
+            }
+            if !should_equate.is_empty() {
+                should_equate.push(equivalence[pos].clone());
+                ready_equivalences.push(should_equate);
             }
         }
     }
     equivalences.retain(|e| e.len() > 1);
 
+    // Rewrite column references to their locations under `source_columns`.
     for expr in ready_to_go.iter_mut() {
         expr.visit_mut(&mut |e| {
             if let ScalarExpr::Column(c) = e {
@@ -392,16 +399,38 @@ where
             }
         })
     }
+    for exprs in ready_equivalences.iter_mut() {
+        for expr in exprs.iter_mut() {
+            expr.visit_mut(&mut |e| {
+                if let ScalarExpr::Column(c) = e {
+                    *c = source_columns
+                        .iter()
+                        .position(|x| x == c)
+                        .expect("Column not found in source_columns");
+                }
+            });
+        }
+    }
 
-    if ready_to_go.is_empty() {
+    // Apply a filter if either list of constraints is non-empty.
+    if ready_to_go.is_empty() && ready_equivalences.is_empty() {
         (updates, None)
     } else {
-        let temp_storage = repr::RowArena::new();
         let (ok_collection, err_collection) = updates.filter_fallible(move |input_row| {
+            let temp_storage = repr::RowArena::new();
             let datums = input_row.unpack();
             for p in &ready_to_go {
                 if p.eval(&datums, &temp_storage)? != Datum::True {
                     return Ok(false);
+                }
+            }
+            for exprs in &ready_equivalences {
+                // Each list of expressions should be equal to the same value.
+                let val = exprs[0].eval(&datums, &temp_storage)?;
+                for expr in exprs[1..].iter() {
+                    if expr.eval(&datums, &temp_storage)? != val {
+                        return Ok(false);
+                    }
                 }
             }
             Ok::<_, DataflowError>(true)

@@ -266,3 +266,14 @@ where
 2  l2  2  2  2  3
 2  l2  2  2  2  3
 3  l3  2  2  2  3
+
+# Test that joins with an `(= #x null)` constraint pass records, rather than drop them.
+query III rowsort
+SELECT * FROM
+    (((SELECT 1 FROM l2) LEFT JOIN
+    (SELECT 1 FROM r2) ON false) LEFT JOIN (SELECT 1 FROM r2) ON false);
+----
+1  NULL  NULL
+1  NULL  NULL
+1  NULL  NULL
+1  NULL  NULL
