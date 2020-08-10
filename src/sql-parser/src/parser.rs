@@ -1151,7 +1151,7 @@ impl Parser {
         // the string actually represents a known keyword...
         assert!(keywords::ALL_KEYWORDS.contains(&expected));
         match self.peek_token() {
-            Some(Token::Word(ref k)) if expected.eq_ignore_ascii_case(&k.keyword) => {
+            Some(Token::Word(ref k)) if k.keyword == expected => {
                 self.next_token();
                 true
             }
@@ -1185,13 +1185,15 @@ impl Parser {
             );
         }
         match self.peek_token() {
-            Some(Token::Word(ref k)) => keywords
-                .iter()
-                .find(|keyword| keyword.eq_ignore_ascii_case(&k.keyword))
-                .map(|keyword| {
-                    self.next_token();
-                    *keyword
-                }),
+            Some(Token::Word(ref k)) => {
+                keywords
+                    .iter()
+                    .find(|keyword| k.keyword == **keyword)
+                    .map(|keyword| {
+                        self.next_token();
+                        *keyword
+                    })
+            }
             _ => None,
         }
     }
