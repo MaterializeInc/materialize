@@ -1,5 +1,5 @@
 [package]
-name = "prof"
+name = "prof-common"
 edition = "2018"
 publish = false
 version = "0.1.0"
@@ -7,8 +7,5 @@ version = "0.1.0"
 [dependencies]
 anyhow = "1.0.32"
 backtrace = "0.3"
-jemalloc-ctl = { version = "0.3", features = ["use_std"] }
-lazy_static = "1.4.0"
-tempfile = "3.1"
 pprof = "0.3.18"
 tokio = { version = "0.2", features = ["time"] }

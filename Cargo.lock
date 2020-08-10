@@ -1795,7 +1795,8 @@ dependencies = [
  "postgres",
  "postgres-openssl",
  "predicates",
- "prof",
+ "prof-common",
+ "prof-jemalloc",
  "prometheus",
  "rdkafka-sys",
  "repr",
@@ -2733,7 +2734,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "prof"
+name = "prof-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "backtrace",
+ "pprof",
+ "tokio",
+]
+
+[[package]]
+name = "prof-jemalloc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2741,6 +2752,7 @@ dependencies = [
  "jemalloc-ctl",
  "lazy_static",
  "pprof",
+ "prof-common",
  "tempfile",
  "tokio",
 ]

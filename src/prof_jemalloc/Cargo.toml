@@ -1,0 +1,15 @@
+[package]
+name = "prof-jemalloc"
+edition = "2018"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1.0.32"
+backtrace = "0.3"
+jemalloc-ctl = { version = "0.3", features = ["use_std"] }
+lazy_static = "1.4.0"
+tempfile = "3.1"
+pprof = "0.3.18"
+prof-common = { path = "../prof_common" }
+tokio = { version = "0.2", features = ["time"] }

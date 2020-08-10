@@ -5,7 +5,7 @@
 {% block content %}
 <h2>Memory profiling</h2>
 {% match mem_prof %}
-{% when Some with (start_time) %}
+{% when crate::http::prof::MemProfilingStatus::Enabled with (start_time) %}
   {% match start_time %}
   {% when Some with (time) %}
     {% match time %}
@@ -25,7 +25,7 @@
         <button type="submit" name="action" value="activate">Activate</button>
       </form>
   {% endmatch %}
-{% when None %}
+{% when crate::http::prof::MemProfilingStatus::Disabled %}
     <p>Jemalloc profiling is not available.</p>
     {% if std::env::consts::OS == "macos" %}
     <p>
@@ -45,8 +45,6 @@
     <input type="checkbox" id="mergeThreads" name="threads" value="merge" />
     <label for="mergeThreads">Merge threads</label>
   </div>
-  <div>
   <button name="action" value="time_fg">Visualize time profile (flamegraph)</button>
-  </div>
 </form>
 {% endblock %}

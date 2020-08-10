@@ -9,14 +9,16 @@
 
 //! Profiling HTTP endpoints.
 
-use std::future::Future;
+use std::fmt::Write;
+use std::{borrow::Cow, cell::RefCell, collections::HashMap, future::Future, time::Duration};
 
 use askama::Template;
 use cfg_if::cfg_if;
 use hyper::{Body, Request, Response};
 
+use super::util;
 use crate::http::Server;
-use prof::ProfStartTime;
+use prof_common::{collate_stacks, time::prof_time, ProfStartTime, StackProfile};
 
 impl Server {
     pub fn handle_prof(
@@ -33,56 +35,124 @@ impl Server {
     }
 }
 
+enum MemProfilingStatus {
+    Disabled,
+    Enabled(Option<ProfStartTime>),
+}
+
 #[derive(Template)]
 #[template(path = "http/templates/prof.html")]
 struct ProfTemplate<'a> {
     version: &'a str,
-    mem_prof: Option<Option<ProfStartTime>>,
+    mem_prof: MemProfilingStatus,
+}
+
+#[derive(Template)]
+#[template(path = "http/templates/flamegraph.html")]
+struct FlamegraphTemplate<'a> {
+    version: &'a str,
+    title: &'a str,
+    data_json: &'a str,
+}
+
+async fn time_prof<'a>(
+    params: &HashMap<Cow<'a, str>, Cow<'a, str>>,
+) -> anyhow::Result<Response<Body>> {
+    let merge_threads = params.get("threads").map(AsRef::as_ref) == Some("merge");
+    let stacks = prof_time(Duration::from_secs(10), 99, merge_threads).await?;
+    flamegraph(stacks, "CPU Time Flamegraph")
+}
+
+fn flamegraph(stacks: StackProfile, title: &str) -> anyhow::Result<Response<Body>> {
+    let collated = collate_stacks(stacks);
+    let data_json = RefCell::new(String::new());
+    collated.dfs(
+        |node| {
+            write!(
+                data_json.borrow_mut(),
+                "{{\"name\": \"{}\",\"value\":{},\"children\":[",
+                node.name,
+                node.weight
+            )
+            .unwrap(); // String's `std::fmt::Write` implementation never fails
+        },
+        |_node, is_last| {
+            data_json.borrow_mut().push_str("]}");
+            if !is_last {
+                data_json.borrow_mut().push_str(",");
+            }
+        },
+    );
+    let data_json = &*data_json.borrow();
+    Ok(util::template_response(FlamegraphTemplate {
+        version: crate::VERSION,
+        title,
+        data_json,
+    }))
 }
 
 mod disabled {
-    use hyper::{Body, Request, Response};
+    use hyper::{Body, Method, Request, Response, StatusCode};
 
-    use super::ProfTemplate;
+    use super::{time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;
+    use std::collections::HashMap;
+    use url::form_urlencoded;
 
-    pub async fn handle(_: Request<Body>) -> anyhow::Result<Response<Body>> {
-        Ok(util::template_response(ProfTemplate {
-            version: crate::VERSION,
-            mem_prof: None,
-        }))
+    pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
+        match req.method() {
+            &Method::GET => Ok(util::template_response(ProfTemplate {
+                version: crate::VERSION,
+                mem_prof: MemProfilingStatus::Disabled,
+            })),
+            &Method::POST => handle_post(req).await,
+            method => {
+                return Ok(util::error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Unrecognized request method: {:?}", method),
+                ))
+            }
+        }
+    }
+
+    async fn handle_post(body: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
+        let body = hyper::body::to_bytes(body).await?;
+        let params: HashMap<_, _> = form_urlencoded::parse(&body).collect();
+        let action = match params.get("action") {
+            Some(action) => action,
+            None => {
+                return Ok(util::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "expected `action` parameter",
+                ))
+            }
+        };
+        match action.as_ref() {
+            "time_fg" => time_prof(&params).await,
+            x => Ok(util::error_response(
+                StatusCode::BAD_REQUEST,
+                format!("unrecognized `action` parameter: {}", x),
+            )),
+        }
     }
 }
 
 #[cfg(not(target_os = "macos"))]
 mod enabled {
-    use std::fmt::Write;
+
     use std::io::{BufReader, Read};
     use std::{
-        cell::RefCell,
         collections::HashMap,
         sync::{Arc, Mutex},
-        time::Duration,
     };
 
-    use askama::Template;
     use hyper::{header, Body, Method, Request, Response, StatusCode};
     use url::form_urlencoded;
 
-    use prof::{
-        collate_stacks, parse_jeheap, time::prof_time, JemallocProfCtl, JemallocProfMetadata,
-        StackProfile, PROF_CTL,
-    };
+    use prof_jemalloc::{parse_jeheap, JemallocProfCtl, JemallocProfMetadata, PROF_CTL};
 
-    use super::ProfTemplate;
+    use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;
-
-    #[derive(Template)]
-    #[template(path = "http/templates/flamegraph.html", escape = "none")]
-    struct FlamegraphTemplate<'a> {
-        version: &'a str,
-        data_json: &'a str,
-    }
 
     pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
         match (req.method(), &*PROF_CTL) {
@@ -147,13 +217,9 @@ mod enabled {
                 let f = borrow.dump()?;
                 let r = BufReader::new(f);
                 let stacks = parse_jeheap(r)?;
-                flamegraph(stacks)
+                flamegraph(stacks, "Heap Flamegraph")
             }
-            "time_fg" => {
-                let merge_threads = params.get("threads").map(AsRef::as_ref) == Some("merge");
-                let stacks = prof_time(Duration::from_secs(10), 99, merge_threads).await?;
-                flamegraph(stacks)
-            }
+            "time_fg" => time_prof(&params).await,
             x => Ok(util::error_response(
                 StatusCode::BAD_REQUEST,
                 format!("unrecognized `action` parameter: {}", x),
@@ -161,37 +227,10 @@ mod enabled {
         }
     }
 
-    fn flamegraph(stacks: StackProfile) -> anyhow::Result<Response<Body>> {
-        let collated = collate_stacks(stacks);
-        let data_json = RefCell::new(String::new());
-        collated.dfs(
-            |node| {
-                write!(
-                    data_json.borrow_mut(),
-                    "{{\"name\": \"{}\",\"value\":{},\"children\":[",
-                    node.name,
-                    node.weight
-                )
-                .unwrap(); // String's `std::fmt::Write` implementation never fails
-            },
-            |_node, is_last| {
-                data_json.borrow_mut().push_str("]}");
-                if !is_last {
-                    data_json.borrow_mut().push_str(",");
-                }
-            },
-        );
-        let data_json = &*data_json.borrow();
-        Ok(util::template_response(FlamegraphTemplate {
-            version: crate::VERSION,
-            data_json,
-        }))
-    }
-
     pub fn handle_get(prof_md: JemallocProfMetadata) -> anyhow::Result<Response<Body>> {
         Ok(util::template_response(ProfTemplate {
             version: crate::VERSION,
-            mem_prof: Some(prof_md.start_time),
+            mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
         }))
     }
 }
