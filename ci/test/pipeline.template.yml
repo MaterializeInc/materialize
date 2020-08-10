@@ -104,18 +104,6 @@ steps:
           config: test/kafka-sasl-plain/mzcompose.yml
           run: testdrive
 
-  - id: testdrive-purgatory
-    label: ":racing_car: testdrive purgatory"
-    depends_on: build
-    command: test/testdrive/ci-only/*.td
-    timeout_in_minutes: 30
-    inputs: [test/testdrive/ci-only]
-    soft_fail: true
-    plugins:
-      - ./ci/plugins/mzcompose:
-          config: test/testdrive/mzcompose.yml
-          run: testdrive
-
   - id: short-sqllogictest
     label: ":bulb: Short SQL logic tests"
     depends_on: build
