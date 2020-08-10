@@ -24,3 +24,10 @@ Expected a timestamp value after 'AS OF', found: EOF
 2 1
 3 1
 1 2
+
+# Ensure keyword matching is not case-sensitive for AS OF
+> SELECT * FROM data as of now()
+1 1
+2 1
+3 1
+1 2
