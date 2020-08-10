@@ -935,3 +935,18 @@ Parse error:
 SELECT * FROM a LEFT JOIN LATERAL (b CROSS JOIN c)
                                    ^
 Expected SELECT, VALUES, or a subquery in the query body, found: b
+
+# Ensure parsing AS OF is case-insensitive
+parse-statement
+SELECT * FROM data as of now()
+----
+SELECT * FROM data AS OF now()
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("data")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) })
+
+parse-statement
+SELECT * FROM data AS OF now()
+----
+SELECT * FROM data AS OF now()
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("data")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) })
