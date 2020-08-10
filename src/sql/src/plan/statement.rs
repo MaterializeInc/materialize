@@ -1785,10 +1785,14 @@ fn handle_insert(
     scx: &StatementContext,
     InsertStatement {
         table_name,
-        columns: _,
+        columns,
         source,
     }: InsertStatement,
 ) -> Result<Plan, anyhow::Error> {
+    if !columns.is_empty() {
+        unsupported!("INSERT statement with specified columns");
+    }
+
     match source {
         InsertSource::Query(query) => {
             let table = scx.catalog.get_item(&scx.resolve_item(table_name)?);

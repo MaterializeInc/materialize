@@ -54,6 +54,12 @@ a    b
 ---------
 1    "a"
 
+! INSERT INTO t (a) VALUES (1, 'a');
+INSERT statement with specified columns not yet supported
+
+! INSERT INTO t (b, a) VALUES (1, 'a');
+INSERT statement with specified columns not yet supported
+
 > INSERT INTO t VALUES (2, 'b'), (3, 'c');
 
 > SELECT * FROM t;
