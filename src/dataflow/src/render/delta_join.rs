@@ -356,6 +356,7 @@ where
     });
     // Extract equivalences fully supported by available columns.
     // This only happens if at least *two* expressions are fully supported.
+    let mut ready_equivalences = Vec::new();
     for equivalence in equivalences.iter_mut() {
         if let Some(pos) = equivalence
             .iter()
@@ -369,11 +370,7 @@ where
                     .all(|c| source_columns.contains(&c))
                 {
                     // Remove expression and equate with the first bound expression.
-                    ready_to_go.push(ScalarExpr::CallBinary {
-                        func: expr::BinaryFunc::Eq,
-                        expr1: Box::new(equivalence[pos].clone()),
-                        expr2: Box::new(equivalence.remove(cursor)),
-                    })
+                    ready_equivalences.push((equivalence[pos].clone(), equivalence.remove(cursor)));
                 } else {
                     cursor += 1;
                 }
@@ -392,15 +389,38 @@ where
             }
         })
     }
+    for (expr1, expr2) in ready_equivalences.iter_mut() {
+        expr1.visit_mut(&mut |e| {
+            if let ScalarExpr::Column(c) = e {
+                *c = source_columns
+                    .iter()
+                    .position(|x| x == c)
+                    .expect("Column not found in source_columns");
+            }
+        });
+        expr2.visit_mut(&mut |e| {
+            if let ScalarExpr::Column(c) = e {
+                *c = source_columns
+                    .iter()
+                    .position(|x| x == c)
+                    .expect("Column not found in source_columns");
+            }
+        });
+    }
 
-    if ready_to_go.is_empty() {
+    if ready_to_go.is_empty() && ready_equivalences.is_empty() {
         (updates, None)
     } else {
-        let temp_storage = repr::RowArena::new();
         let (ok_collection, err_collection) = updates.filter_fallible(move |input_row| {
+            let temp_storage = repr::RowArena::new();
             let datums = input_row.unpack();
             for p in &ready_to_go {
                 if p.eval(&datums, &temp_storage)? != Datum::True {
+                    return Ok(false);
+                }
+            }
+            for (e1, e2) in &ready_equivalences {
+                if e1.eval(&datums, &temp_storage)? != e2.eval(&datums, &temp_storage)? {
                     return Ok(false);
                 }
             }
