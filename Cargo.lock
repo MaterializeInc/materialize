@@ -2751,10 +2751,8 @@ dependencies = [
  "backtrace",
  "jemalloc-ctl",
  "lazy_static",
- "pprof",
  "prof-common",
  "tempfile",
- "tokio",
 ]
 
 [[package]]
