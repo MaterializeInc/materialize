@@ -35,6 +35,7 @@ ore = { path = "../ore" }
 parse_duration = "2.1.0"
 postgres-openssl = "0.3.0"
 pgwire = { path = "../pgwire" }
+prof-common = { path = "../prof_common" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 rlimit = "0.3.0"
@@ -61,14 +62,15 @@ tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 jemallocator = { version = "0.3", features = ["profiling"] }
-# NOTE(benesch): when target-specific features are stabilized [0], we will want
+# NOTE: when target-specific features are stabilized [0], we will want
 # to put the jemalloc-specific bits of the prof crate behind a "jemalloc"
-# feature flag so that we can enable the non-jemalloc bits on macOS. At the
-# moment the entire prof crate is entirely jemalloc-dependent, so the
-# distinction is moot.
+# feature flag so that we can enable the non-jemalloc bits on macOS.
+#
+# Until then, we split into two separate crates, "prof-jemalloc"
+# and "prof-common", only the former of which we depend on on macOS.
 #
 # [0]: https://github.com/rust-lang/cargo/issues/1197
-prof = { path = "../prof" }
+prof-jemalloc = { path = "../prof_jemalloc" }
 
 [package.metadata.deb]
 depends = "$auto"

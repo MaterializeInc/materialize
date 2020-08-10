@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Heap Flamegraph{% endblock %}
+{% block title %}{{ title }}{% endblock %}
 
 {% block head %}
 <link href="https://cdn.jsdelivr.net/npm/d3-flame-graph@3.1.1/dist/d3-flamegraph.css" rel="stylesheet">
@@ -57,7 +57,7 @@
 {% block content %}
 <div id="wrapper">
     <div id="header">
-      <h1>Heap Flamegraph</h1>
+      <h1>{{ title }}</h1>
       <form id="search-form">
             <button id="reset-zoom-button" type="button">Reset zoom</button>
             <div class="separator"></div>
