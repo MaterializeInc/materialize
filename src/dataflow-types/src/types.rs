@@ -26,9 +26,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use url::Url;
 
-use expr::{
-    GlobalId, OptimizedRelationExpr, PartitionId, RelationExpr, ScalarExpr, SourceInstanceId,
-};
+use expr::{GlobalId, OptimizedRelationExpr, PartitionId, RelationExpr, ScalarExpr};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use kafka_util::KafkaAddr;
@@ -78,7 +76,7 @@ pub struct BuildDesc {
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
-    pub source_imports: BTreeMap<SourceInstanceId, SourceDesc>,
+    pub source_imports: BTreeMap<GlobalId, SourceDesc>,
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order as the Vec
@@ -128,7 +126,7 @@ impl DataflowDesc {
 
     pub fn add_source_import(
         &mut self,
-        id: SourceInstanceId,
+        id: GlobalId,
         connector: SourceConnector,
         desc: RelationDesc,
     ) {
@@ -256,8 +254,8 @@ impl DataflowDesc {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source, desc) in self.source_imports.iter() {
-            if &source.sid == id {
+        for (source_id, desc) in self.source_imports.iter() {
+            if source_id == id {
                 return desc.desc.typ().arity();
             }
         }
