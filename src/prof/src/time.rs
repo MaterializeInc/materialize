@@ -31,7 +31,7 @@ pub async fn prof_time(
         .into_iter()
         .map(|(f, weight)| {
             let mut addrs: Vec<_> = f.frames[0..f.depth]
-                .into_iter()
+                .iter()
                 .map(|f| f.ip() as usize)
                 .collect();
             addrs.reverse();
