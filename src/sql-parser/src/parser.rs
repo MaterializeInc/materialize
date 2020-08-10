@@ -2170,7 +2170,7 @@ impl Parser {
         match self.next_token() {
             // Do not accept `AS OF`, which is reserved for providing timestamp information
             // to queries.
-            Some(Token::Word(ref w)) if w.value == "OF" => {
+            Some(Token::Word(ref w)) if w.keyword == "OF" => {
                 self.prev_token();
                 self.prev_token();
                 Ok(None)
