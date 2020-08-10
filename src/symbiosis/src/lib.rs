@@ -37,7 +37,7 @@ use tokio_postgres::types::FromSql;
 use dataflow_types::SourceConnector;
 use pgrepr::Jsonb;
 use repr::adt::decimal::Significand;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::ast::{
     ColumnOption, CreateTableStatement, DataType, DeleteStatement, DropObjectsStatement,
     InsertStatement, ObjectType, Statement, TableConstraint, UpdateStatement,
@@ -163,7 +163,7 @@ END $$;
                             let ty = scalar_type_from_sql(&c.data_type)?;
                             let nullable =
                                 !c.options.iter().any(|o| o.option == ColumnOption::NotNull);
-                            Ok(ColumnType::new(ty, nullable))
+                            Ok(ty.nullable(nullable))
                         })
                         .collect::<Result<Vec<_>, anyhow::Error>>()?,
                 );

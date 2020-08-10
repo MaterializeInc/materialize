@@ -184,86 +184,86 @@ impl LogVariant {
     pub fn schema(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
-                .with_nonnull_column("id", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("name", ScalarType::String)
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("name", ScalarType::String.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
-                .with_nonnull_column("id", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("source_node", ScalarType::Int64)
-                .with_nonnull_column("source_port", ScalarType::Int64)
-                .with_nonnull_column("target_node", ScalarType::Int64)
-                .with_nonnull_column("target_port", ScalarType::Int64)
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("source_node", ScalarType::Int64.nullable(false))
+                .with_column("source_port", ScalarType::Int64.nullable(false))
+                .with_column("target_node", ScalarType::Int64.nullable(false))
+                .with_column("target_port", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
-                .with_nonnull_column("id", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("elapsed_ns", ScalarType::Int64)
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("elapsed_ns", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
-                .with_nonnull_column("id", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("duration_ns", ScalarType::Int64)
-                .with_nonnull_column("count", ScalarType::Int64)
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("duration_ns", ScalarType::Int64.nullable(false))
+                .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
-                .with_nonnull_column("id", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("slot", ScalarType::Int64)
-                .with_nonnull_column("value", ScalarType::Int64)
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("slot", ScalarType::Int64.nullable(false))
+                .with_column("value", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
 
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("slept_for", ScalarType::Int64)
-                .with_nonnull_column("requested", ScalarType::Int64)
-                .with_nonnull_column("count", ScalarType::Int64)
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("slept_for", ScalarType::Int64.nullable(false))
+                .with_column("requested", ScalarType::Int64.nullable(false))
+                .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
-                .with_nonnull_column("operator", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("records", ScalarType::Int64)
-                .with_nonnull_column("batches", ScalarType::Int64)
+                .with_column("operator", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("records", ScalarType::Int64.nullable(false))
+                .with_column("batches", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Differential(DifferentialLog::Sharing) => RelationDesc::empty()
-                .with_nonnull_column("operator", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("count", ScalarType::Int64)
+                .with_column("operator", ScalarType::Int64.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationDesc::empty()
-                .with_nonnull_column("name", ScalarType::String)
-                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_column("name", ScalarType::String.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationDesc::empty()
-                .with_nonnull_column("dataflow", ScalarType::String)
-                .with_nonnull_column("source", ScalarType::String)
-                .with_nonnull_column("worker", ScalarType::Int64),
+                .with_column("dataflow", ScalarType::String.nullable(false))
+                .with_column("source", ScalarType::String.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("time", ScalarType::Int64),
+                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("time", ScalarType::Int64.nullable(false)),
 
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
-                .with_nonnull_column("uuid", ScalarType::String)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("id", ScalarType::String)
-                .with_nonnull_column("time", ScalarType::Int64)
+                .with_column("uuid", ScalarType::String.nullable(false))
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("id", ScalarType::String.nullable(false))
+                .with_column("time", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationDesc::empty()
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("duration_ns", ScalarType::Int64)
-                .with_nonnull_column("count", ScalarType::Int64)
+                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("duration_ns", ScalarType::Int64.nullable(false))
+                .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
         }
     }

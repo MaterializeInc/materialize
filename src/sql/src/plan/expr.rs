@@ -761,7 +761,7 @@ impl ScalarExpr {
                 let datum = parameters.datums.iter().nth(*n - 1).unwrap();
                 let scalar_type = &parameters.types[*n - 1];
                 let row = Row::pack(&[datum]);
-                let column_type = ColumnType::new(scalar_type.clone(), datum.is_null());
+                let column_type = scalar_type.clone().nullable(datum.is_null());
                 *self = ScalarExpr::Literal(row, column_type);
             }
             ScalarExpr::CallUnary { expr, .. } => expr.bind_parameters(parameters),
@@ -787,7 +787,7 @@ impl ScalarExpr {
 
     pub fn literal(datum: Datum, scalar_type: ScalarType) -> ScalarExpr {
         let row = Row::pack(&[datum]);
-        ScalarExpr::Literal(row, ColumnType::new(scalar_type, datum.is_null()))
+        ScalarExpr::Literal(row, scalar_type.nullable(datum.is_null()))
     }
 
     pub fn literal_true() -> ScalarExpr {
@@ -991,7 +991,7 @@ impl ScalarTypeable for ScalarExpr {
                     outers[outers.len() - *level].column_types[*column].clone()
                 }
             }
-            ScalarExpr::Parameter(n) => ColumnType::new(params[&n].clone(), true),
+            ScalarExpr::Parameter(n) => params[&n].clone().nullable(true),
             ScalarExpr::Literal(_, typ) => typ.clone(),
             ScalarExpr::CallNullary(func) => func.output_type(),
             ScalarExpr::CallUnary { expr, func } => {
@@ -1009,7 +1009,7 @@ impl ScalarTypeable for ScalarExpr {
                 let else_type = els.typ(outers, inner, params);
                 then_type.union(&else_type).unwrap()
             }
-            ScalarExpr::Exists(_) => ColumnType::new(ScalarType::Bool, true),
+            ScalarExpr::Exists(_) => ScalarType::Bool.nullable(true),
             ScalarExpr::Select(expr) => {
                 let mut outers = outers.to_vec();
                 outers.push(inner.clone());

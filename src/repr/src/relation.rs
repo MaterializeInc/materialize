@@ -19,7 +19,10 @@ use crate::ScalarType;
 /// The type of a [`Datum`](crate::Datum).
 ///
 /// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
-/// Int32 or String) with additional attributes, like its nullability.
+/// Int32 or String) with its nullability.
+///
+/// To construct a column type, either initialize the struct directly, or
+/// use the [`ScalarType::nullable`] method.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
 pub struct ColumnType {
     /// Whether this datum can be null.
@@ -29,16 +32,6 @@ pub struct ColumnType {
 }
 
 impl ColumnType {
-    /// Constructs a new `ColumnType` with the specified [`ScalarType`] as its
-    /// underlying type. If desired, the `nullable` property can be modified
-    /// with the `nullable(bool)` method.
-    pub fn new(scalar_type: ScalarType, nullable: bool) -> Self {
-        ColumnType {
-            nullable,
-            scalar_type,
-        }
-    }
-
     pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         if self.scalar_type != other.scalar_type {
             bail!(
@@ -183,8 +176,8 @@ impl From<&ColumnName> for ColumnName {
 /// use repr::{ColumnType, RelationDesc, ScalarType};
 ///
 /// let desc = RelationDesc::empty()
-///     .with_nonnull_column("id", ScalarType::Int64)
-///     .with_column("price", ColumnType::new(ScalarType::Float64, true));
+///     .with_column("id", ScalarType::Int64.nullable(false))
+///     .with_column("price", ScalarType::Float64.nullable(true));
 /// ```
 ///
 /// In more complicated cases, like when constructing a `RelationDesc` in
@@ -247,14 +240,6 @@ impl RelationDesc {
             self = self.with_key(k);
         }
         self
-    }
-
-    /// Appends a named, nonnullable column with the specified scalar type.
-    pub fn with_nonnull_column<N>(self, name: N, scalar_type: ScalarType) -> Self
-    where
-        N: Into<ColumnName>,
-    {
-        self.with_column(name, ColumnType::new(scalar_type, false))
     }
 
     /// Appends a named column with the specified column type.

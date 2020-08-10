@@ -316,7 +316,7 @@ impl DataEncoding {
 
         // Add columns for the data, based on the encoding format.
         Ok(match self {
-            DataEncoding::Bytes => key_desc.with_nonnull_column("data", ScalarType::Bytes),
+            DataEncoding::Bytes => key_desc.with_column("data", ScalarType::Bytes.nullable(false)),
             DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
                 avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
                     .context("validating avro ocf reader schema")?
@@ -365,14 +365,15 @@ impl DataEncoding {
                         None => format!("column{}", i),
                         Some(name) => name.to_owned(),
                     };
-                    let ty = ColumnType::new(ScalarType::String, true);
+                    let ty = ScalarType::String.nullable(true);
                     desc.with_column(name, ty)
                 }),
-            DataEncoding::Csv(CsvEncoding { n_cols, .. }) => (1..=*n_cols)
-                .fold(key_desc, |desc, i| {
-                    desc.with_nonnull_column(format!("column{}", i), ScalarType::String)
-                }),
-            DataEncoding::Text => key_desc.with_nonnull_column("text", ScalarType::String),
+            DataEncoding::Csv(CsvEncoding { n_cols, .. }) => {
+                (1..=*n_cols).fold(key_desc, |desc, i| {
+                    desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
+                })
+            }
+            DataEncoding::Text => key_desc.with_column("text", ScalarType::String.nullable(false)),
         })
     }
 
@@ -492,22 +493,10 @@ pub enum ExternalSourceConnector {
 impl ExternalSourceConnector {
     pub fn metadata_columns(&self) -> Vec<(ColumnName, ColumnType)> {
         match self {
-            Self::Kafka(_) => vec![(
-                "mz_offset".into(),
-                ColumnType::new(ScalarType::Int64, false),
-            )],
-            Self::File(_) => vec![(
-                "mz_line_no".into(),
-                ColumnType::new(ScalarType::Int64, false),
-            )],
-            Self::Kinesis(_) => vec![(
-                "mz_offset".into(),
-                ColumnType::new(ScalarType::Int64, false),
-            )],
-            Self::AvroOcf(_) => vec![(
-                "mz_obj_no".into(),
-                ColumnType::new(ScalarType::Int64, false),
-            )],
+            Self::Kafka(_) => vec![("mz_offset".into(), ScalarType::Int64.nullable(false))],
+            Self::File(_) => vec![("mz_line_no".into(), ScalarType::Int64.nullable(false))],
+            Self::Kinesis(_) => vec![("mz_offset".into(), ScalarType::Int64.nullable(false))],
+            Self::AvroOcf(_) => vec![("mz_obj_no".into(), ScalarType::Int64.nullable(false))],
         }
     }
 

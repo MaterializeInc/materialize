@@ -735,8 +735,7 @@ fn get_named_columns<'a>(
                 // the column's output type is nullable, as this
                 // column will be null whenever it is uninhabited.
                 let ty = validate_schema_2(seen_avro_nodes, node)?;
-                let nullable = vs.len() > 1;
-                columns.push((name.into(), ColumnType::new(ty, nullable)));
+                columns.push((name.into(), ty.nullable(vs.len() > 1)));
                 if let Some(named_idx) = named_idx {
                     seen_avro_nodes.remove(&named_idx);
                 }
@@ -745,10 +744,7 @@ fn get_named_columns<'a>(
         Ok(columns)
     } else {
         let scalar_type = validate_schema_2(seen_avro_nodes, schema)?;
-        Ok(vec![(
-            base_name.into(),
-            ColumnType::new(scalar_type, false),
-        )])
+        Ok(vec![(base_name.into(), scalar_type.nullable(false))])
     }
 }
 
@@ -1956,7 +1952,7 @@ mod tests {
             ),
         ];
         for (typ, datum, expected) in valid_pairings {
-            let desc = RelationDesc::empty().with_nonnull_column("column1", typ);
+            let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
             let avro_value = Encoder::new(desc, false).row_to_avro(vec![datum]);
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
