@@ -277,3 +277,21 @@ SELECT * FROM
 1  NULL  NULL
 1  NULL  NULL
 1  NULL  NULL
+
+# Regression test for #3914. The gist is that we want to exercise the
+# redundant join optimization on a join whose inputs contain projections. This
+# turns out to be extremely hard to accomplish because the projection lifting
+# optimization is very good at eliminating all but the top-level projection.
+# Having this test seems better than not, but it's fragile.
+statement ok
+CREATE VIEW gh3914 AS VALUES (NULL::int)
+
+query TTI
+SELECT * FROM (
+    (SELECT 'foo')
+    RIGHT JOIN (
+        (SELECT true) CROSS JOIN (SELECT 1 FROM gh3914 EXCEPT ALL (SELECT 456 WHERE false))
+    ) ON true
+)
+----
+foo  true  1
