@@ -72,12 +72,12 @@
 <script>
     function toHumanBytes(n) {
         const tokens = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
-        let i_tok = 0;
-        while (Math.abs(n) > 1024 && i_tok < tokens.length - 1) {
+        let iTok = 0;
+        while (Math.abs(n) > 1024 && iTok < tokens.length - 1) {
             n /= 1024;
-            ++i_tok;
+            ++iTok;
         }
-        return n.toFixed(2) + " " + tokens[i_tok];
+        return n.toFixed(2) + " " + tokens[iTok];
     }
 
     const chart = flamegraph()
