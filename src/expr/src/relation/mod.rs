@@ -213,12 +213,15 @@ impl RelationExpr {
             RelationExpr::Constant { rows, typ } => {
                 for (row, _diff) in rows {
                     for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
-                        assert!(
-                            datum.is_instance_of(column_typ),
-                            "Expected datum of type {:?}, got value {:?}",
-                            column_typ,
-                            datum
-                        );
+                        // If the record will be observed, we should validate its type.
+                        if datum != Datum::Dummy {
+                            assert!(
+                                datum.is_instance_of(column_typ),
+                                "Expected datum of type {:?}, got value {:?}",
+                                column_typ,
+                                datum
+                            );
+                        }
                     }
                 }
                 let result = typ.clone();
