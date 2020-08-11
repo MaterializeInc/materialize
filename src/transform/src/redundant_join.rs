@@ -286,13 +286,14 @@ impl RedundantJoin {
                 // but they neither drop rows nor invent values.
                 let mut result = self.action(input, lets);
                 for provenance in result.iter_mut() {
-                    let new_binding = (0..outputs.len())
+                    let new_binding = outputs
+                        .iter()
                         .enumerate()
                         .flat_map(|(i, c)| {
                             provenance
                                 .binding
                                 .iter()
-                                .find(|(_, l)| l == &c)
+                                .find(|(_, l)| l == c)
                                 .map(|(s, _)| (*s, i))
                         })
                         .collect::<Vec<_>>();
