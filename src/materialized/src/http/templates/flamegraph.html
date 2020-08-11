@@ -73,7 +73,7 @@
     function toHumanBytes(n) {
         const tokens = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
         let iTok = 0;
-        while (Math.abs(n) > 1024 && iTok < tokens.length - 1) {
+        while (Math.abs(n) >= 1024 && iTok < tokens.length - 1) {
             n /= 1024;
             ++iTok;
         }
