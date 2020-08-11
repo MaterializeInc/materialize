@@ -53,6 +53,7 @@ struct FlamegraphTemplate<'a> {
     version: &'a str,
     title: &'a str,
     data_json: &'a str,
+    display_bytes: bool,
 }
 
 async fn time_prof<'a>(
@@ -60,10 +61,14 @@ async fn time_prof<'a>(
 ) -> anyhow::Result<Response<Body>> {
     let merge_threads = params.get("threads").map(AsRef::as_ref) == Some("merge");
     let stacks = prof_time(Duration::from_secs(10), 99, merge_threads).await?;
-    flamegraph(stacks, "CPU Time Flamegraph")
+    flamegraph(stacks, "CPU Time Flamegraph", false)
 }
 
-fn flamegraph(stacks: StackProfile, title: &str) -> anyhow::Result<Response<Body>> {
+fn flamegraph(
+    stacks: StackProfile,
+    title: &str,
+    display_bytes: bool,
+) -> anyhow::Result<Response<Body>> {
     let collated = collate_stacks(stacks);
     let data_json = RefCell::new(String::new());
     collated.dfs(
@@ -88,6 +93,7 @@ fn flamegraph(stacks: StackProfile, title: &str) -> anyhow::Result<Response<Body
         version: crate::VERSION,
         title,
         data_json,
+        display_bytes,
     }))
 }
 
@@ -215,7 +221,7 @@ mod enabled {
                 let f = borrow.dump()?;
                 let r = BufReader::new(f);
                 let stacks = parse_jeheap(r)?;
-                flamegraph(stacks, "Heap Flamegraph")
+                flamegraph(stacks, "Heap Flamegraph", true)
             }
             "time_fg" => time_prof(&params).await,
             x => Ok(util::error_response(

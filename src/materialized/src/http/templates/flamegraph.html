@@ -70,10 +70,28 @@
 </div>
 
 <script>
+    function toHumanBytes(n) {
+        const tokens = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
+        let i_tok = 0;
+        while (Math.abs(n) > 1024 && i_tok < tokens.length - 1) {
+            n /= 1024;
+            ++i_tok;
+        }
+        return n.toFixed(2) + " " + tokens[i_tok];
+    }
+
     const chart = flamegraph()
         .width(960)
         .setDetailsElement(document.getElementById("details"))
-        .onClick(d => history.pushState({ id: d.id }, "", `#${d.id}`));
+        .onClick(d => history.pushState({ id: d.id }, "", `#${d.id}`))
+{% if display_bytes %}
+        .setLabelHandler(function (d) {
+            return d.data.name + ' (' + d3.format('.3f')(100 * (d.x1 - d.x0), 3) + '%, ' + toHumanBytes(d.value) + ' )';
+        })
+{% endif %}
+        ;
+
+
 
     d3.select(window)
       .on("hashchange", () => {
