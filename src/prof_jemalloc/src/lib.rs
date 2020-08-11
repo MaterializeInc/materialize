@@ -70,7 +70,7 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
         }
         if words.len() > 2 && words[0] == "t*:" {
             if let Some(addrs) = cur_stack.take() {
-                let weight = str::parse::<usize>(words[2])?;
+                let weight = str::parse::<f64>(words[2])?;
                 profile.push(WeightedStack { addrs, weight }, None);
             }
         }
