@@ -33,7 +33,7 @@ pub async fn prof_time(
             .map(|f| f.ip() as usize)
             .collect();
         addrs.reverse();
-        let weight = weight as usize;
+        let weight = weight as f64;
         let anno = if merge_threads {
             None
         } else {

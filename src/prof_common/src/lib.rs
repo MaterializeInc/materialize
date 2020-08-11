@@ -22,7 +22,7 @@ pub enum ProfStartTime {
 #[derive(Clone, Debug)]
 pub struct WeightedStack {
     pub addrs: Vec<usize>,
-    pub weight: usize,
+    pub weight: f64,
 }
 
 #[derive(Default)]
@@ -52,7 +52,7 @@ impl StackProfile {
 }
 pub struct SymbolTrieNode {
     pub name: String,
-    pub weight: usize,
+    pub weight: f64,
     links: Vec<usize>,
 }
 
@@ -64,7 +64,7 @@ impl WeightedSymbolTrie {
     fn new() -> Self {
         let root = SymbolTrieNode {
             name: "".to_string(),
-            weight: 0,
+            weight: 0.0,
             links: vec![],
         };
         let arena = vec![root];
@@ -102,7 +102,7 @@ impl WeightedSymbolTrie {
         }
         let next = SymbolTrieNode {
             name: next_name.to_string(),
-            weight: 0,
+            weight: 0.0,
             links: vec![],
         };
         let idx = self.arena.len();
