@@ -59,8 +59,24 @@ struct FlamegraphTemplate<'a> {
 async fn time_prof<'a>(
     params: &HashMap<Cow<'a, str>, Cow<'a, str>>,
 ) -> anyhow::Result<Response<Body>> {
+    let _ctl_lock;
+    cfg_if! {
+        if #[cfg(target_os = "macos")] {
+            _ctl_lock = ();
+        } else {
+            _ctl_lock = if let Some(ctl) = prof_jemalloc::PROF_CTL.as_ref() {
+                let mut borrow = ctl.lock().await;
+                borrow.deactivate()?;
+                Some(borrow)
+            } else {
+                None
+            };
+        }
+    }
     let merge_threads = params.get("threads").map(AsRef::as_ref) == Some("merge");
-    let stacks = prof_time(Duration::from_secs(10), 99, merge_threads).await?;
+    // SAFETY: We ensure above that memory profiling is off.
+    // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
+    let stacks = unsafe { prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
     flamegraph(stacks, "CPU Time Flamegraph", false)
 }
 
@@ -145,12 +161,10 @@ mod disabled {
 mod enabled {
 
     use std::io::{BufReader, Read};
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
+    use std::{collections::HashMap, sync::Arc};
 
     use hyper::{header, Body, Method, Request, Response, StatusCode};
+    use tokio::sync::Mutex;
     use url::form_urlencoded;
 
     use prof_jemalloc::{parse_jeheap, JemallocProfCtl, JemallocProfMetadata, PROF_CTL};
@@ -161,7 +175,7 @@ mod enabled {
     pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
         match (req.method(), &*PROF_CTL) {
             (&Method::GET, Some(prof_ctl)) => {
-                let prof_md = prof_ctl.lock().expect("Profiler lock poisoned").get_md();
+                let prof_md = prof_ctl.lock().await.get_md();
                 handle_get(prof_md)
             }
 
@@ -189,7 +203,7 @@ mod enabled {
         match action.as_ref() {
             "activate" => {
                 let md = {
-                    let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
+                    let mut borrow = prof_ctl.lock().await;
                     borrow.activate()?;
                     borrow.get_md()
                 };
@@ -197,14 +211,14 @@ mod enabled {
             }
             "deactivate" => {
                 let md = {
-                    let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
+                    let mut borrow = prof_ctl.lock().await;
                     borrow.deactivate()?;
                     borrow.get_md()
                 };
                 handle_get(md)
             }
             "dump_file" => {
-                let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
+                let mut borrow = prof_ctl.lock().await;
                 let mut f = borrow.dump()?;
                 let mut s = String::new();
                 f.read_to_string(&mut s)?;
@@ -217,7 +231,7 @@ mod enabled {
                     .unwrap())
             }
             "mem_fg" => {
-                let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
+                let mut borrow = prof_ctl.lock().await;
                 let f = borrow.dump()?;
                 let r = BufReader::new(f);
                 let stacks = parse_jeheap(r)?;
