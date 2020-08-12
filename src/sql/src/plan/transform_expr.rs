@@ -154,8 +154,9 @@ pub fn split_subquery_predicates(expr: &mut RelationExpr) {
 /// M. Elhemali, et al.
 pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
     fn walk_relation(expr: &mut RelationExpr, outers: &[RelationType]) {
-        expr.visit_mut(&mut |expr| match expr {
+        match expr {
             RelationExpr::Map { scalars, input } => {
+                walk_relation(input, outers);
                 let mut outers = outers.to_vec();
                 outers.push(input.typ(&outers, &NO_PARAMS));
                 for scalar in scalars {
@@ -163,6 +164,7 @@ pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
                 }
             }
             RelationExpr::Filter { predicates, input } => {
+                walk_relation(input, outers);
                 let mut outers = outers.to_vec();
                 outers.push(input.typ(&outers, &NO_PARAMS));
                 for pred in predicates {
@@ -174,8 +176,16 @@ pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
                     walk_scalar(scalar, &outers, false);
                 }
             }
-            _ => (),
-        })
+            RelationExpr::Join {
+                kind, left, right, ..
+            } if kind.is_lateral() => {
+                walk_relation(left, outers);
+                let mut outers = outers.to_vec();
+                outers.push(left.typ(&outers, &NO_PARAMS));
+                walk_relation(right, &outers);
+            }
+            expr => expr.visit1_mut(&mut |expr| walk_relation(expr, outers)),
+        }
     }
 
     fn walk_scalar(expr: &mut ScalarExpr, outers: &[RelationType], mut in_filter: bool) {
