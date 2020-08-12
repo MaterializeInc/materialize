@@ -13,8 +13,10 @@ use pprof::ProfilerGuard;
 use std::{os::raw::c_int, time::Duration};
 use tokio::time::delay_for;
 
-// SAFETY - nothing else must be attempting to unwind backtraces while this is called.
-// In particular, jemalloc memory profiling must be off.
+/// # Safety
+///
+/// Nothing else must be attempting to unwind backtraces while this is called.
+/// In particular, jemalloc memory profiling must be off.
 pub async unsafe fn prof_time(
     total_time: Duration,
     sample_freq: u32,
