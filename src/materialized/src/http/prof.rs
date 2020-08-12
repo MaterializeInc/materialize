@@ -54,6 +54,7 @@ struct FlamegraphTemplate<'a> {
     title: &'a str,
     data_json: &'a str,
     display_bytes: bool,
+    extras: &'a [&'a str],
 }
 
 async fn time_prof<'a>(
@@ -79,13 +80,14 @@ async fn time_prof<'a>(
     let stacks = unsafe { prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
     // Fail with a compile error if we weren't holding the jemalloc lock.
     drop(ctl_lock);
-    flamegraph(stacks, "CPU Time Flamegraph", false)
+    flamegraph(stacks, "CPU Time Flamegraph", false, &[])
 }
 
 fn flamegraph(
     stacks: StackProfile,
     title: &str,
     display_bytes: bool,
+    extras: &[&str],
 ) -> anyhow::Result<Response<Body>> {
     let collated = collate_stacks(stacks);
     let data_json = RefCell::new(String::new());
@@ -112,6 +114,7 @@ fn flamegraph(
         title,
         data_json,
         display_bytes,
+        extras,
     }))
 }
 
@@ -173,6 +176,22 @@ mod enabled {
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;
+
+    struct HumanFormattedBytes(usize);
+    impl std::fmt::Display for HumanFormattedBytes {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            const TOKENS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+
+            let mut counter = self.0 as f64;
+            let mut tok_i = 0;
+            while counter >= 1024.0 && tok_i < TOKENS.len() - 1 {
+                counter /= 1024.0;
+                tok_i += 1;
+            }
+
+            write!(f, "{:.2} {}", counter, TOKENS[tok_i])
+        }
+    }
 
     pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
         match (req.method(), &*PROF_CTL) {
@@ -237,7 +256,26 @@ mod enabled {
                 let f = borrow.dump()?;
                 let r = BufReader::new(f);
                 let stacks = parse_jeheap(r)?;
-                flamegraph(stacks, "Heap Flamegraph", true)
+                let stats = borrow.stats()?;
+                let stats_rendered = &[
+                    format!("Allocated: {}", HumanFormattedBytes(stats.allocated)),
+                    format!("In active pages: {}", HumanFormattedBytes(stats.active)),
+                    format!(
+                        "Allocated for allocator metadata: {}",
+                        HumanFormattedBytes(stats.metadata)
+                    ),
+                    // Don't print `stats.resident` since it is a bit hard to interpret;
+                    // see `man jemalloc` for details.
+                    format!(
+                        "Bytes unused, but retained by allocator: {}",
+                        HumanFormattedBytes(stats.retained)
+                    ),
+                ];
+                let stats_rendered = stats_rendered
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                flamegraph(stacks, "Heap Flamegraph", true, &stats_rendered)
             }
             "time_fg" => time_prof(&params).await,
             x => Ok(util::error_response(

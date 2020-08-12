@@ -66,6 +66,11 @@
         </form>
     </div>
     <div id="chart"></div>
+    <div id="extras">
+      {% for extra_line in extras %}
+      <p>{{ extra_line }}</p>
+      {% endfor %}
+    </div>
     <div id="details"></div>
 </div>
 
