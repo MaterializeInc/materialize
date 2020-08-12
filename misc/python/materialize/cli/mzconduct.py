@@ -12,6 +12,7 @@
 import contextlib
 import itertools
 import os
+import random
 import re
 import shlex
 import subprocess
@@ -806,251 +807,184 @@ class DropKafkaTopicsStep(WorkflowStep):
             say(f"INFO: error purging topics: {e}")
 
 
-class ChaosDockerWorkflowStep(WorkflowStep):
-    """Stops/pauses and starts the designated Docker service.
-
-    Params:
-        service: target Docker service, will be used to grep for container id
-                 NOTE: service name must be unique to correctly match the container id
-
-        other_service: if provided, run only as long as this service is running
-        duration: if provided, run for this duration
-
-        run_cmd: command to start the Docker container
-        run_time: seconds to spend running each loop
-        stop_cmd: command to stop the Docker container
-        stopped_time: seconds to spend stopped each loop
-    """
+@Steps.register("random-chaos")
+class RandomChaos(WorkflowStep):
+    default_chaos = [
+        "pause",
+        "stop",
+        "kill",
+        "delay",
+        "rate",
+        "loss",
+        "duplicate",
+        "corrupt",
+    ]
 
     def __init__(
         self,
-        service: str,
-        other_service: str,
-        duration: int,
-        run_cmd: str,
-        stop_cmd: str,
-        run_time: int,
-        stop_time: int,
+        chaos: List[str] = [],
+        containers: List[str] = [],
+        other_service: str = "",
     ):
-        if (
-            other_service == ""
-            and duration < 0
-            or other_service != ""
-            and duration >= 0
-        ):
-            raise BadSpec(
-                f"Need to specify either 'other_service' or 'duration' to run chaos Docker workflow step"
-            )
-        self._service = service
+        self._chaos = chaos
+        self._containers = containers
         self._other_service = other_service
-        self._duration = duration
-        self._run_cmd = run_cmd
-        self._stop_cmd = stop_cmd
-        self._run_time = run_time
-        self._stop_time = stop_time
+
+    def get_running_docker_processes(self, running: bool = False) -> str:
+        """
+        Use 'docker ps' to return all Docker process information.
+
+        :param running: If True, only return running processes.
+        :return: str of processes
+        """
+        try:
+            if running:
+                cmd = f"docker ps".split()
+            else:
+                cmd = f"docker ps -a".split()
+            return spawn.capture(cmd, unicode=True)
+        except subprocess.CalledProcessError as e:
+            raise Failed(f"failed to get Docker container ids: {e}")
+
+    def get_container_ids(
+        self, services: List[str] = [], running: bool = False
+    ) -> List[str]:
+        """
+        Parse Docker processes for container ids.
+
+        :param services: If provided, only return container ids for these services.
+        :param running: If True, only return container ids of running processes.
+        :return: Docker container id strs
+        """
+        try:
+            docker_processes = self.get_running_docker_processes(running=running)
+
+            patterns = []
+            if services:
+                for service in services:
+                    patterns.append(f"^(?P<c_id>[^ ]+).*{service}")
+            else:
+                patterns.append(f"^(?P<c_id>[^ ]+).*")
+
+            matches = []
+            for pattern in patterns:
+                compiled_pattern = re.compile(pattern)
+                for process in docker_processes.splitlines():
+                    m = compiled_pattern.search(process)
+                    if m and m.group("c_id") != "CONTAINER":
+                        matches.append(m.group("c_id"))
+
+            return matches
+        except subprocess.CalledProcessError as e:
+            raise Failed(f"failed to get Docker container ids: {e}")
+
+    def run_cmd(self, cmd: str) -> None:
+        try:
+            spawn.runv(cmd.split())
+        except subprocess.CalledProcessError as e:
+            say(f"Failed to run command {cmd}: {e}")
+
+    def add_and_remove_chaos(
+        self, add_cmd: str, duration: int = 60, remove_cmd: str = ""
+    ) -> None:
+        self.run_cmd(add_cmd)
+        say(f"sleeping for {duration} seconds...")
+        time.sleep(duration)
+        if remove_cmd:
+            self.run_cmd(remove_cmd)
+
+    def add_and_remove_netem_chaos(
+        self, container_id: str, add_cmd: str, duration: int = 60
+    ) -> None:
+        remove_cmd = f"docker exec -t {container_id} tc qdisc del dev eth0 root netem"
+        self.add_and_remove_chaos(add_cmd, duration, remove_cmd)
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
-        container_id = comp.get_container_id(self._service)
+        if not self._chaos:
+            self._chaos = self.default_chaos
+        if not self._containers:
+            self._containers = self.get_container_ids(running=True)
         say(
-            f"{self._stop_cmd} and {self._run_cmd} {container_id}: running for {self._run_time} seconds, \
-             stopping for {self._stop_time} seconds"
+            f"will run these chaos types: {self._chaos} on these containers: {self._containers}"
         )
-        if self._other_service != "":
-            other_container_id = comp.get_container_id(
-                self._other_service, running=True
+
+        if not self._other_service:
+            say(f"no 'other_service' provided, running chaos forever")
+            while True:
+                self.add_chaos()
+        else:
+            container_ids = self.get_container_ids(services=[self._other_service])
+            if len(container_ids) != 1:
+                raise Failed(
+                    f"wrong number of container ids found for service {self._other_service}. expected 1, found: {len(container_ids)}"
+                )
+
+            container_id = container_ids[0]
+            say(
+                f"running chaos as long as {self._other_service} (container {container_id}) is running"
             )
-            while comp.docker_container_is_running(other_container_id):
-                self.stop_and_start(container_id)
-        elif self._duration >= 0:
-            self.run_for_duration(container_id)
+            while comp.docker_container_is_running(container_id):
+                self.add_chaos()
 
-    def run_for_duration(self, container_id: str) -> None:
-        ui.progress(f"running for {self._duration} ", "C")
-        for _ in ui.timeout_loop(self._duration):
-            self.stop_and_start(container_id)
-        ui.progress(finish=True)
-
-    def stop_and_start(self, container_id: str) -> None:
-        try:
-            spawn.runv(["docker", self._stop_cmd, container_id])
-        except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to {self._stop_cmd} container {container_id}: {e}")
-        time.sleep(self._stop_time)
-
-        try:
-            spawn.runv(["docker", self._run_cmd, container_id])
-        except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to {self._run_cmd} container {container_id}: {e}")
-        time.sleep(self._run_time)
-
-
-@Steps.register("chaos-pause-docker")
-class ChaosPauseDockerStep(ChaosDockerWorkflowStep):
-    """Pauses and unpauses the designated Docker service.
-
-    Params:
-        Same as ChaosDockerWorkflowStep.
-    """
-
-    def __init__(
-        self,
-        service: str,
-        other_service: str = "",
-        duration: int = -1,
-        run_time: int = 60,
-        pause_time: int = 10,
-    ) -> None:
-        super().__init__(
-            service=service,
-            other_service=other_service,
-            duration=duration,
-            run_cmd="unpause",
-            stop_cmd="pause",
-            run_time=run_time,
-            stop_time=pause_time,
-        )
-
-
-@Steps.register("chaos-stop-docker")
-class ChaosStopDockerStep(ChaosDockerWorkflowStep):
-    """Stops and restarts the designated Docker service.
-
-    Params:
-        Same as ChaosDockerWorkflowStep.
-    """
-
-    def __init__(
-        self,
-        service: str,
-        other_service: str = "",
-        duration: int = -1,
-        run_time: int = 60,
-        stop_time: int = 10,
-    ) -> None:
-        super().__init__(
-            service=service,
-            other_service=other_service,
-            duration=duration,
-            run_cmd="start",
-            stop_cmd="stop",
-            run_time=run_time,
-            stop_time=stop_time,
-        )
-
-
-@Steps.register("chaos-kill-docker")
-class ChaosKillDockerStep(ChaosDockerWorkflowStep):
-    """Kills the designated Docker service.
-
-    Params:
-        service: Docker service to kill, will be used to grep for container id
-                 NOTE: service name must be unique to correctly match the container id
-    """
-
-    def __init__(self, service: str) -> None:
-        self._service = service
-
-    def run(self, comp: Composition, workflow: Workflow) -> None:
-        container_id = comp.get_container_id(self._service)
-        say(f"Killing container: {container_id}")
-        try:
-            spawn.runv(["docker", "kill", container_id])
-        except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to kill container {container_id}: {e}")
-
-
-class ChaosNetemStep(WorkflowStep):
-    """Base class for running network chaos tests against a Docker container.
-    """
-
-    def run(self, comp: Composition, workflow: Workflow) -> None:
-        try:
-            cmd = self.get_cmd().split()
-            spawn.runv(cmd)
-        except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to run netem chaos command: {e.stderr}")
-
-    def get_cmd(self) -> str:
-        pass
-
-
-@Steps.register("chaos-delay-docker")
-class ChaosDelayDockerStep(ChaosNetemStep):
-    """Delay the egress network traffic for a Docker service.
-    """
-
-    def __init__(self, container: str, delay: int = 250, jitter: int = 250,) -> None:
-        self._container = container
-        self._delay = delay
-        self._jitter = jitter
-
-    def get_cmd(self) -> str:
-        return f"docker exec -t {self._container} tc qdisc add dev eth0 root netem \
-                    delay {self._delay}ms {self._jitter}ms distribution normal"
-
-
-@Steps.register("chaos-rate-docker")
-class ChaosRateDockerStep(ChaosNetemStep):
-    """Limit the egress network traffic for a Docker service.
-    """
-
-    def __init__(self, container: str) -> None:
-        self._container = container
-
-    def get_cmd(self) -> str:
-        return f"docker exec -t {self._container} tc qdisc add dev eth0 root netem \
-                    rate 5kbit 20 100 5"
-
-
-@Steps.register("chaos-loss-docker")
-class ChaosLossDockerStep(ChaosNetemStep):
-    """Lose a percent of a Docker container's network packets.
-    """
-
-    def __init__(self, container: str, percent: int) -> None:
-        self._container = container
-        self._percent = percent
-
-    def get_cmd(self) -> str:
-        return f"docker exec -t {self._container} tc qdisc add dev eth0 root netem loss {self._percent}"
-
-
-@Steps.register("chaos-duplicate-docker")
-class ChaosDuplicateDockerStep(ChaosNetemStep):
-    """Duplicate a percent of a Docker container's network packets.
-    """
-
-    def __init__(self, container: str, percent: int) -> None:
-        self._container = container
-        self._percent = percent
-
-    def get_cmd(self) -> str:
-        return f"docker exec -t {self._container} tc qdisc add dev eth0 root netem duplicate {self._percent}"
-
-
-@Steps.register("chaos-corrupt-docker")
-class ChaosCorruptDockerStep(ChaosNetemStep):
-    """Corrupt a percent of a Docker container's network packets.
-    """
-
-    def __init__(self, container: str, percent: int) -> None:
-        self._container = container
-        self._percent = percent
-
-    def get_cmd(self) -> str:
-        return f"docker exec -t {self._container} tc qdisc add dev eth0 root netem corrupt {self._percent}"
+    def add_chaos(self) -> None:
+        random_container = random.choice(self._containers)
+        random_chaos = random.choice(self._chaos)
+        if random_chaos == "pause":
+            self.add_and_remove_chaos(
+                add_cmd=f"docker pause {random_container}",
+                remove_cmd=f"docker unpause {random_container}",
+            )
+        elif random_chaos == "stop":
+            self.add_and_remove_chaos(
+                add_cmd=f"docker stop {random_container}",
+                remove_cmd=f"docker start {random_container}",
+            )
+        elif random_chaos == "kill":
+            self.add_and_remove_chaos(
+                add_cmd=f"docker kill {random_container}",
+                remove_cmd=f"docker start {random_container}",
+            )
+        elif random_chaos == "delay":
+            self.add_and_remove_netem_chaos(
+                container_id=random_container,
+                add_cmd=f"docker exec -t {random_container} tc qdisc add dev eth0 root netem \
+                delay 100ms 100ms distribution normal",
+            )
+        elif random_chaos == "rate":
+            self.add_and_remove_netem_chaos(
+                container_id=random_container,
+                add_cmd=f"docker exec -t {random_container} tc qdisc add dev eth0 root netem \
+                rate 5kbit 20 100 5",
+            )
+        elif random_chaos == "loss":
+            self.add_and_remove_netem_chaos(
+                container_id=random_container,
+                add_cmd=f"docker exec -t {random_container} tc qdisc add dev eth0 root netem loss 10",
+            )
+        elif random_chaos == "duplicate":
+            self.add_and_remove_netem_chaos(
+                container_id=random_container,
+                add_cmd=f"docker exec -t {random_container} tc qdisc add dev eth0 root netem duplicate 10",
+            )
+        elif random_chaos == "corrupt":
+            self.add_and_remove_netem_chaos(
+                container_id=random_container,
+                add_cmd=f"docker exec -t {random_container} tc qdisc add dev eth0 root netem corrupt 10",
+            )
+        else:
+            raise Failed(f"unexpected type of chaos: {random_chaos}")
 
 
 @Steps.register("chaos-confirm")
 class ChaosConfirmStep(WorkflowStep):
-    """Confirm the status of a Docker service's container at the end of a workflow.
+    """
+    Confirms the status of a Docker container. Silently succeeds or raises an error.
 
-    Params:
-        service:   Docker service to confirm, will be used to grep for container id
-                   NOTE: service name must be unique to correctly match the container id
-        running:   True if it should be running, False otherwise (default: False)
-        exit_code: expected exit code, if not running (default: 0)
-        wait:      True if step should wait for a running container to exit before confirming (default: False)
+    :param service: Name of Docker service to confirm, will be used to grep for container id.
+                    NOTE: service name must be unique!
+    :param running: If True, confirm container is currently running.
+    :param exit_code: If provided, confirm container exit code matches this exit code.
+    :param wait: If True, wait for target container to exit before confirming its exit code.
     """
 
     def __init__(

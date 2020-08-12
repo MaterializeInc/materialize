@@ -11,20 +11,25 @@
 
 set -euo pipefail
 
+wait-for-it --timeout=60 zookeeper:2181
+wait-for-it --timeout=60 kafka:9092
+
 topics=(
-    mysql.tpcch.warehouse
-    mysql.tpcch.district
-    mysql.tpcch.customer
-    mysql.tpcch.history
-    mysql.tpcch.neworder
-    mysql.tpcch.order
-    mysql.tpcch.orderline
-    mysql.tpcch.item
-    mysql.tpcch.stock
-    mysql.tpcch.nation
-    mysql.tpcch.supplier
-    mysql.tpcch.region
+    debezium.tpcch.warehouse
+    debezium.tpcch.district
+    debezium.tpcch.customer
+    debezium.tpcch.history
+    debezium.tpcch.neworder
+    debezium.tpcch.order
+    debezium.tpcch.orderline
+    debezium.tpcch.item
+    debezium.tpcch.stock
+    debezium.tpcch.nation
+    debezium.tpcch.supplier
+    debezium.tpcch.region
 )
+
+wait-for-it --timeout=60 connect:8083
 
 echo "${topics[@]}" | xargs -n1 -P8 kafka-topics --bootstrap-server kafka:9092 --create --partitions 1 --replication-factor 1 --topic
 
@@ -36,10 +41,10 @@ curl -H 'Content-Type: application/json' connect:8083/connectors --data '{
     "database.port": "3306",
     "database.user": "debezium",
     "database.password": "dbz",
-    "database.server.name": "mysql",
+    "database.server.name": "debezium",
     "database.server.id": "1234",
     "database.history.kafka.bootstrap.servers": "kafka:9092",
     "database.history.kafka.topic": "mysql-history",
     "time.precision.mode": "connect"
-  }
+ }
 }'

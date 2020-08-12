@@ -18,10 +18,10 @@ x-port-mappings:
   - &kafka 9092:9092
   - &connect 8083:8083
   - &mysql 3306:3306
+  - &control-center ${CC_PORT:-9021:9021}
 
 version: '3.7'
 services:
-  # Core test services.
   chaos:
     init: true
     mzbuild: chaos
@@ -40,6 +40,9 @@ services:
     image: confluentinc/cp-zookeeper:5.3.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+    cap_add:
+      - NET_ADMIN
+
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.3.0
     ports:
@@ -53,6 +56,7 @@ services:
       KAFKA_JMX_PORT: 9991
     cap_add:
       - NET_ADMIN
+
   schema-registry:
     image: confluentinc/cp-schema-registry:5.2.1
     ports:
@@ -62,8 +66,9 @@ services:
       - SCHEMA_REGISTRY_HOST_NAME=schema-registry
       - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
     depends_on: [zookeeper, kafka]
+    cap_add:
+      - NET_ADMIN
 
-  # mysql -> debezium -> kafka test services.
   connect:
     build: connect
     ports:
@@ -80,12 +85,16 @@ services:
     depends_on: [kafka, schema-registry]
     cap_add:
       - NET_ADMIN
+
   connector:
     image: confluentinc/cp-enterprise-kafka:5.3.0
     volumes:
       - ./connector/docker-entrypoint.sh:/usr/local/bin/docker-entrypoint.sh
     entrypoint:
       - docker-entrypoint.sh
+    cap_add:
+      - NET_ADMIN
+
   mysql:
     image: debezium/example-mysql:1.1
     ports:
@@ -99,6 +108,19 @@ services:
         source: chbench-gen
         target: /var/lib/mysql-files
         read_only: true
+    cap_add:
+      - NET_ADMIN
+
+  connector-mysql:
+    build: connector-mysql
+    depends_on: [schema-registry, control-center]
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:5.3.0
+    restart: always
+    depends_on: [zookeeper, kafka, connect]
+    ports:
+      - *control-center
+
   chbench:
     init: true
     mzbuild: chbenchmark
@@ -113,215 +135,27 @@ volumes:
 
 mzconduct:
   workflows:
-    # This test is designed to delay egress network traffic of the Kafka broker.
-    delay-kafka:
-      steps:
-        - step: workflow
-          workflow: start-everything
-        - step: chaos-delay-docker
-          container: chaos_kafka_1
-        - step: workflow
-          workflow: chaos-bytes-to-kafka
-        - step: workflow
-          workflow: run-netem-and-confirm
-
-    delay-debezium-chbench:
-      steps:
-        - step: workflow
-          workflow: chbench-chaos-test
-        - step: workflow
-          workflow: start-everything
-        - step: chaos-delay-docker
-          container: chaos_connect_1
-        - step: workflow
-          workflow: chaos-mysql-debezium-kafka
-        - step: workflow
-          workflow: run-netem-and-confirm
-
-    # This test is designed to rate limit egress network traffic of the Kafka broker.
-    rate-kafka:
-      steps:
-        - step: workflow
-          workflow: start-everything
-        - step: chaos-rate-docker
-          container: chaos_kafka_1
-        - step: workflow
-          workflow: chaos-bytes-to-kafka
-        - step: workflow
-          workflow: run-netem-and-confirm
-
-    rate-debezium-chbench:
-      steps:
-        - step: workflow
-          workflow: chbench-chaos-test
-        - step: workflow
-          workflow: start-everything
-        - step: chaos-rate-docker
-          container: chaos_connect_1
-        - step: workflow
-          workflow: chaos-mysql-debezium-kafka
-        - step: workflow
-          workflow: run-netem-and-confirm
-
-    # This test is designed to test packet loss from the Kafka broker.
-    loss-kafka:
-      steps:
-        - step: workflow
-          workflow: start-everything
-        - step: chaos-loss-docker
-          container: chaos_kafka_1
-          percent: 10
-        - step: workflow
-          workflow: chaos-bytes-to-kafka
-        - step: workflow
-          workflow: run-netem-and-confirm
-
-    loss-debezium-chbench:
-      steps:
-        - step: workflow
-          workflow: chbench-chaos-test
-        - step: workflow
-          workflow: start-everything
-        - step: chaos-loss-docker
-          container: chaos_connect_1
-          percent: 10
-        - step: workflow
-          workflow: chaos-mysql-debezium-kafka
-        - step: workflow
-          workflow: run-netem-and-confirm
-
-    # This test is designed to test packet loss from the Kafka broker.
-    duplicate-kafka:
-      steps:
-        - step: workflow
-          workflow: start-everything
-        - step: chaos-duplicate-docker
-          container: chaos_kafka_1
-          percent: 10
-        - step: workflow
-          workflow: chaos-bytes-to-kafka
-        - step: workflow
-          workflow: run-netem-and-confirm
-
-    duplicate-debezium-chbench:
-      steps:
-        - step: workflow
-          workflow: chbench-chaos-test
-        - step: workflow
-          workflow: start-everything
-        - step: chaos-duplicate-docker
-          container: chaos_connect_1
-          percent: 10
-        - step: workflow
-          workflow: chaos-mysql-debezium-kafka
-        - step: workflow
-          workflow: run-netem-and-confirm
-
-    # This test is designed to test packet corruption from the Kafka broker.
-    corrupt-kafka:
-      steps:
-        - step: workflow
-          workflow: start-everything
-        - step: chaos-corrupt-docker
-          container: chaos_kafka_1
-          percent: 10
-        - step: workflow
-          workflow: chaos-bytes-to-kafka
-        - step: workflow
-          workflow: run-netem-and-confirm
-
-    corrupt-debezium-chbench:
-      steps:
-        - step: workflow
-          workflow: chbench-chaos-test
-        - step: workflow
-          workflow: start-everything
-        - step: chaos-corrupt-docker
-          container: chaos_connect_1
-          percent: 10
-        - step: workflow
-          workflow: chaos-mysql-debezium-kafka
-        - step: workflow
-          workflow: run-netem-and-confirm
-
-    # These tests are designed to start and stop the specified Docker container.
-    pause-kafka:
+    test-bytes-to-kafka:
       steps:
         - step: workflow
           workflow: start-everything
         - step: workflow
           workflow: chaos-bytes-to-kafka
-        - step: chaos-pause-docker
-          service: kafka
+        - step: random-chaos
           other_service: chaos_run
+        - step: workflow
+          workflow: confirm-test
 
-    pause-debezium-chbench:
+    test-mysql-debezium-kafka:
       steps:
         - step: workflow
-          workflow: chbench-chaos-test
-        - step: workflow
-          workflow: start-everything
+          workflow: chbench-load-test
         - step: workflow
           workflow: chaos-mysql-debezium-kafka
-        - step: chaos-pause-docker
-          service: chaos_connect_1
-          other_service: chbench
-
-    # These tests are designed to start and stop the specified Docker container.
-    stop-kafka:
-      steps:
-        - step: workflow
-          workflow: start-everything
-        - step: workflow
-          workflow: chaos-bytes-to-kafka
-        - step: chaos-stop-docker
-          service: kafka
+        - step: random-chaos
           other_service: chaos_run
-
-    stop-debezium-chbench:
-      steps:
         - step: workflow
-          workflow: chbench-chaos-test
-        - step: workflow
-          workflow: start-everything
-        - step: workflow
-          workflow: chaos-mysql-debezium-kafka
-        - step: chaos-stop-docker
-          service: chaos_connect_1
-          other_service: chbench
-
-    # These tests are designed to kill the specified Docker container.
-    kill-kafka:
-      steps:
-        - step: workflow
-          workflow: start-everything
-        - step: workflow
-          workflow: chaos-bytes-to-kafka
-        - step: chaos-kill-docker
-          service: kafka
-        - step: chaos-confirm
-          service: materialized
-          running: true
-        - step: chaos-confirm
-          service: kafka
-          exit_code: 137 #SIGKILL
-
-    kill-debezium-chbench:
-      steps:
-        - step: workflow
-          workflow: chbench-chaos-test
-        - step: workflow
-          workflow: start-everything
-        - step: workflow
-          workflow: chaos-mysql-debezium-kafka
-        - step: chaos-kill-docker
-          service: chaos_connect_1
-        - step: chaos-confirm
-          service: materialized
-          running: true
-        - step: chaos-confirm
-          service: chaos_connect_1
-          exit_code: 137 #SIGKILL
+          workflow: confirm-test
 
     # Helper workflows
     start-everything:
@@ -338,7 +172,6 @@ mzconduct:
           host: materialized
           port: 6875
 
-    # Chaos test workflows
     chaos-bytes-to-kafka:
       steps:
         - step: run
@@ -350,7 +183,7 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --kafka-partitions 100
-            --message-count 100000000
+            --message-count 10000
 
     chaos-mysql-debezium-kafka:
       steps:
@@ -364,14 +197,7 @@ mzconduct:
             --kafka-url kafka:9092
             --run-seconds=864000
 
-
-    # To verify a netem chaos test, we run the chaos container to completion
-    # and check the following conditions:
-    #
-    # - the materialized container did not crash
-    # - the kafka container did not crash
-    # - the chaos container completed successfully
-    run-netem-and-confirm:
+    confirm-test:
       steps:
         - step: chaos-confirm
           service: chaos_run
@@ -380,22 +206,19 @@ mzconduct:
         - step: chaos-confirm
           service: materialized
           running: true
-        - step: chaos-confirm
-          service: chaos_kafka_1
-          running: true
 
     # chbench helper workflows
-    chbench-chaos-test:
+    chbench-load-test:
       steps:
         - step: workflow
-          workflow: chbench-bring-up-source-data
+          workflow: bring-up-source-data-mysql
         - step: workflow
-          workflow: chbench-heavy-load
+          workflow: heavy-load
 
-    chbench-bring-up-source-data:
+    bring-up-source-data-mysql:
       steps:
         - step: start-services
-          services: [materialized, mysql, zookeeper, kafka, schema-registry, connect]
+          services: [materialized, mysql]
         - step: wait-for-tcp
           host: materialized
           port: 6875
@@ -403,6 +226,11 @@ mzconduct:
           user: root
           password: debezium
           timeout_secs: 30
+        - step: drop-kafka-topics
+          kafka-container: chbench_kafka_1
+          topic_pattern: debezium.tpcch.*
+        - step: start-services
+          services: [connector-mysql]
         - step: wait-for-tcp
           host: connect
           port: 8083
@@ -410,22 +238,14 @@ mzconduct:
         - step: wait-for-tcp
           host: schema-registry
           port: 8081
-        - step: wait-for-tcp
-          host: kafka
-          port: 9092
-        - step: start-services
-          services: [connector]
-        - step: drop-kafka-topics
-          kafka-container: chaos_kafka_1
-          topic_pattern: mysql.tpcch.*
         - step: run
           service: chbench
           command: >-
             gen
             --warehouses=1
-            --config-file-path=/etc/chbenchmark/mz-default.cfg
+            --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
 
-    chbench-heavy-load:
+    heavy-load:
       steps:
         - step: run
           service: chbench
@@ -437,5 +257,5 @@ mzconduct:
             --transactional-threads=1
             --run-seconds=864000
             -l /dev/stdout
-            --config-file-path=/etc/chbenchmark/mz-default.cfg
+            --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
             --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
