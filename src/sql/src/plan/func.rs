@@ -928,7 +928,7 @@ pub fn select_scalar_func(
 ) -> Result<ScalarExpr, anyhow::Error> {
     let impls = match BUILTIN_IMPLS.get(ident) {
         Some(i) => i,
-        None => unsupported!(ident),
+        None => bail!("function \"{}\" does not exist", ident),
     };
 
     let mut cexprs = Vec::new();
@@ -1473,9 +1473,15 @@ pub fn select_table_func(
     ident: &str,
     args: &[Expr],
 ) -> Result<TableFuncPlan, anyhow::Error> {
+    if ident == "values" {
+        // Produce a nice error message for the common typo
+        // `SELECT * FROM VALUES (1)`.
+        bail!("VALUES expression in FROM clause must be surrounded by parentheses");
+    }
+
     let impls = match BUILTIN_TABLE_IMPLS.get(ident) {
         Some(i) => i,
-        None => unsupported!(ident),
+        None => bail!("function \"{}\" does not exist", ident),
     };
 
     let mut cexprs = Vec::new();
@@ -1493,6 +1499,18 @@ lazy_static! {
         use ParamType::*;
         use ScalarType::*;
         impls! {
+            "array_agg" => {
+                params!(Any) => unary_op(|_ecx, _e| unsupported!("array_agg"))
+            },
+            "bool_and" => {
+                params!(Any) => unary_op(|_ecx, _e| unsupported!("bool_and"))
+            },
+            "bool_or" => {
+                params!(Any) => unary_op(|_ecx, _e| unsupported!("bool_or"))
+            },
+            "concat_agg" => {
+                params!(Any) => unary_op(|_ecx, _e| unsupported!("concat_agg"))
+            },
             "count" => {
                 params!() => nullary_op(|_ecx| {
                     // COUNT(*) is equivalent to COUNT(true).
@@ -1530,6 +1548,9 @@ lazy_static! {
                 params!(Timestamp) => AggregateFunc::MinTimestamp,
                 params!(TimestampTz) => AggregateFunc::MinTimestampTz
             },
+            "json_agg" => {
+                params!(Any) => unary_op(|_ecx, _e| unsupported!("json_agg"))
+            },
             "jsonb_agg" => {
                 params!(JsonbAny) => unary_op(|_ecx, e| {
                     // `AggregateFunc::JsonbAgg` filters out `Datum::Null` (it
@@ -1544,6 +1565,9 @@ lazy_static! {
                     };
                     Ok((e, AggregateFunc::JsonbAgg))
                 })
+            },
+            "string_agg" => {
+                params!(Any, String) => binary_op(|_ecx, _lhs, _rhs| unsupported!("string_agg"))
             },
             "sum" => {
                 params!(Int32) => AggregateFunc::SumInt32,
@@ -1575,7 +1599,7 @@ pub fn select_aggregate_func(
 ) -> Result<(ScalarExpr, AggregateFunc), anyhow::Error> {
     let impls = match BUILTIN_AGGREGATE_IMPLS.get(ident) {
         Some(i) => i,
-        None => unsupported!(ident),
+        None => bail!("function \"{}\" does not exist", ident),
     };
 
     let mut cexprs = Vec::new();
