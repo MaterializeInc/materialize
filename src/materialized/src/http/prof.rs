@@ -77,7 +77,7 @@ async fn time_prof<'a>(
     // SAFETY: We ensure above that memory profiling is off.
     // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
     let stacks = unsafe { prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
-    // Fail with a compile warning if we weren't holding the jemalloc lock.
+    // Fail with a compile error if we weren't holding the jemalloc lock.
     drop(ctl_lock);
     flamegraph(stacks, "CPU Time Flamegraph", false)
 }
