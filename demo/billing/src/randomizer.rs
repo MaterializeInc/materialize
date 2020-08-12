@@ -33,7 +33,6 @@ fn protobuf_timestamp(time: DateTime<Utc>) -> Timestamp {
     let mut ret = Timestamp::new();
     ret.set_seconds(time.timestamp());
     ret.set_nanos(time.timestamp_subsec_nanos() as i32);
-
     ret
 }
 

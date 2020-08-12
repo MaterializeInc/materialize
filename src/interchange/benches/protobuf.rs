@@ -8,25 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use criterion::{black_box, Criterion, Throughput};
-
-use interchange::protobuf::test_util::gen::benchmark::{
-    file_descriptor_proto, Connector, Record, Value,
-};
-use interchange::protobuf::Decoder;
-use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use serde_protobuf::descriptor::Descriptors;
 
-fn get_decoder(message_name: &str) -> Decoder {
-    let mut repeated_field = RepeatedField::<FileDescriptorProto>::new();
-    let file_descriptor_proto = file_descriptor_proto().clone();
-    repeated_field.push(file_descriptor_proto);
+use interchange::protobuf::Decoder;
 
-    let mut file_descriptor_set: FileDescriptorSet = FileDescriptorSet::new();
-    file_descriptor_set.set_file(repeated_field);
+use gen::benchmark::{Connector, Record, Value};
 
-    let descriptors = Descriptors::from_proto(&file_descriptor_set);
-    Decoder::new(descriptors, message_name)
+mod gen {
+    include!(concat!(env!("OUT_DIR"), "/protobuf/mod.rs"));
 }
 
 pub fn bench_protobuf(c: &mut Criterion) {
@@ -74,7 +64,10 @@ pub fn bench_protobuf(c: &mut Criterion) {
         .write_to_bytes()
         .expect("record failed to serialize to bytes");
     let len = buf.len() as u64;
-    let mut decoder = get_decoder(".bench.Record");
+    let mut decoder = Decoder::new(
+        Descriptors::from_proto(&gen::file_descriptor_set()),
+        ".bench.Record",
+    );
 
     let mut bg = c.benchmark_group("protobuf");
     bg.throughput(Throughput::Bytes(len));

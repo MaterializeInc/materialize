@@ -21,6 +21,7 @@ members = [
     "src/pgwire",
     "src/prof_common",
     "src/prof_jemalloc",
+    "src/protoc",
     "src/repr",
     "src/sql",
     "src/sqllogictest",

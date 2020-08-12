@@ -13,24 +13,11 @@
 //!
 //! [`native_types`] provides conversion functions and more rusty types for them.
 
-use std::fmt;
 use std::str::FromStr;
 
 pub mod gen;
-pub mod native;
 
 pub use protobuf::Message;
-
-pub trait DbgMsg: Message + fmt::Debug {}
-
-pub type DynMessage = Box<dyn DbgMsg>;
-
-pub trait ToMessage
-where
-    Self: Sized,
-{
-    fn to_message(self) -> DynMessage;
-}
 
 #[derive(Debug, Copy, Clone)]
 pub enum MessageType {

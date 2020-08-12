@@ -23,8 +23,6 @@ use serde_value::Value as SerdeValue;
 use repr::adt::decimal::Significand;
 use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
-pub mod test_util;
-
 fn proto_message_name(message_name: &str) -> String {
     // Prepend a . (following the serde-protobuf naming scheme to list root paths
     // for packaged messages) if the message is part of a package and the user hasn't
@@ -449,20 +447,23 @@ fn json_nested_from_serde_value(
 
 #[cfg(test)]
 mod tests {
-    use super::test_util::gen::fuzz::{
-        file_descriptor_proto, Color, TestNestedRecord, TestRecord, TestRepeatedNestedRecord,
-        TestRepeatedRecord,
-    };
     use anyhow::{bail, Error};
-    use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
+    use ordered_float::OrderedFloat;
     use protobuf::{Message, RepeatedField};
     use serde_protobuf::descriptor::{
         Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor,
     };
 
-    use ordered_float::OrderedFloat;
     use repr::adt::decimal::Significand;
     use repr::{Datum, DatumList, RelationDesc, ScalarType};
+
+    use gen::fuzz::{
+        Color, TestNestedRecord, TestRecord, TestRepeatedNestedRecord, TestRepeatedRecord,
+    };
+
+    mod gen {
+        include!(concat!(env!("OUT_DIR"), "/protobuf/mod.rs"));
+    }
 
     fn sanity_check_relation(
         relation: &RelationDesc,
@@ -587,14 +588,7 @@ mod tests {
     }
 
     fn get_decoder(message_name: &str) -> super::Decoder {
-        let mut repeated_field = RepeatedField::<FileDescriptorProto>::new();
-        let file_descriptor_proto = file_descriptor_proto().clone();
-        repeated_field.push(file_descriptor_proto);
-
-        let mut file_descriptor_set: FileDescriptorSet = FileDescriptorSet::new();
-        file_descriptor_set.set_file(repeated_field);
-
-        let descriptors = Descriptors::from_proto(&file_descriptor_set);
+        let descriptors = Descriptors::from_proto(&gen::file_descriptor_set());
         let relation = super::validate_descriptors(message_name, &descriptors)
             .expect("Failed to parse descriptor");
 

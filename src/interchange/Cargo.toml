@@ -23,11 +23,10 @@ num-traits = "0.2.12" # don't want to upgrade to autocfg 1.0 until more things u
 itertools = "0.9.0"
 ordered-float = { version = "2.0.0", features = ["serde"] }
 ore = { path = "../ore" }
-protobuf = "2.8.1"
-protoc = "2.8.1"
+protobuf = { git = "https://github.com/stepancheg/rust-protobuf.git", branch = "v2.17" }
 repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }
-serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
+serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "v2.17" }
 serde-value = "0.7.0"
 serde_json = "1.0.57"
 smallvec = "1.4.1"
@@ -39,4 +38,4 @@ base64 = "0.12.3"
 criterion = "0.3"
 
 [build-dependencies]
-protoc-rust = "2.16.2"
+protoc = { path = "../protoc" }

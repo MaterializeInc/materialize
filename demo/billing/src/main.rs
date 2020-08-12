@@ -34,7 +34,6 @@ use crate::config::{Args, KafkaConfig, MzConfig};
 mod config;
 mod gen;
 mod mz;
-mod proto;
 mod randomizer;
 
 #[tokio::main]
@@ -167,11 +166,11 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
 
         mz::create_proto_source(
             &client,
-            proto::BILLING_DESCRIPTOR,
+            &gen::FILE_DESCRIPTOR_SET_DATA,
             &config.kafka_url,
             &config.kafka_topic,
             config::KAFKA_SOURCE_NAME,
-            proto::BILLING_MESSAGE_NAME,
+            "billing.Batch",
             config.batch_size,
         )
         .await?;

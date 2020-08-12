@@ -7,43 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Build script to regenerate proto serializing code for tests
-//! To run invoke `MZ_GENERATE_PROTO=1 cargo build`
-
-use std::env;
-use std::fs;
-
 fn main() {
-    let out_dir = "src/format/protobuf/gen";
-    let input = &[
-        "src/format/protobuf/billing.proto",
-        "src/format/protobuf/simple.proto",
-    ];
-
-    for fname in input {
-        println!("cargo:rerun-if-changed={}", fname);
-    }
-    let env_var = "MZ_GENERATE_PROTO";
-    println!("cargo:rerun-if-env-changed={}", env_var);
-    if env::var_os(env_var).is_none() {
-        return;
-    }
-
-    if !fs::metadata(out_dir).map(|md| md.is_dir()).unwrap_or(false) {
-        panic!(
-            "out directory for proto generation does not exist: {}",
-            out_dir
-        );
-    }
-    for fname in input {
-        if !fs::metadata(fname).map(|md| md.is_file()).unwrap_or(false) {
-            panic!("proto schema file does not exist: {}", fname);
-        }
-    }
-
-    protoc_rust::Codegen::new()
-        .out_dir(out_dir)
-        .inputs(input)
-        .run()
-        .expect("protoc");
+    protoc::Protoc::new()
+        .serde(true)
+        .include("src/format/protobuf")
+        .input("src/format/protobuf/billing.proto")
+        .input("src/format/protobuf/simple.proto")
+        .build_script_exec();
 }
