@@ -59,7 +59,7 @@ async fn mysql_debezium_kafka(args: Args) -> Result<(), anyhow::Error> {
 
     // Create Kafka source.
     let src_query = "CREATE SOURCE src_orderline
-                           FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.orderline'
+                           FROM KAFKA BROKER 'kafka:9092' TOPIC 'debezium.tpcch.orderline'
                            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
                            ENVELOPE DEBEZIUM;";
     log::info!("creating source=> {}", src_query);

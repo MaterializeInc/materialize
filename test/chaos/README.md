@@ -1,29 +1,24 @@
 ### Chaos
 
-This crate is intended to provide tools and tests to chaos test Materialize. The tests are
-implemented as `mzconduct` workflows, meaning that they can be run as follows:
+Tests in this crate chaos test Materialize. Each test is implemented as an `mzconduct`
+workflow and can be run as follows:
 
 ```shell script
-bin/mzconduct up chaos -w delay-kafka
+bin/mzconduct up chaos -w test-bytes-to-kafka
 ```
 
-In this command, `chaos` indicates the name of the target `mzcompose.yml` file and `delay-kafka`
-indicates the name of the target test. Each test has its own unique workflow.
+In this command, `chaos` indicates the name of the target `mzcompose.yml` file and `test-bytes-to-kafka`
+indicates the name of the target chaos test.
 
 These tests can be run:
-1. Locally via the above command
+1. Locally using the above command or some variation
 2. On EC2 instances via our `infra` terraform commands
 
 ### Existing Tests
 
-For the configuration:
+- `test-bytes-to-kafka`: In this test, simple records are pushed directly to Kafka and
+   subsequently read by Materialize.
 
-- Bytes -> Kafka -> Materialize:
-    - basic Docker chaos tests (pause, stop, kill)
-    - basic network chaos tests (delay, rate, limit, loss, corrupt, duplicate)
-
-- Mysql -> Debezium -> Kafka -> Materialize:
-    - basic Docker chaos tests (pause, stop, kill)
-    - basic network chaos tests (delay, rate, limit, loss, corrupt, duplicate)
-
-All other tests are yet to be created and added.
+- `test-mysql-debezium-kafka`: In this test, chbench data will be loaded into a MySQL
+   database. As the data changes, Debezium will push those changes to Kafka. Materialize
+   will read in the changes from Kafka.
