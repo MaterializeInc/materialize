@@ -42,7 +42,7 @@ rlimit = "0.3.0"
 stream-cancel = "0.6.1"
 sysctl = "0.4.0"
 tempfile = "3.1"
-tokio = "0.2"
+tokio = { version = "0.2", features = ["sync"] }
 tokio-openssl = "0.4.0"
 tracing = "0.1.18"
 tracing-subscriber = "0.2.7"

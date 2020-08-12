@@ -45,6 +45,17 @@
     <input type="checkbox" id="mergeThreads" name="threads" value="merge" />
     <label for="mergeThreads">Merge threads</label>
   </div>
-  <button name="action" value="time_fg">Visualize time profile (flamegraph)</button>
+  <div>
+    <button name="action" value="time_fg">Visualize time profile (flamegraph)</button>
+{% match mem_prof %}
+{% when crate::http::prof::MemProfilingStatus::Enabled with (start_time) %}
+  {% match start_time %}
+  {% when Some with (_) %}
+    <strong>Note.</strong> Will deactivate memory profiling.
+  {% when None %}
+  {% endmatch %}
+{% when crate::http::prof::MemProfilingStatus::Disabled %}
+{% endmatch %}
+  </div>
 </form>
 {% endblock %}

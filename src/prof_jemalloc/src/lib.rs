@@ -15,8 +15,8 @@
 
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::{ffi::CString, io::BufRead, time::Instant};
+use tokio::sync::Mutex;
 
 use jemalloc_ctl::raw;
 use lazy_static::lazy_static;
