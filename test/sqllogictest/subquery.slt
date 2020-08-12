@@ -656,5 +656,12 @@ from ys
 1  -1
 2  1
 
+# Regression test for #3924, in which quantified comparision simplification was
+# not correctly handling LATERAL joins.
+query II
+SELECT * FROM (VALUES (1)), LATERAL (SELECT * FROM (SELECT column1) WHERE true)
+----
+1  1
+
 query error aggregate functions that refer exclusively to outer columns not yet supported
 SELECT (SELECT count(likes.likee)) FROM likes
