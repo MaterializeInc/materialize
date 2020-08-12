@@ -839,7 +839,8 @@ class RandomChaos(WorkflowStep):
         self._services = services
         self._other_service = other_service
 
-    def get_running_docker_processes(self, running: bool = False) -> str:
+    @staticmethod
+    def get_docker_processes(running: bool = False) -> str:
         """
         Use 'docker ps' to return all Docker process information.
 
@@ -866,7 +867,7 @@ class RandomChaos(WorkflowStep):
         :return: Docker container id strs
         """
         try:
-            docker_processes = self.get_running_docker_processes(running=running)
+            docker_processes = self.get_docker_processes(running=running)
 
             patterns = []
             if services:
