@@ -10,7 +10,7 @@ menu:
 
 {{< warning >}}
 **INSERT is currently only available in the [developer](https://mtrlz.dev/) (unstable) builds.**
-{{< warning >}}
+{{< /warning >}}
 
 {{< warning >}}
 At the moment, tables do not persist any data that is inserted. This means that restarting a
