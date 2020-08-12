@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::{ffi::CString, io::BufRead, time::Instant};
 use tokio::sync::Mutex;
 
-use jemalloc_ctl::raw;
+use jemalloc_ctl::{epoch, raw, stats};
 use lazy_static::lazy_static;
 use tempfile::NamedTempFile;
 
@@ -117,6 +117,15 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
     Ok(profile)
 }
 
+// See stats.{allocated, active, ...} in http://jemalloc.net/jemalloc.3.html for details
+pub struct JemallocStats {
+    pub active: usize,
+    pub allocated: usize,
+    pub metadata: usize,
+    pub resident: usize,
+    pub retained: usize,
+}
+
 impl JemallocProfCtl {
     // Creates and returns the global singleton.
     fn get() -> Option<Self> {
@@ -169,5 +178,16 @@ impl JemallocProfCtl {
         // http://jemalloc.net/jemalloc.3.html#prof.dump
         unsafe { raw::write(b"prof.dump\0", path.as_ptr()) }?;
         Ok(f.into_file())
+    }
+
+    pub fn stats(&self) -> anyhow::Result<JemallocStats> {
+        epoch::advance()?;
+        Ok(JemallocStats {
+            active: stats::active::read()?,
+            allocated: stats::allocated::read()?,
+            metadata: stats::metadata::read()?,
+            resident: stats::resident::read()?,
+            retained: stats::retained::read()?,
+        })
     }
 }
