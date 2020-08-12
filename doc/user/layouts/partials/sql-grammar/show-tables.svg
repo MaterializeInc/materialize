@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="463" height="69">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="62" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="62"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">SHOW</text>
+   <rect x="113" y="3" width="72" height="32" rx="10"/>
+   <rect x="111"
+         y="1"
+         width="72"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="121" y="21">TABLES</text>
+   <rect x="225" y="35" width="60" height="32" rx="10"/>
+   <rect x="223"
+         y="33"
+         width="60"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="233" y="53">FROM</text>
+   <rect x="305" y="35" width="110" height="32"/>
+   <rect x="303" y="33" width="110" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="313" y="53">schema_name</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m62 0 h10 m0 0 h10 m72 0 h10 m20 0 h10 m0 0 h200 m-230 0 h20 m210 0 h20 m-250 0 q10 0 10 10 m230 0 q0 -10 10 -10 m-240 10 v12 m230 0 v-12 m-230 12 q0 10 10 10 m210 0 q10 0 10 -10 m-220 10 h10 m60 0 h10 m0 0 h10 m110 0 h10 m23 -32 h-3"/>
+   <polygon points="453 17 461 13 461 21"/>
+   <polygon points="453 17 445 13 445 21"/>
+</svg>

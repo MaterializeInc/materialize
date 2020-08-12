@@ -49,6 +49,13 @@ SHOW SOURCES FROM public;
 my_stream_source
 my_file_source
 ```
+```sql
+SHOW SOURCES;
+```
+```nofmt
+my_stream_source
+my_file_source
+```
 
 ## Related pages
 

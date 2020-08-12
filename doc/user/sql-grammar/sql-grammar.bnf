@@ -211,6 +211,8 @@ show_create_sink ::=
   'SHOW' 'CREATE' 'SINK' sink_name
 show_create_source ::=
   'SHOW' 'CREATE' 'SOURCE' source_name
+show_create_table ::=
+  'SHOW' 'CREATE' 'TABLE' table_name
 show_create_view ::=
   'SHOW' 'CREATE' 'VIEW' view_name
 show_databases ::=
@@ -224,6 +226,8 @@ show_sinks ::=
    'SHOW' 'SINKS'
 show_sources ::=
   'SHOW' 'SOURCES' ('FROM' schema_name)?
+show_tables ::=
+  'SHOW' 'TABLES' ('FROM' schema_name)?
 show_views ::=
   'SHOW' ('MATERIALIZED' | 'FULL')? 'VIEWS' ('FROM' schema_name)?
 table_ref ::=
