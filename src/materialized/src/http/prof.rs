@@ -59,12 +59,12 @@ struct FlamegraphTemplate<'a> {
 async fn time_prof<'a>(
     params: &HashMap<Cow<'a, str>, Cow<'a, str>>,
 ) -> anyhow::Result<Response<Body>> {
-    let _ctl_lock;
+    let ctl_lock;
     cfg_if! {
         if #[cfg(target_os = "macos")] {
-            _ctl_lock = ();
+            ctl_lock = ();
         } else {
-            _ctl_lock = if let Some(ctl) = prof_jemalloc::PROF_CTL.as_ref() {
+            ctl_lock = if let Some(ctl) = prof_jemalloc::PROF_CTL.as_ref() {
                 let mut borrow = ctl.lock().await;
                 borrow.deactivate()?;
                 Some(borrow)
@@ -77,6 +77,8 @@ async fn time_prof<'a>(
     // SAFETY: We ensure above that memory profiling is off.
     // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
     let stacks = unsafe { prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
+    // Fail with a compile warning if we weren't holding the jemalloc lock.
+    drop(ctl_lock);
     flamegraph(stacks, "CPU Time Flamegraph", false)
 }
 
