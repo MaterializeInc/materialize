@@ -809,6 +809,18 @@ class DropKafkaTopicsStep(WorkflowStep):
 
 @Steps.register("random-chaos")
 class RandomChaos(WorkflowStep):
+    """
+    Add random chaos to running Docker containers.
+
+    :param chaos:          List containing types of chaos to add. If not provided,
+                           will default to 'default_chaos'.
+    :param services:       List of target Docker services for chaos. If not provided,
+                           will default to all running Docker services.
+    :param other_service:  Chaos will be randomly added to Docker services as long as
+                           'other_service' is running. If not provided, chaos will be
+                           added forever.
+    """
+
     default_chaos = [
         "pause",
         "stop",
@@ -821,13 +833,10 @@ class RandomChaos(WorkflowStep):
     ]
 
     def __init__(
-        self,
-        chaos: List[str] = [],
-        containers: List[str] = [],
-        other_service: str = "",
+        self, chaos: List[str] = [], services: List[str] = [], other_service: str = "",
     ):
         self._chaos = chaos
-        self._containers = containers
+        self._services = services
         self._other_service = other_service
 
     def get_running_docker_processes(self, running: bool = False) -> str:
@@ -884,28 +893,25 @@ class RandomChaos(WorkflowStep):
         except subprocess.CalledProcessError as e:
             say(f"Failed to run command {cmd}: {e}")
 
-    def add_and_remove_chaos(
-        self, add_cmd: str, duration: int = 60, remove_cmd: str = ""
-    ) -> None:
+    def add_and_remove_chaos(self, add_cmd: str, remove_cmd: str = "") -> None:
         self.run_cmd(add_cmd)
-        say(f"sleeping for {duration} seconds...")
-        time.sleep(duration)
+        # todo: Make sleep durations configurable
+        say(f"sleeping for 60 seconds...")
+        time.sleep(60)
         if remove_cmd:
             self.run_cmd(remove_cmd)
 
-    def add_and_remove_netem_chaos(
-        self, container_id: str, add_cmd: str, duration: int = 60
-    ) -> None:
+    def add_and_remove_netem_chaos(self, container_id: str, add_cmd: str) -> None:
         remove_cmd = f"docker exec -t {container_id} tc qdisc del dev eth0 root netem"
-        self.add_and_remove_chaos(add_cmd, duration, remove_cmd)
+        self.add_and_remove_chaos(add_cmd, remove_cmd)
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
         if not self._chaos:
             self._chaos = self.default_chaos
-        if not self._containers:
-            self._containers = self.get_container_ids(running=True)
+        if not self._services:
+            self._services = self.get_container_ids(running=True)
         say(
-            f"will run these chaos types: {self._chaos} on these containers: {self._containers}"
+            f"will run these chaos types: {self._chaos} on these containers: {self._services}"
         )
 
         if not self._other_service:
@@ -927,7 +933,7 @@ class RandomChaos(WorkflowStep):
                 self.add_chaos()
 
     def add_chaos(self) -> None:
-        random_container = random.choice(self._containers)
+        random_container = random.choice(self._services)
         random_chaos = random.choice(self._chaos)
         if random_chaos == "pause":
             self.add_and_remove_chaos(
