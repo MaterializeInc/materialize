@@ -16,6 +16,7 @@ Flag | Default | Modifies
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
 [`--experimental`](#experimental-mode) | Disabled | Get more details [here](#experimental-mode).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
+[`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
 [`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
 [`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
@@ -98,6 +99,20 @@ responsibility of the network firewall to limit incoming connections. If you
 wish to configure `materialized` to only listen to, e.g. localhost connections,
 you can set `--listen-addr` to `localhost:6875`. You can also use this to change
 the port that Materialize listens on from the default `6875`.
+
+### Compaction window
+
+The `--logical-compaction-window` option specifies how much historical detail
+Materialize is required to maintain in
+[arrangements](/overview/api-components#indexes). Note that compaction happens
+lazily, so Materialize may retain more historical detail than requested, but it
+will never retain less.
+
+By default, the logical compaction window is 60 seconds. The special value
+`off` indicates disables logical compaction.
+
+See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
+the compaction window.
 
 ### TLS encryption
 
