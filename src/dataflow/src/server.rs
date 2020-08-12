@@ -152,6 +152,9 @@ pub enum SequencedCommand {
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
     /// Request that persistence data is streamed to the provided channel.
     EnablePersistence(comm::mpsc::Sender<WorkerPersistenceData>),
+    /// Request that the logging sources in the contained configuration are
+    /// installed.
+    EnableLogging(LoggingConfig),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
@@ -204,7 +207,6 @@ pub fn serve<C>(
     process: usize,
     switchboard: comm::Switchboard<C>,
     executor: tokio::runtime::Handle,
-    logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String>
 where
     C: comm::Connection,
@@ -250,7 +252,6 @@ where
                     dataflow_tokens: HashMap::new(),
                     persistence_tx: None,
                 },
-                logging_config: logging_config.clone(),
                 materialized_logger: None,
                 command_rx,
                 pending_peeks: Vec::new(),
@@ -305,8 +306,6 @@ where
     timely_worker: &'w mut TimelyWorker<A>,
     /// The state associated with rendering dataflows.
     render_state: RenderState,
-    // The configuration for Timely's logging framework.
-    logging_config: Option<LoggingConfig>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     materialized_logger: Option<logging::materialized::Logger>,
     /// The channel from which commands are drawn.
@@ -326,94 +325,89 @@ where
     A: Allocate + 'w,
 {
     /// Initializes timely dataflow logging and publishes as a view.
-    ///
-    /// The initialization respects the setting of `self.logging_config`, and in particular
-    /// if it is set to `None` then nothing happens. This has the potential to crash and burn
-    /// if logging is not initialized and anyone tries to use it.
-    fn initialize_logging(&mut self) {
-        if let Some(logging) = &self.logging_config {
-            use crate::logging::BatchLogger;
-            use timely::dataflow::operators::capture::event::link::EventLink;
+    fn initialize_logging(&mut self, logging: &LoggingConfig) {
+        if self.materialized_logger.is_some() {
+            panic!("dataflow server has already initialized logging");
+        }
 
-            let granularity_ms =
-                std::cmp::max(1, logging.granularity_ns() / 1_000_000) as Timestamp;
+        use crate::logging::BatchLogger;
+        use timely::dataflow::operators::capture::event::link::EventLink;
 
-            // Establish loggers first, so we can either log the logging or not, as we like.
-            let t_linked = std::rc::Rc::new(EventLink::new());
-            let mut t_logger = BatchLogger::new(t_linked.clone(), granularity_ms);
-            let d_linked = std::rc::Rc::new(EventLink::new());
-            let mut d_logger = BatchLogger::new(d_linked.clone(), granularity_ms);
-            let m_linked = std::rc::Rc::new(EventLink::new());
-            let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
+        let granularity_ms = std::cmp::max(1, logging.granularity_ns / 1_000_000) as Timestamp;
 
-            // Construct logging dataflows and endpoints before registering any.
-            let t_traces = logging::timely::construct(&mut self.timely_worker, logging, t_linked);
-            let d_traces =
-                logging::differential::construct(&mut self.timely_worker, logging, d_linked);
-            let m_traces =
-                logging::materialized::construct(&mut self.timely_worker, logging, m_linked);
+        // Establish loggers first, so we can either log the logging or not, as we like.
+        let t_linked = std::rc::Rc::new(EventLink::new());
+        let mut t_logger = BatchLogger::new(t_linked.clone(), granularity_ms);
+        let d_linked = std::rc::Rc::new(EventLink::new());
+        let mut d_logger = BatchLogger::new(d_linked.clone(), granularity_ms);
+        let m_linked = std::rc::Rc::new(EventLink::new());
+        let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
 
-            // Register each logger endpoint.
-            self.timely_worker
-                .log_register()
-                .insert::<timely::logging::TimelyEvent, _>("timely", move |time, data| {
-                    t_logger.publish_batch(time, data)
-                });
+        // Construct logging dataflows and endpoints before registering any.
+        let t_traces = logging::timely::construct(&mut self.timely_worker, logging, t_linked);
+        let d_traces = logging::differential::construct(&mut self.timely_worker, logging, d_linked);
+        let m_traces = logging::materialized::construct(&mut self.timely_worker, logging, m_linked);
 
-            self.timely_worker
-                .log_register()
-                .insert::<differential_dataflow::logging::DifferentialEvent, _>(
-                    "differential/arrange",
-                    move |time, data| d_logger.publish_batch(time, data),
-                );
-
-            self.timely_worker
-                .log_register()
-                .insert::<logging::materialized::MaterializedEvent, _>(
-                    "materialized",
-                    move |time, data| m_logger.publish_batch(time, data),
-                );
-
-            let errs = self.timely_worker.dataflow::<Timestamp, _, _>(|scope| {
-                Collection::<_, DataflowError, isize>::empty(scope)
-                    .arrange()
-                    .trace
+        // Register each logger endpoint.
+        self.timely_worker
+            .log_register()
+            .insert::<timely::logging::TimelyEvent, _>("timely", move |time, data| {
+                t_logger.publish_batch(time, data)
             });
 
-            let logger = self
-                .timely_worker
-                .log_register()
-                .get("materialized")
-                .unwrap();
+        self.timely_worker
+            .log_register()
+            .insert::<differential_dataflow::logging::DifferentialEvent, _>(
+                "differential/arrange",
+                move |time, data| d_logger.publish_batch(time, data),
+            );
 
-            // Install traces as maintained indexes
-            for (log, (_, trace)) in t_traces {
-                self.render_state
-                    .traces
-                    .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
-                self.reported_frontiers
-                    .insert(log.index_id(), Antichain::from_elem(0));
-                logger.log(MaterializedEvent::Frontier(log.index_id(), 0, 1));
-            }
-            for (log, (_, trace)) in d_traces {
-                self.render_state
-                    .traces
-                    .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
-                self.reported_frontiers
-                    .insert(log.index_id(), Antichain::from_elem(0));
-                logger.log(MaterializedEvent::Frontier(log.index_id(), 0, 1));
-            }
-            for (log, (_, trace)) in m_traces {
-                self.render_state
-                    .traces
-                    .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
-                self.reported_frontiers
-                    .insert(log.index_id(), Antichain::from_elem(0));
-                logger.log(MaterializedEvent::Frontier(log.index_id(), 0, 1));
-            }
+        self.timely_worker
+            .log_register()
+            .insert::<logging::materialized::MaterializedEvent, _>(
+                "materialized",
+                move |time, data| m_logger.publish_batch(time, data),
+            );
 
-            self.materialized_logger = Some(logger);
+        let errs = self.timely_worker.dataflow::<Timestamp, _, _>(|scope| {
+            Collection::<_, DataflowError, isize>::empty(scope)
+                .arrange()
+                .trace
+        });
+
+        let logger = self
+            .timely_worker
+            .log_register()
+            .get("materialized")
+            .unwrap();
+
+        // Install traces as maintained indexes
+        for (log, (_, trace)) in t_traces {
+            let id = logging.active_logs[&log];
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone()));
+            self.reported_frontiers.insert(id, Antichain::from_elem(0));
+            logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
+        for (log, (_, trace)) in d_traces {
+            let id = logging.active_logs[&log];
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone()));
+            self.reported_frontiers.insert(id, Antichain::from_elem(0));
+            logger.log(MaterializedEvent::Frontier(id, 0, 1));
+        }
+        for (log, (_, trace)) in m_traces {
+            let id = logging.active_logs[&log];
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone()));
+            self.reported_frontiers.insert(id, Antichain::from_elem(0));
+            logger.log(MaterializedEvent::Frontier(id, 0, 1));
+        }
+
+        self.materialized_logger = Some(logger);
     }
 
     /// Disables timely dataflow logging.
@@ -430,12 +424,6 @@ where
 
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
-        // Logging can be initialized with a "granularity" in nanoseconds, so that events are only
-        // produced at logical times that are multiples of this many nanoseconds, which can reduce
-        // the churn of the underlying computation.
-
-        self.initialize_logging();
-
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
@@ -726,6 +714,9 @@ where
                     Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
                         |err| panic!("error sending worker feedback: {}", err),
                     )));
+            }
+            SequencedCommand::EnableLogging(config) => {
+                self.initialize_logging(&config);
             }
             SequencedCommand::EnablePersistence(tx) => {
                 self.render_state.persistence_tx = Some(tx);
@@ -1025,5 +1016,5 @@ impl PendingPeek {
 /// doesn't really become slower, because you needed to instantiate these
 /// templates anyway to run tests.
 pub fn __explicit_instantiation__() {
-    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _, _, _, _) -> _);
+    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _, _, _) -> _);
 }

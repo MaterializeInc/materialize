@@ -29,7 +29,7 @@ pub fn construct<A: Allocate>(
     config: &LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
 ) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
-    let granularity_ms = std::cmp::max(1, config.granularity_ns() / 1_000_000) as Timestamp;
+    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow(move |scope| {
@@ -39,7 +39,7 @@ pub fn construct<A: Allocate>(
 
         let logs = Some(linked).replay_core(
             scope,
-            Some(Duration::from_nanos(config.granularity_ns() as u64)),
+            Some(Duration::from_nanos(config.granularity_ns as u64)),
         );
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -365,7 +365,7 @@ pub fn construct<A: Allocate>(
 
         let mut result = std::collections::HashMap::new();
         for (variant, collection) in logs {
-            if config.active_logs().contains(&variant) {
+            if config.active_logs.contains_key(&variant) {
                 let key = variant.index_by();
                 let key_clone = key.clone();
                 let trace = collection

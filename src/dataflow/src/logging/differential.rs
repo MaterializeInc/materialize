@@ -28,7 +28,7 @@ pub fn construct<A: Allocate>(
     config: &dataflow_types::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
 ) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
-    let granularity_ms = std::cmp::max(1, config.granularity_ns() / 1_000_000) as Timestamp;
+    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow(move |scope| {
         use differential_dataflow::collection::AsCollection;
@@ -38,7 +38,7 @@ pub fn construct<A: Allocate>(
         // TODO: Rewrite as one operator with multiple outputs.
         let logs = Some(linked).replay_core(
             scope,
-            Some(Duration::from_nanos(config.granularity_ns() as u64)),
+            Some(Duration::from_nanos(config.granularity_ns as u64)),
         );
 
         // Duration statistics derive from the non-rounded event times.
@@ -126,7 +126,7 @@ pub fn construct<A: Allocate>(
         use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
         let mut result = std::collections::HashMap::new();
         for (variant, collection) in logs {
-            if config.active_logs().contains(&variant) {
+            if config.active_logs.contains_key(&variant) {
                 let key = variant.index_by();
                 let key_clone = key.clone();
                 let trace = collection

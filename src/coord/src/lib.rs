@@ -23,6 +23,7 @@
 mod catalog;
 mod command;
 mod coord;
+mod logging;
 mod persistence;
 mod sink_connector;
 mod timestamp;
