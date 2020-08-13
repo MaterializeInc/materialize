@@ -84,6 +84,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] The "Time behind external source" dashboard panel in Grafana should have remained
     at 0ms or similar for the entirety of the run.
 
+- [ ] Let the chaos tests run for 24 hours, with the following success criteria:
+
+  - [ ] Each chaos test's `chaos_run` container should complete with a `0` exit code. To check
+        this, ssh into each EC2 instance running a chaos test and run `docker ps -a`.
+
 - [ ] Remove all load test machines.
 
 ## Final release
