@@ -162,6 +162,9 @@
       &bull; Side: `BOTH`<br/>
       &bull; `'c'`: `' '` (space)"
 
+  - signature: 'split_part(s: str, d: s, i: int) -> str'
+    description: Split `s` on delimiter `d`. Return the `str` at index `i`, counting from 1.
+
 - type: Scalar
   description: Scalar functions take a list of scalar expressions
   functions:
