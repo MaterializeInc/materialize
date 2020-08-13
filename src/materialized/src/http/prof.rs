@@ -35,6 +35,7 @@ impl Server {
     }
 }
 
+#[allow(dead_code)]
 enum MemProfilingStatus {
     Disabled,
     Enabled(Option<ProfStartTime>),
@@ -57,6 +58,7 @@ struct FlamegraphTemplate<'a> {
     extras: &'a [&'a str],
 }
 
+#[allow(clippy::drop_copy, clippy::unit_arg)]
 async fn time_prof<'a>(
     params: &HashMap<Cow<'a, str>, Cow<'a, str>>,
 ) -> anyhow::Result<Response<Body>> {
