@@ -728,13 +728,13 @@ fn plan_view_select_intrusive(
             allow_aggregates: true,
             allow_subqueries: true,
         };
-        for (select_item, column_name) in projection {
+        for (select_item, column_name) in &projection {
             let expr = match select_item {
                 ExpandedSelectItem::InputOrdinal(i) => {
                     if let Some(column) = select_all_mapping.get(&i).copied() {
                         ScalarExpr::Column(ColumnRef { level: 0, column })
                     } else {
-                        bail!("column \"{}\" must appear in the GROUP BY clause or be used in an aggregate function", from_scope.items[i].short_display_name());
+                        bail!("column \"{}\" must appear in the GROUP BY clause or be used in an aggregate function", from_scope.items[*i].short_display_name());
                     }
                 }
                 ExpandedSelectItem::Expr(expr) => plan_expr(ecx, &expr)?.type_as_any(ecx)?,
@@ -744,24 +744,21 @@ fn plan_view_select_intrusive(
                 // Mark the output name as prioritized, so that they shadow any
                 // input columns of the same name.
                 if let Some(column_name) = column_name {
-                    map_scope.items[column].names.insert(
-                        0,
-                        ScopeItemName {
-                            table_name: None,
-                            column_name: Some(column_name),
-                            priority: true,
-                        },
-                    );
+                    map_scope.items[column].names.push(ScopeItemName {
+                        table_name: None,
+                        column_name: Some(column_name.clone()),
+                        priority: true,
+                    });
                 }
             } else {
                 project_key.push(group_scope.len() + new_exprs.len());
                 new_exprs.push(expr);
                 map_scope.items.push(ScopeItem {
                     names: column_name
-                        .into_iter()
+                        .iter()
                         .map(|column_name| ScopeItemName {
                             table_name: None,
-                            column_name: Some(column_name),
+                            column_name: Some(column_name.clone()),
                             priority: true,
                         })
                         .collect(),
@@ -813,9 +810,19 @@ fn plan_view_select_intrusive(
         order_by
     };
 
+    // Construct a clean scope to expose outwards, where all of the state that
+    // accumulated in the scope during planning of this SELECT is erased. The
+    // clean scope has at most one name for each column, and the names are not
+    // associated with any table.
+    let scope = Scope::from_source(
+        None,
+        projection.into_iter().map(|(_expr, name)| name),
+        Some(qcx.outer_scope.clone()),
+    );
+
     Ok(SelectPlan {
         expr: relation_expr,
-        scope: map_scope.project(&project_key).scrub(),
+        scope,
         order_by,
         project: project_key,
     })

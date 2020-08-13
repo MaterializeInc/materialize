@@ -282,17 +282,4 @@ impl Scope {
             outer_scope: self.outer_scope.clone(),
         }
     }
-
-    /// Removes cruft from planning a single SELECT statement from the scope,
-    /// readying it for use by e.g. an outer SELECT.
-    pub fn scrub(mut self) -> Self {
-        for item in &mut self.items {
-            for name in &mut item.names {
-                name.table_name = None;
-                name.priority = false;
-            }
-            item.expr = None;
-        }
-        self
-    }
 }

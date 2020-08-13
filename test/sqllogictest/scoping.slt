@@ -107,3 +107,11 @@ SELECT EXISTS (SELECT 1)
 ----
 exists
 true
+
+# Check that duplicated columns with different names retain their different
+# names.
+query TT colnames
+SELECT column1, column1 as column2 FROM (VALUES (1))
+----
+column1  column2
+1  1
