@@ -30,7 +30,6 @@ use tokio::runtime::Runtime;
 
 use comm::Switchboard;
 use coord::PersistenceConfig;
-use dataflow_types::logging::LoggingConfig;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use ore::tokio::net::TcpStreamExt;
 
@@ -260,8 +259,6 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         })
         .collect::<Result<_, io::Error>>()?;
 
-    let logging_config = config.logging_granularity.map(LoggingConfig::new);
-
     // Launch dataflow workers.
     let dataflow_guard = dataflow::serve(
         dataflow_conns,
@@ -269,7 +266,6 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         config.process,
         switchboard.clone(),
         executor.clone(),
-        logging_config.clone(),
     )
     .map_err(|s| anyhow!("{}", s))?;
 
@@ -283,7 +279,6 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             switchboard,
             num_timely_workers,
             symbiosis_url: config.symbiosis_url.as_deref(),
-            logging: logging_config.as_ref(),
             logging_granularity: config.logging_granularity,
             data_directory: config.data_directory.as_deref(),
             timestamp: coord::TimestampConfig {

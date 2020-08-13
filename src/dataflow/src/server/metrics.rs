@@ -109,6 +109,8 @@ struct CommandsProcessedMetrics {
     advance_source_timestamp: IntCounter,
     enable_feedback_int: i32,
     enable_feedback: IntCounter,
+    enable_logging_int: i32,
+    enable_logging: IntCounter,
     enable_persistence_int: i32,
     enable_persistence: IntCounter,
     shutdown_int: i32,
@@ -148,6 +150,8 @@ impl CommandsProcessedMetrics {
                 .with_label_values(&[worker, "advance_source_timestamp"]),
             enable_feedback_int: 0,
             enable_feedback: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_feedback"]),
+            enable_logging_int: 0,
+            enable_logging: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_logging"]),
             enable_persistence_int: 0,
             enable_persistence: COMMANDS_PROCESSED_RAW
                 .with_label_values(&[worker, "enable_persistence"]),
@@ -175,6 +179,7 @@ impl CommandsProcessedMetrics {
             }
             SequencedCommand::EnableFeedback(..) => self.enable_feedback_int += 1,
             SequencedCommand::EnablePersistence(..) => self.enable_persistence_int += 1,
+            SequencedCommand::EnableLogging(_) => self.enable_logging_int += 1,
             SequencedCommand::Shutdown { .. } => self.shutdown_int += 1,
             SequencedCommand::AdvanceAllLocalInputs { .. } => {
                 self.advance_all_local_inputs_int += 1

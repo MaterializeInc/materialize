@@ -372,7 +372,6 @@ fn format_row(
 
 impl State {
     pub fn start() -> Result<Self, anyhow::Error> {
-        let logging_config = None;
         let process_id = 0;
 
         let (switchboard, runtime) = comm::Switchboard::local()?;
@@ -384,7 +383,6 @@ impl State {
             switchboard: switchboard.clone(),
             num_timely_workers: NUM_TIMELY_WORKERS,
             symbiosis_url: Some("postgres://"),
-            logging: logging_config.as_ref(),
             data_directory: None,
             executor: &executor,
             logging_granularity: None,
@@ -404,7 +402,6 @@ impl State {
             process_id,
             switchboard,
             runtime.handle().clone(),
-            logging_config,
         )
         .unwrap();
 

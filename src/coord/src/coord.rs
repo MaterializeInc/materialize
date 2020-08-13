@@ -56,14 +56,14 @@ use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{MutationKind, Params, PeekWhen, Plan, PlanContext};
 use transform::Optimizer;
 
+use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState, Source};
+use crate::logging::{LOG_SOURCES, LOG_VIEWS};
 use crate::persistence::{PersistenceConfig, PersistenceMetadata, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
-
-use arrangement_state::{ArrangementFrontiers, Frontiers};
 
 pub enum Message {
     Command(Command),
@@ -94,7 +94,6 @@ where
     pub switchboard: comm::Switchboard<C>,
     pub num_timely_workers: usize,
     pub symbiosis_url: Option<&'a str>,
-    pub logging: Option<&'a LoggingConfig>,
     pub logging_granularity: Option<Duration>,
     pub data_directory: Option<&'a Path>,
     pub executor: &'a tokio::runtime::Handle,
@@ -182,7 +181,7 @@ where
         let optimizer = Optimizer::default();
         let catalog = open_catalog(
             config.data_directory,
-            config.logging,
+            config.logging_granularity.is_some(),
             optimizer,
             Some(config.experimental_mode),
         )?;
@@ -196,9 +195,21 @@ where
                 millis as Timestamp
             }
         });
-        let logging = config.logging;
         let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
         broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
+
+        if let Some(granularity) = config.logging_granularity {
+            broadcast(
+                &mut broadcast_tx,
+                SequencedCommand::EnableLogging(LoggingConfig {
+                    granularity_ns: granularity.as_nanos(),
+                    active_logs: LOG_SOURCES
+                        .iter()
+                        .map(|src| (src.variant.clone(), src.index_id))
+                        .collect(),
+                }),
+            );
+        }
 
         let (persister, persistence_metadata_tx) =
             if let Some(persistence_config) = config.persistence {
@@ -343,17 +354,13 @@ where
         }
 
         // Announce primary and foreign key relationships.
-        if let Some(logging_config) = logging {
-            for log in logging_config.active_logs().iter() {
-                let log_id = &log.id().to_string();
+        if coord.logging_granularity.is_some() {
+            for log in LOG_SOURCES {
+                let log_id = &log.id.to_string();
                 coord.update_catalog_view(
                     CatalogView::MzViewKeys,
-                    log.schema()
-                        .typ()
-                        .keys
-                        .iter()
-                        .enumerate()
-                        .flat_map(move |(index, key)| {
+                    log.variant.desc().typ().keys.iter().enumerate().flat_map(
+                        move |(index, key)| {
                             key.iter().map(move |k| {
                                 let row = Row::pack(&[
                                     Datum::String(log_id),
@@ -362,14 +369,20 @@ where
                                 ]);
                                 (row, 1)
                             })
-                        }),
+                        },
+                    ),
                 );
 
                 coord.update_catalog_view(
                     CatalogView::MzViewForeignKeys,
-                    log.foreign_keys().into_iter().enumerate().flat_map(
+                    log.variant.foreign_keys().into_iter().enumerate().flat_map(
                         move |(index, (parent, pairs))| {
-                            let parent_id = parent.to_string();
+                            let parent_id = LOG_SOURCES
+                                .iter()
+                                .find(|src| src.variant == parent)
+                                .unwrap()
+                                .id
+                                .to_string();
                             pairs.into_iter().map(move |(c, p)| {
                                 let row = Row::pack(&[
                                     Datum::String(&log_id),
@@ -2686,7 +2699,7 @@ fn index_sql(
 
 fn open_catalog(
     data_directory: Option<&Path>,
-    logging_config: Option<&LoggingConfig>,
+    enable_logging: bool,
     mut optimizer: Optimizer,
     experimental_mode: Option<bool>,
 ) -> Result<Catalog, anyhow::Error> {
@@ -2696,39 +2709,40 @@ fn open_catalog(
         None
     };
     let path = path.as_deref();
-    Ok(if let Some(logging_config) = logging_config {
+    Ok(if enable_logging {
         Catalog::open(path, experimental_mode, |catalog| {
-            for log_src in logging_config.active_logs() {
+            for log_src in LOG_SOURCES {
                 let view_name = FullName {
                     database: DatabaseSpecifier::Ambient,
                     schema: "mz_catalog".into(),
-                    item: log_src.name().into(),
+                    item: log_src.name.into(),
                 };
-                let index_name = format!("{}_primary_idx", log_src.name());
+                let index_name = format!("{}_primary_idx", log_src.name);
                 catalog.insert_item(
-                    log_src.id(),
+                    log_src.id,
                     FullName {
                         database: DatabaseSpecifier::Ambient,
                         schema: "mz_catalog".into(),
-                        item: log_src.name().into(),
+                        item: log_src.name.into(),
                     },
                     CatalogItem::Source(catalog::Source {
                         create_sql: "TODO".to_string(),
                         plan_cx: PlanContext::default(),
                         connector: dataflow_types::SourceConnector::Local,
-                        desc: log_src.schema(),
+                        desc: log_src.variant.desc(),
                     }),
                 );
                 catalog.insert_item(
-                    log_src.index_id(),
+                    log_src.index_id,
                     FullName {
                         database: DatabaseSpecifier::Ambient,
                         schema: "mz_catalog".into(),
                         item: index_name.clone(),
                     },
                     CatalogItem::Index(catalog::Index {
-                        on: log_src.id(),
+                        on: log_src.id,
                         keys: log_src
+                            .variant
                             .index_by()
                             .into_iter()
                             .map(ScalarExpr::Column)
@@ -2736,8 +2750,8 @@ fn open_catalog(
                         create_sql: index_sql(
                             index_name,
                             view_name,
-                            &log_src.schema(),
-                            &log_src.index_by(),
+                            &log_src.variant.desc(),
+                            &log_src.variant.index_by(),
                         ),
                         plan_cx: PlanContext::default(),
                     }),
@@ -2778,7 +2792,7 @@ fn open_catalog(
                 );
             }
 
-            for log_view in logging_config.active_views() {
+            for log_view in LOG_VIEWS {
                 let pcx = PlanContext::default();
                 let params = Params {
                     datums: Row::pack(&[]),
@@ -2835,10 +2849,10 @@ fn open_catalog(
 /// There are no guarantees about the format of the serialized state, except that
 /// the serialized state for two identical catalogs will compare identically.
 pub fn dump_catalog(data_directory: &Path) -> Result<String, anyhow::Error> {
-    let logging_config = LoggingConfig::new(Duration::from_secs(0));
+    let enable_logging = true;
     let catalog = open_catalog(
         Some(data_directory),
-        Some(&logging_config),
+        enable_logging,
         Optimizer::default(),
         None,
     )?;
