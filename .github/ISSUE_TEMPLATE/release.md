@@ -84,6 +84,8 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] The "Time behind external source" dashboard panel in Grafana should have remained
     at 0ms or similar for the entirety of the run.
 
+- [ ] Verify the `chaos_run` container for each of the chaos tests exits successfully.
+
 - [ ] Remove all load test machines.
 
 ## Final release
