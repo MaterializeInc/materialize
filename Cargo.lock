@@ -1779,6 +1779,7 @@ dependencies = [
  "hyper",
  "include_dir",
  "itertools",
+ "jemalloc-ctl",
  "jemallocator",
  "krb5-src",
  "lazy_static",

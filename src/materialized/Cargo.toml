@@ -62,6 +62,7 @@ tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 jemallocator = { version = "0.3", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+jemalloc-ctl = "0.3"
 # NOTE: when target-specific features are stabilized [0], we will want
 # to put the jemalloc-specific bits of the prof crate behind a "jemalloc"
 # feature flag so that we can enable the non-jemalloc bits on macOS.
