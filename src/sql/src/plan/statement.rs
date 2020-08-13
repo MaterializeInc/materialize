@@ -1296,6 +1296,7 @@ fn handle_create_source(
                 start_offsets,
                 group_id_prefix,
                 enable_persistence,
+                persisted_files: None,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)

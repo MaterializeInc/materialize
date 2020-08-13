@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -33,11 +33,12 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 
-use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
+use dataflow::{PersistedFileMetadata, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, SinkConnector,
-    SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
+    AvroOcfSinkConnector, DataflowDesc, ExternalSourceConnector, IndexDesc, KafkaSinkConnector,
+    PeekResponse, SinkConnector, SourceConnector, TailSinkConnector, Timestamp,
+    TimestampSourceUpdate, Update,
 };
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
@@ -265,7 +266,24 @@ where
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    coord.handle_source_connector_persistence(*id, &source.connector);
+                    // See if we have any previously persisted data that we need to capture
+                    // TODO(rkhaitan): this part is kind of a mess rn and does not play well with the
+                    // persister
+                    if let Some(persister) = &coord.persister {
+                        let connector = block_on(handle_persistence(
+                            source.connector.clone(),
+                            persister.config.path.clone(),
+                            *id,
+                        ))
+                        .with_context(|| format!("recreating source {}", name))?;
+
+                        // If handle_persistence gave us back a new connector, we need to take some
+                        // additional action.
+                        if let Some(connector) = connector {
+                            coord.handle_source_connector_persistence(*id, &connector);
+                        }
+                    }
+
                     coord.views.insert(*id, ViewState::new(false, vec![]));
                 }
                 CatalogItem::View(view) => {
@@ -2012,7 +2030,24 @@ where
         self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
     }
 
-    // Tell the persister that we have a new source to persist
+    fn update_item<F>(&mut self, id: GlobalId, mut f: F)
+    where
+        F: FnMut(CatalogItem) -> CatalogItem,
+    {
+        let entry = self.catalog.get_by_id(&id);
+        let name = entry.name().clone();
+        let item = f(entry.item().clone());
+
+        let ops = vec![
+            catalog::Op::DropItem(id),
+            catalog::Op::CreateItem { id, name, item },
+        ];
+        self.catalog
+            .transact(ops)
+            .expect("replacing a source cannot fail");
+    }
+
+    // Handle metadata surrounding marking a source as persisted.
     fn handle_source_connector_persistence(
         &mut self,
         id: GlobalId,
@@ -2031,6 +2066,16 @@ where
                     );
                 }
             }
+
+            self.update_item(id, |item| match item {
+                CatalogItem::Source(mut source) => {
+                    source.connector = source_connector.clone();
+                    CatalogItem::Source(source)
+                }
+                _ => unreachable!(),
+            });
+        } else {
+            log::error!("can only update an external source");
         }
     }
 
@@ -2976,4 +3021,96 @@ pub mod arrangement_state {
             self.since.join_assign(frontier);
         }
     }
+}
+
+// Wire up persistence and augment the given SourceConnector with that information, returning it.
+pub async fn handle_persistence(
+    connector: SourceConnector,
+    path: PathBuf,
+    id: GlobalId,
+) -> Result<Option<SourceConnector>, anyhow::Error> {
+    match connector {
+        SourceConnector::External {
+            connector,
+            encoding,
+            envelope,
+            consistency,
+            max_ts_batch,
+            ts_frequency,
+        } => {
+            if !connector.persistence_enabled() {
+                // This connector has no persistence, so do nothing.
+                Ok(None)
+            } else {
+                if let Some(connector) = handle_persistence_inner(connector, path, id).await? {
+                    Ok(Some(SourceConnector::External {
+                        connector,
+                        encoding,
+                        envelope,
+                        consistency,
+                        max_ts_batch,
+                        ts_frequency,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+        SourceConnector::Local => Ok(None),
+    }
+}
+
+async fn handle_persistence_inner(
+    mut connector: ExternalSourceConnector,
+    path: PathBuf,
+    id: GlobalId,
+) -> Result<Option<ExternalSourceConnector>, anyhow::Error> {
+    match &mut connector {
+        ExternalSourceConnector::Kafka(k) => {
+            // TODO fix this string literal situation
+            let file_prefix = format!("materialize-{}", id);
+            let mut read_offsets: HashMap<i32, i64> = HashMap::new();
+            let mut paths = Vec::new();
+
+            let files = std::fs::read_dir(format!("{}/{}", &path.to_str().unwrap(), id))
+                .expect("reading directory cannot fail");
+
+            for f in files {
+                // TODO(justin): cleaner way to do this?
+                let path = f.expect("file known to exist").path();
+                let filename = path.file_name().unwrap().to_str().unwrap().to_owned();
+                if filename.starts_with(&file_prefix) {
+                    let meta = PersistedFileMetadata::from_fname(&filename)?;
+                    if !meta.is_complete {
+                        continue;
+                    }
+
+                    paths.push(path);
+
+                    // TODO this is lazy and incomplete
+                    match read_offsets.get(&meta.partition_id) {
+                        None => {
+                            read_offsets.insert(meta.partition_id, meta.end_offset);
+                        }
+                        Some(o) => {
+                            if meta.end_offset > *o {
+                                read_offsets.insert(meta.partition_id, meta.end_offset);
+                            }
+                        }
+                    };
+                }
+            }
+
+            log::info!(
+                "updated kafka connector offsets {:?} paths {:?}",
+                read_offsets,
+                paths
+            );
+            k.start_offsets = read_offsets;
+            k.persisted_files = Some(paths);
+        }
+        _ => bail!("persistence only enabled for Kafka sources at this time"),
+    }
+
+    Ok(Some(connector))
 }

@@ -482,6 +482,15 @@ pub enum SourceConnector {
     Local,
 }
 
+pub fn persisted_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
+    match e {
+        ExternalSourceConnector::Kafka(KafkaSourceConnector {
+            persisted_files, ..
+        }) => persisted_files.clone().unwrap_or_else(Vec::new),
+        _ => vec![],
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExternalSourceConnector {
     Kafka(KafkaSourceConnector),
@@ -589,6 +598,9 @@ pub struct KafkaSourceConnector {
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
     pub enable_persistence: bool,
+    // This field gets set after the initial construction of this struct, so this is None if it has
+    // not yet been set.
+    pub persisted_files: Option<Vec<PathBuf>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

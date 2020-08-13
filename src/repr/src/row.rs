@@ -452,6 +452,11 @@ impl Row {
         Ok(packer.finish())
     }
 
+    // TODO(justin): find a better place to put this.
+    pub fn from_data(data: Vec<u8>) -> Self {
+        Row { data: data.into() }
+    }
+
     /// Pack a slice of `Datum`s into a `Row`.
     ///
     /// This method has the advantage over `pack` that it can determine the required
