@@ -39,7 +39,7 @@ where
             inputs,
             equivalences,
             demand,
-            implementation: expr::JoinImplementation::Differential(start, order),
+            implementation: expr::JoinImplementation::Differential((start, start_arr), order),
         } = relation_expr
         {
             let column_types = relation_expr.typ().column_types;
@@ -80,18 +80,22 @@ where
                 .collect::<Vec<_>>();
 
             let mut predicates = predicates.to_vec();
-            let (j, es) = crate::render::delta_join::build_filter(
-                joined,
-                &source_columns,
-                &mut predicates,
-                &mut equivalences,
-            );
-            joined = j;
-            if let Some(es) = es {
-                errs.concat(&es);
+            if start_arr.is_none() {
+                // If there is no starting arrangement, then we can run filters
+                // directly on the starting collection.
+                let (j, es) = crate::render::delta_join::build_filter(
+                    joined,
+                    &source_columns,
+                    &mut predicates,
+                    &mut equivalences,
+                );
+                joined = j;
+                if let Some(es) = es {
+                    errs.concat(&es);
+                }
             }
 
-            for (input, next_keys) in order.iter() {
+            for (input_index, (input, next_keys)) in order.iter().enumerate() {
                 let mut next_keys_rebased = next_keys.clone();
                 for expr in next_keys_rebased.iter_mut() {
                     expr.visit_mut(&mut |e| {
@@ -183,23 +187,6 @@ where
                     .chain(next_vals.iter().map(|i| prior_arities[*input] + *i))
                     .collect();
 
-                // We exploit the demand information to restrict `prev` to its demanded columns.
-                let (prev_keyed, es) = joined.map_fallible({
-                    let mut row_packer = repr::RowPacker::new();
-                    move |row| {
-                        let datums = row.unpack();
-                        let temp_storage = RowArena::new();
-                        let key = Row::try_pack(
-                            prev_keys.iter().map(|e| e.eval(&datums, &temp_storage)),
-                        )?;
-                        let row = row_packer.pack(prev_vals.iter().map(|i| datums[*i]));
-                        Ok((key, row))
-                    }
-                });
-                errs = errs.concat(&es);
-                let prev_keyed = prev_keyed
-                    .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", input));
-
                 // Pre-test for the arrangement existence, so that we can populate it if the
                 // collection is present but the arrangement is not.
                 if self.arrangement(&inputs[*input], &next_keys[..]).is_none() {
@@ -217,45 +204,45 @@ where
                     }
                 }
 
-                match self.arrangement(&inputs[*input], &next_keys[..]) {
-                    Some(ArrangementFlavor::Local(oks, es)) => {
+                let (j, es) = if input_index == 0 && start_arr.is_some() {
+                    // if a starting arrangement has been specified, use that
+                    let start_arr = start_arr.as_ref().unwrap();
+                    match self.arrangement(&inputs[*start], start_arr) {
+                        Some(ArrangementFlavor::Local(oks, es)) => {
+                            errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
+                            self.differential_join(oks, &inputs[*input], &next_keys[..], next_vals)
+                        }
+                        Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
+                            errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
+                            self.differential_join(oks, &inputs[*input], &next_keys[..], next_vals)
+                        }
+                        None => {
+                            unreachable!("Start arrangement not present");
+                        }
+                    }
+                } else {
+                    // Otherwise, build a new arrangement from the collection of
+                    // joins of previous inputs.
+                    // We exploit the demand information to restrict `prev` to its demanded columns.
+                    let (prev_keyed, es) = joined.map_fallible({
                         let mut row_packer = repr::RowPacker::new();
-                        joined = prev_keyed.join_core(&oks, move |_keys, old, new| {
-                            let prev_datums = old.unpack();
-                            let next_datums = new.unpack();
-                            // TODO: We could in principle apply some predicates here, and avoid
-                            // constructing output rows that will be filtered out soon.
-                            Some(
-                                row_packer.pack(
-                                    prev_datums
-                                        .iter()
-                                        .chain(next_vals.iter().map(|i| &next_datums[*i])),
-                                ),
-                            )
-                        });
-                        errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
-                    }
-                    Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
-                        let mut row_packer = repr::RowPacker::new();
-                        joined = prev_keyed.join_core(&oks, move |_keys, old, new| {
-                            let prev_datums = old.unpack();
-                            let next_datums = new.unpack();
-                            // TODO: We could in principle apply some predicates here, and avoid
-                            // constructing output rows that will be filtered out soon.
-                            Some(
-                                row_packer.pack(
-                                    prev_datums
-                                        .iter()
-                                        .chain(next_vals.iter().map(|i| &next_datums[*i])),
-                                ),
-                            )
-                        });
-                        errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
-                    }
-                    None => {
-                        unreachable!("Arrangement absent despite explicit construction");
-                    }
+                        move |row| {
+                            let datums = row.unpack();
+                            let temp_storage = RowArena::new();
+                            let key = Row::try_pack(
+                                prev_keys.iter().map(|e| e.eval(&datums, &temp_storage)),
+                            )?;
+                            let row = row_packer.pack(prev_vals.iter().map(|i| datums[*i]));
+                            Ok((key, row))
+                        }
+                    });
+                    errs = errs.concat(&es);
+                    let prev_keyed = prev_keyed
+                        .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", input));
+                    self.differential_join(prev_keyed, &inputs[*input], &next_keys[..], next_vals)
                 };
+                joined = j;
+                errs = errs.concat(&es);
 
                 let (j, es) = crate::render::delta_join::build_filter(
                     joined,
@@ -292,6 +279,64 @@ where
             )
         } else {
             panic!("render_join called on invalid expression.")
+        }
+    }
+
+    /// Joins the next input to the arranged version of the join of previous inputs.
+    /// This is split into its own method to enable reuse of code with different
+    /// types of `prev_keyed`.
+    fn differential_join<J>(
+        &mut self,
+        prev_keyed: J,
+        next_input: &RelationExpr,
+        next_keys: &[ScalarExpr],
+        next_vals: Vec<usize>,
+    ) -> (Collection<G, Row>, Collection<G, DataflowError>)
+    where
+        J: JoinCore<G, Row, Row, expr::Diff>,
+    {
+        match self.arrangement(next_input, next_keys) {
+            Some(ArrangementFlavor::Local(oks, es)) => {
+                let mut row_packer = repr::RowPacker::new();
+                (
+                    prev_keyed.join_core(&oks, move |_keys, old, new| {
+                        let prev_datums = old.unpack();
+                        let next_datums = new.unpack();
+                        // TODO: We could in principle apply some predicates here, and avoid
+                        // constructing output rows that will be filtered out soon.
+                        Some(
+                            row_packer.pack(
+                                prev_datums
+                                    .iter()
+                                    .chain(next_vals.iter().map(|i| &next_datums[*i])),
+                            ),
+                        )
+                    }),
+                    es.as_collection(|k, _v| k.clone()),
+                )
+            }
+            Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
+                let mut row_packer = repr::RowPacker::new();
+                (
+                    prev_keyed.join_core(&oks, move |_keys, old, new| {
+                        let prev_datums = old.unpack();
+                        let next_datums = new.unpack();
+                        // TODO: We could in principle apply some predicates here, and avoid
+                        // constructing output rows that will be filtered out soon.
+                        Some(
+                            row_packer.pack(
+                                prev_datums
+                                    .iter()
+                                    .chain(next_vals.iter().map(|i| &next_datums[*i])),
+                            ),
+                        )
+                    }),
+                    es.as_collection(|k, _v| k.clone()),
+                )
+            }
+            None => {
+                unreachable!("Arrangement absent despite explicit construction");
+            }
         }
     }
 }

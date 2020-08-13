@@ -407,9 +407,14 @@ impl JoinImplementation {
     fn fmt_with(&self, input_chains: &[usize]) -> String {
         use JoinImplementation::*;
         match self {
-            Differential(pos, inputs) => format!(
-                "Differential %{} {}",
+            Differential((pos, first_arr), inputs) => format!(
+                "Differential %{}{} {}",
                 input_chains[*pos],
+                if let Some(arr) = first_arr {
+                    format!(".({})", Separated(", ", arr.clone()))
+                } else {
+                    "".to_string()
+                },
                 Separated(
                     " ",
                     inputs

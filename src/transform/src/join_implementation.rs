@@ -193,6 +193,10 @@ mod delta_queries {
             implementation,
         } = &mut new_join
         {
+            // Delta queries are supposed to involve 2 or more inputs.
+            if inputs.len() < 2 {
+                return None;
+            }
             let input_relation = arities
                 .iter()
                 .enumerate()
@@ -207,7 +211,10 @@ mod delta_queries {
                 &input_relation[..],
                 prior_arities,
             );
-            if !orders.iter().all(|o| o.iter().all(|(c, _, _)| c.arranged)) {
+            if !orders
+                .iter()
+                .all(|o| o.iter().skip(1).all(|(c, _, _)| c.arranged))
+            {
                 return None;
             }
 
@@ -295,25 +302,48 @@ mod differential {
             // Important, we should choose something stable under re-ordering, to converge under fixed
             // point iteration; we choose to start with the first input optimizing our criteria, which
             // should remain stable even when promoted to the first position.
-            let orders = super::optimize_orders(
+            let mut orders = super::optimize_orders(
                 equivalences,
                 available,
                 unique_keys,
                 &input_relation[..],
                 prior_arities,
             );
+
             let max_min_characteristics = orders
                 .iter()
-                .flat_map(|order| order.iter().map(|(c, _, _)| c.clone()).min())
-                .max()
-                .unwrap();
-            let mut order = orders
-                .into_iter()
-                .find(|o| o.iter().map(|(c, _, _)| c).min().unwrap() == &max_min_characteristics)?
-                .into_iter()
-                .map(|(_c, k, r)| (r, k))
-                .collect::<Vec<_>>();
-            let (start, _keys) = order.remove(0);
+                .flat_map(|order| order.iter().skip(1).map(|(c, _, _)| c.clone()).min())
+                .max();
+            let mut order = if let Some(max_min_characteristics) = max_min_characteristics {
+                orders
+                    .into_iter()
+                    .find(|o| {
+                        o.iter().skip(1).map(|(c, _, _)| c).min().unwrap()
+                            == &max_min_characteristics
+                    })?
+                    .into_iter()
+                    .map(|(_c, k, r)| (r, k))
+                    .collect::<Vec<_>>()
+            } else {
+                // if max_min_characteristics is None, then there must only be
+                // one input and thus only one order in orders
+                orders
+                    .remove(0)
+                    .into_iter()
+                    .map(|(_c, k, r)| (r, k))
+                    .collect::<Vec<_>>()
+            };
+
+            let (start, start_keys) = &order[0];
+            let start = *start;
+            let start_keys = if available[start].contains(&start_keys) {
+                Some(start_keys.clone())
+            } else {
+                // if there is not already a pre-existing arrangement
+                // for the start input, do not implement one
+                order.remove(0);
+                None
+            };
 
             // Implement arrangements in each of the inputs.
             let mut lifted = Vec::new();
@@ -337,8 +367,15 @@ mod differential {
                 }
             }
 
+            if start_keys.is_some() {
+                // now that the starting arrangement has been implemented,
+                // remove it from `order` so `order` only contains information
+                // about the other inputs
+                order.remove(0);
+            }
+
             // Install the implementation.
-            *implementation = JoinImplementation::Differential(start, order);
+            *implementation = JoinImplementation::Differential((start, start_keys), order);
 
             if !lifted.is_empty() {
                 new_join = new_join.filter(lifted);
@@ -563,17 +600,22 @@ impl<'a> Orderer<'a> {
             }
         }
 
-        self.order.push((
-            Characteristics::new(true, usize::max_value(), true, start),
-            vec![],
-            start,
-        ));
         self.order_input(start);
+        let mut start_key_found = false;
         while self.order.len() < self.inputs {
             let (characteristics, key, input) = self.priority_queue.pop().unwrap();
+            // put the tuple into `self.order` unless the tuple with the same
+            // input is already in `self.order`. For all inputs other than
+            // start, `self.placed[input]` is an indication of whether a
+            // corresponding tuple is already in `self.order`.
             if !self.placed[input] {
+                // non-starting inputs are ordered in decreasing priority
                 self.order.push((characteristics, key, input));
                 self.order_input(input);
+            } else if !start_key_found && input == start {
+                // starting input is always first
+                self.order.insert(0, (characteristics, key, input));
+                start_key_found = true;
             }
         }
 
