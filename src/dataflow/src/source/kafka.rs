@@ -10,6 +10,8 @@
 use std::cmp;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,8 +37,8 @@ use crate::server::{
     WorkerPersistenceData,
 };
 use crate::source::{
-    ConsistencyInfo, PartitionMetrics, PersistenceSender, SourceConstructor, SourceInfo,
-    SourceMessage,
+    ConsistencyInfo, PartitionMetrics, PersistedFileMetadata, PersistenceSender, RecordIter,
+    SourceConstructor, SourceInfo, SourceMessage,
 };
 
 /// Contains all information necessary to ingest data from Kafka
@@ -333,6 +335,23 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         consumer.buffer = Some(message);
         // Mark the partition has buffered
         self.buffered_metadata.insert(consumer.pid);
+    }
+
+    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Timestamp, i64)> {
+        files
+            .iter()
+            .filter(|f| {
+                // We partition the given partitions up amongst workers, so we need to be
+                // careful not to process a partition that this worker was not allocated (or
+                // else we would process files multiple times).
+                let meta = PersistedFileMetadata::from_fname(f.to_str().unwrap()).unwrap();
+                self.has_partition(meta.partition_id)
+            })
+            .flat_map(|f| {
+                let data = fs::read(f).unwrap();
+                RecordIter { data }.map(|r| (r.data, r.time as u64, r.offset))
+            })
+            .collect()
     }
 
     fn persist_message(
