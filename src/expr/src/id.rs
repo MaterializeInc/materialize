@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::{anyhow, Error};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`RelationExpr::Get`](crate::RelationExpr::Get).
@@ -88,6 +90,22 @@ impl GlobalId {
         match self {
             GlobalId::System(_) => false,
             GlobalId::User(_) => true,
+        }
+    }
+}
+
+impl FromStr for GlobalId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() < 2 {
+            return Err(anyhow!("couldn't parse id {}", s));
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next().unwrap() {
+            's' => Ok(GlobalId::System(val)),
+            'u' => Ok(GlobalId::User(val)),
+            _ => Err(anyhow!("couldn't parse id {}", s)),
         }
     }
 }

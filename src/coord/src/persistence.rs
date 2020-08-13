@@ -200,7 +200,7 @@ pub struct Persister {
     data_rx: comm::mpsc::Receiver<WorkerPersistenceData>,
     metadata_rx: std::sync::mpsc::Receiver<PersistenceMetadata>,
     sources: HashMap<GlobalId, Source>,
-    config: PersistenceConfig,
+    pub config: PersistenceConfig,
 }
 
 impl Persister {

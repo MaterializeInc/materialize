@@ -133,7 +133,7 @@ async fn create_upsert_text_source(
 ) -> Result<()> {
     let query = format!(
         "CREATE MATERIALIZED SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
-             FORMAT TEXT ENVELOPE UPSERT",
+            FORMAT TEXT ENVELOPE UPSERT",
         kafka_url = kafka_url,
         topic = kafka_topic_name,
         source = source_name,
