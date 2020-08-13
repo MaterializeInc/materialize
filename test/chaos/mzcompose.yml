@@ -184,7 +184,7 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --kafka-partitions 100
-            --message-count 10000
+            --message-count 1000000
 
     chaos-mysql-debezium-kafka:
       steps:
