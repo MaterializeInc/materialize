@@ -663,5 +663,14 @@ SELECT * FROM (VALUES (1)), LATERAL (SELECT * FROM (SELECT column1) WHERE true)
 ----
 1  1
 
+# Regression test for #3933, in which the query planner mishandled the outer
+# scope of a nested LATERAL join.
+query IIII
+SELECT * FROM
+    (SELECT 1, 1 AS col2),
+    LATERAL (SELECT * FROM (SELECT col2) LEFT JOIN LATERAL (SELECT col2) ON true)
+----
+1  1  1  1
+
 query error aggregate functions that refer exclusively to outer columns not yet supported
 SELECT (SELECT count(likes.likee)) FROM likes
