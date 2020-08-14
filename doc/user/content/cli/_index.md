@@ -44,6 +44,10 @@ required `--workers` flag, and cannot be changed without shutting down
 of worker threads will be possible over distributed clusters, see
 [#2449](https://github.com/MaterializeInc/materialize/issues/2449).
 
+{{< version-changed v0.4.0 >}}
+Rename the `--threads` flag to `--workers`.
+{{</ version-changed >}}
+
 #### How many worker threads should you run?
 
 Adding worker threads allows Materialize to handle more throughput. Reducing
@@ -160,6 +164,8 @@ Acquire a certificate from a proper certificate authority (CA) instead.
 [OpenSSL]: https://www.openssl.org
 
 ### Experimental mode
+
+{{< version-added v0.4.0 >}}
 
 {{< warning >}}
 
