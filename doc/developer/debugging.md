@@ -1,4 +1,4 @@
-# Developer guide: debugging
+# Debugging guide
 
 *Last updated November 5th, 2019*
 
@@ -157,4 +157,5 @@ The rustc
 [guide](https://rust-lang.github.io/rustc-guide/debugging-support-in-rustc.html)
 has a page detailing the state of debugger support in Rust. There's plenty of
 guides for how to use GDB/LLDB online but most of them focus on C/C++ programs.
-[This](https://beej.us/guide/bggdb/) one is a good starting point.
+[Beej's Quick Guide to GDB](https://beej.us/guide/bggdb/) is a good starting
+point.

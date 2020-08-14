@@ -1,7 +1,7 @@
-# doc/user
+# User docs
 
-This is the root directory of the Materialize user docs, which are rendered by
-[Hugo] locally and published by CI to <https://materialize.io/docs>.
+This is the root directory of the Materialize user documentation, which are
+rendered by [Hugo] locally and published by CI to <https://materialize.io/docs>.
 
 ## Viewing the docs locally
 
@@ -79,7 +79,7 @@ You can now include the diagram on a page using:
 
 - `SOME-NONTERMINAL` must be the name of a nonterminal in the BNF.
 
-## Function + Operator docs
+## Function + operator docs
 
 The **Functions** you see at
 [content/sql/functions/](content/sql/functions) are populated from
@@ -216,7 +216,7 @@ programming language). For expressivity, we chose `nofmt`.
   would like to volunteer their web development expertise to make this more
   sane, I would be really happy to help them out.
 
-## Miscellany, Trivia, & Footguns
+## Miscellany, trivia, & footguns
 
 - Headers are automatically hyperlinked using [AnchorJS].
 - Railroad diagrams are managed in

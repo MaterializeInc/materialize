@@ -1,5 +1,4 @@
-
-Materialize CDC ingestion.
+# Change data capture
 
 ## Core informational requirements
 
@@ -77,7 +76,7 @@ Materialize can deduplicate updates for CDC formats that make this possible. It 
 
 Deduplicatable updates are a must have for Materialize to produce correct output, and it is increasingly nice to have clear and efficient protocols for deduplication.
 
-### Primary Keys
+### Primary keys
 
 Materialize can ingest data for arbitrary collections, without requiring primary key information. This information can be helpful for tasks like deduplication and upsert ingestion, and it does provide our query planner with additional plan options.
 
