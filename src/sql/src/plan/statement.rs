@@ -1550,6 +1550,8 @@ fn handle_create_table(
     scx: &StatementContext,
     stmt: CreateTableStatement,
 ) -> Result<Plan, anyhow::Error> {
+    scx.require_experimental_mode("CREATE TABLE")?;
+
     let CreateTableStatement {
         name,
         columns,
@@ -1789,6 +1791,8 @@ fn handle_insert(
         source,
     }: InsertStatement,
 ) -> Result<Plan, anyhow::Error> {
+    scx.require_experimental_mode("INSERT")?;
+
     if !columns.is_empty() {
         unsupported!("INSERT statement with specified columns");
     }
@@ -2044,6 +2048,17 @@ impl<'a> StatementContext<'a> {
 
     pub fn experimental_mode(&self) -> bool {
         self.catalog.experimental_mode()
+    }
+
+    pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
+        if !self.experimental_mode() {
+            bail!(
+                "{} requires experimental mode; see \
+                https://materialize.io/docs/cli/#experimental-mode",
+                feature_name
+            )
+        }
+        Ok(())
     }
 
     pub fn unwrap_param_types(self) -> BTreeMap<usize, ScalarType> {
