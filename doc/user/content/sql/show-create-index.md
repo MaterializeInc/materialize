@@ -6,6 +6,8 @@ menu:
     parent: 'sql'
 ---
 
+{{< version-added v0.4.0 >}}
+
 `SHOW CREATE INDEX` returns the [`CREATE INDEX`](../create-index) statement used to create the index.
 
 ## Syntax
