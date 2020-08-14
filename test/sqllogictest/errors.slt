@@ -1,0 +1,23 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This file is for SQL planning errors only. Parse errors should live in the
+# sql-parser test suite!
+
+query error VALUES expression in FROM clause must be surrounded by parentheses
+SELECT * FROM VALUES (1)
+
+query error VALUES expression in FROM clause must be surrounded by parentheses
+SELECT * FROM VALUES (1), (2)
+
+query error function "noexist" does not exist
+SELECT noexist()
+
+query error function "noexist" does not exist
+SELECT * FROM noexist()
