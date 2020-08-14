@@ -193,8 +193,12 @@ mod delta_queries {
             implementation,
         } = &mut new_join
         {
-            // Delta queries are supposed to involve 2 or more inputs.
             if inputs.len() < 2 {
+                // Single input joins are filters and should be planned as
+                // differential plans instead of delta queries. Because a
+                // a filter gets converted into a single input join only when
+                // there are existing arrangements, without this early return,
+                // filters will always be planned as delta queries.
                 return None;
             }
             let input_relation = arities
@@ -310,6 +314,10 @@ mod differential {
                 prior_arities,
             );
 
+            // For differential join, it is not as important for the starting
+            // input to have good characteristics because the other ones
+            // determine whether intermediate results blow up. Thus, we do not
+            // include the starting input when max-minning.
             let max_min_characteristics = orders
                 .iter()
                 .flat_map(|order| order.iter().skip(1).map(|(c, _, _)| c.clone()).min())
