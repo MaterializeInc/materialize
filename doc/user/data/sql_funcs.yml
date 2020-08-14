@@ -149,6 +149,9 @@
   - signature: 'rtrim(s: str, c: str) -> str'
     description: Trim any character in `c` from the right side of `s`.
 
+  - signature: 'split_part(s: str, d: s, i: int) -> str'
+    description: Split `s` on delimiter `d`. Return the `str` at index `i`, counting from 1.
+
   - signature: 'substring(s: str, start_pos: int) -> str'
     description: Substring of `s` starting at `start_pos`
     url: substring
@@ -161,9 +164,6 @@
     description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
       &bull; Side: `BOTH`<br/>
       &bull; `'c'`: `' '` (space)"
-
-  - signature: 'split_part(s: str, d: s, i: int) -> str'
-    description: Split `s` on delimiter `d`. Return the `str` at index `i`, counting from 1.
 
 - type: Scalar
   description: Scalar functions take a list of scalar expressions
