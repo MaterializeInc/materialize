@@ -4,20 +4,20 @@ about: >
   A tracking issue for a new release of Materialize. Contributor use only.
 ---
 
-## Current Status: 🚢 Progressing 🚢
+## Current status: 🚢 Progressing 🚢
 
 <!--
-## Current Status: 🛑 Blocked 🛑
-## Current Status: 🚀 [Released](https://github.com/MaterializeInc/materialize/releases/tag/vX.Y.Z) 🚀
+## Current status: 🛑 Blocked 🛑
+## Current status: 🚀 [Released](https://github.com/MaterializeInc/materialize/releases/tag/vX.Y.Z) 🚀
 -->
 
 ## Announce the imminent release internally
 
-- [x] create this release issue
-- [ ] Check for open issues with the [`M-milestone-blocker`][blocker-search] label,
-  include them in a list here, or state that there are none. Update the current status.
+- [x] Create this release issue.
+- [ ] Check for open issues with the [`M-milestone-blocker`][blocker-search]
+  label, include them in a list here, or state that there are none:
   > unknown
-- [ ] Link to this issue in the `#release` slack channel
+- [ ] Link to this issue in the #release Slack channel.
 
 [blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aissue+is%3Aopen+label%3AM-milestone-blocker
 
@@ -39,23 +39,23 @@ production readiness.
   git push origin $tag
   ```
 
-- [ ] *After* you have pushed that tag, on **main**, do the same thing for the dev
-  version, without creating a tag:
+- [ ] *After* you have pushed that tag, on `main`, do the same thing for the
+  dev version, without creating a tag:
 
   ```shell
   next=v<NEXT_VERSION>-dev
   bin/mkrelease --no-tag -b prepare-$next $next
   ```
 
-  This must be done after the tag has been pushed, or git will delete the tag that isn't
-  on the server.
+  This must be done after the tag has been pushed, or Git will delete the tag
+  that isn't on the server.
 
-  - [ ] Open a PR, and land it.
+  - [ ] Open a PR with this change, and land it.
 
-- [ ] Create an issue and assign it to the @MaterializeInc/relnotes team to review the
-  Release Notes and (if applicable) the Release Announcement. All members of the team
-  should leave a comment stating that the release looks good.
-
+- [ ] Create an issue and assign it to the @MaterializeInc/release-notes team to
+  review the [release notes] and, if applicable, the release announcement. All
+  members of the team should leave a comment stating that the release looks
+  good.
 
 ### Test the release candidate
 
@@ -68,10 +68,10 @@ in the infrastructure repository. All of these tests can be run in parallel.
 - [ ] Kick off a [full SQL logic test run](https://buildkite.com/materialize/sql-logic-tests)
   and verify that it passes.
 
-- [ ] Start the load tests according to the instructions above
+- [ ] Start the load tests according to the instructions above.
 
-- [ ] Find the load tests in grafana.mz , and link to them in #release, validating that
-    data is showing up:
+- [ ] Find the load tests in grafana.mz, and link to them in #release,
+  validating that data is showing up:
 
   - [ ] chbench
   - [ ] billing-demo
@@ -79,26 +79,27 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 - [ ] Let the tests run for at least 24 hours, with the following success criteria:
 
-  - [ ] Chbench should not have slower ingest than the previous release
-  - [ ] The billing-demo container should run and finish without error
-  - [ ] The "Time behind external source" dashboard panel in Grafana should have remained
-    at 0ms or similar for the entirety of the run.
+  - [ ] Chbench should not have slower ingest than the previous release.
+  - [ ] The billing-demo container should run and finish without error.
+  - [ ] The "Time behind external source" dashboard panel in Grafana should have
+    remained at 0ms or similar for the entirety of the run.
 
 - [ ] Let the chaos tests run for 24 hours, with the following success criteria:
 
-  - [ ] Each chaos test's `chaos_run` container should complete with a `0` exit code. To check
-        this, ssh into each EC2 instance running a chaos test and run `docker ps -a`.
+  - [ ] Each chaos test's `chaos_run` container should complete with a `0` exit
+    code. To check this, SSH into each EC2 instance running a chaos test and run
+    `docker ps -a`.
 
 - [ ] Remove all load test machines.
 
 ## Final release
 
-### Create git tag
+### Create Git tag
 
-- [ ] Create the final release based on the final RC tag. For example, if there was only
-  one RC then that would be `-rc1`
+- [ ] Create the final release based on the final RC tag. For example, if there
+  was only one RC, then the final RC tag would be `-rc1`.
 
-  ```console
+  ```shell
   $ tag=v<VERSION>
   $ bin/mkrelease --checkout ${tag}-rc1 $tag
   git push origin $tag
@@ -144,16 +145,16 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 ### Update the main branch for the next version
 
-- [ ] On **main**, update the various files that must be up to date:
+- [ ] On `main`, update the various files that must be up to date:
 
-  - [ ] Ensure that the [Release Notes] are up to date, including the current version.
+  - [ ] Ensure that the [release notes] are up to date, including the current version.
 
   - [ ] Add the version to the website's list of versions in [`doc/user/config.toml`].
 
   - [ ] Ensure that the issue for checking the release notes has been closed.
 
-  - [ ] (If applicable) Ensure that the announcement blog post has been published and
-    announced, by pinging the PM in `#release`.
+  - [ ] Ensure that the announcement blog post has been published and
+    announced, if applicable, by pinging the product team in #release.
 
 ## Finish
 
@@ -164,8 +165,6 @@ in the infrastructure repository. All of these tests can be run in parallel.
 [`LICENSE`]: https://github.com/MaterializeInc/materialize/tree/main/LICENSE
 [`src/materialized/Cargo.toml`]: https://github.com/MaterializeInc/materialize/tree/main/src/materialized/Cargo.toml
 [homebrew-guide]: https://github.com/MaterializeInc/homebrew-materialize/blob/master/CONTRIBUTING.md
-[Release Notes]: https://github.com/MaterializeInc/materialize/tree/main/doc/user/content/release-notes.md
+[release notes]: https://github.com/MaterializeInc/materialize/tree/main/doc/user/content/release-notes.md
 [releases]: https://github.com/MaterializeInc/materialize/releases
 [v0.1.2]: https://github.com/MaterializeInc/materialize/releases/tag/v0.1.2
-[our blog]: https://materialize.io/wp-admin/edit.php?post_type=post
-[makes sense]: https://github.com/MaterializeInc/materialize/pull/3769#pullrequestreview-456713779
