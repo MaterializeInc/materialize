@@ -33,7 +33,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
-use cfg_if::cfg_if;
 use chrono::Utc;
 use lazy_static::lazy_static;
 use log::{info, trace, warn};
@@ -50,17 +49,6 @@ fn main() {
 }
 
 fn run() -> Result<(), anyhow::Error> {
-    cfg_if! {
-        if #[cfg(not(target_os = "macos"))] {
-            // According to jemalloc developers, this should always be
-            // enabled, except in "esoteric" situations that don't apply to Materialize
-            // (Namely: if the application relies on new threads not being created for whatever reason)
-            //
-            // See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-            jemalloc_ctl::background_thread::write(true)?;
-        }
-    }
-
     panic::set_hook(Box::new(handle_panic));
 
     let args: Vec<_> = env::args().collect();
