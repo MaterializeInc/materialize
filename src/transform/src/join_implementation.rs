@@ -217,7 +217,7 @@ mod delta_queries {
             );
 
             // A viable delta query requires that, for every order,
-            // there is an arrangement for every input except for 
+            // there is an arrangement for every input except for
             // the starting one.
             if !orders
                 .iter()
