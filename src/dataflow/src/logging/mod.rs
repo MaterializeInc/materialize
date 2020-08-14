@@ -13,10 +13,12 @@ pub mod differential;
 pub mod materialized;
 pub mod timely;
 
+use std::time::{Duration, SystemTime};
+
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
+
 use dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
 use dataflow_types::Timestamp;
-use std::time::{Duration, SystemTime};
 
 /// Logs events as a timely stream, with progress statements.
 pub struct BatchLogger<T, E, P>
@@ -25,6 +27,7 @@ where
 {
     /// Time in milliseconds of the current expressed capability.
     time_ms: Timestamp,
+    correction_ms: Timestamp,
     event_pusher: P,
     _phantom: ::std::marker::PhantomData<(E, T)>,
     /// Each time is advanced to the strictly next millisecond that is a multiple of this granularity.
@@ -40,12 +43,15 @@ where
     P: EventPusher<Timestamp, (Duration, E, T)>,
 {
     /// Creates a new batch logger.
-    pub fn new(event_pusher: P, granularity_ms: u64) -> Self {
+    pub fn new(mut event_pusher: P, granularity_ms: u64) -> Self {
+        let correction_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_millis() as Timestamp;
+        event_pusher.push(Event::Progress(vec![(correction_ms, 1), (0, -1)]));
         BatchLogger {
-            time_ms: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("failed")
-                .as_millis() as Timestamp,
+            time_ms: 0,
+            correction_ms,
             event_pusher,
             _phantom: ::std::marker::PhantomData,
             granularity_ms,
@@ -61,25 +67,29 @@ where
             // If we don't need to grow our buffer, move
             if data.len() > self.buffer.capacity() - self.buffer.len() {
                 self.event_pusher.push(Event::Messages(
-                    self.time_ms as Timestamp,
+                    self.correction_ms + self.time_ms,
                     self.buffer.drain(..).collect(),
                 ));
             }
 
-            self.buffer.extend(data.drain(..));
+            let correction = Duration::from_millis(self.correction_ms);
+            self.buffer
+                .extend(data.drain(..).map(|(dur, ev, t)| (dur + correction, ev, t)));
         }
         if self.time_ms < new_time_ms {
             // Flush buffered events that may need to advance.
             self.event_pusher.push(Event::Messages(
-                self.time_ms as Timestamp,
+                self.correction_ms + self.time_ms,
                 self.buffer.drain(..).collect(),
             ));
 
             // In principle we can buffer up until this point, if that is appealing to us.
             // We could buffer more aggressively if the logging granularity were exposed
             // here, as the forward ticks would be that much less frequent.
-            self.event_pusher
-                .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));
+            self.event_pusher.push(Event::Progress(vec![
+                (self.correction_ms + new_time_ms, 1),
+                (self.correction_ms + self.time_ms, -1),
+            ]));
         }
         self.time_ms = new_time_ms;
     }

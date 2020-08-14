@@ -23,7 +23,7 @@ use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context};
 use futures::executor::block_on;
@@ -139,9 +139,6 @@ where
     // Channel to communicate source status updates and shutdown notifications to the persister
     // thread.
     persistence_metadata_tx: Option<std::sync::mpsc::Sender<PersistenceMetadata>>,
-    /// The startup time of the coordinator, from which local input timstamps are generated
-    /// relative to.
-    start_time: Instant,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -244,7 +241,6 @@ where
             feedback_rx: Some(rx),
             persister,
             persistence_metadata_tx,
-            start_time: Instant::now(),
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,

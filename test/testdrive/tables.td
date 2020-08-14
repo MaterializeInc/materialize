@@ -77,9 +77,16 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM t CROSS JOIN data;
+> SELECT * FROM t CROSS JOIN data
+1  a  valid1  2  1
 
-> select * from mz_perf_dependency_frontiers;
+# We don't actually care about these results. We just want to ensure that
+# joining a table with a logging source selects some reasonable timestamp,
+# rather than e.g. blocking forever, or producing an error about being
+# unable to select a timestamp.
+> SELECT * FROM t CROSS JOIN mz_dataflow_operators LIMIT 0
+
+> DROP SOURCE data
 
 ! INSERT INTO t (a) VALUES (1, 'a');
 INSERT statement with specified columns not yet supported
