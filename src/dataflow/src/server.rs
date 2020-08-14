@@ -16,6 +16,7 @@ use std::net::TcpStream;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Mutex;
+use std::time::{Instant, UNIX_EPOCH};
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
@@ -32,6 +33,7 @@ use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::ActivateCapability;
+use timely::logging::Logger;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
@@ -322,6 +324,11 @@ where
 
         let granularity_ms = std::cmp::max(1, logging.granularity_ns / 1_000_000) as Timestamp;
 
+        // Track time relative to the Unix epoch, rather than when the server
+        // started, so that the logging sources can be joined with tables and
+        // other real time sources for semi-sensible results.
+        let epoch = Instant::now() - UNIX_EPOCH.elapsed().expect("time went backwards");
+
         // Establish loggers first, so we can either log the logging or not, as we like.
         let t_linked = std::rc::Rc::new(EventLink::new());
         let mut t_logger = BatchLogger::new(t_linked.clone(), granularity_ms);
@@ -336,25 +343,26 @@ where
         let m_traces = logging::materialized::construct(&mut self.timely_worker, logging, m_linked);
 
         // Register each logger endpoint.
-        self.timely_worker
-            .log_register()
-            .insert::<timely::logging::TimelyEvent, _>("timely", move |time, data| {
+        self.timely_worker.log_register().insert_logger(
+            "timely",
+            Logger::new(epoch, self.timely_worker.index(), move |time, data| {
                 t_logger.publish_batch(time, data)
-            });
+            }),
+        );
 
-        self.timely_worker
-            .log_register()
-            .insert::<differential_dataflow::logging::DifferentialEvent, _>(
-                "differential/arrange",
-                move |time, data| d_logger.publish_batch(time, data),
-            );
+        self.timely_worker.log_register().insert_logger(
+            "differential/arrange",
+            Logger::new(epoch, self.timely_worker.index(), move |time, data| {
+                d_logger.publish_batch(time, data)
+            }),
+        );
 
-        self.timely_worker
-            .log_register()
-            .insert::<logging::materialized::MaterializedEvent, _>(
-                "materialized",
-                move |time, data| m_logger.publish_batch(time, data),
-            );
+        self.timely_worker.log_register().insert_logger(
+            "materialized",
+            Logger::new(epoch, self.timely_worker.index(), move |time, data| {
+                m_logger.publish_batch(time, data)
+            }),
+        );
 
         let errs = self.timely_worker.dataflow::<Timestamp, _, _>(|scope| {
             Collection::<_, DataflowError, isize>::empty(scope)

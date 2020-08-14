@@ -53,6 +53,50 @@ a    b
 ---------
 1    "a"
 
+$ set schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "id", "type": "string"},
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] }
+    ]
+  }
+
+$ kafka-create-topic topic=data
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+{"before": null, "after": {"id": "valid1", "a": 2, "b": 1}}
+
+> CREATE MATERIALIZED SOURCE data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM t CROSS JOIN data
+1  a  valid1  2  1
+
+# We don't actually care about these results. We just want to ensure that
+# joining a table with a logging source selects some reasonable timestamp,
+# rather than e.g. blocking forever, or producing an error about being
+# unable to select a timestamp.
+> SELECT * FROM t CROSS JOIN mz_dataflow_operators LIMIT 0
+
+> DROP SOURCE data
+
 ! INSERT INTO t (a) VALUES (1, 'a');
 INSERT statement with specified columns not yet supported
 
