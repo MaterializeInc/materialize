@@ -26,6 +26,7 @@ pub struct Args {
     pub materialized_url: String,
     /// If true, don't run peeks, just create sources and views
     pub only_initialize: bool,
+    pub init_attempts: u16,
     pub config: Config,
 }
 
@@ -64,6 +65,12 @@ impl Args {
             "only-initialize",
             "run the initalization of sources and views, but don't start peeking",
         );
+        opts.optopt(
+            "",
+            "init-attempts",
+            "How many times to try and initialize. Default: 10",
+            "ATTEMPTS",
+        );
         let popts = match opts.parse(&args[1..]) {
             Ok(popts) => {
                 if popts.opt_present("h") {
@@ -78,6 +85,12 @@ impl Args {
                 std::process::exit(0);
             }
         };
+        let init_attempts = popts
+            .opt_str("init-attempts")
+            .map(|s| s.parse())
+            .transpose()
+            .map_err(|e| format!("Error parsing --init-attempts: {}", e))?
+            .unwrap_or(10);
 
         let config = load_config(popts.opt_str("config-file"), popts.opt_str("queries"))?;
 
@@ -92,6 +105,7 @@ impl Args {
                 "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
             )?,
             only_initialize: popts.opt_present("only-initialize"),
+            init_attempts,
             config,
         })
     }
