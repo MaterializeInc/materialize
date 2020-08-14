@@ -25,16 +25,6 @@ CREATE TABLE with column constraint: DEFAULT 1 not yet supported
 
 > SELECT * FROM t;
 
-> SHOW TABLES;
-TABLES
-------
-t
-
-> SHOW SOURCES;
-SOURCES
--------
-t
-
 > SHOW INDEXES FROM t;
 Source_or_view        Key_name                          Column_name  Expression  Null   Seq_in_index
 ----------------------------------------------------------------------------------------------------------------
@@ -53,6 +43,43 @@ b          NO        text
 a    b
 ---------
 1    "a"
+
+$ set schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "id", "type": "string"},
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] }
+    ]
+  }
+
+$ kafka-create-topic topic=data
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+{"before": null, "after": {"id": "valid1", "a": 2, "b": 1}}
+
+> CREATE MATERIALIZED SOURCE data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM t CROSS JOIN data;
+
+> select * from mz_perf_dependency_frontiers;
 
 ! INSERT INTO t (a) VALUES (1, 'a');
 INSERT statement with specified columns not yet supported

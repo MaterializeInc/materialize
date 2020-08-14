@@ -23,7 +23,7 @@ use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{bail, Context};
 use futures::executor::block_on;
@@ -416,12 +416,13 @@ where
         // This is a hack. In a perfect world we would represent time as having a "real" dimension
         // and a "coordinator" dimension so that clients always observed linearizability from
         // things the coordinator did without being related to the real dimension.
-        let ts = self
-            .start_time
-            .elapsed()
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("failed to get millis since epoch")
             .as_millis()
             .try_into()
-            .expect("system time did not fit in u64");
+            .expect("current time did not fit into u64");
+
         if ts < self.read_lower_bound {
             self.read_lower_bound
         } else {

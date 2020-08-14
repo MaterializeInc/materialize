@@ -16,7 +16,7 @@ pub mod timely;
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
 use dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
 use dataflow_types::Timestamp;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Logs events as a timely stream, with progress statements.
 pub struct BatchLogger<T, E, P>
@@ -42,7 +42,10 @@ where
     /// Creates a new batch logger.
     pub fn new(event_pusher: P, granularity_ms: u64) -> Self {
         BatchLogger {
-            time_ms: 0,
+            time_ms: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("failed")
+                .as_millis() as Timestamp,
             event_pusher,
             _phantom: ::std::marker::PhantomData,
             granularity_ms,
