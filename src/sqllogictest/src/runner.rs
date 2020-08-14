@@ -312,7 +312,7 @@ fn format_row(
                 let d = d.unwrap_decimal().with_scale(*s);
                 format!("{:.0}", d)
             }
-            (Type::Integer, ScalarType::Float64) => format!("{:.0}", d.unwrap_float64().trunc()),
+            (Type::Integer, ScalarType::Float64) => (d.unwrap_float64().round() as i64).to_string(),
             (Type::Integer, ScalarType::String) => "0".to_owned(),
             (Type::Integer, ScalarType::Bool) => i8::from(d.unwrap_bool()).to_string(),
 

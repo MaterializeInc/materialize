@@ -259,7 +259,7 @@ SELECT 1 + CAST ('5' AS double precision)
 ----
 6
 
-query II
+query RR
 SELECT CAST ('+Inf' AS double precision), CAST ('inf' AS double precision)
 ----
 inf inf
