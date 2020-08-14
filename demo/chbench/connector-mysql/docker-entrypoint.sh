@@ -11,8 +11,8 @@
 
 set -euo pipefail
 
-wait-for-it --timeout=60 zookeeper:2181
-wait-for-it --timeout=60 kafka:9092
+wait-for-it --timeout=60 "${ZOOKEEPER_HOST:-zookeper}":2181
+wait-for-it --timeout=60 "${KAFKA_HOST:-kafka}":9092
 
 topics=(
     debezium.tpcch.warehouse
@@ -29,23 +29,28 @@ topics=(
     debezium.tpcch.region
 )
 
-wait-for-it --timeout=60 connect:8083
+wait-for-it --timeout=60 "${CONNECT_HOST:-connect}":8083
 
-echo "${topics[@]}" | xargs -n1 -P8 kafka-topics --bootstrap-server kafka:9092 --create --partitions 1 --replication-factor 1 --topic
+echo "${topics[@]}" | xargs -n1 -P8 kafka-topics --bootstrap-server "${KAFKA_HOST:-kafka}":9092 --create --partitions 1 --replication-factor 1 --topic
 
-
-curl -H 'Content-Type: application/json' connect:8083/connectors --data '{
+generate_config() {
+  cat <<EOF
+{
   "name": "mysql-connector",
   "config": {
     "connector.class": "io.debezium.connector.mysql.MySqlConnector",
-    "database.hostname": "mysql",
+    "database.hostname": "${MYSQL_HOST:-mysql}",
     "database.port": "3306",
     "database.user": "debezium",
     "database.password": "dbz",
     "database.server.name": "debezium",
     "database.server.id": "1234",
-    "database.history.kafka.bootstrap.servers": "kafka:9092",
+    "database.history.kafka.bootstrap.servers": "${KAFKA_HOST:-kafka}:9092",
     "database.history.kafka.topic": "mysql-history",
     "time.precision.mode": "connect"
  }
-}'
+}
+EOF
+}
+
+curl -H 'Content-Type: application/json' "${CONNECT_HOST:-connect}":8083/connectors --data "$(generate_config)"
