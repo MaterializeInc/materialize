@@ -411,9 +411,14 @@ lazy_static! {
 fn substitute_config_env_vars(contents: &str) -> String {
     let mut parsed_contents = contents.to_string();
     for cap in BASHLIKE_ENV_VAR_PATTERN.captures_iter(contents) {
-        let val = match env::var(cap.name("var").unwrap().as_str()) {
+        let var = cap.name("var").unwrap().as_str();
+        let val = match env::var(var) {
             Ok(val) => val,
-            Err(_) => cap.name("default").unwrap().as_str().to_string(),
+            Err(_) => cap
+                .name("default")
+                .unwrap_or_else(|| panic!("Env Var is not set and has no default: {}", var))
+                .as_str()
+                .to_string(),
         };
         parsed_contents = parsed_contents.replace(cap.name("declaration").unwrap().as_str(), &val);
     }
