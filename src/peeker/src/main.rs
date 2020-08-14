@@ -206,6 +206,7 @@ fn initialize_sources(client: &mut Client, sources: &[Source], attempts: u16) ->
     let mut failed = false;
     for source in sources {
         let mut still_to_try = source.names.clone();
+        let mut succeeded = Vec::new();
         let materialized = if source.materialized {
             "MATERIALIZED "
         } else {
@@ -217,9 +218,9 @@ fn initialize_sources(client: &mut Client, sources: &[Source], attempts: u16) ->
             for name in this_time {
                 let delete_source = format!(r#" DROP SOURCE {name} CASCADE"#, name = name);
                 match client.batch_execute(&delete_source) {
-                    Ok(_) => info!("Deleted source {}", name),
+                    Ok(_) => info!("Deleted source in preparation for creation {}", name),
                     Err(err) => {
-                        warn!("error trying to delete source {}: {}", name, err);
+                        debug!("error trying to delete source {}: {}", name, err);
                     }
                 }
                 let create_source = format!(
@@ -234,10 +235,13 @@ fn initialize_sources(client: &mut Client, sources: &[Source], attempts: u16) ->
                     materialized = materialized,
                 );
                 match client.batch_execute(&create_source) {
-                    Ok(_) => info!(
-                        "installed source {} for topic {}{}",
-                        name, source.topic_namespace, name
-                    ),
+                    Ok(_) => {
+                        info!(
+                            "installed source {} for topic {}{}",
+                            name, source.topic_namespace, name
+                        );
+                        succeeded.push(name)
+                    }
                     Err(err) => {
                         warn!("error trying to create source {}: {}", name, err);
                         debug!("For query:\n                     {}", create_source);
@@ -253,8 +257,8 @@ fn initialize_sources(client: &mut Client, sources: &[Source], attempts: u16) ->
         }
         if !still_to_try.is_empty() {
             warn!(
-                "Some sources were not successfully created! {:?}",
-                still_to_try
+                "Some sources were not successfully created! created={:?} failed={:?}",
+                succeeded, still_to_try
             );
             failed = true;
         }
