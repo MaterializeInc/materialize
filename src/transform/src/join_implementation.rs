@@ -215,6 +215,10 @@ mod delta_queries {
                 &input_relation[..],
                 prior_arities,
             );
+
+            // A viable delta query requires that, for every order,
+            // there is an arrangement for every input except for 
+            // the starting one.
             if !orders
                 .iter()
                 .all(|o| o.iter().skip(1).all(|(c, _, _)| c.arranged))
