@@ -8,9 +8,7 @@ menu:
 
 `INSERT` inserts values into a table.
 
-{{< warning >}}
-**INSERT is currently only available in the [developer](https://mtrlz.dev/) (unstable) builds.**
-{{< /warning >}}
+{{< experimental v0.4.1 >}}
 
 {{< warning >}}
 At the moment, tables do not persist any data that is inserted. This means that restarting a

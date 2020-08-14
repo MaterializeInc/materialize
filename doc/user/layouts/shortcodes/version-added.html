@@ -1,0 +1,9 @@
+<p>
+  <em>
+    {{if in (apply $.Site.Params.versions "index" "." "name") (.Get 0)}}
+    New in {{.Get 0}}.
+    {{else}}
+    Available only in <a href="{{"/versions/#unstable-builds"|relURL}}">unstable builds</a>.
+    {{end}}
+  </em>
+</p>

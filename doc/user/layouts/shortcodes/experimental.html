@@ -1,0 +1,10 @@
+<div class="experimental">
+  <strong>EXPERIMENTAL!</strong> This feature is under construction and requires
+  <a href="{{"/cli/#experimental-mode"|relURL}}">experimental mode</a>.
+
+  {{if in (apply $.Site.Params.versions "index" "." "name") (.Get 0)}}
+  <em>Available since {{.Get 0}}.</em>
+  {{else}}
+  <em>Available only in <a href="{{"/versions/#unstable-builds"|relURL}}">unstable builds</a>.</em>
+  {{end}}
+</div>

@@ -1,0 +1,8 @@
+<p>
+  {{if in (apply $.Site.Params.versions "index" "." "name") (.Get 0)}}
+    <em>Changed in {{.Get 0}}:</em> {{.Inner|markdownify}}
+  {{else}}
+    <em>Changed in <a href="{{"/versions/#unstable-builds"|relURL}}">unstable builds</a>:</em>
+    {{.Inner|markdownify}}
+  {{end}}
+</p>
