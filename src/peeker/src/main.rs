@@ -183,8 +183,12 @@ fn initialize(config: &Args) -> Result<()> {
 
 fn init_inner(config: &Args) -> Result<()> {
     let mut postgres_client = create_postgres_client(&config.materialized_url);
-    initialize_sources(&mut postgres_client, &config.config.sources)
-        .map_err(|e| format!("need to have sources for anything else to work: {}", e))?;
+    initialize_sources(
+        &mut postgres_client,
+        &config.config.sources,
+        config.init_attempts,
+    )
+    .map_err(|e| format!("need to have sources for anything else to work: {}", e))?;
     let mut errors = 0;
     for group in config.config.queries_in_declaration_order() {
         if !try_initialize(&mut postgres_client, group) {
@@ -198,7 +202,7 @@ fn init_inner(config: &Args) -> Result<()> {
     }
 }
 
-fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
+fn initialize_sources(client: &mut Client, sources: &[Source], attempts: u16) -> Result<()> {
     let mut failed = false;
     for source in sources {
         let mut still_to_try = source.names.clone();
@@ -207,7 +211,7 @@ fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
         } else {
             ""
         };
-        for _ in 0..10 {
+        for _ in 0..attempts {
             let this_time = still_to_try.clone();
             still_to_try.clear();
             for name in this_time {
