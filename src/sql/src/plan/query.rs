@@ -1631,7 +1631,9 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 0,
                 "subscript expression must contain at least one position"
             );
-            ecx.require_experimental_mode_if(positions.len() > 1, "multi-dimensional slicing")?;
+            if positions.len() > 1 {
+                ecx.require_experimental_mode("multi-dimensional slicing")?;
+            }
             let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
             let ty = ecx.scalar_type(&expr);
             match &ty {
@@ -2306,23 +2308,7 @@ impl<'a> ExprContext<'a> {
     }
 
     pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
-        self.require_experimental_mode_if(true, feature_name)
-    }
-
-    pub fn require_experimental_mode_if(
-        &self,
-        predicate: bool,
-        feature_name: &str,
-    ) -> Result<(), anyhow::Error> {
-        if predicate && !self.qcx.scx.experimental_mode() {
-            bail!(
-                "{} requires experimental mode; see \
-            https://materialize.io/docs/cli/#experimental-mode",
-                feature_name
-            )
-        } else {
-            Ok(())
-        }
+        self.qcx.scx.require_experimental_mode(feature_name)
     }
 
     pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {
