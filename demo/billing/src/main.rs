@@ -107,11 +107,12 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     }
 
     let mut buf = vec![];
-    let mut total_messages_sent = 0;
-    loop {
+    let mut messages_remaining = config.message_count;
+    while messages_remaining > 0 {
         let mut bytes_sent = 0;
         let backoff = tokio::time::delay_for(Duration::from_secs(1));
-        for _ in 0..config.messages_per_second {
+        let messages_to_send = std::cmp::min(config.messages_per_second, messages_remaining);
+        for _ in 0..messages_to_send {
             let m = randomizer::random_batch(rng, &mut recordstate);
             m.write_to_vec(&mut buf)?;
             log::trace!("sending: {:?}", m);
@@ -130,14 +131,11 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         }
         log::info!(
             "produced {} records ({} bytes / record)",
-            config.messages_per_second,
-            bytes_sent / config.messages_per_second
+            messages_to_send,
+            bytes_sent / messages_to_send
         );
-        total_messages_sent += config.messages_per_second;
+        messages_remaining -= messages_to_send;
 
-        if total_messages_sent >= config.message_count {
-            break;
-        }
         backoff.await;
     }
     Ok(())

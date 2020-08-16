@@ -63,7 +63,7 @@ async fn run() -> Result<()> {
 async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     use rand::SeedableRng;
     let mut rng = rand::rngs::StdRng::from_seed(rand::random());
-    let mut total_messages_sent = 0;
+    let mut messages_remaining = config.message_count;
 
     let val_a: Vec<u8> = "a".repeat(500).into_bytes();
 
@@ -91,10 +91,11 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
             .await?;
     }
 
-    loop {
-        log::info!("producing {} records", config.messages_per_second);
+    while messages_remaining > 0 {
+        let messages_to_send = std::cmp::min(config.messages_per_second, messages_remaining);
+        log::info!("producing {} records", messages_to_send);
         let backoff = tokio::time::delay_for(Duration::from_secs(1));
-        for i in 0..config.messages_per_second {
+        for i in 0..messages_to_send {
             // Artificially create a skewed distribution of keys where 33% of
             // inserts to the topic are from keys drawn uniformly from [0, 10_000)
             // and the remaining 67% of the time inserts come from keys drawn
@@ -118,11 +119,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
             }
         }
 
-        total_messages_sent += config.messages_per_second;
-
-        if total_messages_sent >= config.message_count {
-            break;
-        }
+        messages_remaining -= messages_to_send;
         backoff.await;
     }
     Ok(())
