@@ -57,8 +57,11 @@ use sql::plan::{MutationKind, Params, PeekWhen, Plan, PlanContext};
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
-use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState, Source};
-use crate::logging::{LOG_SOURCES, LOG_VIEWS};
+use crate::catalog::builtin::{
+    Builtin, BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_KAFKA_SINKS, MZ_VIEW_FOREIGN_KEYS,
+    MZ_VIEW_KEYS,
+};
+use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState, Source};
 use crate::persistence::{PersistenceConfig, PersistenceMetadata, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
@@ -203,8 +206,8 @@ where
                 &mut broadcast_tx,
                 SequencedCommand::EnableLogging(LoggingConfig {
                     granularity_ns: granularity.as_nanos(),
-                    active_logs: LOG_SOURCES
-                        .iter()
+                    active_logs: BUILTINS
+                        .logs()
                         .map(|src| (src.variant.clone(), src.index_id))
                         .collect(),
                 }),
@@ -239,10 +242,7 @@ where
             catalog,
             symbiosis,
             views: HashMap::new(),
-            tables: CatalogView::all_views()
-                .iter()
-                .map(|v| v.index_id())
-                .collect(),
+            tables: BUILTINS.tables().map(|v| v.index_id).collect(),
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
@@ -355,10 +355,10 @@ where
 
         // Announce primary and foreign key relationships.
         if coord.logging_granularity.is_some() {
-            for log in LOG_SOURCES {
+            for log in BUILTINS.logs() {
                 let log_id = &log.id.to_string();
                 coord.update_catalog_view(
-                    CatalogView::MzViewKeys,
+                    MZ_VIEW_KEYS.index_id,
                     log.variant.desc().typ().keys.iter().enumerate().flat_map(
                         move |(index, key)| {
                             key.iter().map(move |k| {
@@ -374,11 +374,11 @@ where
                 );
 
                 coord.update_catalog_view(
-                    CatalogView::MzViewForeignKeys,
+                    MZ_VIEW_FOREIGN_KEYS.index_id,
                     log.variant.foreign_keys().into_iter().enumerate().flat_map(
                         move |(index, (parent, pairs))| {
-                            let parent_id = LOG_SOURCES
-                                .iter()
+                            let parent_id = BUILTINS
+                                .logs()
                                 .find(|src| src.variant == parent)
                                 .unwrap()
                                 .id
@@ -1757,7 +1757,7 @@ where
                                         Datum::String(topic.as_str()),
                                     ]);
                                     self.update_catalog_view(
-                                        CatalogView::MzKafkaSinks,
+                                        MZ_KAFKA_SINKS.index_id,
                                         iter::once((row, -1)),
                                     );
                                 }
@@ -1767,7 +1767,7 @@ where
                                         Datum::Bytes(&path.clone().into_os_string().into_vec()),
                                     ]);
                                     self.update_catalog_view(
-                                        CatalogView::MzAvroOcfSinks,
+                                        MZ_AVRO_OCF_SINKS.index_id,
                                         iter::once((row, -1)),
                                     );
                                 }
@@ -2048,7 +2048,7 @@ where
     }
 
     /// Insert a single row into a given catalog view.
-    fn update_catalog_view<I>(&mut self, v: CatalogView, updates: I)
+    fn update_catalog_view<I>(&mut self, index_id: GlobalId, updates: I)
     where
         I: IntoIterator<Item = (Row, isize)>,
     {
@@ -2064,7 +2064,7 @@ where
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::Insert {
-                id: v.index_id(),
+                id: index_id,
                 updates,
             },
         );
@@ -2083,14 +2083,14 @@ where
                     Datum::String(&id.to_string()),
                     Datum::String(topic.as_str()),
                 ]);
-                self.update_catalog_view(CatalogView::MzKafkaSinks, iter::once((row, 1)));
+                self.update_catalog_view(MZ_KAFKA_SINKS.index_id, iter::once((row, 1)));
             }
             SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
                 let row = Row::pack(&[
                     Datum::String(&id.to_string()),
                     Datum::Bytes(&path.clone().into_os_string().into_vec()),
                 ]);
-                self.update_catalog_view(CatalogView::MzAvroOcfSinks, iter::once((row, 1)));
+                self.update_catalog_view(MZ_AVRO_OCF_SINKS.index_id, iter::once((row, 1)));
             }
             _ => (),
         }
@@ -2160,7 +2160,7 @@ where
 
     fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
         let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
-        self.update_catalog_view(CatalogView::MzCatalogNames, iter::once((row, diff)));
+        self.update_catalog_view(MZ_CATALOG_NAMES.index_id, iter::once((row, diff)));
     }
 
     /// Perform maintenance work associated with the coordinator.
@@ -2582,7 +2582,10 @@ where
 
 fn is_cat_index(id: &GlobalId) -> bool {
     // TODO(justin): do something better here?
-    CatalogView::all_views().iter().any(|v| v.index_id() == *id)
+    BUILTINS.values().any(|b| match b {
+        Builtin::Log(_) | Builtin::View(_) => false,
+        Builtin::Table(t) => t.index_id == *id,
+    })
 }
 
 fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {
@@ -2711,7 +2714,7 @@ fn open_catalog(
     let path = path.as_deref();
     Ok(if enable_logging {
         Catalog::open(path, experimental_mode, |catalog| {
-            for log_src in LOG_SOURCES {
+            for log_src in BUILTINS.logs() {
                 let view_name = FullName {
                     database: DatabaseSpecifier::Ambient,
                     schema: "mz_catalog".into(),
@@ -2758,41 +2761,40 @@ fn open_catalog(
                 );
             }
 
-            for v in CatalogView::all_views() {
-                let desc = v.desc();
+            for v in BUILTINS.tables() {
                 let view_name = FullName {
                     database: DatabaseSpecifier::Ambient,
                     schema: "mz_catalog".into(),
-                    item: v.name(),
+                    item: v.name.to_owned(),
                 };
                 let src = catalog::Source {
                     create_sql: "".to_string(),
                     plan_cx: PlanContext::default(),
                     connector: dataflow_types::SourceConnector::Local,
-                    desc: desc.clone(),
+                    desc: v.desc.clone(),
                 };
-                let index_name = format!("{}_primary_idx", v.name());
+                let index_name = format!("{}_primary_idx", v.name);
 
                 let tab = CatalogItem::Source(src);
 
-                catalog.insert_item(v.id(), view_name.clone(), tab);
+                catalog.insert_item(v.id, view_name.clone(), tab);
                 catalog.insert_item(
-                    v.index_id(),
+                    v.index_id,
                     FullName {
                         database: DatabaseSpecifier::Ambient,
                         schema: "mz_catalog".into(),
                         item: index_name.clone(),
                     },
                     CatalogItem::Index(catalog::Index {
-                        on: v.id(),
+                        on: v.id,
                         keys: vec![],
-                        create_sql: index_sql(index_name, view_name, &desc, &[]),
+                        create_sql: index_sql(index_name, view_name, &v.desc, &[]),
                         plan_cx: PlanContext::default(),
                     }),
                 );
             }
 
-            for log_view in LOG_VIEWS {
+            for log_view in BUILTINS.views() {
                 let pcx = PlanContext::default();
                 let params = Params {
                     datums: Row::pack(&[]),
