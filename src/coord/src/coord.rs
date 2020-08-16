@@ -43,7 +43,6 @@ use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
     SourceInstanceId,
 };
-use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker};
 use sql::ast::display::AstDisplay;
@@ -181,13 +180,12 @@ where
             None
         };
 
-        let optimizer = Optimizer::default();
-        let catalog = open_catalog(
-            config.data_directory,
-            config.logging_granularity.is_some(),
-            optimizer,
-            Some(config.experimental_mode),
-        )?;
+        let catalog_path = config.data_directory.map(|d| d.join("catalog"));
+        let catalog = Catalog::open(catalog::Config {
+            path: catalog_path.as_deref(),
+            experimental_mode: Some(config.experimental_mode),
+            enable_logging: config.logging_granularity.is_some(),
+        })?;
         let logical_compaction_window_ms = config.logical_compaction_window.map(|d| {
             let millis = d.as_millis();
             if millis > Timestamp::max_value() as u128 {
@@ -2669,7 +2667,7 @@ pub fn auto_generate_primary_idx(
 
 // TODO(benesch): constructing the canonical CREATE INDEX statement should be
 // the responsibility of the SQL package.
-fn index_sql(
+pub fn index_sql(
     index_name: String,
     view_name: FullName,
     view_desc: &RelationDesc,
@@ -2693,164 +2691,17 @@ fn index_sql(
     .to_ast_string_stable()
 }
 
-fn open_catalog(
-    data_directory: Option<&Path>,
-    enable_logging: bool,
-    mut optimizer: Optimizer,
-    experimental_mode: Option<bool>,
-) -> Result<Catalog, anyhow::Error> {
-    let path = if let Some(data_directory) = data_directory {
-        Some(data_directory.join("catalog"))
-    } else {
-        None
-    };
-    let path = path.as_deref();
-    Ok(if enable_logging {
-        Catalog::open(path, experimental_mode, |catalog| {
-            for log_src in BUILTINS.logs() {
-                let view_name = FullName {
-                    database: DatabaseSpecifier::Ambient,
-                    schema: "mz_catalog".into(),
-                    item: log_src.name.into(),
-                };
-                let index_name = format!("{}_primary_idx", log_src.name);
-                catalog.insert_item(
-                    log_src.id,
-                    FullName {
-                        database: DatabaseSpecifier::Ambient,
-                        schema: "mz_catalog".into(),
-                        item: log_src.name.into(),
-                    },
-                    CatalogItem::Source(catalog::Source {
-                        create_sql: "TODO".to_string(),
-                        plan_cx: PlanContext::default(),
-                        connector: dataflow_types::SourceConnector::Local,
-                        desc: log_src.variant.desc(),
-                    }),
-                );
-                catalog.insert_item(
-                    log_src.index_id,
-                    FullName {
-                        database: DatabaseSpecifier::Ambient,
-                        schema: "mz_catalog".into(),
-                        item: index_name.clone(),
-                    },
-                    CatalogItem::Index(catalog::Index {
-                        on: log_src.id,
-                        keys: log_src
-                            .variant
-                            .index_by()
-                            .into_iter()
-                            .map(ScalarExpr::Column)
-                            .collect(),
-                        create_sql: index_sql(
-                            index_name,
-                            view_name,
-                            &log_src.variant.desc(),
-                            &log_src.variant.index_by(),
-                        ),
-                        plan_cx: PlanContext::default(),
-                    }),
-                );
-            }
-
-            for v in BUILTINS.tables() {
-                let view_name = FullName {
-                    database: DatabaseSpecifier::Ambient,
-                    schema: "mz_catalog".into(),
-                    item: v.name.to_owned(),
-                };
-                let src = catalog::Source {
-                    create_sql: "".to_string(),
-                    plan_cx: PlanContext::default(),
-                    connector: dataflow_types::SourceConnector::Local,
-                    desc: v.desc.clone(),
-                };
-                let index_name = format!("{}_primary_idx", v.name);
-
-                let tab = CatalogItem::Source(src);
-
-                catalog.insert_item(v.id, view_name.clone(), tab);
-                catalog.insert_item(
-                    v.index_id,
-                    FullName {
-                        database: DatabaseSpecifier::Ambient,
-                        schema: "mz_catalog".into(),
-                        item: index_name.clone(),
-                    },
-                    CatalogItem::Index(catalog::Index {
-                        on: v.id,
-                        keys: vec![],
-                        create_sql: index_sql(index_name, view_name, &v.desc, &[]),
-                        plan_cx: PlanContext::default(),
-                    }),
-                );
-            }
-
-            for log_view in BUILTINS.views() {
-                let pcx = PlanContext::default();
-                let params = Params {
-                    datums: Row::pack(&[]),
-                    types: vec![],
-                };
-                let stmt = sql::parse::parse(log_view.sql.to_owned())
-                    .expect("failed to parse bootstrap sql")
-                    .into_element();
-                match sql::plan::plan(&pcx, &catalog.for_system_session(), stmt, &params) {
-                    Ok(Plan::CreateView {
-                        name: _,
-                        view,
-                        replace,
-                        materialize,
-                        if_not_exists,
-                    }) => {
-                        assert!(replace.is_none());
-                        assert!(!if_not_exists);
-                        assert!(!materialize);
-                        // Optimize the expression so that we can form an accurately typed description.
-                        let optimized_expr = optimizer
-                            .optimize(view.expr, catalog.indexes())
-                            .expect("failed to optimize bootstrap sql");
-                        let desc =
-                            RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
-                        let view = catalog::View {
-                            create_sql: view.create_sql,
-                            plan_cx: pcx,
-                            optimized_expr,
-                            desc,
-                            conn_id: None,
-                        };
-                        let view_name = FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: "mz_catalog".into(),
-                            item: log_view.name.into(),
-                        };
-                        catalog.insert_item(log_view.id, view_name, CatalogItem::View(view));
-                    }
-                    err => panic!(
-                        "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
-                        log_view.sql, err
-                    ),
-                }
-            }
-        })?
-    } else {
-        Catalog::open(path, experimental_mode, |_| ())?
-    })
-}
-
-/// Loads the catalog stored at `data_directory` and returns its serialized state.
+/// Loads the catalog stored at `path` and returns its serialized state.
 ///
-/// There are no guarantees about the format of the serialized state, except that
-/// the serialized state for two identical catalogs will compare identically.
-pub fn dump_catalog(data_directory: &Path) -> Result<String, anyhow::Error> {
-    let enable_logging = true;
-    let catalog = open_catalog(
-        Some(data_directory),
-        enable_logging,
-        Optimizer::default(),
-        None,
-    )?;
+/// There are no guarantees about the format of the serialized state, except
+/// that the serialized state for two identical catalogs will compare
+/// identically.
+pub fn dump_catalog(path: &Path) -> Result<String, anyhow::Error> {
+    let catalog = Catalog::open(catalog::Config {
+        path: Some(path),
+        enable_logging: true,
+        experimental_mode: None,
+    })?;
     Ok(catalog.dump())
 }
 

@@ -34,6 +34,14 @@ pub enum Builtin {
 }
 
 impl Builtin {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Builtin::Log(log) => log.name,
+            Builtin::Table(table) => table.name,
+            Builtin::View(view) => view.name,
+        }
+    }
+
     pub fn id(&self) -> GlobalId {
         match self {
             Builtin::Log(log) => log.id,
@@ -452,13 +460,6 @@ impl BUILTINS {
     pub fn tables(&self) -> impl Iterator<Item = &'static BuiltinTable> + '_ {
         self.values().filter_map(|b| match b {
             Builtin::Table(table) => Some(*table),
-            _ => None,
-        })
-    }
-
-    pub fn views(&self) -> impl Iterator<Item = &'static BuiltinView> + '_ {
-        self.values().filter_map(|b| match b {
-            Builtin::View(view) => Some(*view),
             _ => None,
         })
     }

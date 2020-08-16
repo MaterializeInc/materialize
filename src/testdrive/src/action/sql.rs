@@ -126,7 +126,7 @@ impl Action for SqlAction {
         })
         .await?;
 
-        if let Some(data_dir) = &state.data_dir {
+        if let Some(path) = &state.materialized_catalog_path {
             match self.stmt {
                 Statement::CreateDatabase { .. }
                 | Statement::CreateIndex { .. }
@@ -136,7 +136,7 @@ impl Action for SqlAction {
                 | Statement::CreateView { .. }
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
-                    let disk_state = coord::dump_catalog(data_dir).map_err(|e| e.to_string())?;
+                    let disk_state = coord::dump_catalog(path).map_err(|e| e.to_string())?;
                     let mem_state = reqwest::get(&format!(
                         "http://{}/internal/catalog",
                         state.materialized_addr,

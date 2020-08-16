@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::iter;
-use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
@@ -30,16 +29,22 @@ use sql::names::{DatabaseSpecifier, FullName, PartialName};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
+use crate::catalog::builtin::{Builtin, BUILTINS};
 use crate::catalog::error::{Error, ErrorKind};
 use crate::session::Session;
 
-pub mod builtin;
+mod config;
 mod error;
+
+pub mod builtin;
 pub mod storage;
+
+pub use crate::catalog::config::Config;
 
 const SYSTEM_CONN_ID: u32 = 0;
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
+pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -308,15 +313,8 @@ impl Catalog {
     /// Opens or creates a `Catalog` that stores data at `path`. The
     /// `initialize` callback will be invoked after database and schemas are
     /// loaded but before any persisted user items are loaded.
-    pub fn open<F>(
-        path: Option<&Path>,
-        experimental_mode: Option<bool>,
-        f: F,
-    ) -> Result<Catalog, Error>
-    where
-        F: FnOnce(&mut Self),
-    {
-        let (storage, experimental_mode) = storage::Connection::open(path, experimental_mode)?;
+    pub fn open(config: Config) -> Result<Catalog, Error> {
+        let (storage, experimental_mode) = storage::Connection::open(&config)?;
 
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
@@ -363,11 +361,105 @@ impl Catalog {
             );
         }
 
-        // Invoke callback so that it can install system items. This has to be
-        // done after databases and schemas are loaded, but before any items, as
-        // items might depend on these system items, but these system items
-        // depend on the system database/schema being installed.
-        f(&mut catalog);
+        // TODO(benesch): disabling logging shouldn't turn off views/tables
+        // that have nothing to do with logging.
+        if config.enable_logging {
+            for builtin in BUILTINS.values() {
+                let name = FullName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: MZ_CATALOG_SCHEMA.into(),
+                    item: builtin.name().into(),
+                };
+                match builtin {
+                    Builtin::Log(log) => {
+                        let index_name = format!("{}_primary_idx", log.name);
+                        catalog.insert_item(
+                            log.id,
+                            name.clone(),
+                            CatalogItem::Source(Source {
+                                create_sql: "TODO".to_string(),
+                                plan_cx: PlanContext::default(),
+                                connector: dataflow_types::SourceConnector::Local,
+                                desc: log.variant.desc(),
+                            }),
+                        );
+                        catalog.insert_item(
+                            log.index_id,
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: MZ_CATALOG_SCHEMA.into(),
+                                item: index_name.clone(),
+                            },
+                            CatalogItem::Index(Index {
+                                on: log.id,
+                                keys: log
+                                    .variant
+                                    .index_by()
+                                    .into_iter()
+                                    .map(ScalarExpr::Column)
+                                    .collect(),
+                                create_sql: super::coord::index_sql(
+                                    index_name,
+                                    name,
+                                    &log.variant.desc(),
+                                    &log.variant.index_by(),
+                                ),
+                                plan_cx: PlanContext::default(),
+                            }),
+                        );
+                    }
+
+                    Builtin::Table(table) => {
+                        let index_name = format!("{}_primary_idx", table.name);
+                        let index_sql = super::coord::index_sql(
+                            index_name.clone(),
+                            name.clone(),
+                            &table.desc,
+                            &[],
+                        );
+                        catalog.insert_item(
+                            table.id,
+                            name.clone(),
+                            CatalogItem::Source(Source {
+                                create_sql: "TODO".to_string(),
+                                plan_cx: PlanContext::default(),
+                                connector: dataflow_types::SourceConnector::Local,
+                                desc: table.desc.clone(),
+                            }),
+                        );
+                        catalog.insert_item(
+                            table.index_id,
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: MZ_CATALOG_SCHEMA.into(),
+                                item: index_name,
+                            },
+                            CatalogItem::Index(Index {
+                                on: table.id,
+                                keys: vec![],
+                                create_sql: index_sql,
+                                plan_cx: PlanContext::default(),
+                            }),
+                        );
+                    }
+
+                    Builtin::View(view) => {
+                        let item = catalog
+                            .parse_item(view.sql.into(), PlanContext::default())
+                            .unwrap_or_else(|e| {
+                                panic!(
+                                    "internal error: failed to load bootstrap view:\n\
+                                    {}\n\
+                                    error:\n\
+                                    {:?}",
+                                    view.name, e
+                                )
+                            });
+                        catalog.insert_item(view.id, name, item);
+                    }
+                }
+            }
+        }
 
         let items = catalog.storage().load_items()?;
         for (id, name, def) in items {
@@ -558,7 +650,7 @@ impl Catalog {
 
     pub fn drop_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
         if !self.temporary_schemas[&conn_id].items.is_empty() {
-            return Err(Error::new(ErrorKind::SchemaNotEmpty("mz_temp".into())));
+            return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
         }
         self.temporary_schemas.remove(&conn_id);
         Ok(())
@@ -1073,10 +1165,6 @@ impl Catalog {
             create_sql,
             eval_env,
         } = serde_json::from_slice(&bytes)?;
-        let params = Params {
-            datums: Row::pack(&[]),
-            types: vec![],
-        };
         let pcx = match eval_env {
             // Old sources and sinks don't have plan contexts, but it's safe to
             // just give them a default, as they clearly don't depend on the
@@ -1084,7 +1172,19 @@ impl Catalog {
             None => PlanContext::default(),
             Some(eval_env) => eval_env.into(),
         };
+        self.parse_item(create_sql, pcx)
+    }
+
+    fn parse_item(
+        &self,
+        create_sql: String,
+        pcx: PlanContext,
+    ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(create_sql)?.into_element();
+        let params = Params {
+            datums: Row::pack(&[]),
+            types: vec![],
+        };
         let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &params)?;
         Ok(match plan {
             Plan::CreateSource { source, .. } | Plan::CreateTable { source, .. } => {

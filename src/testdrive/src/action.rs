@@ -84,7 +84,7 @@ impl Default for Config {
 pub struct State {
     seed: u32,
     temp_dir: tempfile::TempDir,
-    data_dir: Option<PathBuf>,
+    materialized_catalog_path: Option<PathBuf>,
     materialized_addr: String,
     pgclient: tokio_postgres::Client,
     schema_registry_url: Url,
@@ -374,11 +374,7 @@ pub async fn create_state(
     let seed = rand::thread_rng().gen();
     let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory".into())?;
 
-    let data_dir = if let Some(path) = &config.materialized_catalog_path {
-        let mut path = path.clone();
-        if !path.ends_with("catalog") {
-            path.push("catalog");
-        }
+    let materialized_catalog_path = if let Some(path) = &config.materialized_catalog_path {
         match fs::metadata(&path) {
             Ok(m) if !m.is_file() => {
                 return Err(Error::General {
@@ -387,10 +383,7 @@ pub async fn create_state(
                     hints: vec![],
                 })
             }
-            Ok(_) => {
-                path.pop();
-                Some(path)
-            }
+            Ok(_) => Some(path.to_path_buf()),
             Err(e) => {
                 return Err(Error::General {
                     ctx: "opening materialized catalog path".into(),
@@ -527,7 +520,7 @@ pub async fn create_state(
     let state = State {
         seed,
         temp_dir,
-        data_dir,
+        materialized_catalog_path,
         materialized_addr,
         pgclient,
         schema_registry_url,

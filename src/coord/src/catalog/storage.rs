@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::path::Path;
-
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
@@ -19,6 +17,7 @@ use ore::cast::CastFrom;
 use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName};
 
+use crate::catalog::config::Config;
 use crate::catalog::error::{Error, ErrorKind};
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
@@ -113,11 +112,8 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn open(
-        path: Option<&Path>,
-        experimental_mode: Option<bool>,
-    ) -> Result<(Connection, bool), Error> {
-        let mut sqlite = match path {
+    pub fn open(config: &Config) -> Result<(Connection, bool), Error> {
+        let mut sqlite = match &config.path {
             Some(path) => rusqlite::Connection::open(path)?,
             None => rusqlite::Connection::open_in_memory()?,
         };
@@ -153,7 +149,8 @@ impl Connection {
             tx.commit()?;
         }
 
-        let experimental_mode = Self::set_or_get_experimental_mode(&mut sqlite, experimental_mode)?;
+        let experimental_mode =
+            Self::set_or_get_experimental_mode(&mut sqlite, config.experimental_mode)?;
 
         Ok((Connection { inner: sqlite }, experimental_mode))
     }

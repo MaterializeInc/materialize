@@ -23,7 +23,7 @@ services:
         --aws-region=us-east-2
         --schema-registry-url=http://schema-registry:8081
         --materialized-url=postgres://ignored@materialized:6875
-        --validate-catalog=/share/mzdata
+        --validate-catalog=/share/mzdata/catalog
         $$*
       - bash
     command: test/testdrive/*.td
