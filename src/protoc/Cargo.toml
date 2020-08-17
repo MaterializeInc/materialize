@@ -14,7 +14,7 @@ path = "bin/protoc.rs"
 [dependencies]
 anyhow = "1.0.28"
 getopts = "0.2"
-protobuf = { git = "https://github.com/stepancheg/rust-protobuf.git", branch = "v2.17" }
-protobuf-codegen = { git = "https://github.com/stepancheg/rust-protobuf.git", branch = "v2.17" }
-protobuf-codegen-pure = { git = "https://github.com/stepancheg/rust-protobuf.git", branch = "v2.17" }
+protobuf = "2.17"
+protobuf-codegen = "2.17"
+protobuf-codegen-pure = "2.17"
 tempfile = "3.1.0"

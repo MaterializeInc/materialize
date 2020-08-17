@@ -18,7 +18,7 @@ log = "0.4.11"
 ore = { path = "../../src/ore" }
 parse_duration = "2.1.0"
 postgres-types = "0.1.1"
-protobuf = { git = "https://github.com/stepancheg/rust-protobuf.git", branch = "v2.17" }
+protobuf = "2.17"
 rand = "0.7.3"
 rand_distr = "0.2.2"
 structopt = "0.3.16"
