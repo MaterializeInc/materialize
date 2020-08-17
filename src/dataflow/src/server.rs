@@ -39,12 +39,11 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, DataflowError, IndexDesc, MzOffset, PeekResponse, Timestamp,
-    TimestampSourceUpdate, Update,
+    DataflowDesc, DataflowError, MzOffset, PeekResponse, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{Diff, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
-use repr::{Datum, RelationType, Row, RowArena};
+use repr::{Datum, Row, RowArena};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
@@ -110,18 +109,6 @@ pub enum SequencedCommand {
     CancelPeek {
         /// The identifier of the peek request to cancel.
         conn_id: u32,
-    },
-    /// Create a local input named `index.on_id`
-    CreateLocalInput {
-        /// A name to use for the input.
-        name: String,
-        /// A globally unique identifier to use for the local input's index.
-        index_id: GlobalId,
-        /// Contains the global id of the local input
-        /// and the keys that its index is arranged on
-        index: IndexDesc,
-        /// The relation type of the input.
-        on_type: RelationType,
     },
     /// Insert `updates` into the local input named `id`.
     Insert {
@@ -670,34 +657,15 @@ where
                 }
             }
 
-            SequencedCommand::CreateLocalInput {
-                name,
-                index_id,
-                index,
-                on_type,
-            } => {
-                render::build_local_input(
-                    self.timely_worker,
-                    &mut self.render_state,
-                    index_id,
-                    &name,
-                    index,
-                    on_type,
-                );
-                self.reported_frontiers
-                    .insert(index_id, Antichain::from_elem(0));
-                if let Some(logger) = self.materialized_logger.as_mut() {
-                    logger.log(MaterializedEvent::Frontier(index_id, 0, 1));
-                }
-            }
-
             SequencedCommand::Insert { id, updates } => {
-                if let Some(input) = self.render_state.local_inputs.get_mut(&id) {
-                    let mut session = input.handle.session(input.capability.clone());
-                    for update in updates {
-                        assert!(update.timestamp >= *input.capability.time());
-                        session.give((update.row, update.timestamp, update.diff));
-                    }
+                let input = match self.render_state.local_inputs.get_mut(&id) {
+                    Some(input) => input,
+                    None => panic!("local input {} missing for insert", id),
+                };
+                let mut session = input.handle.session(input.capability.clone());
+                for update in updates {
+                    assert!(update.timestamp >= *input.capability.time());
+                    session.give((update.row, update.timestamp, update.diff));
                 }
             }
 
