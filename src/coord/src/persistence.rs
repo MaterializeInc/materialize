@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::executor::block_on;
 use futures::stream::StreamExt;
@@ -52,7 +52,8 @@ struct Partition {
 
 #[derive(Debug)]
 struct Source {
-    // TODO(rkhaitan): key on SourceInstanceId.
+    // Multiple source instances will send data to the same Source object
+    // but the data will be deduplicated before it is persisted.
     id: GlobalId,
     path: PathBuf,
     // TODO: in a future where persistence supports more than just Kafka this
@@ -87,9 +88,9 @@ impl Source {
             if let Some(last_persisted_offset) = partition.last_persisted_offset {
                 if offset <= last_persisted_offset {
                     // The persister does not assume that dataflow workers will send data in
-                    // any ordering. This is a fairly low effort sanity check against obviously
-                    // bad duplication.
-                    error!("Received an offset ({}) for source: {} partition: {} that was
+                    // any ordering. We can filter out the records that we have obviously do not
+                    // need to think about here.
+                    trace!("Received an offset ({}) for source: {} partition: {} that was
                            lower than the most recent offset flushed to persistent storage {}. Ignoring.",
                            offset, self.id, partition_id, last_persisted_offset);
                     return;
@@ -113,9 +114,11 @@ impl Source {
                 continue;
             }
 
-            // TODO we should probably be extra careful and deduplicate by offset
-            // here as well.
+            // Sort the data we have received by offset, timestamp
             partition.pending.sort();
+
+            // Keep only the minimum timestamp we received for every offset
+            partition.pending.dedup_by_key(|x| x.offset);
 
             let mut prev = partition.last_persisted_offset;
             let mut prefix_length = 0;
@@ -160,7 +163,7 @@ impl Source {
                         Datum::Bytes(&record.payload),
                     ]);
 
-                    encode_row(&row, &mut buf);
+                    encode_row(&row, &mut buf)?;
                 }
 
                 // The offsets we put in this filename are 1-indexed
@@ -340,10 +343,15 @@ pub fn update(persister: Option<Persister>) {
 }
 
 /// Write a length-prefixed Row to a buffer
-fn encode_row(row: &Row, buf: &mut Vec<u8>) {
-    // TODO assert that the row is small enough for its length to fit in 4 bytes
+fn encode_row(row: &Row, buf: &mut Vec<u8>) -> Result<(), anyhow::Error> {
     let data = row.data();
+
+    if data.len() >= u32::MAX as usize {
+        bail!("failed to encode row: row too large");
+    }
+
     buf.write_u32::<NetworkEndian>(data.len() as u32)
         .expect("writes to vec cannot fail");
     buf.extend_from_slice(data);
+    Ok(())
 }
