@@ -368,7 +368,7 @@ where
                                 &self.debug_name,
                                 scope.index(),
                                 self.as_of_frontier.clone(),
-                                &mut src.operators,
+                                src.operators,
                                 src.desc.typ(),
                             );
 

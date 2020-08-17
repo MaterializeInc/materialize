@@ -39,7 +39,7 @@ pub fn pre_arrange_from_upsert_transforms<G>(
     debug_name: &str,
     worker_index: usize,
     as_of_frontier: Antichain<Timestamp>,
-    linear_operator: &mut Option<LinearOperator>,
+    linear_operator: Option<LinearOperator>,
     src_type: &RelationType,
 ) -> (
     Stream<G, (Row, Option<Row>, Timestamp)>,
@@ -175,7 +175,7 @@ where
 /// whereas the input stream is `Stream<G, (key, Option<value>, Timestamp)>
 fn apply_linear_operators<G>(
     stream: &Stream<G, (Row, Option<Row>, Timestamp)>,
-    linear_operator: &mut Option<LinearOperator>,
+    linear_operator: Option<LinearOperator>,
     src_type: &RelationType,
 ) -> (
     Stream<G, (Row, Option<Row>, Timestamp)>,
@@ -184,10 +184,9 @@ fn apply_linear_operators<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let operator = linear_operator.take();
     let mut row_packer = repr::RowPacker::new();
 
-    if let Some(operator) = operator {
+    if let Some(operator) = linear_operator {
         // Determine replacement values for unused columns.
         // This is copied over from applying linear operators to
         // the non-upsert case.
