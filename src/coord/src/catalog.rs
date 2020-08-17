@@ -361,103 +361,99 @@ impl Catalog {
             );
         }
 
-        // TODO(benesch): disabling logging shouldn't turn off views/tables
-        // that have nothing to do with logging.
-        if config.enable_logging {
-            for builtin in BUILTINS.values() {
-                let name = FullName {
-                    database: DatabaseSpecifier::Ambient,
-                    schema: MZ_CATALOG_SCHEMA.into(),
-                    item: builtin.name().into(),
-                };
-                match builtin {
-                    Builtin::Log(log) => {
-                        let index_name = format!("{}_primary_idx", log.name);
-                        catalog.insert_item(
-                            log.id,
-                            name.clone(),
-                            CatalogItem::Source(Source {
-                                create_sql: "TODO".to_string(),
-                                plan_cx: PlanContext::default(),
-                                connector: dataflow_types::SourceConnector::Local,
-                                desc: log.variant.desc(),
-                            }),
-                        );
-                        catalog.insert_item(
-                            log.index_id,
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: MZ_CATALOG_SCHEMA.into(),
-                                item: index_name.clone(),
-                            },
-                            CatalogItem::Index(Index {
-                                on: log.id,
-                                keys: log
-                                    .variant
-                                    .index_by()
-                                    .into_iter()
-                                    .map(ScalarExpr::Column)
-                                    .collect(),
-                                create_sql: super::coord::index_sql(
-                                    index_name,
-                                    name,
-                                    &log.variant.desc(),
-                                    &log.variant.index_by(),
-                                ),
-                                plan_cx: PlanContext::default(),
-                            }),
-                        );
-                    }
+        for builtin in BUILTINS.values() {
+            let name = FullName {
+                database: DatabaseSpecifier::Ambient,
+                schema: MZ_CATALOG_SCHEMA.into(),
+                item: builtin.name().into(),
+            };
+            match builtin {
+                Builtin::Log(log) if config.enable_logging => {
+                    let index_name = format!("{}_primary_idx", log.name);
+                    catalog.insert_item(
+                        log.id,
+                        name.clone(),
+                        CatalogItem::Source(Source {
+                            create_sql: "TODO".to_string(),
+                            plan_cx: PlanContext::default(),
+                            connector: dataflow_types::SourceConnector::Local,
+                            desc: log.variant.desc(),
+                        }),
+                    );
+                    catalog.insert_item(
+                        log.index_id,
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: MZ_CATALOG_SCHEMA.into(),
+                            item: index_name.clone(),
+                        },
+                        CatalogItem::Index(Index {
+                            on: log.id,
+                            keys: log
+                                .variant
+                                .index_by()
+                                .into_iter()
+                                .map(ScalarExpr::Column)
+                                .collect(),
+                            create_sql: super::coord::index_sql(
+                                index_name,
+                                name,
+                                &log.variant.desc(),
+                                &log.variant.index_by(),
+                            ),
+                            plan_cx: PlanContext::default(),
+                        }),
+                    );
+                }
 
-                    Builtin::Table(table) => {
-                        let index_name = format!("{}_primary_idx", table.name);
-                        let index_sql = super::coord::index_sql(
-                            index_name.clone(),
-                            name.clone(),
-                            &table.desc,
-                            &[],
-                        );
-                        catalog.insert_item(
-                            table.id,
-                            name.clone(),
-                            CatalogItem::Source(Source {
-                                create_sql: "TODO".to_string(),
-                                plan_cx: PlanContext::default(),
-                                connector: dataflow_types::SourceConnector::Local,
-                                desc: table.desc.clone(),
-                            }),
-                        );
-                        catalog.insert_item(
-                            table.index_id,
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: MZ_CATALOG_SCHEMA.into(),
-                                item: index_name,
-                            },
-                            CatalogItem::Index(Index {
-                                on: table.id,
-                                keys: vec![],
-                                create_sql: index_sql,
-                                plan_cx: PlanContext::default(),
-                            }),
-                        );
-                    }
+                Builtin::Table(table) => {
+                    let index_name = format!("{}_primary_idx", table.name);
+                    let index_sql =
+                        super::coord::index_sql(index_name.clone(), name.clone(), &table.desc, &[]);
+                    catalog.insert_item(
+                        table.id,
+                        name.clone(),
+                        CatalogItem::Source(Source {
+                            create_sql: "TODO".to_string(),
+                            plan_cx: PlanContext::default(),
+                            connector: dataflow_types::SourceConnector::Local,
+                            desc: table.desc.clone(),
+                        }),
+                    );
+                    catalog.insert_item(
+                        table.index_id,
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: MZ_CATALOG_SCHEMA.into(),
+                            item: index_name,
+                        },
+                        CatalogItem::Index(Index {
+                            on: table.id,
+                            keys: vec![],
+                            create_sql: index_sql,
+                            plan_cx: PlanContext::default(),
+                        }),
+                    );
+                }
 
-                    Builtin::View(view) => {
-                        let item = catalog
-                            .parse_item(view.sql.into(), PlanContext::default())
-                            .unwrap_or_else(|e| {
-                                panic!(
-                                    "internal error: failed to load bootstrap view:\n\
+                // TODO(benesch): disabling logging shouldn't turn off the
+                // views that have nothing to do with logging.
+                Builtin::View(view) if config.enable_logging => {
+                    let item = catalog
+                        .parse_item(view.sql.into(), PlanContext::default())
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "internal error: failed to load bootstrap view:\n\
                                     {}\n\
                                     error:\n\
                                     {:?}",
-                                    view.name, e
-                                )
-                            });
-                        catalog.insert_item(view.id, name, item);
-                    }
+                                view.name, e
+                            )
+                        });
+                    catalog.insert_item(view.id, name, item);
                 }
+
+                _ => (),
             }
         }
 
