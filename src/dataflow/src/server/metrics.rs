@@ -171,7 +171,6 @@ impl CommandsProcessedMetrics {
             SequencedCommand::DropIndexes(..) => self.drop_indexes_int += 1,
             SequencedCommand::Peek { .. } => self.peek_int += 1,
             SequencedCommand::CancelPeek { .. } => self.cancel_peek_int += 1,
-            SequencedCommand::CreateLocalInput { .. } => self.create_local_input_int += 1,
             SequencedCommand::Insert { .. } => self.insert_int += 1,
             SequencedCommand::AllowCompaction(..) => self.allow_compaction_int += 1,
             SequencedCommand::AdvanceSourceTimestamp { .. } => {
@@ -212,11 +211,6 @@ impl CommandsProcessedMetrics {
         if self.cancel_peek_int > 0 {
             self.cancel_peek.inc_by(self.cancel_peek_int as i64);
             self.cancel_peek_int = 0;
-        }
-        if self.create_local_input_int > 0 {
-            self.create_local_input
-                .inc_by(self.create_local_input_int as i64);
-            self.create_local_input_int = 0;
         }
         if self.insert_int > 0 {
             self.insert.inc_by(self.insert_int as i64);

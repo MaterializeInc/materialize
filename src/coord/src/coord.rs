@@ -60,7 +60,7 @@ use crate::catalog::builtin::{
     BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_KAFKA_SINKS, MZ_VIEW_FOREIGN_KEYS,
     MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState, Source};
+use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
 use crate::persistence::{PersistenceConfig, PersistenceMetadata, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
@@ -296,54 +296,13 @@ where
                     .with_context(|| format!("recreating sink {}", name))?;
                     coord.handle_sink_connector_ready(*id, connector);
                 }
-                CatalogItem::Index(index) => match id {
-                    GlobalId::User(_) => {
-                        // If index is on a local source, don't create a dataflow.
-                        if let CatalogItem::Source(Source {
-                            connector: SourceConnector::Local,
-                            desc,
-                            ..
-                        }) = coord.catalog.get_by_id(&index.on).item()
-                        {
-                            coord.views.insert(*id, ViewState::new(false, vec![]));
-                            broadcast(
-                                &mut coord.broadcast_tx,
-                                SequencedCommand::CreateLocalInput {
-                                    name: name.to_string(),
-                                    index_id: *id,
-                                    index: IndexDesc {
-                                        on_id: *id,
-                                        keys: index.keys.clone(),
-                                    },
-                                    on_type: desc.typ().clone(),
-                                },
-                            );
-                            coord.insert_index(*id, &index, Some(1_000));
-                        } else {
-                            coord.create_index_dataflow(name.to_string(), *id, index.clone())
-                        }
+                CatalogItem::Index(index) => {
+                    if BUILTINS.logs().any(|log| log.index_id == *id) {
+                        coord.insert_index(*id, &index, Some(1_000));
+                    } else {
+                        coord.create_index_dataflow(name.to_string(), *id, index.clone())
                     }
-                    GlobalId::System(_) => {
-                        // TODO(justin): do something better here?
-                        if BUILTINS.tables().any(|t| t.index_id == *id) {
-                            let entry = coord.catalog.get_by_id(&index.on);
-                            coord.views.insert(*id, ViewState::new(false, vec![]));
-                            broadcast(
-                                &mut coord.broadcast_tx,
-                                SequencedCommand::CreateLocalInput {
-                                    name: name.to_string(),
-                                    index_id: *id,
-                                    index: IndexDesc {
-                                        on_id: *id,
-                                        keys: index.keys.clone(),
-                                    },
-                                    on_type: entry.desc().unwrap().typ().clone(),
-                                },
-                            );
-                        }
-                        coord.insert_index(*id, &index, Some(1_000))
-                    }
-                },
+                }
             }
         }
 
@@ -357,7 +316,7 @@ where
             for log in BUILTINS.logs() {
                 let log_id = &log.id.to_string();
                 coord.update_catalog_view(
-                    MZ_VIEW_KEYS.index_id,
+                    MZ_VIEW_KEYS.id,
                     log.variant.desc().typ().keys.iter().enumerate().flat_map(
                         move |(index, key)| {
                             key.iter().map(move |k| {
@@ -373,7 +332,7 @@ where
                 );
 
                 coord.update_catalog_view(
-                    MZ_VIEW_FOREIGN_KEYS.index_id,
+                    MZ_VIEW_FOREIGN_KEYS.id,
                     log.variant.foreign_keys().into_iter().enumerate().flat_map(
                         move |(index, (parent, pairs))| {
                             let parent_id = BUILTINS
@@ -1011,19 +970,9 @@ where
         ]) {
             Ok(_) => {
                 self.views.insert(source_id, ViewState::new(false, vec![]));
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::CreateLocalInput {
-                        name: name.to_string(),
-                        index_id,
-                        index: IndexDesc {
-                            on_id: index.on,
-                            keys: index.keys.clone(),
-                        },
-                        on_type: source.desc.typ().clone(),
-                    },
-                );
-                self.insert_index(index_id, &index, self.logical_compaction_window_ms);
+                let mut dataflow = DataflowDesc::new(name.to_string());
+                self.import_source_or_view(&source_id, &mut dataflow);
+                self.build_arrangement(&index_id, index, source.desc.typ().clone(), dataflow);
                 self.tables.insert(index_id);
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
@@ -1756,7 +1705,7 @@ where
                                         Datum::String(topic.as_str()),
                                     ]);
                                     self.update_catalog_view(
-                                        MZ_KAFKA_SINKS.index_id,
+                                        MZ_KAFKA_SINKS.id,
                                         iter::once((row, -1)),
                                     );
                                 }
@@ -1766,7 +1715,7 @@ where
                                         Datum::Bytes(&path.clone().into_os_string().into_vec()),
                                     ]);
                                     self.update_catalog_view(
-                                        MZ_AVRO_OCF_SINKS.index_id,
+                                        MZ_AVRO_OCF_SINKS.id,
                                         iter::once((row, -1)),
                                     );
                                 }
@@ -2082,14 +2031,14 @@ where
                     Datum::String(&id.to_string()),
                     Datum::String(topic.as_str()),
                 ]);
-                self.update_catalog_view(MZ_KAFKA_SINKS.index_id, iter::once((row, 1)));
+                self.update_catalog_view(MZ_KAFKA_SINKS.id, iter::once((row, 1)));
             }
             SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
                 let row = Row::pack(&[
                     Datum::String(&id.to_string()),
                     Datum::Bytes(&path.clone().into_os_string().into_vec()),
                 ]);
-                self.update_catalog_view(MZ_AVRO_OCF_SINKS.index_id, iter::once((row, 1)));
+                self.update_catalog_view(MZ_AVRO_OCF_SINKS.id, iter::once((row, 1)));
             }
             _ => (),
         }
@@ -2159,7 +2108,7 @@ where
 
     fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
         let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
-        self.update_catalog_view(MZ_CATALOG_NAMES.index_id, iter::once((row, diff)));
+        self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)));
     }
 
     /// Perform maintenance work associated with the coordinator.
