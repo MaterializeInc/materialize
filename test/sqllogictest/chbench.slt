@@ -1004,6 +1004,7 @@ ORDER BY su_suppkey
 ----
 %0 =
 | Get materialize.public.supplier (u34)
+| ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.orderline (u19)
@@ -1041,7 +1042,7 @@ ORDER BY su_suppkey
 
 %7 =
 | Join %0 %3 %6 (= #0 #7) (= #8 #9)
-| | implementation = Differential %0 %3.(#0) %6.(#0)
+| | implementation = Differential %0.(#0) %3.(#0) %6.(#0)
 | | demand = (#0..#2, #4, #8)
 | Filter !(isnull(#8))
 | Project (#0..#2, #4, #8)
@@ -1331,6 +1332,7 @@ ORDER BY su_name
 
 %5 =
 | Get materialize.public.stock (u26)
+| ArrangeBy (#0)
 
 %6 =
 | Get materialize.public.orderline (u19)
@@ -1342,7 +1344,7 @@ ORDER BY su_name
 
 %8 =
 | Join %4 %5 %6 %7 (= #11 #33 #39)
-| | implementation = Differential %5 %7.(#0) %6.(#4) %4.()
+| | implementation = Differential %5.(#0) %7.(#0) %6.(#4) %4.()
 | | demand = (#0, #11..#13, #35, #36, #43)
 | Filter "^co.*$" ~(#43), (datetots(#35) > 2010-05-23 12:00:00)
 | Reduce group=(#0, #11, #12, #13) sum(#36)

@@ -1069,6 +1069,7 @@ ORDER BY
 ----
 %0 =
 | Get materialize.public.supplier (u8)
+| ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.revenue (u27)
@@ -1083,7 +1084,7 @@ ORDER BY
 
 %3 =
 | Join %0 %1 %2 (= #0 #7) (= #8 #9)
-| | implementation = Differential %0 %1.(#0) %2.(#0)
+| | implementation = Differential %0.(#0) %1.(#0) %2.(#0)
 | | demand = (#0..#2, #4, #8)
 | Project (#0..#2, #4, #8)
 
@@ -1485,6 +1486,7 @@ ORDER BY
 
 %4 =
 | Get materialize.public.partsupp (u11)
+| ArrangeBy (#0)
 
 %5 =
 | Get materialize.public.part (u6)
@@ -1492,7 +1494,7 @@ ORDER BY
 
 %6 =
 | Join %3 %4 %5 (= #11 #16)
-| | implementation = Differential %4 %5.(#0) %3.()
+| | implementation = Differential %4.(#0) %5.(#0) %3.()
 | | demand = (#0, #11..#13, #17)
 | Filter "^forest.*$" ~(#17)
 
