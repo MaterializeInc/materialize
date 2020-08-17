@@ -38,7 +38,7 @@ pgwire = { path = "../pgwire" }
 prof-common = { path = "../prof_common" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-rlimit = "0.3.0"
+rlimit = "0.4.0"
 stream-cancel = "0.6.1"
 sysctl = "0.4.0"
 tempfile = "3.1"
