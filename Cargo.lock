@@ -2780,8 +2780,8 @@ dependencies = [
 
 [[package]]
 name = "protobuf"
-version = "2.17.0-pre"
-source = "git+https://github.com/stepancheg/rust-protobuf.git?branch=v2.17#e028a194c349b95dabf8b98d2d8ccb507b424a87"
+version = "2.17.0"
+source = "git+https://github.com/stepancheg/rust-protobuf.git?branch=v2.17#0ac13de86714d6a4c8af36591dcbd607c913b6ee"
 dependencies = [
  "serde",
  "serde_derive",
@@ -2789,16 +2789,16 @@ dependencies = [
 
 [[package]]
 name = "protobuf-codegen"
-version = "2.17.0-pre"
-source = "git+https://github.com/stepancheg/rust-protobuf.git?branch=v2.17#e028a194c349b95dabf8b98d2d8ccb507b424a87"
+version = "2.17.0"
+source = "git+https://github.com/stepancheg/rust-protobuf.git?branch=v2.17#0ac13de86714d6a4c8af36591dcbd607c913b6ee"
 dependencies = [
  "protobuf",
 ]
 
 [[package]]
 name = "protobuf-codegen-pure"
-version = "2.17.0-pre"
-source = "git+https://github.com/stepancheg/rust-protobuf.git?branch=v2.17#e028a194c349b95dabf8b98d2d8ccb507b424a87"
+version = "2.17.0"
+source = "git+https://github.com/stepancheg/rust-protobuf.git?branch=v2.17#0ac13de86714d6a4c8af36591dcbd607c913b6ee"
 dependencies = [
  "protobuf",
  "protobuf-codegen",
