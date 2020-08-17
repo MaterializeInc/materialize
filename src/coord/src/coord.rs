@@ -298,6 +298,15 @@ where
                 }
                 CatalogItem::Index(index) => {
                     if BUILTINS.logs().any(|log| log.index_id == *id) {
+                        // Indexes on logging views are special, as they are
+                        // already installed in the dataflow plane via
+                        // `SequencedCommand::EnableLogging`. Just teach the
+                        // coordinator of their existence, without creating a
+                        // dataflow for the index.
+                        //
+                        // TODO(benesch): why is this hardcoded to 1000?
+                        // Should it not be the same logical compaction window
+                        // that everything else uses?
                         coord.insert_index(*id, &index, Some(1_000));
                     } else {
                         coord.create_index_dataflow(name.to_string(), *id, index.clone())
