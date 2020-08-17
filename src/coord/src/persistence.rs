@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context};
 use byteorder::{NetworkEndian, WriteBytesExt};
-use futures::executor::block_on;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
 
@@ -314,19 +313,16 @@ impl Persister {
 
         Ok(false)
     }
-}
 
-// TODO(rkhaitan): make this a method on Persister.
-pub fn update(persister: Option<Persister>) {
-    if let Some(mut persister) = persister {
+    pub async fn update(&mut self) {
         info!("Persistence thread starting with flush_interval: {:#?}, flush_min_records: {}, path: {}",
-              persister.config.flush_interval,
-              persister.config.flush_min_records,
-              persister.config.path.display());
+              self.config.flush_interval,
+              self.config.flush_min_records,
+              self.config.path.display());
         loop {
-            thread::sleep(persister.config.flush_interval);
+            thread::sleep(self.config.flush_interval);
             trace!("Persistence thread checking for updates.");
-            let ret = block_on(async { persister.update_persistence().await });
+            let ret = self.update_persistence().await;
 
             match ret {
                 Ok(true) => break,

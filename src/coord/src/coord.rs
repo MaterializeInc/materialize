@@ -462,11 +462,9 @@ where
 
         let persister = self.persister.take();
 
-        let executor = self.executor.clone();
-        // TODO(rkhaitan): use tokio::spawn here instead.
-        let _persister_thread =
-            thread::spawn(move || executor.enter(|| crate::persistence::update(persister)))
-                .join_on_drop();
+        if let Some(mut persister) = persister {
+            tokio::spawn(async move { persister.update().await });
+        }
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
