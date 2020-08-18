@@ -11,10 +11,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::env;
 use std::result::Result as StdResult;
 use std::time::Duration;
 
+use lazy_static::lazy_static;
 use log::debug;
+use regex::Regex;
 use serde::{Deserialize, Deserializer};
 
 use crate::{Error, Result};
@@ -118,13 +121,16 @@ fn load_config(config_path: Option<String>, cli_queries: Option<String>) -> Resu
         .map(std::fs::read_to_string)
         .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
     let conf = match &config_file {
-        Ok(contents) => toml::from_str::<RawConfig>(&contents).map_err(|e| {
-            format!(
-                "Unable to parse config file {}: {}",
-                config_path.as_deref().unwrap_or("DEFAULT"),
-                e
-            )
-        })?,
+        Ok(contents) => {
+            let contents = substitute_config_env_vars(contents);
+            toml::from_str::<RawConfig>(&contents).map_err(|e| {
+                format!(
+                    "Unable to parse config file {}: {}",
+                    config_path.as_deref().unwrap_or("DEFAULT"),
+                    e
+                )
+            })?
+        }
         Err(e) => {
             eprintln!(
                 "unable to read config file {:?}: {}",
@@ -404,4 +410,55 @@ where
 {
     let d = Duration::from_millis(Deserialize::deserialize(deser)?);
     Ok(Some(d))
+}
+
+lazy_static! {
+    static ref BASHLIKE_ENV_VAR_PATTERN: Regex =
+        Regex::new(r"(?P<declaration>\$\{(?P<var>[^:}]+)(:-(?P<default>[^}]+))?\})").unwrap();
+}
+
+/// replace instances of `${VAR:-default}` with a local environment variable if
+/// present or the default value.
+///
+/// # Panics
+/// - If environment variable does not exist and no default value is provided.
+fn substitute_config_env_vars(contents: &str) -> String {
+    let mut parsed_contents = contents.to_string();
+    for cap in BASHLIKE_ENV_VAR_PATTERN.captures_iter(contents) {
+        let var = cap.name("var").unwrap().as_str();
+        let val = match env::var(var) {
+            Ok(val) => val,
+            Err(_) => cap
+                .name("default")
+                .unwrap_or_else(|| panic!("Env Var is not set and has no default: {}", var))
+                .as_str()
+                .to_string(),
+        };
+        parsed_contents = parsed_contents.replace(cap.name("declaration").unwrap().as_str(), &val);
+    }
+    parsed_contents
+}
+
+#[test]
+fn test_substitute_config_env_vars() {
+    fn remove_test_vars() {
+        env::remove_var("MZ_TEST_ENV_VAR_NAME");
+        env::remove_var("MZ_TEST_ENV_VAR_DAY");
+    }
+
+    remove_test_vars();
+    let contents =
+        "Hello, ${MZ_TEST_ENV_VAR_NAME:-Sean}; how is your ${MZ_TEST_ENV_VAR_DAY:-Friday}?";
+    let parsed_contents = substitute_config_env_vars(contents);
+    assert_eq!(parsed_contents, "Hello, Sean; how is your Friday?");
+
+    env::set_var("MZ_TEST_ENV_VAR_NAME", "friend");
+    env::set_var("MZ_TEST_ENV_VAR_DAY", "weekend");
+    let parsed_contents = substitute_config_env_vars(contents);
+    let valid_env_var_sub = "Hello, friend; how is your weekend?";
+    if parsed_contents != valid_env_var_sub {
+        remove_test_vars();
+        assert_eq!(parsed_contents, valid_env_var_sub);
+    }
+    remove_test_vars();
 }

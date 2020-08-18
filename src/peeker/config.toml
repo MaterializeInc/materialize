@@ -7,9 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# This config supports bash-like environment variables, e.g.
+# `${ENV_VAR:-default}`. The `default` value is optional, but `peeker`
+# panics if the `ENV_VAR` is not present and no default value is provided.
+
 [[sources]]
-kafka_broker = "kafka:9092"
-schema_registry = "http://schema-registry:8081"
+kafka_broker = "${KAFA_HOST:-kafka}:9092"
+schema_registry = "http://${SR_HOST:-schema-registry}:8081"
 topic_namespace = "debezium.tpcch."
 materialized = false
 names = [
