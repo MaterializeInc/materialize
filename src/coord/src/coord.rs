@@ -269,7 +269,7 @@ where
         for (id, name, item) in &catalog_entries {
             match item {
                 CatalogItem::Table(_) => {
-                    coord.views.insert(*id, ViewState::new(false, vec![]));
+                    coord.views.insert(*id, ViewState::new(false));
                 }
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
@@ -278,7 +278,7 @@ where
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
                     coord.handle_source_connector_persistence(*id, &source.connector);
-                    coord.views.insert(*id, ViewState::new(false, vec![]));
+                    coord.views.insert(*id, ViewState::new(false));
                 }
                 CatalogItem::View(view) => {
                     coord.insert_view(*id, &view);
@@ -976,7 +976,7 @@ where
             },
         ]) {
             Ok(_) => {
-                self.views.insert(table_id, ViewState::new(false, vec![]));
+                self.views.insert(table_id, ViewState::new(false));
                 let mut dataflow = DataflowDesc::new(name.to_string());
                 self.import_source_or_view(&table_id, &mut dataflow);
                 self.build_arrangement(&index_id, index, table.desc.typ().clone(), dataflow);
@@ -1029,7 +1029,7 @@ where
         };
         match self.catalog_transact(ops) {
             Ok(()) => {
-                self.views.insert(source_id, ViewState::new(false, vec![]));
+                self.views.insert(source_id, ViewState::new(false));
                 if materialized {
                     let mut dataflow = DataflowDesc::new(name.to_string());
                     self.import_source_or_view(&source_id, &mut dataflow);
@@ -2174,8 +2174,10 @@ where
             //if view is not materialized
             if self.views.contains_key(&used_by_id) && self.views[&used_by_id].default_idx.is_none()
             {
-                let new_queryability = self.views[&used_by_id]
-                    .uses_views
+                let new_queryability = self
+                    .catalog
+                    .get_by_id(&used_by_id)
+                    .uses()
                     .iter()
                     .all(|id| self.views[id].queryable);
                 if let Some(view_state) = self.views.get_mut(&used_by_id) {
@@ -2196,7 +2198,7 @@ where
         let mut results = Vec::new();
         let view_state = &self.views[id];
         if view_state.primary_idxes.is_empty() {
-            for id in view_state.uses_views.iter() {
+            for id in self.catalog.get_by_id(id).uses().iter() {
                 results.append(&mut self.find_dependent_indexes(id));
             }
         } else {
@@ -2409,16 +2411,13 @@ where
         let uses = view.optimized_expr.as_ref().global_uses();
         self.views.insert(
             view_id,
-            ViewState::new(
-                uses.iter().all(|id| {
-                    if let Some(view_state) = self.views.get(&id) {
-                        view_state.queryable
-                    } else {
-                        false
-                    }
-                }),
-                uses,
-            ),
+            ViewState::new(uses.iter().all(|id| {
+                if let Some(view_state) = self.views.get(&id) {
+                    view_state.queryable
+                } else {
+                    false
+                }
+            })),
         );
     }
 
@@ -2538,8 +2537,6 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 /// Per-view state.
 #[derive(Debug)]
 pub struct ViewState {
-    /// Only views, not sources, on which the view depends
-    uses_views: Vec<GlobalId>,
     queryable: bool,
     /// keys of default index
     default_idx: Option<(GlobalId, Vec<ScalarExpr>)>,
@@ -2551,10 +2548,9 @@ pub struct ViewState {
 }
 
 impl ViewState {
-    fn new(queryable: bool, uses_views: Vec<GlobalId>) -> Self {
+    fn new(queryable: bool) -> Self {
         ViewState {
             queryable,
-            uses_views,
             default_idx: None,
             primary_idxes: BTreeMap::new(),
             //secondary_idxes: BTreeMap::new(),
