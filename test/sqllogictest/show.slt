@@ -170,10 +170,10 @@ SHOW VIEWS WHERE "VIEWS" = 'u'
 query T
 SHOW SOURCES
 ----
-xyz
 
 statement error supported
 SHOW SOURCES WHERE "SOURCES" = 'u'
+----
 
 # SHOW OBJECTS
 

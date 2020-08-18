@@ -203,12 +203,9 @@ SOURCES                              TYPE   MATERIALIZED
 --------------------------------------------------------
 mz_arrangement_sharing               SYSTEM true
 mz_arrangement_sizes                 SYSTEM true
-mz_avro_ocf_sinks                    SYSTEM true
-mz_catalog_names                     SYSTEM true
 mz_dataflow_channels                 SYSTEM true
 mz_dataflow_operator_addresses       SYSTEM true
 mz_dataflow_operators                SYSTEM true
-mz_kafka_sinks                       SYSTEM true
 mz_materialization_dependencies      SYSTEM true
 mz_materializations                  SYSTEM true
 mz_peek_active                       SYSTEM true
@@ -216,9 +213,16 @@ mz_peek_durations                    SYSTEM true
 mz_scheduling_elapsed                SYSTEM true
 mz_scheduling_histogram              SYSTEM true
 mz_scheduling_parks                  SYSTEM true
-mz_view_foreign_keys                 SYSTEM true
-mz_view_keys                         SYSTEM true
 mz_worker_materialization_frontiers  SYSTEM true
+
+> SHOW FULL TABLES FROM mz_catalog
+TABLES                TYPE
+----------------------------
+mz_avro_ocf_sinks     SYSTEM
+mz_catalog_names      SYSTEM
+mz_kafka_sinks        SYSTEM
+mz_view_foreign_keys  SYSTEM
+mz_view_keys          SYSTEM
 
 > SHOW FULL VIEWS FROM mz_catalog
 VIEWS                             TYPE   QUERYABLE MATERIALIZED

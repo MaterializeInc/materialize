@@ -33,7 +33,6 @@ t
 > SHOW SOURCES;
 SOURCES
 -------
-t
 
 > SHOW INDEXES FROM t;
 Source_or_view        Key_name                          Column_name  Expression  Null   Seq_in_index
@@ -129,7 +128,6 @@ v
 > SHOW SOURCES;
 SOURCES
 -------
-v
 
 > CREATE TABLE t (a int, b text NOT NULL)
 
