@@ -134,7 +134,7 @@ use crate::decode::{decode_avro_values, decode_values};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::{
-    LocalInput, TimestampDataUpdates, TimestampMetadataUpdates, WorkerPersistenceData,
+    LocalInput, PersistenceMessage, TimestampDataUpdates, TimestampMetadataUpdates,
 };
 use crate::sink;
 use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
@@ -166,7 +166,7 @@ pub struct RenderState {
     /// associated state.
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
     /// Sender to give data to be persisted.
-    pub persistence_tx: Option<comm::mpsc::Sender<WorkerPersistenceData>>,
+    pub persistence_tx: Option<comm::mpsc::Sender<PersistenceMessage>>,
 }
 
 pub fn build_dataflow<A: Allocate>(

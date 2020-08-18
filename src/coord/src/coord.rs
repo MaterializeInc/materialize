@@ -22,6 +22,7 @@ use std::convert::TryInto;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -29,11 +30,14 @@ use anyhow::{bail, Context};
 use differential_dataflow::lattice::Lattice;
 use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
-use futures::sink::SinkExt;
+use futures::sink::{Sink, SinkExt};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 
-use dataflow::{PersistedFileMetadata, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
+use dataflow::{
+    PersistedFileMetadata, PersistenceMessage, SequencedCommand, WorkerFeedback,
+    WorkerFeedbackWithMeta,
+};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, ExternalSourceConnector, IndexDesc, KafkaSinkConnector,
@@ -62,7 +66,7 @@ use crate::catalog::builtin::{
     MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
-use crate::persistence::{PersistenceConfig, PersistenceMetadata, Persister};
+use crate::persistence::{PersistenceConfig, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -139,7 +143,7 @@ where
     persister: Option<Persister>,
     // Channel to communicate source status updates and shutdown notifications to the persister
     // thread.
-    persistence_metadata_tx: Option<std::sync::mpsc::Sender<PersistenceMetadata>>,
+    persistence_tx: Option<Pin<Box<dyn Sink<PersistenceMessage, Error = comm::Error> + Send>>>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -209,25 +213,19 @@ where
             );
         }
 
-        let (persister, persistence_metadata_tx) =
-            if let Some(persistence_config) = config.persistence {
-                let (persistence_tx, persistence_rx) = config.switchboard.mpsc();
-                let (persistence_metadata_tx, persistence_metadata_rx) = std::sync::mpsc::channel();
-                broadcast(
-                    &mut broadcast_tx,
-                    SequencedCommand::EnablePersistence(persistence_tx),
-                );
-                (
-                    Some(Persister::new(
-                        persistence_rx,
-                        persistence_metadata_rx,
-                        persistence_config,
-                    )),
-                    Some(persistence_metadata_tx),
-                )
-            } else {
-                (None, None)
-            };
+        let (persister, persistence_tx) = if let Some(persistence_config) = config.persistence {
+            let (persistence_tx, persistence_rx) = config.switchboard.mpsc();
+            broadcast(
+                &mut broadcast_tx,
+                SequencedCommand::EnablePersistence(persistence_tx.clone()),
+            );
+            (
+                Some(Persister::new(persistence_rx, persistence_config)),
+                Some(block_on(persistence_tx.connect()).expect("failed to connect persistence tx")),
+            )
+        } else {
+            (None, None)
+        };
 
         let mut coord = Self {
             switchboard: config.switchboard,
@@ -247,7 +245,7 @@ where
             logical_compaction_window_ms,
             feedback_rx: Some(rx),
             persister,
-            persistence_metadata_tx,
+            persistence_tx,
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,
@@ -652,10 +650,9 @@ where
                 Message::Shutdown => {
                     ts_tx.send(TimestampMessage::Shutdown).unwrap();
 
-                    if let Some(persistence_metadata_tx) = &self.persistence_metadata_tx {
-                        persistence_metadata_tx
-                            .send(PersistenceMetadata::Shutdown)
-                            .unwrap();
+                    if let Some(persistence_tx) = &mut self.persistence_tx {
+                        block_on(persistence_tx.send(PersistenceMessage::Shutdown))
+                            .expect("failed to send shutdown message to persistence thread");
                     }
                     broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown);
                     break;
@@ -1430,10 +1427,9 @@ where
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => {
                 for id in items.iter() {
-                    if let Some(persistence_metadata_tx) = &self.persistence_metadata_tx {
-                        persistence_metadata_tx
-                            .send(PersistenceMetadata::DropSource(*id))
-                            .expect("Failed to send DROP SOURCE notice to persister");
+                    if let Some(persistence_tx) = &mut self.persistence_tx {
+                        block_on(persistence_tx.send(PersistenceMessage::DropSource(*id)))
+                            .expect("failed to send DROP SOURCE to persistence thread");
                     }
                 }
                 ExecuteResponse::DroppedSource
@@ -2317,11 +2313,9 @@ where
     ) {
         if let SourceConnector::External { connector, .. } = &source_connector {
             if connector.persistence_enabled() {
-                if let Some(persistence_metadata_tx) = &self.persistence_metadata_tx {
-                    persistence_metadata_tx
-                        .send(PersistenceMetadata::AddSource(id))
-                        .expect("Failed to send CREATE SOURCE message to persister");
-
+                if let Some(persistence_tx) = &mut self.persistence_tx {
+                    block_on(persistence_tx.send(PersistenceMessage::AddSource(id)))
+                        .expect("failed to send CREATE SOURCE notification to persistence thread");
                     // TODO(jjaffray): fix this to make it work for materialized sources
                     self.update_item(id, |item| match item {
                         CatalogItem::Source(mut source) => {

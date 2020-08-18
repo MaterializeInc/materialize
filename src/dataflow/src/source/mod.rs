@@ -47,8 +47,8 @@ use timely::Data;
 use super::source::util::source;
 use crate::operator::StreamExt;
 use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-    WorkerPersistenceData,
+    PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
+    TimestampMetadataUpdates,
 };
 
 mod file;
@@ -96,7 +96,7 @@ pub struct SourceConfig<'a, G> {
     pub persisted_files: Vec<PathBuf>,
 }
 
-type PersistenceSender = Pin<Box<dyn Sink<WorkerPersistenceData, Error = comm::Error> + Send>>;
+type PersistenceSender = Pin<Box<dyn Sink<PersistenceMessage, Error = comm::Error> + Send>>;
 
 #[derive(Clone, Serialize, Deserialize)]
 /// A record produced by a source
