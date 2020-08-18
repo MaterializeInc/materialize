@@ -192,6 +192,12 @@ pub struct WorkerPersistenceData {
 pub enum PersistenceMessage {
     /// Data to be persisted (sent from dataflow workers)
     Data(WorkerPersistenceData),
+    /// Add source to persist
+    AddSource(GlobalId),
+    /// Drop source to persist
+    DropSource(GlobalId),
+    /// Shut down persistence thread
+    Shutdown,
 }
 
 /// Responses the worker can provide back to the coordinator.

@@ -190,87 +190,28 @@ impl Source {
     }
 }
 
-#[derive(Debug)]
-pub enum PersistenceMetadata {
-    AddSource(GlobalId),
-    DropSource(GlobalId),
-    Shutdown,
-}
-
 pub struct Persister {
-    data_rx: comm::mpsc::Receiver<PersistenceMessage>,
-    metadata_rx: std::sync::mpsc::Receiver<PersistenceMetadata>,
+    rx: comm::mpsc::Receiver<PersistenceMessage>,
     sources: HashMap<GlobalId, Source>,
     config: PersistenceConfig,
 }
 
 impl Persister {
-    pub fn new(
-        data_rx: comm::mpsc::Receiver<PersistenceMessage>,
-        metadata_rx: std::sync::mpsc::Receiver<PersistenceMetadata>,
-        config: PersistenceConfig,
-    ) -> Self {
+    pub fn new(rx: comm::mpsc::Receiver<PersistenceMessage>, config: PersistenceConfig) -> Self {
         Persister {
-            data_rx,
-            metadata_rx,
+            rx,
             sources: HashMap::new(),
             config,
         }
     }
 
     async fn update_persistence(&mut self) -> Result<bool, anyhow::Error> {
-        while let Ok(metadata) = self.metadata_rx.try_recv() {
-            match metadata {
-                PersistenceMetadata::AddSource(id) => {
-                    // Check if we already have a source
-                    if self.sources.contains_key(&id) {
-                        error!(
-                            "Received signal to enable persistence for {} but it is already persisted. Ignoring.",
-                            id
-                        );
-                        continue;
-                    }
-
-                    // Create a new subdirectory to store this source's data.
-                    let mut source_path = self.config.path.clone();
-                    source_path.push(format!("{}/", id));
-                    fs::create_dir_all(&source_path).with_context(|| {
-                        anyhow!(
-                            "trying to create persistence directory: {:#?} for source: {}",
-                            source_path,
-                            id
-                        )
-                    })?;
-
-                    let source = Source::new(id, source_path);
-                    self.sources.insert(id, source);
-                    info!("Enabled persistence for source: {}", id);
-                }
-                PersistenceMetadata::DropSource(id) => {
-                    if !self.sources.contains_key(&id) {
-                        // This will actually happen fairly often because the
-                        // coordinator doesn't see which sources had persistence
-                        // enabled on delete, so notifies the persistence thread
-                        // for all drops.
-                        trace!("Received signal to disable persistence for {} but it is not persisted. Ignoring.", id);
-                        continue;
-                    }
-
-                    self.sources.remove(&id);
-                    info!("Disabled persistence for source: {}", id);
-                }
-                PersistenceMetadata::Shutdown => {
-                    return Ok(true);
-                }
-            };
-        }
-
         // We need to bound the amount of time spent reading from the data channel to ensure we
         // don't neglect our other tasks.
         // TODO(rkhaitan): rework this loop to select from a timer and the channel(s).
         let timer = Instant::now();
         loop {
-            match tokio::time::timeout(Duration::from_millis(5), self.data_rx.next()).await {
+            match tokio::time::timeout(Duration::from_millis(5), self.rx.next()).await {
                 Ok(None) => break,
                 Ok(Some(Ok(data))) => {
                     match data {
@@ -295,6 +236,47 @@ impl Persister {
                                     data.payload,
                                 );
                             }
+                        }
+                        PersistenceMessage::AddSource(id) => {
+                            // Check if we already have a source
+                            if self.sources.contains_key(&id) {
+                                error!(
+                            "Received signal to enable persistence for {} but it is already persisted. Ignoring.",
+                            id
+                        );
+                                continue;
+                            }
+
+                            // Create a new subdirectory to store this source's data.
+                            let mut source_path = self.config.path.clone();
+                            source_path.push(format!("{}/", id));
+                            fs::create_dir_all(&source_path).with_context(|| {
+                                anyhow!(
+                                    "trying to create persistence directory: {:#?} for source: {}",
+                                    source_path,
+                                    id
+                                )
+                            })?;
+
+                            let source = Source::new(id, source_path);
+                            self.sources.insert(id, source);
+                            info!("Enabled persistence for source: {}", id);
+                        }
+                        PersistenceMessage::DropSource(id) => {
+                            if !self.sources.contains_key(&id) {
+                                // This will actually happen fairly often because the
+                                // coordinator doesn't see which sources had persistence
+                                // enabled on delete, so notifies the persistence thread
+                                // for all drops.
+                                trace!("Received signal to disable persistence for {} but it is not persisted. Ignoring.", id);
+                                continue;
+                            }
+
+                            self.sources.remove(&id);
+                            info!("Disabled persistence for source: {}", id);
+                        }
+                        PersistenceMessage::Shutdown => {
+                            return Ok(true);
                         }
                     }
                 }
