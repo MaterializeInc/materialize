@@ -34,7 +34,6 @@ use anyhow::{anyhow, bail};
 use chrono::Utc;
 use tokio_postgres::types::FromSql;
 
-use dataflow_types::SourceConnector;
 use pgrepr::Jsonb;
 use repr::adt::decimal::Significand;
 use repr::{Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
@@ -45,7 +44,7 @@ use sql::ast::{
 use sql::catalog::Catalog;
 use sql::names::FullName;
 use sql::normalize;
-use sql::plan::{scalar_type_from_sql, MutationKind, Plan, PlanContext, Source, StatementContext};
+use sql::plan::{scalar_type_from_sql, MutationKind, Plan, PlanContext, StatementContext, Table};
 
 pub struct Postgres {
     client: tokio_postgres::Client,
@@ -213,14 +212,13 @@ END $$;
                 self.table_types
                     .insert(name.clone(), (sql_types, desc.clone()));
 
-                let source = Source {
+                let table = Table {
                     create_sql: stmt.to_string(),
-                    connector: SourceConnector::Local,
                     desc,
                 };
                 Plan::CreateTable {
                     name,
-                    source,
+                    table,
                     if_not_exists: *if_not_exists,
                 }
             }

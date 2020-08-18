@@ -168,12 +168,14 @@ statement error supported
 SHOW VIEWS WHERE "VIEWS" = 'u'
 
 query T
-SHOW SOURCES
+SHOW TABLES
 ----
 xyz
 
-statement error supported
-SHOW SOURCES WHERE "SOURCES" = 'u'
+query T
+SHOW TABLES WHERE "TABLES" = 'xyz'
+----
+xyz
 
 # SHOW OBJECTS
 

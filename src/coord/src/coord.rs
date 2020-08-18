@@ -268,6 +268,9 @@ where
 
         for (id, name, item) in &catalog_entries {
             match item {
+                CatalogItem::Table(_) => {
+                    coord.views.insert(*id, ViewState::new(false, vec![]));
+                }
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
                 //about how it was built. If we start building multiple sinks and/or indexes
@@ -732,10 +735,10 @@ where
 
             Plan::CreateTable {
                 name,
-                source,
+                table,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_table(pcx, name, source, if_not_exists),
+                self.sequence_create_table(pcx, name, table, if_not_exists),
                 session,
             ),
 
@@ -946,30 +949,25 @@ where
         &mut self,
         pcx: PlanContext,
         name: FullName,
-        source: sql::plan::Source,
+        table: sql::plan::Table,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        let source_id = self.catalog.allocate_id()?;
-        let source = catalog::Source {
-            create_sql: source.create_sql,
+        let table_id = self.catalog.allocate_id()?;
+        let table = catalog::Table {
+            create_sql: table.create_sql,
             plan_cx: pcx,
-            connector: dataflow_types::SourceConnector::Local,
-            desc: source.desc,
+            desc: table.desc,
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
         index_name.item += "_primary_idx";
-        let index = auto_generate_primary_idx(
-            index_name.item.clone(),
-            name.clone(),
-            source_id,
-            &source.desc,
-        );
+        let index =
+            auto_generate_primary_idx(index_name.item.clone(), name.clone(), table_id, &table.desc);
         match self.catalog_transact(vec![
             catalog::Op::CreateItem {
-                id: source_id,
+                id: table_id,
                 name: name.clone(),
-                item: CatalogItem::Source(source.clone()),
+                item: CatalogItem::Table(table.clone()),
             },
             catalog::Op::CreateItem {
                 id: index_id,
@@ -978,10 +976,10 @@ where
             },
         ]) {
             Ok(_) => {
-                self.views.insert(source_id, ViewState::new(false, vec![]));
+                self.views.insert(table_id, ViewState::new(false, vec![]));
                 let mut dataflow = DataflowDesc::new(name.to_string());
-                self.import_source_or_view(&source_id, &mut dataflow);
-                self.build_arrangement(&index_id, index, source.desc.typ().clone(), dataflow);
+                self.import_source_or_view(&table_id, &mut dataflow);
+                self.build_arrangement(&index_id, index, table.desc.typ().clone(), dataflow);
                 self.tables.insert(index_id);
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
@@ -1697,7 +1695,7 @@ where
                 catalog::OpStatus::DroppedItem(entry) => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
                     match entry.item() {
-                        CatalogItem::Source(_) => {
+                        CatalogItem::Table(_) | CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
                             views_to_drop.push(entry.id());
                         }
@@ -1785,22 +1783,17 @@ where
                 on_id: *id,
                 keys: keys.to_vec(),
             };
-            match self.catalog.get_by_id(id).item() {
-                CatalogItem::View(view) => {
-                    dataflow.add_index_import(*index_id, index_desc, view.desc.typ().clone(), *id);
-                }
-                CatalogItem::Source(source) => {
-                    dataflow.add_index_import(
-                        *index_id,
-                        index_desc,
-                        source.desc.typ().clone(),
-                        *id,
-                    );
-                }
-                _ => unreachable!(),
-            }
+            let desc = self
+                .catalog
+                .get_by_id(id)
+                .desc()
+                .expect("indexes can only be built on items with descs");
+            dataflow.add_index_import(*index_id, index_desc, desc.typ().clone(), *id);
         } else {
             match self.catalog.get_by_id(id).item() {
+                CatalogItem::Table(table) => {
+                    dataflow.add_source_import(*id, SourceConnector::Local, table.desc.clone());
+                }
                 CatalogItem::Source(source) => {
                     dataflow.add_source_import(*id, source.connector.clone(), source.desc.clone());
                 }
@@ -2552,6 +2545,7 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 }
 
 /// Per-view state.
+#[derive(Debug)]
 pub struct ViewState {
     /// Only views, not sources, on which the view depends
     uses_views: Vec<GlobalId>,

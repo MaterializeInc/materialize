@@ -82,7 +82,7 @@ pub enum Plan {
     },
     CreateTable {
         name: FullName,
-        source: Source,
+        table: Table,
         if_not_exists: bool,
     },
     CreateView {
@@ -160,6 +160,12 @@ pub enum Plan {
         to_name: String,
         object_type: ObjectType,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct Table {
+    pub create_sql: String,
+    pub desc: RelationDesc,
 }
 
 #[derive(Clone, Debug)]

@@ -176,6 +176,8 @@ pub trait CatalogItem {
 /// The type of a [`CatalogItem`].
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum CatalogItemType {
+    /// A table.
+    Table,
     /// A source.
     Source,
     /// A sink.
@@ -189,6 +191,7 @@ pub enum CatalogItemType {
 impl fmt::Display for CatalogItemType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            CatalogItemType::Table => f.write_str("table"),
             CatalogItemType::Source => f.write_str("source"),
             CatalogItemType::Sink => f.write_str("sink"),
             CatalogItemType::View => f.write_str("view"),

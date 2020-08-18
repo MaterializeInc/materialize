@@ -124,10 +124,18 @@ pub struct CatalogEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CatalogItem {
+    Table(Table),
     Source(Source),
     View(View),
     Sink(Sink),
     Index(Index),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Table {
+    pub create_sql: String,
+    pub plan_cx: PlanContext,
+    pub desc: RelationDesc,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +183,7 @@ impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
     pub fn type_string(&self) -> &'static str {
         match self {
+            CatalogItem::Table(_) => "table",
             CatalogItem::Source(_) => "source",
             CatalogItem::Sink(_) => "sink",
             CatalogItem::View(_) => "view",
@@ -186,6 +195,7 @@ impl CatalogItem {
     /// upon.
     pub fn uses(&self) -> Vec<GlobalId> {
         match self {
+            CatalogItem::Table(_) => vec![],
             CatalogItem::Source(_) => vec![],
             CatalogItem::Sink(sink) => vec![sink.from],
             CatalogItem::View(view) => {
@@ -201,7 +211,10 @@ impl CatalogItem {
     /// or if it's actually a real item.
     pub fn is_placeholder(&self) -> bool {
         match self {
-            CatalogItem::Source(_) | CatalogItem::View(_) | CatalogItem::Index(_) => false,
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Index(_) => false,
             CatalogItem::Sink(s) => match s.connector {
                 SinkConnectorState::Pending(_) => true,
                 SinkConnectorState::Ready(_) => false,
@@ -243,25 +256,30 @@ impl CatalogItem {
         };
 
         match self {
-            CatalogItem::Index(i) => {
+            CatalogItem::Table(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
-                Ok(CatalogItem::Index(i))
-            }
-            CatalogItem::Sink(i) => {
-                let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
-                Ok(CatalogItem::Sink(i))
+                Ok(CatalogItem::Table(i))
             }
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Source(i))
             }
+            CatalogItem::Sink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Sink(i))
+            }
             CatalogItem::View(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::View(i))
+            }
+            CatalogItem::Index(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Index(i))
             }
         }
     }
@@ -271,6 +289,7 @@ impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
     pub fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
         match &self.item {
+            CatalogItem::Table(tbl) => Ok(&tbl.desc),
             CatalogItem::Source(src) => Ok(&src.desc),
             CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(
                 self.name.to_string(),
@@ -413,10 +432,9 @@ impl Catalog {
                     catalog.insert_item(
                         table.id,
                         name.clone(),
-                        CatalogItem::Source(Source {
+                        CatalogItem::Table(Table {
                             create_sql: "TODO".to_string(),
                             plan_cx: PlanContext::default(),
-                            connector: dataflow_types::SourceConnector::Local,
                             desc: table.desc.clone(),
                         }),
                     );
@@ -1136,6 +1154,10 @@ impl Catalog {
 
     fn serialize_item(&self, item: &CatalogItem) -> Vec<u8> {
         let item = match item {
+            CatalogItem::Table(table) => SerializedCatalogItem::V1 {
+                create_sql: table.create_sql.clone(),
+                eval_env: Some(table.plan_cx.clone().into()),
+            },
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
                 eval_env: Some(source.plan_cx.clone().into()),
@@ -1183,14 +1205,17 @@ impl Catalog {
         };
         let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &params)?;
         Ok(match plan {
-            Plan::CreateSource { source, .. } | Plan::CreateTable { source, .. } => {
-                CatalogItem::Source(Source {
-                    create_sql: source.create_sql,
-                    plan_cx: pcx,
-                    connector: source.connector,
-                    desc: source.desc,
-                })
-            }
+            Plan::CreateTable { table, .. } => CatalogItem::Table(Table {
+                create_sql: table.create_sql,
+                plan_cx: pcx,
+                desc: table.desc,
+            }),
+            Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
+                create_sql: source.create_sql,
+                plan_cx: pcx,
+                connector: source.connector,
+                desc: source.desc,
+            }),
             Plan::CreateView { view, .. } => {
                 let mut optimizer = Optimizer::default();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
@@ -1432,6 +1457,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn create_sql(&self) -> &str {
         match self.item() {
+            CatalogItem::Table(Table { create_sql, .. }) => create_sql,
             CatalogItem::Source(Source { create_sql, .. }) => create_sql,
             CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
             CatalogItem::View(View { create_sql, .. }) => create_sql,
@@ -1441,6 +1467,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn plan_cx(&self) -> &PlanContext {
         match self.item() {
+            CatalogItem::Table(Table { plan_cx, .. }) => plan_cx,
             CatalogItem::Source(Source { plan_cx, .. }) => plan_cx,
             CatalogItem::Sink(Sink { plan_cx, .. }) => plan_cx,
             CatalogItem::View(View { plan_cx, .. }) => plan_cx,
@@ -1450,6 +1477,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn item_type(&self) -> sql::catalog::CatalogItemType {
         match self.item() {
+            CatalogItem::Table(_) => sql::catalog::CatalogItemType::Table,
             CatalogItem::Source(_) => sql::catalog::CatalogItemType::Source,
             CatalogItem::Sink(_) => sql::catalog::CatalogItemType::Sink,
             CatalogItem::View(_) => sql::catalog::CatalogItemType::View,
