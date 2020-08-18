@@ -151,7 +151,7 @@ pub enum SequencedCommand {
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
     /// Request that persistence data is streamed to the provided channel.
-    EnablePersistence(comm::mpsc::Sender<WorkerPersistenceData>),
+    EnablePersistence(comm::mpsc::Sender<PersistenceMessage>),
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
@@ -168,9 +168,9 @@ pub struct WorkerFeedbackWithMeta {
     pub message: WorkerFeedback,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 /// Source data that gets sent to the persistence thread to place in persistent storage.
 /// TODO currently fairly Kafka input-centric.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkerPersistenceData {
     /// Global Id of the Source whose data is being persisted.
     pub source_id: GlobalId,
@@ -184,6 +184,14 @@ pub struct WorkerPersistenceData {
     pub key: Vec<u8>,
     /// The data of the message.
     pub payload: Vec<u8>,
+}
+
+/// All data and metadata messages that can be sent by dataflow workers or coordinator
+/// to the persister thread.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum PersistenceMessage {
+    /// Data to be persisted (sent from dataflow workers)
+    Data(WorkerPersistenceData),
 }
 
 /// Responses the worker can provide back to the coordinator.

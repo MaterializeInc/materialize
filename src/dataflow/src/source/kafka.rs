@@ -31,8 +31,8 @@ use kafka_util::KafkaAddr;
 use log::{error, info, log_enabled, warn};
 
 use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-    WorkerPersistenceData,
+    PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
+    TimestampMetadataUpdates, WorkerPersistenceData,
 };
 use crate::source::{
     ConsistencyInfo, PartitionMetrics, PersistenceSender, SourceConstructor, SourceInfo,
@@ -353,14 +353,14 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             let key = message.key.clone().unwrap_or_default();
             let payload = message.payload.clone().unwrap_or_default();
 
-            let persistence_data = WorkerPersistenceData {
+            let persistence_data = PersistenceMessage::Data(WorkerPersistenceData {
                 source_id: self.source_global_id,
                 partition: partition_id,
                 offset: message.offset.offset,
                 timestamp,
                 key,
                 payload,
-            };
+            });
 
             let mut connector = persistence_tx.as_mut();
 

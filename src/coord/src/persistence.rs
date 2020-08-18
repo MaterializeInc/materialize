@@ -10,7 +10,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context};
@@ -18,7 +17,7 @@ use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::StreamExt;
 use log::{error, info, trace};
 
-use dataflow::WorkerPersistenceData;
+use dataflow::PersistenceMessage;
 use dataflow_types::Timestamp;
 use expr::GlobalId;
 use repr::{Datum, Row};
@@ -199,7 +198,7 @@ pub enum PersistenceMetadata {
 }
 
 pub struct Persister {
-    data_rx: comm::mpsc::Receiver<WorkerPersistenceData>,
+    data_rx: comm::mpsc::Receiver<PersistenceMessage>,
     metadata_rx: std::sync::mpsc::Receiver<PersistenceMetadata>,
     sources: HashMap<GlobalId, Source>,
     config: PersistenceConfig,
@@ -207,7 +206,7 @@ pub struct Persister {
 
 impl Persister {
     pub fn new(
-        data_rx: comm::mpsc::Receiver<WorkerPersistenceData>,
+        data_rx: comm::mpsc::Receiver<PersistenceMessage>,
         metadata_rx: std::sync::mpsc::Receiver<PersistenceMetadata>,
         config: PersistenceConfig,
     ) -> Self {
@@ -274,25 +273,29 @@ impl Persister {
             match tokio::time::timeout(Duration::from_millis(5), self.data_rx.next()).await {
                 Ok(None) => break,
                 Ok(Some(Ok(data))) => {
-                    if !self.sources.contains_key(&data.source_id) {
-                        // TODO(rkhaitan): dropping here is not actually a correct thing to do, as
-                        // there may be a race between when we see the metadata informing
-                        // us to track this source vs when we see the data itself.
-                        error!(
+                    match data {
+                        PersistenceMessage::Data(data) => {
+                            if !self.sources.contains_key(&data.source_id) {
+                                // TODO(rkhaitan): dropping here is not actually a correct thing to do, as
+                                // there may be a race between when we see the metadata informing
+                                // us to track this source vs when we see the data itself.
+                                error!(
                             "Received data for source {} that is not currently persisted. Ignoring.",
                             data.source_id
                         );
-                        continue;
-                    }
+                                continue;
+                            }
 
-                    if let Some(source) = self.sources.get_mut(&data.source_id) {
-                        source.insert_record(
-                            data.partition,
-                            data.offset,
-                            data.timestamp,
-                            data.key,
-                            data.payload,
-                        );
+                            if let Some(source) = self.sources.get_mut(&data.source_id) {
+                                source.insert_record(
+                                    data.partition,
+                                    data.offset,
+                                    data.timestamp,
+                                    data.key,
+                                    data.payload,
+                                );
+                            }
+                        }
                     }
                 }
                 Ok(Some(Err(e))) => {
@@ -320,7 +323,6 @@ impl Persister {
               self.config.flush_min_records,
               self.config.path.display());
         loop {
-            thread::sleep(self.config.flush_interval);
             trace!("Persistence thread checking for updates.");
             let ret = self.update_persistence().await;
 
