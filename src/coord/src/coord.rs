@@ -2238,14 +2238,8 @@ where
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-        let mut uses_ids = Vec::new();
-        source.global_uses(&mut uses_ids);
-
-        let need_to_determine = when == PeekWhen::Immediately;
-
-        uses_ids.sort();
-        uses_ids.dedup();
-        if need_to_determine
+        let mut uses_ids = source.global_uses();
+        if when == PeekWhen::Immediately
             && uses_ids.iter().any(|id| {
                 if let Some(view_state) = self.views.get(id) {
                     !view_state.queryable
@@ -2419,10 +2413,7 @@ where
     /// Initializes managed state and logs the insertion (and removal of any existing view).
     fn insert_view(&mut self, view_id: GlobalId, view: &catalog::View) {
         self.views.remove(&view_id);
-        let mut uses = Vec::new();
-        view.optimized_expr.as_ref().global_uses(&mut uses);
-        uses.sort();
-        uses.dedup();
+        let uses = view.optimized_expr.as_ref().global_uses();
         self.views.insert(
             view_id,
             ViewState::new(

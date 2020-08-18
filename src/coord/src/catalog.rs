@@ -188,11 +188,7 @@ impl CatalogItem {
         match self {
             CatalogItem::Source(_) => vec![],
             CatalogItem::Sink(sink) => vec![sink.from],
-            CatalogItem::View(view) => {
-                let mut out = Vec::new();
-                view.optimized_expr.as_ref().global_uses(&mut out);
-                out
-            }
+            CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
             CatalogItem::Index(idx) => vec![idx.on],
         }
     }
