@@ -708,15 +708,30 @@ impl RelationExpr {
         }
     }
 
+    /// Returns the distinct global identifiers on which this expression
+    /// depends.
+    ///
+    /// See [`Relationexpr::global_uses_into`] to reuse an existing vector.
+    pub fn global_uses(&self) -> Vec<GlobalId> {
+        let mut out = vec![];
+        self.global_uses_into(&mut out);
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// Appends global identifiers on which this expression depends to `out`.
-    pub fn global_uses(&self, out: &mut Vec<GlobalId>) {
+    ///
+    /// Unlike [`RelationExpr::global_uses`], this method does not deduplicate
+    /// the global identifiers.
+    pub fn global_uses_into(&self, out: &mut Vec<GlobalId>) {
         if let RelationExpr::Get {
             id: Id::Global(id), ..
         } = self
         {
             out.push(*id);
         }
-        self.visit1(|e| e.global_uses(out))
+        self.visit1(|expr| expr.global_uses_into(out))
     }
 
     /// Applies a fallible `f` to each child `RelationExpr`.
