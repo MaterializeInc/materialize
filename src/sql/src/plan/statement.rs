@@ -28,7 +28,7 @@ use dataflow_types::{
     KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding,
     RegexEncoding, SinkConnectorBuilder, SourceConnector,
 };
-use expr::{like_pattern, GlobalId, RowSetFinishing};
+use expr::{GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
 use repr::{strconv, ColumnName};
@@ -518,40 +518,39 @@ fn handle_show_objects(
                 .list_items(&scx.resolve_default_database()?, "public")
         };
 
-        let filtered_items = items.filter(|entry| object_type == entry.item_type());
+        let rows = items
+            .filter(|entry| object_type == entry.item_type())
+            .filter_map(|entry| {
+                let name = &entry.name().item;
+                let class = classify_id(entry.id());
+                match object_type {
+                    ObjectType::View | ObjectType::Source => {
+                        let mut row = vec![Datum::from(arena.push_string(name.to_string()))];
+                        if full {
+                            row.push(Datum::from(arena.push_string(class.to_string())));
+                        }
+                        if full && object_type == ObjectType::View {
+                            row.push(Datum::from(scx.catalog.is_queryable(entry.id())));
+                        }
+                        if full && !materialized {
+                            row.push(Datum::from(scx.catalog.is_materialized(entry.id())));
+                        }
+                        if !materialized || scx.catalog.is_materialized(entry.id()) {
+                            Some(row)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => Some(make_row(name, class)),
+                }
+            });
 
-        if object_type == ObjectType::View || object_type == ObjectType::Source {
-            // TODO(justin): we can't handle SHOW ... WHERE here yet because the coordinator adds
-            // extra columns to this result that we don't have access to here yet. This could be
-            // fixed by passing down this extra catalog info somehow.
-            let like_regex = match filter {
-                Some(ShowStatementFilter::Like(pattern)) => like_pattern::build_regex(&pattern)?,
-                Some(ShowStatementFilter::Where(_)) => unsupported!("SHOW ... WHERE"),
-                None => like_pattern::build_regex("%")?,
-            };
-
-            let filtered_items =
-                filtered_items.filter(|entry| like_regex.is_match(&entry.name().item));
-            Ok(Plan::ShowViews {
-                ids: filtered_items
-                    .map(|entry| (entry.name().item.clone(), entry.id()))
-                    .collect::<Vec<_>>(),
-                full,
-                show_queryable: object_type == ObjectType::View,
-                limit_materialized: materialized,
-            })
-        } else {
-            let rows = filtered_items
-                .map(|entry| make_row(&entry.name().item, classify_id(entry.id())))
-                .collect::<Vec<_>>();
-
-            finish_show_where(
-                scx,
-                filter,
-                rows,
-                &make_show_objects_desc(object_type, materialized, full),
-            )
-        }
+        finish_show_where(
+            scx,
+            filter,
+            rows.collect(),
+            &make_show_objects_desc(object_type, materialized, full),
+        )
     }
 }
 

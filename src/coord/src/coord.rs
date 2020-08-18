@@ -269,7 +269,7 @@ where
         for (id, name, item) in &catalog_entries {
             match item {
                 CatalogItem::Table(_) => {
-                    coord.views.insert(*id, ViewState::new(false));
+                    coord.views.insert(*id, ViewState::new());
                 }
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
@@ -278,10 +278,10 @@ where
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
                     coord.handle_source_connector_persistence(*id, &source.connector);
-                    coord.views.insert(*id, ViewState::new(false));
+                    coord.views.insert(*id, ViewState::new());
                 }
-                CatalogItem::View(view) => {
-                    coord.insert_view(*id, &view);
+                CatalogItem::View(_) => {
+                    coord.views.insert(*id, ViewState::new());
                 }
                 CatalogItem::Sink(sink) => {
                     let builder = match &sink.connector {
@@ -888,16 +888,6 @@ where
 
             Plan::Insert { id, values } => tx.send(self.sequence_insert(id, values), session),
 
-            Plan::ShowViews {
-                ids,
-                full,
-                show_queryable,
-                limit_materialized,
-            } => tx.send(
-                self.sequence_show_views(ids, full, show_queryable, limit_materialized),
-                session,
-            ),
-
             Plan::AlterItemRename {
                 id,
                 to_name,
@@ -976,7 +966,7 @@ where
             },
         ]) {
             Ok(_) => {
-                self.views.insert(table_id, ViewState::new(false));
+                self.views.insert(table_id, ViewState::new());
                 let mut dataflow = DataflowDesc::new(name.to_string());
                 self.import_source_or_view(&table_id, &mut dataflow);
                 self.build_arrangement(&index_id, index, table.desc.typ().clone(), dataflow);
@@ -1029,7 +1019,7 @@ where
         };
         match self.catalog_transact(ops) {
             Ok(()) => {
-                self.views.insert(source_id, ViewState::new(false));
+                self.views.insert(source_id, ViewState::new());
                 if materialized {
                     let mut dataflow = DataflowDesc::new(name.to_string());
                     self.import_source_or_view(&source_id, &mut dataflow);
@@ -1179,7 +1169,7 @@ where
         };
         match self.catalog_transact(ops) {
             Ok(()) => {
-                self.insert_view(view_id, &view);
+                self.views.insert(view_id, ViewState::new());
                 if materialize {
                     let mut dataflow = DataflowDesc::new(name.to_string());
                     self.build_view_collection(&view_id, &view, &mut dataflow);
@@ -1607,60 +1597,6 @@ where
         }
     }
 
-    fn sequence_show_views(
-        &mut self,
-        ids: Vec<(String, GlobalId)>,
-        full: bool,
-        show_queryable: bool,
-        limit_materialized: bool,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
-        let view_information = ids
-            .into_iter()
-            .filter_map(|(name, id)| {
-                let class = match id {
-                    GlobalId::System(_) => "SYSTEM",
-                    GlobalId::User(_) => "USER",
-                };
-                if let Some(view_state) = self.views.get(&id) {
-                    if !limit_materialized || view_state.default_idx.is_some() {
-                        Some((
-                            name,
-                            class,
-                            view_state.queryable,
-                            view_state.default_idx.is_some(),
-                        ))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let mut rows = view_information
-            .into_iter()
-            .map({
-                let mut row_packer = RowPacker::new();
-                move |(name, class, queryable, materialized)| {
-                    let mut datums = vec![Datum::from(name.as_str())];
-                    if full {
-                        datums.push(Datum::from(class));
-                        if show_queryable {
-                            datums.push(Datum::from(queryable));
-                        }
-                        if !limit_materialized {
-                            datums.push(Datum::from(materialized));
-                        }
-                    }
-                    row_packer.pack(&datums)
-                }
-            })
-            .collect::<Vec<_>>();
-        rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
-        Ok(send_immediate_rows(rows))
-    }
-
     fn sequence_alter_item_rename(
         &mut self,
         id: Option<GlobalId>,
@@ -2082,10 +2018,6 @@ where
             if self.indexes.remove(&id).is_some() {
                 if let Some(view_state) = self.views.get_mut(&idx.on) {
                     view_state.drop_primary_idx(&idx.keys, id);
-                    if view_state.default_idx.is_none() {
-                        view_state.queryable = false;
-                        self.propagate_queryability(&idx.on);
-                    }
                 }
                 trace_keys.push(id);
             }
@@ -2168,49 +2100,6 @@ where
         }
     }
 
-    fn propagate_queryability(&mut self, id: &GlobalId) {
-        let mut ids_to_propagate = Vec::new();
-        for used_by_id in self.catalog.get_by_id(id).used_by().to_owned() {
-            //if view is not materialized
-            if self.views.contains_key(&used_by_id) && self.views[&used_by_id].default_idx.is_none()
-            {
-                let new_queryability = self
-                    .catalog
-                    .get_by_id(&used_by_id)
-                    .uses()
-                    .iter()
-                    .all(|id| self.views[id].queryable);
-                if let Some(view_state) = self.views.get_mut(&used_by_id) {
-                    // we only need to continue propagating if there is a change in queryability
-                    if view_state.queryable != new_queryability {
-                        ids_to_propagate.push(used_by_id);
-                        view_state.queryable = new_queryability;
-                    }
-                }
-            }
-        }
-        for id in ids_to_propagate {
-            self.propagate_queryability(&id);
-        }
-    }
-
-    fn find_dependent_indexes(&self, id: &GlobalId) -> Vec<GlobalId> {
-        let mut results = Vec::new();
-        let view_state = &self.views[id];
-        if view_state.primary_idxes.is_empty() {
-            for id in self.catalog.get_by_id(id).uses().iter() {
-                results.append(&mut self.find_dependent_indexes(id));
-            }
-        } else {
-            for ids in view_state.primary_idxes.values() {
-                results.extend(ids.clone());
-            }
-        }
-        results.sort();
-        results.dedup();
-        results
-    }
-
     /// A policy for determining the timestamp for a peek.
     ///
     /// The result may be `None` in the case that the `when` policy cannot be satisfied,
@@ -2233,22 +2122,8 @@ where
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-        let mut uses_ids = source.global_uses();
-        if when == PeekWhen::Immediately
-            && uses_ids.iter().any(|id| {
-                if let Some(view_state) = self.views.get(id) {
-                    !view_state.queryable
-                } else {
-                    true
-                }
-            })
-        {
-            bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
-        }
-        uses_ids = uses_ids
-            .into_iter()
-            .flat_map(|id| self.find_dependent_indexes(&id))
-            .collect();
+
+        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&source.global_uses());
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
@@ -2260,12 +2135,15 @@ where
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
-                if uses_ids.iter().any(|id| self.tables.contains(id)) {
+                if !indexes_complete {
+                    bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
+                }
+                if index_ids.iter().any(|id| self.tables.contains(id)) {
                     // If the view depends on any tables, we enforce
                     // linearizability by choosing the latest input time.
                     self.get_read_ts()
                 } else {
-                    let upper = self.indexes.greatest_open_upper(uses_ids.iter().cloned());
+                    let upper = self.indexes.greatest_open_upper(index_ids.iter().cloned());
                     // We peek at the largest element not in advance of `upper`, which
                     // involves a subtraction. If `upper` contains a zero timestamp there
                     // is no "prior" answer, and we do not want to peek at it as it risks
@@ -2274,7 +2152,7 @@ where
                         if *candidate > 0 {
                             candidate.saturating_sub(1)
                         } else {
-                            let unstarted = uses_ids
+                            let unstarted = index_ids
                                 .iter()
                                 .filter(|id| {
                                     self.indexes
@@ -2301,14 +2179,14 @@ where
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
         // and does not depend on the transitive sources.
-        let since = self.indexes.least_valid_since(uses_ids.iter().cloned());
+        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
 
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
         if since.less_equal(&timestamp) {
             Ok(timestamp)
         } else {
-            let invalid = uses_ids
+            let invalid = index_ids
                 .iter()
                 .filter(|id| {
                     !self
@@ -2403,24 +2281,6 @@ where
         }
     }
 
-    /// Inserts a view into the coordinator.
-    ///
-    /// Initializes managed state and logs the insertion (and removal of any existing view).
-    fn insert_view(&mut self, view_id: GlobalId, view: &catalog::View) {
-        self.views.remove(&view_id);
-        let uses = view.optimized_expr.as_ref().global_uses();
-        self.views.insert(
-            view_id,
-            ViewState::new(uses.iter().all(|id| {
-                if let Some(view_state) = self.views.get(&id) {
-                    view_state.queryable
-                } else {
-                    false
-                }
-            })),
-        );
-    }
-
     /// Add an index to a view in the coordinator.
     fn insert_index(
         &mut self,
@@ -2430,10 +2290,6 @@ where
     ) {
         if let Some(viewstate) = self.views.get_mut(&index.on) {
             viewstate.add_primary_idx(&index.keys, id);
-            if !viewstate.queryable {
-                viewstate.queryable = true;
-                self.propagate_queryability(&index.on);
-            }
         } // else the view is temporary
         let index_state = Frontiers::new(self.num_timely_workers, latency_ms);
         self.indexes.insert(id, index_state);
@@ -2537,7 +2393,6 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 /// Per-view state.
 #[derive(Debug)]
 pub struct ViewState {
-    queryable: bool,
     /// keys of default index
     default_idx: Option<(GlobalId, Vec<ScalarExpr>)>,
     // TODO(andiwang): only allow one primary index?
@@ -2548,9 +2403,8 @@ pub struct ViewState {
 }
 
 impl ViewState {
-    fn new(queryable: bool) -> Self {
+    fn new() -> Self {
         ViewState {
-            queryable,
             default_idx: None,
             primary_idxes: BTreeMap::new(),
             //secondary_idxes: BTreeMap::new(),

@@ -59,7 +59,7 @@ pub struct TransformArgs<'a> {
     /// A shared instance of IdGen to allow constructing new Let expressions.
     pub id_gen: &'a mut IdGen,
     /// The indexes accessible.
-    pub indexes: &'a HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+    pub indexes: &'a HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
 }
 
 /// Types capable of transforming relation expressions.
@@ -161,7 +161,7 @@ impl Optimizer {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
     ) -> Result<(), TransformError> {
         let mut id_gen = Default::default();
         for transform in self.transforms.iter() {
@@ -264,7 +264,7 @@ impl Optimizer {
     pub fn optimize(
         &mut self,
         mut relation: RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
     ) -> Result<OptimizedRelationExpr, TransformError> {
         self.transform(&mut relation, indexes)?;
         Ok(expr::OptimizedRelationExpr(relation))

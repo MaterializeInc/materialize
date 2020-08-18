@@ -149,12 +149,6 @@ pub enum Plan {
         id: GlobalId,
         values: ::expr::RelationExpr,
     },
-    ShowViews {
-        ids: Vec<(String, GlobalId)>,
-        full: bool,
-        show_queryable: bool,
-        limit_materialized: bool,
-    },
     AlterItemRename {
         id: Option<GlobalId>,
         to_name: String,

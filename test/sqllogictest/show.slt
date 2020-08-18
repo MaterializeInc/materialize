@@ -164,14 +164,16 @@ SHOW VIEWS LIKE '%u'
 ----
 u
 
-statement error supported
+query T
 SHOW VIEWS WHERE "VIEWS" = 'u'
+----
+u
 
 query T
 SHOW SOURCES
 ----
 
-statement error supported
+query T
 SHOW SOURCES WHERE "SOURCES" = 'u'
 ----
 
