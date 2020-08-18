@@ -53,7 +53,8 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
-    query, scalar_type_from_sql, Index, Params, PeekWhen, Plan, PlanContext, Sink, Source, View,
+    query, scalar_type_from_sql, Index, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table,
+    View,
 };
 use crate::pure::Schema;
 
@@ -372,11 +373,13 @@ fn handle_tail(
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
 
     match entry.item_type() {
-        CatalogItemType::Source | CatalogItemType::View => Ok(Plan::Tail {
-            id: entry.id(),
-            ts,
-            with_snapshot,
-        }),
+        CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
+            Ok(Plan::Tail {
+                id: entry.id(),
+                ts,
+                with_snapshot,
+            })
+        }
         CatalogItemType::Index | CatalogItemType::Sink => bail!(
             "'{}' cannot be tailed because it is a {}",
             from,
@@ -567,6 +570,7 @@ fn handle_show_indexes(
     let from_entry = scx.catalog.get_item(&from_name);
     if from_entry.item_type() != CatalogItemType::View
         && from_entry.item_type() != CatalogItemType::Source
+        && from_entry.item_type() != CatalogItemType::Table
     {
         bail!(
             "cannot show indexes on {} because it is a {}",
@@ -697,13 +701,16 @@ fn handle_show_create_table(
     scx: &StatementContext,
     ShowCreateTableStatement { table_name }: ShowCreateTableStatement,
 ) -> Result<Plan, anyhow::Error> {
-    // Tables are sources, defer to handle_show_create_source().
-    handle_show_create_source(
-        scx,
-        ShowCreateSourceStatement {
-            source_name: table_name,
-        },
-    )
+    let name = scx.resolve_item(table_name)?;
+    let entry = scx.catalog.get_item(&name);
+    if let CatalogItemType::Table = entry.item_type() {
+        Ok(Plan::SendRows(vec![Row::pack(&[
+            Datum::String(&name.to_string()),
+            Datum::String(entry.create_sql()),
+        ])]))
+    } else {
+        bail!("{} is not a table", name);
+    }
 }
 
 fn handle_show_create_sink(
@@ -899,6 +906,7 @@ fn handle_create_index(
 
     if CatalogItemType::View != catalog_entry.item_type()
         && CatalogItemType::Source != catalog_entry.item_type()
+        && CatalogItemType::Table != catalog_entry.item_type()
     {
         bail!(
             "index cannot be created on {} because it is a {}",
@@ -1597,14 +1605,10 @@ fn handle_create_table(
     let desc = RelationDesc::new(typ, names);
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
-    let source = Source {
-        create_sql,
-        connector: SourceConnector::Local,
-        desc,
-    };
+    let table = Table { create_sql, desc };
     Ok(Plan::CreateTable {
         name,
-        source,
+        table,
         if_not_exists: *if_not_exists,
     })
 }
@@ -1769,7 +1773,10 @@ fn handle_drop_item(
         for id in catalog_entry.used_by() {
             let dep = scx.catalog.get_item_by_id(id);
             match dep.item_type() {
-                CatalogItemType::Source | CatalogItemType::View | CatalogItemType::Sink => {
+                CatalogItemType::Table
+                | CatalogItemType::Source
+                | CatalogItemType::View
+                | CatalogItemType::Sink => {
                     bail!(
                         "cannot drop {}: still depended upon by catalog item '{}'",
                         catalog_entry.name(),
@@ -1953,7 +1960,7 @@ impl PartialEq<ObjectType> for CatalogItemType {
     fn eq(&self, other: &ObjectType) -> bool {
         match (self, other) {
             (CatalogItemType::Source, ObjectType::Source)
-            | (CatalogItemType::Source, ObjectType::Table)
+            | (CatalogItemType::Table, ObjectType::Table)
             | (CatalogItemType::Sink, ObjectType::Sink)
             | (CatalogItemType::View, ObjectType::View)
             | (CatalogItemType::Index, ObjectType::Index) => true,
