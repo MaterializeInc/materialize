@@ -40,8 +40,8 @@ use dataflow_types::{
     SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{
-    GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
-    SourceInstanceId,
+    GlobalId, Id, IdHumanizer, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
+    ScalarExpr, SourceInstanceId,
 };
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker};
@@ -290,7 +290,7 @@ where
                     .with_context(|| format!("recreating sink {}", name))?;
                     coord.handle_sink_connector_ready(*id, connector);
                 }
-                CatalogItem::Index(index) => {
+                CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == *id) {
                         // Indexes on logging views are special, as they are
                         // already installed in the dataflow plane via
@@ -305,7 +305,7 @@ where
                             .indexes
                             .insert(*id, Frontiers::new(coord.num_timely_workers, Some(1_000)));
                     } else {
-                        coord.create_index_dataflow(name.to_string(), *id, index.clone())
+                        coord.ship_dataflow(coord.build_index_dataflow(*id));
                     }
                 }
             }
@@ -858,7 +858,7 @@ where
             .transact(ops)
             .expect("replacing a sink cannot fail");
 
-        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
+        self.ship_dataflow(self.build_sink_dataflow(name.to_string(), id, sink.from, connector))
     }
 
     fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
@@ -1135,19 +1135,17 @@ where
         match self.catalog_transact(vec![
             catalog::Op::CreateItem {
                 id: table_id,
-                name: name.clone(),
-                item: CatalogItem::Table(table.clone()),
+                name,
+                item: CatalogItem::Table(table),
             },
             catalog::Op::CreateItem {
                 id: index_id,
                 name: index_name,
-                item: CatalogItem::Index(index.clone()),
+                item: CatalogItem::Index(index),
             },
         ]) {
             Ok(_) => {
-                let mut dataflow = DataflowDesc::new(name.to_string());
-                self.import_source_or_view(&table_id, &mut dataflow);
-                self.build_arrangement(&index_id, index, table.desc.typ().clone(), dataflow);
+                self.ship_dataflow(self.build_index_dataflow(index_id));
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1175,36 +1173,25 @@ where
             name: name.clone(),
             item: CatalogItem::Source(source.clone()),
         }];
-        let (index_id, index) = if materialized {
+        let index_id = if materialized {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index = auto_generate_primary_idx(
-                index_name.item.clone(),
-                name.clone(),
-                source_id,
-                &source.desc,
-            );
+            let index =
+                auto_generate_primary_idx(index_name.item.clone(), name, source_id, &source.desc);
             let index_id = self.catalog.allocate_id()?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
                 name: index_name,
-                item: CatalogItem::Index(index.clone()),
+                item: CatalogItem::Index(index),
             });
-            (Some(index_id), Some(index))
+            Some(index_id)
         } else {
-            (None, None)
+            None
         };
         match self.catalog_transact(ops) {
             Ok(()) => {
-                if materialized {
-                    let mut dataflow = DataflowDesc::new(name.to_string());
-                    self.import_source_or_view(&source_id, &mut dataflow);
-                    self.build_arrangement(
-                        &index_id.unwrap(),
-                        index.unwrap(),
-                        source.desc.typ().clone(),
-                        dataflow,
-                    );
+                if let Some(index_id) = index_id {
+                    self.ship_dataflow(self.build_index_dataflow(index_id));
                 }
 
                 self.handle_source_connector_persistence(source_id, &source.connector);
@@ -1323,37 +1310,26 @@ where
             name: name.clone(),
             item: CatalogItem::View(view.clone()),
         });
-        let (index_id, index) = if materialize {
+        let index_id = if materialize {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index = auto_generate_primary_idx(
-                index_name.item.clone(),
-                name.clone(),
-                view_id,
-                &view.desc,
-            );
+            let index =
+                auto_generate_primary_idx(index_name.item.clone(), name, view_id, &view.desc);
 
             let index_id = self.catalog.allocate_id()?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
                 name: index_name,
-                item: CatalogItem::Index(index.clone()),
+                item: CatalogItem::Index(index),
             });
-            (Some(index_id), Some(index))
+            Some(index_id)
         } else {
-            (None, None)
+            None
         };
         match self.catalog_transact(ops) {
             Ok(()) => {
-                if materialize {
-                    let mut dataflow = DataflowDesc::new(name.to_string());
-                    self.build_view_collection(&view_id, &view, &mut dataflow);
-                    self.build_arrangement(
-                        &index_id.unwrap(),
-                        index.unwrap(),
-                        view.desc.typ().clone(),
-                        dataflow,
-                    );
+                if let Some(index_id) = index_id {
+                    self.ship_dataflow(self.build_index_dataflow(index_id));
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -1378,12 +1354,12 @@ where
         let id = self.catalog.allocate_id()?;
         let op = catalog::Op::CreateItem {
             id,
-            name: name.clone(),
-            item: CatalogItem::Index(index.clone()),
+            name,
+            item: CatalogItem::Index(index),
         };
         match self.catalog_transact(vec![op]) {
             Ok(()) => {
-                self.create_index_dataflow(name.to_string(), id, index);
+                self.ship_dataflow(self.build_index_dataflow(id));
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
@@ -1550,38 +1526,14 @@ where
                 // a new transient dataflow that will be dropped after the
                 // peek completes.
                 let typ = source.as_ref().typ();
-                let ncols = typ.column_types.len();
-                // Cheat a little bit here to get a relation description. A
-                // relation description is just a relation type with column
-                // names, but we don't know the column names for `source`
-                // here. Nothing in the dataflow layer cares about column
-                // names, so just set them all to `None`. The column names
-                // will ultimately be correctly transmitted to the client
-                // because they are safely stashed in the connection's
-                // session.
-                let desc = RelationDesc::new(
-                    typ.clone(),
-                    iter::repeat::<Option<ColumnName>>(None).take(ncols),
-                );
+                let key: Vec<_> = (0..typ.arity()).map(ScalarExpr::Column).collect();
                 let view_id = self.catalog.allocate_id()?;
-                let view_name = FullName {
-                    database: DatabaseSpecifier::Ambient,
-                    schema: "temp".into(),
-                    item: format!("temp-view-{}", view_id),
-                };
-                let index_name = format!("temp-index-on-{}", view_id);
-                let mut dataflow = DataflowDesc::new(view_name.to_string());
+                let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
                 dataflow.set_as_of(Antichain::from_elem(timestamp));
-                let view = catalog::View {
-                    create_sql: "<none>".into(),
-                    plan_cx: PlanContext::default(),
-                    optimized_expr: source,
-                    desc,
-                    conn_id: None,
-                };
-                self.build_view_collection(&view_id, &view, &mut dataflow);
-                let index = auto_generate_primary_idx(index_name, view_name, view_id, &view.desc);
-                self.build_arrangement(&index_id, index, typ, dataflow);
+                self.import_view_into_dataflow(&view_id, &source, &mut dataflow);
+                dataflow.add_index_to_build(index_id, view_id, typ.clone(), key.clone());
+                dataflow.add_index_export(index_id, view_id, typ, key);
+                self.ship_dataflow(dataflow);
             }
 
             broadcast(
@@ -1648,7 +1600,7 @@ where
         self.active_tails.insert(conn_id, sink_id);
         let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
-        self.create_sink_dataflow(
+        self.ship_dataflow(self.build_sink_dataflow(
             sink_name,
             sink_id,
             source_id,
@@ -1657,10 +1609,9 @@ where
                 frontier,
                 strict: !with_snapshot,
             }),
-        );
+        ));
         Ok(ExecuteResponse::Tailing { rx })
     }
-
 
     /// Extracts an optional projection around an optional filter.
     ///
@@ -2069,7 +2020,9 @@ where
         }
     }
 
-    fn import_source_or_view(&self, id: &GlobalId, dataflow: &mut DataflowDesc) {
+    /// Imports the view, source, or table with `id` into the provided
+    /// dataflow description.
+    fn import_into_dataflow(&self, id: &GlobalId, dataflow: &mut DataflowDesc) {
         if dataflow.objects_to_build.iter().any(|bd| &bd.id == id)
             || dataflow.source_imports.iter().any(|(i, _)| i == id)
         {
@@ -2100,32 +2053,34 @@ where
                     dataflow.add_source_import(*id, source.connector.clone(), source.desc.clone());
                 }
                 CatalogItem::View(view) => {
-                    self.build_view_collection(id, &view, dataflow);
+                    self.import_view_into_dataflow(id, &view.optimized_expr, dataflow);
                 }
                 _ => unreachable!(),
             }
         }
     }
 
-    fn build_view_collection(
+    /// Imports the view with the specified ID and expression into the provided
+    /// dataflow description.
+    fn import_view_into_dataflow(
         &self,
         view_id: &GlobalId,
-        view: &catalog::View,
+        view: &OptimizedRelationExpr,
         dataflow: &mut DataflowDesc,
     ) {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
-        view.optimized_expr.as_ref().visit(&mut |e| {
+        view.as_ref().visit(&mut |e| {
             if let RelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
             } = e
             {
-                self.import_source_or_view(&id, dataflow);
+                self.import_into_dataflow(&id, dataflow);
                 dataflow.add_dependency(*view_id, *id)
             }
         });
         // Collect sources, views, and indexes used.
-        view.optimized_expr.as_ref().visit(&mut |e| {
+        view.as_ref().visit(&mut |e| {
             if let RelationExpr::ArrangeBy { input, keys } = e {
                 if let RelationExpr::Get {
                     id: Id::Global(on_id),
@@ -2148,68 +2103,40 @@ where
                 }
             }
         });
-        dataflow.add_view_to_build(
-            *view_id,
-            view.optimized_expr.clone(),
-            view.desc.typ().clone(),
-        );
+        dataflow.add_view_to_build(*view_id, view.clone(), view.as_ref().typ());
     }
 
-    fn build_arrangement(
-        &mut self,
-        id: &GlobalId,
-        index: catalog::Index,
-        on_type: RelationType,
-        mut dataflow: DataflowDesc,
-    ) {
-        self.import_source_or_view(&index.on, &mut dataflow);
-        dataflow.add_index_to_build(*id, index.on.clone(), on_type.clone(), index.keys.clone());
-        dataflow.add_index_export(*id, index.on, on_type, index.keys);
-        self.ship_dataflow(dataflow);
+    /// Builds a dataflow description for the index with the specified ID.
+    fn build_index_dataflow(&self, id: GlobalId) -> DataflowDesc {
+        let index_entry = self.catalog.get_by_id(&id);
+        let index = match index_entry.item() {
+            CatalogItem::Index(index) => index,
+            _ => unreachable!("cannot create index dataflow on non-index"),
+        };
+        let on_entry = self.catalog.get_by_id(&index.on);
+        let on_type = on_entry.desc().unwrap().typ().clone();
+        let mut dataflow = DataflowDesc::new(index_entry.name().to_string());
+        self.import_into_dataflow(&index.on, &mut dataflow);
+        dataflow.add_index_to_build(id, index.on.clone(), on_type.clone(), index.keys.clone());
+        dataflow.add_index_export(id, index.on, on_type, index.keys.clone());
+        dataflow
     }
 
-    fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: catalog::Index) {
-        let dataflow = DataflowDesc::new(name);
-        let on_type = self
-            .catalog
-            .get_by_id(&index.on)
-            .desc()
-            .unwrap()
-            .typ()
-            .clone();
-        self.build_arrangement(&id, index, on_type, dataflow);
-    }
-
-    fn create_sink_dataflow(
-        &mut self,
+    /// Builds a dataflow description for the sink with the specified name,
+    /// ID, source, and output connector.
+    fn build_sink_dataflow(
+        &self,
         name: String,
         id: GlobalId,
         from: GlobalId,
         connector: SinkConnector,
-    ) {
-        match &connector {
-            SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                let row = Row::pack(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(topic.as_str()),
-                ]);
-                self.update_catalog_view(MZ_KAFKA_SINKS.id, iter::once((row, 1)));
-            }
-            SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                let row = Row::pack(&[
-                    Datum::String(&id.to_string()),
-                    Datum::Bytes(&path.clone().into_os_string().into_vec()),
-                ]);
-                self.update_catalog_view(MZ_AVRO_OCF_SINKS.id, iter::once((row, 1)));
-            }
-            _ => (),
-        }
+    ) -> DataflowDesc {
         let mut dataflow = DataflowDesc::new(name);
         dataflow.set_as_of(connector.get_frontier());
-        self.import_source_or_view(&from, &mut dataflow);
+        self.import_into_dataflow(&from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);
-        self.ship_dataflow(dataflow);
+        dataflow
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
@@ -2248,6 +2175,26 @@ where
                 Frontiers::new(self.num_timely_workers, self.logical_compaction_window_ms);
             frontiers.advance_since(&since);
             self.indexes.insert(*global_id, frontiers);
+        }
+
+        for (id, sink) in &dataflow.sink_exports {
+            match &sink.connector {
+                SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
+                    let row = Row::pack(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String(topic.as_str()),
+                    ]);
+                    self.update_catalog_view(MZ_KAFKA_SINKS.id, iter::once((row, 1)));
+                }
+                SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
+                    let row = Row::pack(&[
+                        Datum::String(&id.to_string()),
+                        Datum::Bytes(&path.clone().into_os_string().into_vec()),
+                    ]);
+                    self.update_catalog_view(MZ_AVRO_OCF_SINKS.id, iter::once((row, 1)));
+                }
+                _ => (),
+            }
         }
 
         // TODO: Produce "valid from" information for each sink.

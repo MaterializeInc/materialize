@@ -31,7 +31,7 @@ mod util;
 pub mod session;
 
 pub use catalog::dump as dump_catalog;
+pub use command::{Command, ExecuteResponse, Response, RowsFuture, StartupMessage};
 pub use coord::{Config, Coordinator};
 pub use persistence::PersistenceConfig;
 pub use timestamp::TimestampConfig;
-pub use command::{Command, ExecuteResponse, Response, RowsFuture, StartupMessage};
