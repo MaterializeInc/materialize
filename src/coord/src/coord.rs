@@ -566,7 +566,7 @@ where
                 }
 
                 Message::Command(Command::CancelRequest { conn_id }) => {
-                    self.sequence_cancel(conn_id);
+                    self.handle_cancel(conn_id);
                 }
 
                 Message::Command(Command::DumpCatalog { tx }) => {
@@ -627,7 +627,7 @@ where
                             .send(PersistenceMetadata::Shutdown)
                             .unwrap();
                     }
-                    self.shutdown();
+                    broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown);
                     break;
                 }
             }
@@ -663,6 +663,140 @@ where
         while block_on(messages.next()).is_some() {}
     }
 
+    /// Updates the upper frontier of a named view.
+    fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
+        if let Some(index_state) = self.indexes.get_mut(name) {
+            let changes: Vec<_> = index_state.upper.update_iter(changes.drain()).collect();
+            if !changes.is_empty() {
+                // Advance the compaction frontier to trail the new frontier.
+                // If the compaction latency is `None` compaction messages are
+                // not emitted, and the trace should be broadly useable.
+                // TODO: If the frontier advances surprisingly quickly, e.g. in
+                // the case of a constant collection, this compaction is actively
+                // harmful. We should reconsider compaction policy with an eye
+                // towards minimizing unexpected screw-ups.
+                if let Some(compaction_latency_ms) = index_state.compaction_latency_ms {
+                    // Decline to compact complete collections. This would have the
+                    // effect of making the collection unusable. Instead, we would
+                    // prefer to compact collections only when we believe it would
+                    // reduce the volume of the collection, but we don't have that
+                    // information here.
+                    if !index_state.upper.frontier().is_empty() {
+                        let mut compaction_frontier = Antichain::new();
+                        for time in index_state.upper.frontier().iter() {
+                            compaction_frontier.insert(time.saturating_sub(compaction_latency_ms));
+                        }
+                        index_state.advance_since(&compaction_frontier);
+                        self.since_updates
+                            .push((name.clone(), index_state.since.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Perform maintenance work associated with the coordinator.
+    ///
+    /// Primarily, this involves sequencing compaction commands, which should be
+    /// issued whenever available.
+    fn maintenance(&mut self) {
+        // Take this opportunity to drain `since_update` commands.
+        // Don't try to compact to an empty frontier. There may be a good reason to do this
+        // in principle, but not in any current Mz use case.
+        // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
+        self.since_updates
+            .retain(|(_, frontier)| frontier != &Antichain::new());
+        if !self.since_updates.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::AllowCompaction(std::mem::replace(
+                    &mut self.since_updates,
+                    Vec::new(),
+                )),
+            );
+        }
+    }
+
+    fn handle_statement(
+        &mut self,
+        session: &Session,
+        stmt: sql::ast::Statement,
+        params: &sql::plan::Params,
+    ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
+        let pcx = PlanContext::default();
+
+        // When symbiosis mode is enabled, use symbiosis planning for:
+        //  - CREATE TABLE
+        //  - DROP TABLE
+        //  - INSERT
+        // When these statements are routed through symbiosis, table information
+        // is created and maintained locally, which is required for other statements
+        // to be executed correctly.
+        if let Statement::CreateTable(CreateTableStatement { .. })
+        | Statement::DropObjects(DropObjectsStatement {
+            object_type: ObjectType::Table,
+            ..
+        })
+        | Statement::Insert { .. } = &stmt
+        {
+            if let Some(ref mut postgres) = self.symbiosis {
+                let plan =
+                    block_on(postgres.execute(&pcx, &self.catalog.for_session(session), &stmt))?;
+                return Ok((pcx, plan));
+            }
+        }
+
+        match sql::plan::plan(
+            &pcx,
+            &self.catalog.for_session(session),
+            stmt.clone(),
+            params,
+        ) {
+            Ok(plan) => Ok((pcx, plan)),
+            Err(err) => match self.symbiosis {
+                Some(ref mut postgres) if postgres.can_handle(&stmt) => {
+                    let plan = block_on(postgres.execute(
+                        &pcx,
+                        &self.catalog.for_session(session),
+                        &stmt,
+                    ))?;
+                    Ok((pcx, plan))
+                }
+                _ => Err(err),
+            },
+        }
+    }
+
+    fn handle_describe(
+        &self,
+        session: &mut Session,
+        name: String,
+        stmt: Option<Statement>,
+        param_types: Vec<Option<pgrepr::Type>>,
+    ) -> Result<(), anyhow::Error> {
+        let (desc, param_types) = if let Some(stmt) = stmt.clone() {
+            match sql::plan::describe(
+                &self.catalog.for_session(session),
+                stmt.clone(),
+                &param_types,
+            ) {
+                Ok((desc, param_types)) => (desc, param_types),
+                // Describing the query failed. If we're running in symbiosis with
+                // Postgres, see if Postgres can handle it. Note that Postgres
+                // only handles commands that do not return rows, so the
+                // `RelationDesc` is always `None`.
+                Err(err) => match self.symbiosis {
+                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
+                    _ => return Err(err),
+                },
+            }
+        } else {
+            (None, vec![])
+        };
+        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
+        Ok(())
+    }
+
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`. This means canceling the active PEEK or TAIL, if
     /// one exists.
@@ -670,7 +804,7 @@ where
     /// NOTE(benesch): this function makes the assumption that a connection can
     /// only have one active query at a time. This is true today, but will not
     /// be true once we have full support for portals.
-    pub fn sequence_cancel(&mut self, conn_id: u32) {
+    fn handle_cancel(&mut self, conn_id: u32) {
         if let Some(name) = self.active_tails.remove(&conn_id) {
             // A TAIL is known to be active, so drop the dataflow that is
             // servicing it. No need to try to cancel PEEKs in this case,
@@ -689,7 +823,7 @@ where
 
     /// Terminate any temporary objects created by the named `conn_id`
     /// stored on the Coordinator.
-    pub fn handle_terminate(&mut self, conn_id: u32) {
+    fn handle_terminate(&mut self, conn_id: u32) {
         if let Some(name) = self.active_tails.remove(&conn_id) {
             self.drop_sinks(vec![name]);
         }
@@ -701,6 +835,58 @@ where
         self.catalog
             .drop_temporary_schema(conn_id)
             .expect("unable to drop temporary schema");
+    }
+
+    fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {
+        // Update catalog entry with sink connector.
+        let entry = self.catalog.get_by_id(&id);
+        let name = entry.name().clone();
+        let mut sink = match entry.item() {
+            CatalogItem::Sink(sink) => sink.clone(),
+            _ => unreachable!(),
+        };
+        sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
+        let ops = vec![
+            catalog::Op::DropItem(id),
+            catalog::Op::CreateItem {
+                id,
+                name: name.clone(),
+                item: CatalogItem::Sink(sink.clone()),
+            },
+        ];
+        self.catalog
+            .transact(ops)
+            .expect("replacing a sink cannot fail");
+
+        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
+    }
+
+    fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
+        let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
+        self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)));
+    }
+
+    /// Insert a single row into a given catalog view.
+    fn update_catalog_view<I>(&mut self, index_id: GlobalId, updates: I)
+    where
+        I: IntoIterator<Item = (Row, isize)>,
+    {
+        let timestamp = self.get_write_ts();
+        let updates = updates
+            .into_iter()
+            .map(|(row, diff)| Update {
+                row,
+                diff,
+                timestamp,
+            })
+            .collect();
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::Insert {
+                id: index_id,
+                updates,
+            },
+        );
     }
 
     fn sequence_plan(
@@ -1475,6 +1661,185 @@ where
         Ok(ExecuteResponse::Tailing { rx })
     }
 
+
+    /// Extracts an optional projection around an optional filter.
+    ///
+    /// This extraction is done to allow workers to process a larger class of queries
+    /// without building explicit dataflows, avoiding latency, allocation and general
+    /// load on the system. The worker performs the filter and projection in place.
+    fn plan_peek(expr: &mut RelationExpr) -> (Option<Vec<usize>>, Vec<expr::ScalarExpr>) {
+        let mut outputs_plan = None;
+        if let RelationExpr::Project { input, outputs } = expr {
+            outputs_plan = Some(outputs.clone());
+            *expr = input.take_dangerous();
+        }
+        let mut predicates_plan = Vec::new();
+        if let RelationExpr::Filter { input, predicates } = expr {
+            predicates_plan.extend(predicates.iter().cloned());
+            *expr = input.take_dangerous();
+        }
+
+        // We only apply this transformation if the result is a `Get`.
+        // It is harmful to apply it otherwise, as we materialize more data than
+        // we would have if we applied the filter and projection beforehand.
+        if let RelationExpr::Get { .. } = expr {
+            (outputs_plan, predicates_plan)
+        } else {
+            if !predicates_plan.is_empty() {
+                *expr = expr.take_dangerous().filter(predicates_plan);
+            }
+            if let Some(outputs) = outputs_plan {
+                *expr = expr.take_dangerous().project(outputs);
+            }
+            (None, Vec::new())
+        }
+    }
+
+    /// A policy for determining the timestamp for a peek.
+    ///
+    /// The result may be `None` in the case that the `when` policy cannot be satisfied,
+    /// which is possible due to the restricted validity of traces (each has a `since`
+    /// and `upper` frontier, and are only valid after `since` and sure to be available
+    /// not after `upper`).
+    fn determine_timestamp(
+        &mut self,
+        source: &RelationExpr,
+        when: PeekWhen,
+    ) -> Result<Timestamp, anyhow::Error> {
+        // Each involved trace has a validity interval `[since, upper)`.
+        // The contents of a trace are only guaranteed to be correct when
+        // accumulated at a time greater or equal to `since`, and they
+        // are only guaranteed to be currently present for times not
+        // greater or equal to `upper`.
+        //
+        // The plan is to first determine a timestamp, based on the requested
+        // timestamp policy, and then determine if it can be satisfied using
+        // the compacted arrangements we have at hand. It remains unresolved
+        // what to do if it cannot be satisfied (perhaps the query should use
+        // a larger timestamp and block, perhaps the user should intervene).
+        let uses_ids = &source.global_uses();
+        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
+
+        // First determine the candidate timestamp, which is either the explicitly requested
+        // timestamp, or the latest timestamp known to be immediately available.
+        let timestamp = match when {
+            // Explicitly requested timestamps should be respected.
+            PeekWhen::AtTimestamp(timestamp) => timestamp,
+
+            // These two strategies vary in terms of which traces drive the
+            // timestamp determination process: either the trace itself or the
+            // original sources on which they depend.
+            PeekWhen::Immediately => {
+                if !indexes_complete {
+                    bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
+                }
+                if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
+                    // If the view depends on any tables, we enforce
+                    // linearizability by choosing the latest input time.
+                    self.get_read_ts()
+                } else {
+                    let upper = self.indexes.greatest_open_upper(index_ids.iter().cloned());
+                    // We peek at the largest element not in advance of `upper`, which
+                    // involves a subtraction. If `upper` contains a zero timestamp there
+                    // is no "prior" answer, and we do not want to peek at it as it risks
+                    // hanging awaiting the response to data that may never arrive.
+                    if let Some(candidate) = upper.elements().get(0) {
+                        if *candidate > 0 {
+                            candidate.saturating_sub(1)
+                        } else {
+                            let unstarted = index_ids
+                                .iter()
+                                .filter(|id| {
+                                    self.indexes
+                                        .upper_of(id)
+                                        .expect("id not found")
+                                        .less_equal(&0)
+                                })
+                                .collect::<Vec<_>>();
+                            bail!(
+                                "At least one input has no complete timestamps yet: {:?}",
+                                unstarted
+                            );
+                        }
+                    } else {
+                        // A complete trace can be read in its final form with this time.
+                        //
+                        // This should only happen for literals that have no sources
+                        Timestamp::max_value()
+                    }
+                }
+            }
+        };
+
+        // Determine the valid lower bound of times that can produce correct outputs.
+        // This bound is determined by the arrangements contributing to the query,
+        // and does not depend on the transitive sources.
+        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
+
+        // If the timestamp is greater or equal to some element in `since` we are
+        // assured that the answer will be correct.
+        if since.less_equal(&timestamp) {
+            Ok(timestamp)
+        } else {
+            let invalid = index_ids
+                .iter()
+                .filter(|id| {
+                    !self
+                        .indexes
+                        .since_of(id)
+                        .expect("id not found")
+                        .less_equal(&timestamp)
+                })
+                .map(|id| (id, self.indexes.since_of(id)))
+                .collect::<Vec<_>>();
+            bail!(
+                "Timestamp ({}) is not valid for all inputs: {:?}",
+                timestamp,
+                invalid
+            );
+        }
+    }
+
+    /// Determine the frontier of updates to start *from*.
+    /// Updates greater or equal to this frontier will be produced.
+    fn determine_frontier(
+        &mut self,
+        as_of: Option<u64>,
+        source_id: GlobalId,
+    ) -> Result<Antichain<u64>, anyhow::Error> {
+        let frontier = if let Some(ts) = as_of {
+            // If a timestamp was explicitly requested, use that.
+            Antichain::from_elem(self.determine_timestamp(
+                &RelationExpr::Get {
+                    id: Id::Global(source_id),
+                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
+                    typ: RelationType::empty(),
+                },
+                PeekWhen::AtTimestamp(ts),
+            )?)
+        }
+        // TODO: The logic that follows is at variance from PEEK logic which consults the
+        // "queryable" state of its inputs. We might want those to line up, but it is only
+        // a "might".
+        else if let Some((index_id, _)) = self.catalog.indexes()[&source_id].first() {
+            let upper = self
+                .indexes
+                .upper_of(index_id)
+                .expect("name missing at coordinator");
+
+            if let Some(ts) = upper.get(0) {
+                Antichain::from_elem(ts.saturating_sub(1))
+            } else {
+                Antichain::from_elem(Timestamp::max_value())
+            }
+        } else {
+            // TODO: This should more carefully consider `since` frontiers of its input.
+            // This will be forcibly corrected if any inputs are compacted.
+            Antichain::from_elem(0)
+        };
+        Ok(frontier)
+    }
+
     fn sequence_explain_plan(
         &mut self,
         raw_plan: sql::plan::RelationExpr,
@@ -1682,6 +2047,28 @@ where
         Ok(())
     }
 
+    fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::DropSinks(dataflow_names),
+        )
+    }
+
+    fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
+        let mut trace_keys = Vec::new();
+        for id in indexes {
+            if self.indexes.remove(&id).is_some() {
+                trace_keys.push(id);
+            }
+        }
+        if !trace_keys.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropIndexes(trace_keys),
+            )
+        }
+    }
+
     fn import_source_or_view(&self, id: &GlobalId, dataflow: &mut DataflowDesc) {
         if dataflow.objects_to_build.iter().any(|bd| &bd.id == id)
             || dataflow.source_imports.iter().any(|(i, _)| i == id)
@@ -1781,6 +2168,50 @@ where
         self.ship_dataflow(dataflow);
     }
 
+    fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: catalog::Index) {
+        let dataflow = DataflowDesc::new(name);
+        let on_type = self
+            .catalog
+            .get_by_id(&index.on)
+            .desc()
+            .unwrap()
+            .typ()
+            .clone();
+        self.build_arrangement(&id, index, on_type, dataflow);
+    }
+
+    fn create_sink_dataflow(
+        &mut self,
+        name: String,
+        id: GlobalId,
+        from: GlobalId,
+        connector: SinkConnector,
+    ) {
+        match &connector {
+            SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
+                let row = Row::pack(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String(topic.as_str()),
+                ]);
+                self.update_catalog_view(MZ_KAFKA_SINKS.id, iter::once((row, 1)));
+            }
+            SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
+                let row = Row::pack(&[
+                    Datum::String(&id.to_string()),
+                    Datum::Bytes(&path.clone().into_os_string().into_vec()),
+                ]);
+                self.update_catalog_view(MZ_AVRO_OCF_SINKS.id, iter::once((row, 1)));
+            }
+            _ => (),
+        }
+        let mut dataflow = DataflowDesc::new(name);
+        dataflow.set_as_of(connector.get_frontier());
+        self.import_source_or_view(&from, &mut dataflow);
+        let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
+        dataflow.add_sink_export(id, from, from_type, connector);
+        self.ship_dataflow(dataflow);
+    }
+
     /// Finalizes a dataflow and then broadcasts it to all workers.
     ///
     /// Finalization includes optimization, but also validation of various
@@ -1857,42 +2288,6 @@ where
         );
     }
 
-    fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: catalog::Index) {
-        let dataflow = DataflowDesc::new(name);
-        let on_type = self
-            .catalog
-            .get_by_id(&index.on)
-            .desc()
-            .unwrap()
-            .typ()
-            .clone();
-        self.build_arrangement(&id, index, on_type, dataflow);
-    }
-
-    fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {
-        // Update catalog entry with sink connector.
-        let entry = self.catalog.get_by_id(&id);
-        let name = entry.name().clone();
-        let mut sink = match entry.item() {
-            CatalogItem::Sink(sink) => sink.clone(),
-            _ => unreachable!(),
-        };
-        sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
-        let ops = vec![
-            catalog::Op::DropItem(id),
-            catalog::Op::CreateItem {
-                id,
-                name: name.clone(),
-                item: CatalogItem::Sink(sink.clone()),
-            },
-        ];
-        self.catalog
-            .transact(ops)
-            .expect("replacing a sink cannot fail");
-
-        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
-    }
-
     // Tell the persister that we have a new source to persist
     fn handle_source_connector_persistence(
         &mut self,
@@ -1914,410 +2309,6 @@ where
             }
         }
     }
-
-    /// Insert a single row into a given catalog view.
-    fn update_catalog_view<I>(&mut self, index_id: GlobalId, updates: I)
-    where
-        I: IntoIterator<Item = (Row, isize)>,
-    {
-        let timestamp = self.get_write_ts();
-        let updates = updates
-            .into_iter()
-            .map(|(row, diff)| Update {
-                row,
-                diff,
-                timestamp,
-            })
-            .collect();
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::Insert {
-                id: index_id,
-                updates,
-            },
-        );
-    }
-
-    fn create_sink_dataflow(
-        &mut self,
-        name: String,
-        id: GlobalId,
-        from: GlobalId,
-        connector: SinkConnector,
-    ) {
-        match &connector {
-            SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                let row = Row::pack(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(topic.as_str()),
-                ]);
-                self.update_catalog_view(MZ_KAFKA_SINKS.id, iter::once((row, 1)));
-            }
-            SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                let row = Row::pack(&[
-                    Datum::String(&id.to_string()),
-                    Datum::Bytes(&path.clone().into_os_string().into_vec()),
-                ]);
-                self.update_catalog_view(MZ_AVRO_OCF_SINKS.id, iter::once((row, 1)));
-            }
-            _ => (),
-        }
-        let mut dataflow = DataflowDesc::new(name);
-        dataflow.set_as_of(connector.get_frontier());
-        self.import_source_or_view(&from, &mut dataflow);
-        let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
-        dataflow.add_sink_export(id, from, from_type, connector);
-        self.ship_dataflow(dataflow);
-    }
-
-    fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::DropSinks(dataflow_names),
-        )
-    }
-
-    fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
-        let mut trace_keys = Vec::new();
-        for id in indexes {
-            if self.indexes.remove(&id).is_some() {
-                trace_keys.push(id);
-            }
-        }
-        if !trace_keys.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropIndexes(trace_keys),
-            )
-        }
-    }
-
-    pub fn enable_feedback(&mut self) -> comm::mpsc::Receiver<WorkerFeedbackWithMeta> {
-        let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
-        broadcast(&mut self.broadcast_tx, SequencedCommand::EnableFeedback(tx));
-        rx
-    }
-
-    pub fn shutdown(&mut self) {
-        broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown)
-    }
-
-    fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
-        let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
-        self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)));
-    }
-
-    /// Perform maintenance work associated with the coordinator.
-    ///
-    /// Primarily, this involves sequencing compaction commands, which should be
-    /// issued whenever available.
-    pub fn maintenance(&mut self) {
-        // Take this opportunity to drain `since_update` commands.
-        // Don't try to compact to an empty frontier. There may be a good reason to do this
-        // in principle, but not in any current Mz use case.
-        // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
-        self.since_updates
-            .retain(|(_, frontier)| frontier != &Antichain::new());
-        if !self.since_updates.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::AllowCompaction(std::mem::replace(
-                    &mut self.since_updates,
-                    Vec::new(),
-                )),
-            );
-        }
-    }
-
-    /// Extracts an optional projection around an optional filter.
-    ///
-    /// This extraction is done to allow workers to process a larger class of queries
-    /// without building explicit dataflows, avoiding latency, allocation and general
-    /// load on the system. The worker performs the filter and projection in place.
-    fn plan_peek(expr: &mut RelationExpr) -> (Option<Vec<usize>>, Vec<expr::ScalarExpr>) {
-        let mut outputs_plan = None;
-        if let RelationExpr::Project { input, outputs } = expr {
-            outputs_plan = Some(outputs.clone());
-            *expr = input.take_dangerous();
-        }
-        let mut predicates_plan = Vec::new();
-        if let RelationExpr::Filter { input, predicates } = expr {
-            predicates_plan.extend(predicates.iter().cloned());
-            *expr = input.take_dangerous();
-        }
-
-        // We only apply this transformation if the result is a `Get`.
-        // It is harmful to apply it otherwise, as we materialize more data than
-        // we would have if we applied the filter and projection beforehand.
-        if let RelationExpr::Get { .. } = expr {
-            (outputs_plan, predicates_plan)
-        } else {
-            if !predicates_plan.is_empty() {
-                *expr = expr.take_dangerous().filter(predicates_plan);
-            }
-            if let Some(outputs) = outputs_plan {
-                *expr = expr.take_dangerous().project(outputs);
-            }
-            (None, Vec::new())
-        }
-    }
-
-    /// A policy for determining the timestamp for a peek.
-    ///
-    /// The result may be `None` in the case that the `when` policy cannot be satisfied,
-    /// which is possible due to the restricted validity of traces (each has a `since`
-    /// and `upper` frontier, and are only valid after `since` and sure to be available
-    /// not after `upper`).
-    fn determine_timestamp(
-        &mut self,
-        source: &RelationExpr,
-        when: PeekWhen,
-    ) -> Result<Timestamp, anyhow::Error> {
-        // Each involved trace has a validity interval `[since, upper)`.
-        // The contents of a trace are only guaranteed to be correct when
-        // accumulated at a time greater or equal to `since`, and they
-        // are only guaranteed to be currently present for times not
-        // greater or equal to `upper`.
-        //
-        // The plan is to first determine a timestamp, based on the requested
-        // timestamp policy, and then determine if it can be satisfied using
-        // the compacted arrangements we have at hand. It remains unresolved
-        // what to do if it cannot be satisfied (perhaps the query should use
-        // a larger timestamp and block, perhaps the user should intervene).
-        let uses_ids = &source.global_uses();
-        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
-
-        // First determine the candidate timestamp, which is either the explicitly requested
-        // timestamp, or the latest timestamp known to be immediately available.
-        let timestamp = match when {
-            // Explicitly requested timestamps should be respected.
-            PeekWhen::AtTimestamp(timestamp) => timestamp,
-
-            // These two strategies vary in terms of which traces drive the
-            // timestamp determination process: either the trace itself or the
-            // original sources on which they depend.
-            PeekWhen::Immediately => {
-                if !indexes_complete {
-                    bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
-                }
-                if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
-                    // If the view depends on any tables, we enforce
-                    // linearizability by choosing the latest input time.
-                    self.get_read_ts()
-                } else {
-                    let upper = self.indexes.greatest_open_upper(index_ids.iter().cloned());
-                    // We peek at the largest element not in advance of `upper`, which
-                    // involves a subtraction. If `upper` contains a zero timestamp there
-                    // is no "prior" answer, and we do not want to peek at it as it risks
-                    // hanging awaiting the response to data that may never arrive.
-                    if let Some(candidate) = upper.elements().get(0) {
-                        if *candidate > 0 {
-                            candidate.saturating_sub(1)
-                        } else {
-                            let unstarted = index_ids
-                                .iter()
-                                .filter(|id| {
-                                    self.indexes
-                                        .upper_of(id)
-                                        .expect("id not found")
-                                        .less_equal(&0)
-                                })
-                                .collect::<Vec<_>>();
-                            bail!(
-                                "At least one input has no complete timestamps yet: {:?}",
-                                unstarted
-                            );
-                        }
-                    } else {
-                        // A complete trace can be read in its final form with this time.
-                        //
-                        // This should only happen for literals that have no sources
-                        Timestamp::max_value()
-                    }
-                }
-            }
-        };
-
-        // Determine the valid lower bound of times that can produce correct outputs.
-        // This bound is determined by the arrangements contributing to the query,
-        // and does not depend on the transitive sources.
-        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
-
-        // If the timestamp is greater or equal to some element in `since` we are
-        // assured that the answer will be correct.
-        if since.less_equal(&timestamp) {
-            Ok(timestamp)
-        } else {
-            let invalid = index_ids
-                .iter()
-                .filter(|id| {
-                    !self
-                        .indexes
-                        .since_of(id)
-                        .expect("id not found")
-                        .less_equal(&timestamp)
-                })
-                .map(|id| (id, self.indexes.since_of(id)))
-                .collect::<Vec<_>>();
-            bail!(
-                "Timestamp ({}) is not valid for all inputs: {:?}",
-                timestamp,
-                invalid
-            );
-        }
-    }
-
-    /// Determine the frontier of updates to start *from*.
-    /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(
-        &mut self,
-        as_of: Option<u64>,
-        source_id: GlobalId,
-    ) -> Result<Antichain<u64>, anyhow::Error> {
-        let frontier = if let Some(ts) = as_of {
-            // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(self.determine_timestamp(
-                &RelationExpr::Get {
-                    id: Id::Global(source_id),
-                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
-                    typ: RelationType::empty(),
-                },
-                PeekWhen::AtTimestamp(ts),
-            )?)
-        }
-        // TODO: The logic that follows is at variance from PEEK logic which consults the
-        // "queryable" state of its inputs. We might want those to line up, but it is only
-        // a "might".
-        else if let Some((index_id, _)) = self.catalog.indexes()[&source_id].first() {
-            let upper = self
-                .indexes
-                .upper_of(index_id)
-                .expect("name missing at coordinator");
-
-            if let Some(ts) = upper.get(0) {
-                Antichain::from_elem(ts.saturating_sub(1))
-            } else {
-                Antichain::from_elem(Timestamp::max_value())
-            }
-        } else {
-            // TODO: This should more carefully consider `since` frontiers of its input.
-            // This will be forcibly corrected if any inputs are compacted.
-            Antichain::from_elem(0)
-        };
-        Ok(frontier)
-    }
-
-    /// Updates the upper frontier of a named view.
-    fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
-        if let Some(index_state) = self.indexes.get_mut(name) {
-            let changes: Vec<_> = index_state.upper.update_iter(changes.drain()).collect();
-            if !changes.is_empty() {
-                // Advance the compaction frontier to trail the new frontier.
-                // If the compaction latency is `None` compaction messages are
-                // not emitted, and the trace should be broadly useable.
-                // TODO: If the frontier advances surprisingly quickly, e.g. in
-                // the case of a constant collection, this compaction is actively
-                // harmful. We should reconsider compaction policy with an eye
-                // towards minimizing unexpected screw-ups.
-                if let Some(compaction_latency_ms) = index_state.compaction_latency_ms {
-                    // Decline to compact complete collections. This would have the
-                    // effect of making the collection unusable. Instead, we would
-                    // prefer to compact collections only when we believe it would
-                    // reduce the volume of the collection, but we don't have that
-                    // information here.
-                    if !index_state.upper.frontier().is_empty() {
-                        let mut compaction_frontier = Antichain::new();
-                        for time in index_state.upper.frontier().iter() {
-                            compaction_frontier.insert(time.saturating_sub(compaction_latency_ms));
-                        }
-                        index_state.advance_since(&compaction_frontier);
-                        self.since_updates
-                            .push((name.clone(), index_state.since.clone()));
-                    }
-                }
-            }
-        }
-    }
-
-    fn handle_statement(
-        &mut self,
-        session: &Session,
-        stmt: sql::ast::Statement,
-        params: &sql::plan::Params,
-    ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
-        let pcx = PlanContext::default();
-
-        // When symbiosis mode is enabled, use symbiosis planning for:
-        //  - CREATE TABLE
-        //  - DROP TABLE
-        //  - INSERT
-        // When these statements are routed through symbiosis, table information
-        // is created and maintained locally, which is required for other statements
-        // to be executed correctly.
-        if let Statement::CreateTable(CreateTableStatement { .. })
-        | Statement::DropObjects(DropObjectsStatement {
-            object_type: ObjectType::Table,
-            ..
-        })
-        | Statement::Insert { .. } = &stmt
-        {
-            if let Some(ref mut postgres) = self.symbiosis {
-                let plan =
-                    block_on(postgres.execute(&pcx, &self.catalog.for_session(session), &stmt))?;
-                return Ok((pcx, plan));
-            }
-        }
-
-        match sql::plan::plan(
-            &pcx,
-            &self.catalog.for_session(session),
-            stmt.clone(),
-            params,
-        ) {
-            Ok(plan) => Ok((pcx, plan)),
-            Err(err) => match self.symbiosis {
-                Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                    let plan = block_on(postgres.execute(
-                        &pcx,
-                        &self.catalog.for_session(session),
-                        &stmt,
-                    ))?;
-                    Ok((pcx, plan))
-                }
-                _ => Err(err),
-            },
-        }
-    }
-
-    fn handle_describe(
-        &self,
-        session: &mut Session,
-        name: String,
-        stmt: Option<Statement>,
-        param_types: Vec<Option<pgrepr::Type>>,
-    ) -> Result<(), anyhow::Error> {
-        let (desc, param_types) = if let Some(stmt) = stmt.clone() {
-            match sql::plan::describe(
-                &self.catalog.for_session(session),
-                stmt.clone(),
-                &param_types,
-            ) {
-                Ok((desc, param_types)) => (desc, param_types),
-                // Describing the query failed. If we're running in symbiosis with
-                // Postgres, see if Postgres can handle it. Note that Postgres
-                // only handles commands that do not return rows, so the
-                // `RelationDesc` is always `None`.
-                Err(err) => match self.symbiosis {
-                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
-                    _ => return Err(err),
-                },
-            }
-        } else {
-            (None, vec![])
-        };
-        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
-        Ok(())
-    }
 }
 
 fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {
@@ -2334,7 +2325,7 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
     ExecuteResponse::SendingRows(Box::pin(rx.err_into()))
 }
 
-pub fn auto_generate_primary_idx(
+fn auto_generate_primary_idx(
     index_name: String,
     on_name: FullName,
     on_id: GlobalId,
