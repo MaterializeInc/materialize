@@ -58,7 +58,7 @@ Wrap your release notes at the 80 character mark.
   This fixes a regression introduced in v0.4.1.
 
 <span id="v0.4.1"></span>
-## v0.4.1 (Unreleased)
+## v0.4.1
 
 - **Known regression.** Specifying multiple Kafka broker addresses in
   [Kafka sources](/sql/create-source/avro-kafka/), as in
