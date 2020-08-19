@@ -34,7 +34,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 {"before": null, "after": {"a": 1}}
 
 > CREATE MATERIALIZED SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA BROKER 'kafka1:9092,kafka2:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
       ssl_key_location = '/share/secrets/materialized.key',

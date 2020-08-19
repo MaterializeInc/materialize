@@ -28,7 +28,7 @@ openssl req \
 	-passin pass:$SSL_SECRET \
 	-passout pass:$SSL_SECRET
 
-for i in kafka schema-registry materialized producer
+for i in kafka kafka1 kafka2 schema-registry materialized producer
 do
 	# Create key & csr
 	openssl req -nodes \
@@ -41,10 +41,7 @@ do
 		-passin pass:$SSL_SECRET \
 		-passout pass:$SSL_SECRET \
 
-	# Sign the CSR; note that the extensions are necessary to fulfill the
-	# following requirements of rustls/webpki:
-	# - Add SAN to cert
-	# - Create a v3 cert
+	# Sign the CSR.
 	openssl x509 -req \
 		-CA secrets/ca.crt \
 		-CAkey secrets/ca.key \
@@ -54,7 +51,6 @@ do
 		-days 36500 \
 		-CAcreateserial \
 		-passin pass:$SSL_SECRET \
-		-extensions $i -extfile openssl.cnf
 
 	# Generate key and cert p12 (i.e. non-Java keystore)
 	openssl pkcs12 \
