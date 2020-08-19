@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::{anyhow, Error};
-use core::str::FromStr;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`RelationExpr::Get`](crate::RelationExpr::Get).

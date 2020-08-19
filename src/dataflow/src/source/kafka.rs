@@ -349,7 +349,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             })
             .flat_map(|f| {
                 let data = fs::read(f).unwrap();
-                RecordIter { data }.map(|r| (r.data, r.time as u64, r.offset))
+                RecordIter { data, offset: 0 }.map(|r| (r.data, r.time as u64, r.offset))
             })
             .collect()
     }
