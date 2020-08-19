@@ -461,7 +461,7 @@ where
         let persister = self.persister.take();
 
         if let Some(mut persister) = persister {
-            tokio::spawn(async move { persister.update().await });
+            tokio::spawn(async move { persister.run().await });
         }
 
         let mut messages = ore::future::select_all_biased(vec![
