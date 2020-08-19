@@ -770,7 +770,7 @@ fn kafka_sink_builder(
         _ => unsupported!("non-confluent schema registry avro sinks"),
     };
 
-    let broker_addr = broker.parse()?;
+    let broker_addrs = broker.parse()?;
 
     let mut with_options = normalize::with_options(&with_options);
     let include_consistency = match with_options.remove("consistency") {
@@ -800,7 +800,7 @@ fn kafka_sink_builder(
     };
 
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
-        broker_addr,
+        broker_addrs,
         schema_registry_url,
         value_schema,
         topic_prefix,
@@ -1298,7 +1298,7 @@ fn handle_create_source(
             start_offsets.insert(0, start_offset);
 
             let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                addr: broker.parse()?,
+                addrs: broker.parse()?,
                 topic: topic.clone(),
                 config_options,
                 start_offsets,

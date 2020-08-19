@@ -27,7 +27,7 @@ use dataflow_types::{
     MzOffset, Timestamp,
 };
 use expr::{GlobalId, PartitionId, SourceInstanceId};
-use kafka_util::KafkaAddr;
+use kafka_util::KafkaAddrs;
 use log::{error, info, log_enabled, warn};
 
 use crate::server::{
@@ -382,14 +382,14 @@ impl KafkaSourceInfo {
         kc: KafkaSourceConnector,
     ) -> KafkaSourceInfo {
         let KafkaSourceConnector {
-            addr,
+            addrs,
             topic,
             config_options,
             group_id_prefix,
             ..
         } = kc;
         let kafka_config =
-            create_kafka_config(&source_name, &addr, group_id_prefix, &config_options);
+            create_kafka_config(&source_name, &addrs, group_id_prefix, &config_options);
         let source_global_id = source_id.source_id;
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
@@ -506,14 +506,14 @@ impl KafkaSourceInfo {
 /// Creates a Kafka config.
 fn create_kafka_config(
     name: &str,
-    addr: &KafkaAddr,
+    addrs: &KafkaAddrs,
     group_id_prefix: Option<String>,
     config_options: &HashMap<String, String>,
 ) -> ClientConfig {
     let mut kafka_config = ClientConfig::new();
 
     // Broker configuration.
-    kafka_config.set("bootstrap.servers", &addr.to_string());
+    kafka_config.set("bootstrap.servers", &addrs.to_string());
 
     // Opt-out of Kafka's offset management facilities. Whenever we restart,
     // we want to restart from the beginning of the topic.

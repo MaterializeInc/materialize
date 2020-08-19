@@ -1166,7 +1166,7 @@ impl Timestamper {
         kc: KafkaSourceConnector,
     ) -> Option<RtKafkaConnector> {
         let mut config = ClientConfig::new();
-        config.set("bootstrap.servers", &kc.addr.to_string());
+        config.set("bootstrap.servers", &kc.addrs.to_string());
 
         if log_enabled!(target: "librdkafka", log::Level::Debug) {
             config.set("debug", "all");
@@ -1355,7 +1355,7 @@ impl Timestamper {
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
-            .set("bootstrap.servers", &kc.addr.to_string());
+            .set("bootstrap.servers", &kc.addrs.to_string());
 
         let group_id_prefix = kc.group_id_prefix.clone().unwrap_or_else(String::new);
         config.set(

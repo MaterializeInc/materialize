@@ -52,8 +52,23 @@ Wrap your release notes at the 80 character mark.
 - Support [`CREATE TABLE`](/sql/create-table), [`DROP TABLE`](/sql/drop-table),
   [`INSERT`](/sql/insert) and [`SHOW CREATE TABLE`](/sql/show-create-table).
 
+- Restore support for specifying multiple Kafka broker addresses in
+  [Kafka sources](/sql/create-source/avro-kafka/) {{% gh 3986 %}}.
+
+  This fixes a regression introduced in v0.4.1.
+
 <span id="v0.4.1"></span>
 ## v0.4.1 (Unreleased)
+
+- **Known regression.** Specifying multiple Kafka broker addresses in
+  [Kafka sources](/sql/create-source/avro-kafka/), as in
+
+  ```sql
+  CREATE SOURCE ... FROM KAFKA BROKER 'host1:9092,host2:9092' ...
+  ```
+
+  is incorrectly prohibited in this version. This change was unintentional and
+  is reverted in v0.5.0.
 
 - Enhance internal monitoring tools:
 
