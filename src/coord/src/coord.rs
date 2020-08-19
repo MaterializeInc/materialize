@@ -17,7 +17,7 @@
 //! must accumulate to the same value as would an un-compacted trace.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
@@ -116,7 +116,6 @@ where
     optimizer: Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
-    tables: HashSet<GlobalId>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
@@ -237,7 +236,6 @@ where
             optimizer: Default::default(),
             catalog,
             symbiosis,
-            tables: BUILTINS.tables().map(|v| v.index_id).collect(),
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
@@ -960,7 +958,6 @@ where
                 let mut dataflow = DataflowDesc::new(name.to_string());
                 self.import_source_or_view(&table_id, &mut dataflow);
                 self.build_arrangement(&index_id, index, table.desc.typ().clone(), dataflow);
-                self.tables.insert(index_id);
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1675,11 +1672,6 @@ where
             );
         }
         if !indexes_to_drop.is_empty() {
-            // It might be a table; just blindly remove it from `self.tables`
-            // in case it is.
-            for id in &indexes_to_drop {
-                let _ = self.tables.remove(id);
-            }
             self.drop_indexes(indexes_to_drop);
         }
 
@@ -1692,6 +1684,8 @@ where
         {
             return;
         }
+        // A valid index is any index on `id` that is known to the dataflow
+        // layer, as indicated by its presence in `self.indexes`.s
         let valid_index = self.catalog.indexes()[id]
             .iter()
             .find(|(id, _keys)| self.indexes.contains_key(*id));
@@ -2094,8 +2088,8 @@ where
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-
-        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&source.global_uses());
+        let uses_ids = &source.global_uses();
+        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
@@ -2110,7 +2104,7 @@ where
                 if !indexes_complete {
                     bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
                 }
-                if index_ids.iter().any(|id| self.tables.contains(id)) {
+                if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
                     // If the view depends on any tables, we enforce
                     // linearizability by choosing the latest input time.
                     self.get_read_ts()

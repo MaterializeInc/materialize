@@ -1319,6 +1319,17 @@ impl Catalog {
         (indexes, complete)
     }
 
+    pub fn uses_tables(&self, id: GlobalId) -> bool {
+        match self.get_by_id(&id).item() {
+            CatalogItem::Table(_) => true,
+            CatalogItem::Source(_) => false,
+            item @ CatalogItem::View(_) => item.uses().into_iter().any(|id| self.uses_tables(id)),
+            CatalogItem::Sink(_) | CatalogItem::Index(_) => {
+                unreachable!("sinks and indexes cannot be depended upon");
+            }
+        }
+    }
+
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }

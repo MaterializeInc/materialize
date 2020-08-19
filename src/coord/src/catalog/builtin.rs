@@ -456,11 +456,4 @@ impl BUILTINS {
             _ => None,
         })
     }
-
-    pub fn tables(&self) -> impl Iterator<Item = &'static BuiltinTable> + '_ {
-        self.values().filter_map(|b| match b {
-            Builtin::Table(table) => Some(*table),
-            _ => None,
-        })
-    }
 }
