@@ -26,12 +26,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context};
+use differential_dataflow::lattice::Lattice;
 use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
-use timely::progress::frontier::Antichain;
-use timely::progress::ChangeBatch;
+use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -299,7 +299,9 @@ where
                         // TODO(benesch): why is this hardcoded to 1000?
                         // Should it not be the same logical compaction window
                         // that everything else uses?
-                        coord.insert_index(*id, Some(1_000));
+                        coord
+                            .indexes
+                            .insert(*id, Frontiers::new(coord.num_timely_workers, Some(1_000)));
                     } else {
                         coord.create_index_dataflow(name.to_string(), *id, index.clone())
                     }
@@ -1774,20 +1776,19 @@ where
         self.import_source_or_view(&index.on, &mut dataflow);
         dataflow.add_index_to_build(*id, index.on.clone(), on_type.clone(), index.keys.clone());
         dataflow.add_index_export(*id, index.on, on_type, index.keys);
-        self.insert_index(*id, self.logical_compaction_window_ms);
-        self.validate_dataflow(&mut dataflow);
-        self.broadcast_dataflow_creation(dataflow);
+        self.ship_dataflow(dataflow);
     }
 
-    /// Performs some sanity checking on the dataflow before shipping it.
+    /// Finalizes a dataflow and then broadcasts it to all workers.
+    ///
+    /// Finalization includes optimization, but also validation of various
+    /// invariants such as ensuring that the `as_of` frontier is in advance of
+    /// the various `since` frontiers of participating data inputs.
     ///
     /// In particular, there are requirement on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
-    fn validate_dataflow(&mut self, dataflow: &mut DataflowDesc) {
-        use differential_dataflow::lattice::Lattice;
-        use timely::progress::timestamp::Timestamp;
-
+    fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) {
         // The identity for `join` is the minimum element.
         let mut since = Antichain::from_elem(Timestamp::minimum());
 
@@ -1807,12 +1808,13 @@ where
             );
         }
 
-        // For each produced arrangement, force its compaction frontier to be at least `since`.
+        // For each produced arrangement, start tracking the arrangement with
+        // a compaction frontier of at least `since`.
         for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-            self.indexes
-                .get_mut(global_id)
-                .expect("global id missing at coordinator")
-                .advance_since(&since);
+            let mut frontiers =
+                Frontiers::new(self.num_timely_workers, self.logical_compaction_window_ms);
+            frontiers.advance_since(&since);
+            self.indexes.insert(*global_id, frontiers);
         }
 
         // TODO: Produce "valid from" information for each sink.
@@ -1842,6 +1844,15 @@ where
             // Bind the since frontier to the dataflow description.
             dataflow.set_as_of(since);
         }
+
+        // Optimize the dataflow across views, and any other ways that appeal.
+        transform::optimize_dataflow(&mut dataflow);
+
+        // Finalize the dataflow by broadcasting its construction to all workers.
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::CreateDataflows(vec![dataflow]),
+        );
     }
 
     fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: catalog::Index) {
@@ -1954,24 +1965,7 @@ where
         self.import_source_or_view(&from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);
-        self.validate_dataflow(&mut dataflow);
-        self.broadcast_dataflow_creation(dataflow);
-    }
-
-    // Finalizes the dataflow and broadcasts it to all workers.
-    //
-    // Finalization includes optimization, but also validation of various invariants
-    // such as ensuring that the `as_of` frontier is in advance of the various `since`
-    // frontiers of participating data inputs.
-    fn broadcast_dataflow_creation(&mut self, mut dataflow: DataflowDesc) {
-        // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow);
-
-        // Finalize the dataflow by broadcasting its construction to all workers.
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::CreateDataflows(vec![dataflow]),
-        );
+        self.ship_dataflow(dataflow);
     }
 
     fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
@@ -2241,12 +2235,6 @@ where
                 }
             }
         }
-    }
-
-    /// Add an index to a view in the coordinator.
-    fn insert_index(&mut self, id: GlobalId, latency_ms: Option<Timestamp>) {
-        let index_state = Frontiers::new(self.num_timely_workers, latency_ms);
-        self.indexes.insert(id, index_state);
     }
 
     fn handle_statement(
