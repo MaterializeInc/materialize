@@ -10,10 +10,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use byteorder::{NetworkEndian, WriteBytesExt};
+use futures::select;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
 
@@ -191,7 +192,7 @@ impl Source {
 }
 
 pub struct Persister {
-    rx: comm::mpsc::Receiver<PersistenceMessage>,
+    rx: Option<comm::mpsc::Receiver<PersistenceMessage>>,
     sources: HashMap<GlobalId, Source>,
     disabled_sources: HashSet<GlobalId>,
     config: PersistenceConfig,
@@ -200,7 +201,7 @@ pub struct Persister {
 impl Persister {
     pub fn new(rx: comm::mpsc::Receiver<PersistenceMessage>, config: PersistenceConfig) -> Self {
         Persister {
-            rx,
+            rx: Some(rx),
             sources: HashMap::new(),
             disabled_sources: HashSet::new(),
             config,
@@ -210,106 +211,125 @@ impl Persister {
     async fn update_persistence(&mut self) -> Result<bool, anyhow::Error> {
         // We need to bound the amount of time spent reading from the data channel to ensure we
         // don't neglect our other tasks.
-        // TODO(rkhaitan): rework this loop to select from a timer and the channel(s).
-        let timer = Instant::now();
+        let mut rx_stream = self
+            .rx
+            .take()
+            .unwrap()
+            .map(|m| match m {
+                Ok(m) => m,
+                Err(_) => panic!("persister thread failed to read from channel"),
+            })
+            .fuse();
+
+        let mut interval = tokio::time::interval(self.config.flush_interval).fuse();
         loop {
-            match tokio::time::timeout(Duration::from_millis(5), self.rx.next()).await {
-                Ok(None) => break,
-                Ok(Some(Ok(data))) => {
-                    match data {
-                        PersistenceMessage::Data(data) => {
-                            if !self.sources.contains_key(&data.source_id) {
-                                if self.disabled_sources.contains(&data.source_id) {
-                                    // It's possible that there was a delay between when the coordinator
-                                    // deleted a source and when dataflow threads learned about that delete.
-                                    error!("Received data for source {} that has disabled persistence. Ignoring.",
-                                data.source_id);
-                                    continue;
-                                } else {
-                                    // We got data for a source that we don't currently track persistence data for
-                                    // and we've never deleted. This isn't possible in the current implementation,
-                                    // as the coordinatr sends a CreateSource message to the persister before sending
-                                    // anything to the dataflow workers, but this could become possible in the future.
+            select! {
+                data = rx_stream.next() => {
+                    let shutdown = if let Some(data) = data {
+                    self.handle_new_data(data)?
+                    } else {
+                        // TODO not sure if this should be a stronger error
+                        error!("Persistence thread receiver hung up. Shutting down persistence");
+                        true
+                   };
 
-                                    self.disabled_sources.insert(data.source_id);
-                                    error!("Received data for unknown source {}. Disabling persistence on the source.", data.source_id);
-                                    continue;
-                                }
-                            }
+                   if shutdown {
+                       break;
+                   }
+                }
+                _ = interval.next() => {
+                    for (_, s) in self.sources.iter_mut() {
+                        s.persist(self.config.flush_min_records)?;
+                    }
 
-                            if let Some(source) = self.sources.get_mut(&data.source_id) {
-                                source.insert_record(
-                                    data.partition,
-                                    data.offset,
-                                    data.timestamp,
-                                    data.key,
-                                    data.payload,
-                                );
-                            }
-                        }
-                        PersistenceMessage::AddSource(id) => {
-                            // Check if we already have a source
-                            if self.sources.contains_key(&id) {
-                                error!(
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn handle_new_data(&mut self, data: PersistenceMessage) -> Result<bool, anyhow::Error> {
+        match data {
+            PersistenceMessage::Data(data) => {
+                if !self.sources.contains_key(&data.source_id) {
+                    if self.disabled_sources.contains(&data.source_id) {
+                        // It's possible that there was a delay between when the coordinator
+                        // deleted a source and when dataflow threads learned about that delete.
+                        error!(
+                            "Received data for source {} that has disabled persistence. Ignoring.",
+                            data.source_id
+                        );
+                    } else {
+                        // We got data for a source that we don't currently track persistence data for
+                        // and we've never deleted. This isn't possible in the current implementation,
+                        // as the coordinatr sends a CreateSource message to the persister before sending
+                        // anything to the dataflow workers, but this could become possible in the future.
+
+                        self.disabled_sources.insert(data.source_id);
+                        error!("Received data for unknown source {}. Disabling persistence on the source.", data.source_id);
+                    }
+
+                    return Ok(false);
+                }
+
+                if let Some(source) = self.sources.get_mut(&data.source_id) {
+                    source.insert_record(
+                        data.partition,
+                        data.offset,
+                        data.timestamp,
+                        data.key,
+                        data.payload,
+                    );
+                }
+            }
+            PersistenceMessage::AddSource(id) => {
+                // Check if we already have a source
+                if self.sources.contains_key(&id) {
+                    error!(
                             "Received signal to enable persistence for {} but it is already persisted. Ignoring.",
                             id
                         );
-                                continue;
-                            }
-
-                            if self.disabled_sources.contains(&id) {
-                                error!("Received signal to enable persistence for {} but it has already been disabled. Ignoring.", id);
-                            }
-
-                            // Create a new subdirectory to store this source's data.
-                            let mut source_path = self.config.path.clone();
-                            source_path.push(format!("{}/", id));
-                            fs::create_dir_all(&source_path).with_context(|| {
-                                anyhow!(
-                                    "trying to create persistence directory: {:#?} for source: {}",
-                                    source_path,
-                                    id
-                                )
-                            })?;
-
-                            let source = Source::new(id, source_path);
-                            self.sources.insert(id, source);
-                            info!("Enabled persistence for source: {}", id);
-                        }
-                        PersistenceMessage::DropSource(id) => {
-                            if !self.sources.contains_key(&id) {
-                                // This will actually happen fairly often because the
-                                // coordinator doesn't see which sources had persistence
-                                // enabled on delete, so notifies the persistence thread
-                                // for all drops.
-                                trace!("Received signal to disable persistence for {} but it is not persisted. Ignoring.", id);
-                                continue;
-                            }
-
-                            self.sources.remove(&id);
-                            self.disabled_sources.insert(id);
-                            info!("Disabled persistence for source: {}", id);
-                        }
-                        PersistenceMessage::Shutdown => {
-                            return Ok(true);
-                        }
-                    }
+                    return Ok(false);
                 }
-                Ok(Some(Err(e))) => {
-                    error!("received error from persistence rx: {}", e);
-                    break;
+
+                if self.disabled_sources.contains(&id) {
+                    error!("Received signal to enable persistence for {} but it has already been disabled. Ignoring.", id);
+                    return Ok(false);
                 }
-                Err(tokio::time::Elapsed { .. }) => break,
-            }
 
-            if timer.elapsed() > self.config.flush_interval {
-                break;
-            }
-        }
+                // Create a new subdirectory to store this source's data.
+                let mut source_path = self.config.path.clone();
+                source_path.push(format!("{}/", id));
+                fs::create_dir_all(&source_path).with_context(|| {
+                    anyhow!(
+                        "trying to create persistence directory: {:#?} for source: {}",
+                        source_path,
+                        id
+                    )
+                })?;
 
-        for (_, s) in self.sources.iter_mut() {
-            s.persist(self.config.flush_min_records)?;
-        }
+                let source = Source::new(id, source_path);
+                self.sources.insert(id, source);
+                info!("Enabled persistence for source: {}", id);
+            }
+            PersistenceMessage::DropSource(id) => {
+                if !self.sources.contains_key(&id) {
+                    // This will actually happen fairly often because the
+                    // coordinator doesn't see which sources had persistence
+                    // enabled on delete, so notifies the persistence thread
+                    // for all drops.
+                    trace!("Received signal to disable persistence for {} but it is not persisted. Ignoring.", id);
+                } else {
+                    self.sources.remove(&id);
+                    self.disabled_sources.insert(id);
+                    info!("Disabled persistence for source: {}", id);
+                }
+            }
+            PersistenceMessage::Shutdown => {
+                return Ok(true);
+            }
+        };
 
         Ok(false)
     }
@@ -319,19 +339,15 @@ impl Persister {
               self.config.flush_interval,
               self.config.flush_min_records,
               self.config.path.display());
-        loop {
-            trace!("Persistence thread checking for updates.");
-            let ret = self.update_persistence().await;
+        trace!("Persistence thread checking for updates.");
+        let ret = self.update_persistence().await;
 
-            match ret {
-                Ok(true) => break,
-                Err(e) => {
-                    error!("Persistence thread encountered error: {:#}", e);
-                    error!("Persistence thread shutting down.
+        match ret {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Persistence thread encountered error: {:#}", e);
+                error!("Persistence thread shutting down.
                            All current and future persisted sources on this materialized process will not continue to be persisted.");
-                    break;
-                }
-                Ok(false) => continue,
             }
         }
     }
