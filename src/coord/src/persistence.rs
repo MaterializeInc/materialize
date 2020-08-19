@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -193,6 +193,7 @@ impl Source {
 pub struct Persister {
     rx: comm::mpsc::Receiver<PersistenceMessage>,
     sources: HashMap<GlobalId, Source>,
+    disabled_sources: HashSet<GlobalId>,
     pub config: PersistenceConfig,
 }
 
@@ -201,6 +202,7 @@ impl Persister {
         Persister {
             rx,
             sources: HashMap::new(),
+            disabled_sources: HashSet::new(),
             config,
         }
     }
@@ -217,14 +219,22 @@ impl Persister {
                     match data {
                         PersistenceMessage::Data(data) => {
                             if !self.sources.contains_key(&data.source_id) {
-                                // TODO(rkhaitan): dropping here is not actually a correct thing to do, as
-                                // there may be a race between when we see the metadata informing
-                                // us to track this source vs when we see the data itself.
-                                error!(
-                            "Received data for source {} that is not currently persisted. Ignoring.",
-                            data.source_id
-                        );
-                                continue;
+                                if self.disabled_sources.contains(&data.source_id) {
+                                    // It's possible that there was a delay between when the coordinator
+                                    // deleted a source and when dataflow threads learned about that delete.
+                                    error!("Received data for source {} that has disabled persistence. Ignoring.",
+                                data.source_id);
+                                    continue;
+                                } else {
+                                    // We got data for a source that we don't currently track persistence data for
+                                    // and we've never deleted. This isn't possible in the current implementation,
+                                    // as the coordinatr sends a CreateSource message to the persister before sending
+                                    // anything to the dataflow workers, but this could become possible in the future.
+
+                                    self.disabled_sources.insert(data.source_id);
+                                    error!("Received data for unknown source {}. Disabling persistence on the source.", data.source_id);
+                                    continue;
+                                }
                             }
 
                             if let Some(source) = self.sources.get_mut(&data.source_id) {
@@ -245,6 +255,10 @@ impl Persister {
                             id
                         );
                                 continue;
+                            }
+
+                            if self.disabled_sources.contains(&id) {
+                                error!("Received signal to enable persistence for {} but it has already been disabled. Ignoring.", id);
                             }
 
                             // Create a new subdirectory to store this source's data.
@@ -273,6 +287,7 @@ impl Persister {
                             }
 
                             self.sources.remove(&id);
+                            self.disabled_sources.insert(id);
                             info!("Disabled persistence for source: {}", id);
                         }
                         PersistenceMessage::Shutdown => {
