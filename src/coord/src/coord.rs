@@ -2375,18 +2375,3 @@ pub fn index_sql(
     }
     .to_ast_string_stable()
 }
-
-/// Loads the catalog stored at `path` and returns its serialized state.
-///
-/// There are no guarantees about the format of the serialized state, except
-/// that the serialized state for two identical catalogs will compare
-/// identically.
-pub fn dump_catalog(path: &Path) -> Result<String, anyhow::Error> {
-    let catalog = Catalog::open(catalog::Config {
-        path: Some(path),
-        enable_logging: true,
-        experimental_mode: None,
-    })?;
-    Ok(catalog.dump())
-}
-

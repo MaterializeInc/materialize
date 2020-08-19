@@ -30,7 +30,8 @@ mod util;
 
 pub mod session;
 
-pub use self::coord::{dump_catalog, Config, Coordinator};
-pub use self::persistence::PersistenceConfig;
-pub use self::timestamp::TimestampConfig;
+pub use catalog::dump as dump_catalog;
+pub use coord::{Config, Coordinator};
+pub use persistence::PersistenceConfig;
+pub use timestamp::TimestampConfig;
 pub use command::{Command, ExecuteResponse, Response, RowsFuture, StartupMessage};
