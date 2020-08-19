@@ -1268,6 +1268,16 @@ impl Catalog {
         &self.indexes
     }
 
+    /// Returns the default index for the specified `id`.
+    ///
+    /// Panics if `id` does not exist, or if `id` is not an object on which
+    /// indexes can be built.
+    pub fn default_index_for(&self, id: GlobalId) -> Option<GlobalId> {
+        // The default index is just whatever index happens to appear first in
+        // self.indexes.
+        self.indexes[&id].first().map(|(id, _keys)| *id)
+    }
+
     /// Finds the nearest indexes that can satisfy the views or sources whose
     /// identifiers are listed in `ids`.
     ///

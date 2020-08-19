@@ -1504,8 +1504,8 @@ where
                 typ: _,
             } = source.as_ref()
             {
-                if let Some((index_id, _)) = self.catalog.indexes()[&id].first() {
-                    (true, *index_id)
+                if let Some(index_id) = self.catalog.default_index_for(*id) {
+                    (true, index_id)
                 } else if materialize {
                     (false, self.catalog.allocate_id()?)
                 } else {
@@ -1769,10 +1769,10 @@ where
         // TODO: The logic that follows is at variance from PEEK logic which consults the
         // "queryable" state of its inputs. We might want those to line up, but it is only
         // a "might".
-        else if let Some((index_id, _)) = self.catalog.indexes()[&source_id].first() {
+        else if let Some(index_id) = self.catalog.default_index_for(source_id) {
             let upper = self
                 .indexes
-                .upper_of(index_id)
+                .upper_of(&index_id)
                 .expect("name missing at coordinator");
 
             if let Some(ts) = upper.get(0) {
