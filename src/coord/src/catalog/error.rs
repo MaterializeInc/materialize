@@ -34,6 +34,7 @@ pub(crate) enum ErrorKind {
     SchemaNotEmpty(String),
     InvalidTemporaryDependency(String),
     InvalidTemporarySchema,
+    MandatoryTableIndex(String),
     UnsatisfiableLoggingDependency {
         depender_name: String,
     },
@@ -81,6 +82,7 @@ impl std::error::Error for Error {
             | ErrorKind::SchemaNotEmpty(_)
             | ErrorKind::InvalidTemporaryDependency(_)
             | ErrorKind::InvalidTemporarySchema
+            | ErrorKind::MandatoryTableIndex(_)
             | ErrorKind::UnsatisfiableLoggingDependency { .. }
             | ErrorKind::AmbiguousRename { .. }
             | ErrorKind::ExperimentalModeRequired
@@ -119,6 +121,11 @@ impl fmt::Display for Error {
             ErrorKind::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
             }
+            ErrorKind::MandatoryTableIndex(index_name) => write!(
+                f,
+                "cannot drop '{}' as it is the default index for a table",
+                index_name
+            ),
             ErrorKind::UnsatisfiableLoggingDependency { depender_name } => write!(
                 f,
                 "catalog item '{}' depends on system logging, but logging is disabled",
