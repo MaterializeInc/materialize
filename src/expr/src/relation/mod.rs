@@ -165,6 +165,8 @@ pub enum RelationExpr {
         limit: Option<usize>,
         /// Number of records to skip
         offset: usize,
+        /// True iff the input is known to monotonically increase (only addition of records).
+        monotonic: bool,
     },
     /// Return a dataflow where the row counts are negated
     ///
@@ -651,6 +653,7 @@ impl RelationExpr {
             order_key,
             limit,
             offset,
+            monotonic: false,
         }
     }
 
@@ -976,6 +979,7 @@ impl RelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                monotonic: _,
             }
             | RelationExpr::Negate { input: _ }
             | RelationExpr::Threshold { input: _ }

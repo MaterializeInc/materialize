@@ -31,6 +31,7 @@ where
             order_key,
             limit,
             offset,
+            monotonic: _,
         } = relation_expr
         {
             let arity = input.arity();

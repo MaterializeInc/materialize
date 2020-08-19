@@ -219,6 +219,7 @@ impl ProjectionLifting {
                 order_key,
                 limit,
                 offset,
+                monotonic: _,
             } => {
                 self.action(input, gets);
                 if let RelationExpr::Project {
