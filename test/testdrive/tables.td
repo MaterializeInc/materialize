@@ -192,6 +192,13 @@ SOURCES
 ! CREATE TABLE s (a int primary key);
 CREATE TABLE with column constraint: PRIMARY KEY
 
+> CREATE VIEW view AS SELECT 1
+! INSERT INTO view VALUES (1)
+cannot insert into view 'materialize.public.view'
+
+! INSERT INTO mz_kafka_sinks VALUES ('bad', 'bad')
+cannot insert into system table 'mz_catalog.mz_kafka_sinks'
+
 # Test that a fairly large INSERT completes.
 > CREATE TABLE large (a int)
 > INSERT INTO large VALUES
