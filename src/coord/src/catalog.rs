@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::iter;
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
@@ -1416,6 +1417,20 @@ impl From<PlanContext> for SerializedPlanContext {
             wall_time: Some(cx.wall_time),
         }
     }
+}
+
+/// Loads the catalog stored at `path` and returns its serialized state.
+///
+/// There are no guarantees about the format of the serialized state, except
+/// that the serialized state for two identical catalogs will compare
+/// identically.
+pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
+    let catalog = Catalog::open(Config {
+        path: Some(path),
+        enable_logging: true,
+        experimental_mode: None,
+    })?;
+    Ok(catalog.dump())
 }
 
 impl sql::catalog::Catalog for ConnCatalog<'_> {
