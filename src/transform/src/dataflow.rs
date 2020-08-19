@@ -126,10 +126,10 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
 /// Analysis to identify monotonic collections, especially TopK inputs.
 pub mod monotonic {
 
-    use std::collections::HashSet;
+    use dataflow_types::{DataflowDesc, Envelope, SourceConnector};
     use expr::RelationExpr;
     use expr::{GlobalId, Id};
-    use dataflow_types::{DataflowDesc, Envelope, SourceConnector};
+    use std::collections::HashSet;
 
     // Determines if a relation is monotonic, and applies any optimizations along the way.
     fn is_monotonic(expr: &mut RelationExpr, sources: &HashSet<GlobalId>) -> bool {
@@ -137,18 +137,16 @@ pub mod monotonic {
             RelationExpr::Get { id, .. } => {
                 if let Id::Global(id) = id {
                     sources.contains(id)
-                } else { false }
-            },
-            RelationExpr::Project { input, .. } => {
-                is_monotonic(input, sources)
-            },
-            RelationExpr::Filter { input, .. } => {
-                is_monotonic(input, sources)
-            },
-            RelationExpr::Map { input, .. } => {
-                is_monotonic(input, sources)
-            },
-            RelationExpr::TopK { input, monotonic, .. } => {
+                } else {
+                    false
+                }
+            }
+            RelationExpr::Project { input, .. } => is_monotonic(input, sources),
+            RelationExpr::Filter { input, .. } => is_monotonic(input, sources),
+            RelationExpr::Map { input, .. } => is_monotonic(input, sources),
+            RelationExpr::TopK {
+                input, monotonic, ..
+            } => {
                 *monotonic = is_monotonic(input, sources);
                 *monotonic
             }
@@ -156,23 +154,26 @@ pub mod monotonic {
                 let monotonic_l = is_monotonic(left, sources);
                 let monotonic_r = is_monotonic(right, sources);
                 monotonic_l && monotonic_r
-            },
-            RelationExpr::ArrangeBy { input, ..} => {
-                is_monotonic(input, sources)
             }
+            RelationExpr::ArrangeBy { input, .. } => is_monotonic(input, sources),
             _ => {
-                expr.visit1_mut(|e| { is_monotonic(e, sources); });
+                expr.visit1_mut(|e| {
+                    is_monotonic(e, sources);
+                });
                 false
-            },
+            }
         }
     }
 
     /// Propagates information about monotonic inputs through views.
     pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) {
-
         let mut monotonic = std::collections::HashSet::new();
         for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
-            if let SourceConnector::External { envelope: Envelope::None, .. } = source_desc.connector {
+            if let SourceConnector::External {
+                envelope: Envelope::None,
+                ..
+            } = source_desc.connector
+            {
                 monotonic.insert(source_id.clone());
             }
         }
