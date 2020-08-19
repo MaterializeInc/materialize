@@ -116,8 +116,6 @@ where
     optimizer: Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
-    /// Maps (global Id of view) -> (existing indexes)
-    views: HashMap<GlobalId, ViewState>,
     tables: HashSet<GlobalId>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
@@ -239,7 +237,6 @@ where
             optimizer: Default::default(),
             catalog,
             symbiosis,
-            views: HashMap::new(),
             tables: BUILTINS.tables().map(|v| v.index_id).collect(),
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
@@ -268,9 +265,7 @@ where
 
         for (id, name, item) in &catalog_entries {
             match item {
-                CatalogItem::Table(_) => {
-                    coord.views.insert(*id, ViewState::new());
-                }
+                CatalogItem::Table(_) | CatalogItem::View(_) => (),
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
                 //about how it was built. If we start building multiple sinks and/or indexes
@@ -278,10 +273,6 @@ where
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
                     coord.handle_source_connector_persistence(*id, &source.connector);
-                    coord.views.insert(*id, ViewState::new());
-                }
-                CatalogItem::View(_) => {
-                    coord.views.insert(*id, ViewState::new());
                 }
                 CatalogItem::Sink(sink) => {
                     let builder = match &sink.connector {
@@ -310,7 +301,7 @@ where
                         // TODO(benesch): why is this hardcoded to 1000?
                         // Should it not be the same logical compaction window
                         // that everything else uses?
-                        coord.insert_index(*id, &index, Some(1_000));
+                        coord.insert_index(*id, Some(1_000));
                     } else {
                         coord.create_index_dataflow(name.to_string(), *id, index.clone())
                     }
@@ -966,7 +957,6 @@ where
             },
         ]) {
             Ok(_) => {
-                self.views.insert(table_id, ViewState::new());
                 let mut dataflow = DataflowDesc::new(name.to_string());
                 self.import_source_or_view(&table_id, &mut dataflow);
                 self.build_arrangement(&index_id, index, table.desc.typ().clone(), dataflow);
@@ -1019,7 +1009,6 @@ where
         };
         match self.catalog_transact(ops) {
             Ok(()) => {
-                self.views.insert(source_id, ViewState::new());
                 if materialized {
                     let mut dataflow = DataflowDesc::new(name.to_string());
                     self.import_source_or_view(&source_id, &mut dataflow);
@@ -1169,7 +1158,6 @@ where
         };
         match self.catalog_transact(ops) {
             Ok(()) => {
-                self.views.insert(view_id, ViewState::new());
                 if materialize {
                     let mut dataflow = DataflowDesc::new(name.to_string());
                     self.build_view_collection(&view_id, &view, &mut dataflow);
@@ -1356,7 +1344,7 @@ where
                 typ: _,
             } = source.as_ref()
             {
-                if let Some(Some((index_id, _))) = self.views.get(&id).map(|v| &v.default_idx) {
+                if let Some((index_id, _)) = self.catalog.indexes()[&id].first() {
                     (true, *index_id)
                 } else if materialize {
                     (false, self.catalog.allocate_id()?)
@@ -1370,7 +1358,7 @@ where
                 (false, self.catalog.allocate_id()?)
             };
 
-            let index = if !fast_path {
+            if !fast_path {
                 // Slow path. We need to perform some computation, so build
                 // a new transient dataflow that will be dropped after the
                 // peek completes.
@@ -1406,11 +1394,8 @@ where
                 };
                 self.build_view_collection(&view_id, &view, &mut dataflow);
                 let index = auto_generate_primary_idx(index_name, view_name, view_id, &view.desc);
-                self.build_arrangement(&index_id, index.clone(), typ, dataflow);
-                Some(index)
-            } else {
-                None
-            };
+                self.build_arrangement(&index_id, index, typ, dataflow);
+            }
 
             broadcast(
                 &mut self.broadcast_tx,
@@ -1426,7 +1411,7 @@ where
             );
 
             if !fast_path {
-                self.drop_indexes(vec![(index_id, &index.unwrap())]);
+                self.drop_indexes(vec![index_id]);
             }
 
             let rows_rx = rows_rx
@@ -1617,7 +1602,6 @@ where
 
     fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), anyhow::Error> {
         let mut sources_to_drop = vec![];
-        let mut views_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
 
@@ -1633,9 +1617,8 @@ where
                     match entry.item() {
                         CatalogItem::Table(_) | CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
-                            views_to_drop.push(entry.id());
                         }
-                        CatalogItem::View(_) => views_to_drop.push(entry.id()),
+                        CatalogItem::View(_) => (),
                         CatalogItem::Sink(catalog::Sink {
                             connector: SinkConnectorState::Ready(connector),
                             ..
@@ -1672,7 +1655,7 @@ where
                             // If the sink connector state is pending, the sink
                             // dataflow was never created, so nothing to drop.
                         }
-                        CatalogItem::Index(idx) => indexes_to_drop.push((entry.id(), idx)),
+                        CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
                     }
                 }
                 _ => (),
@@ -1685,11 +1668,6 @@ where
                 SequencedCommand::DropSources(sources_to_drop),
             );
         }
-        if !views_to_drop.is_empty() {
-            for id in views_to_drop {
-                self.views.remove(&id);
-            }
-        }
         if !sinks_to_drop.is_empty() {
             broadcast(
                 &mut self.broadcast_tx,
@@ -1699,7 +1677,7 @@ where
         if !indexes_to_drop.is_empty() {
             // It might be a table; just blindly remove it from `self.tables`
             // in case it is.
-            for (id, _) in &indexes_to_drop {
+            for id in &indexes_to_drop {
                 let _ = self.tables.remove(id);
             }
             self.drop_indexes(indexes_to_drop);
@@ -1714,7 +1692,10 @@ where
         {
             return;
         }
-        if let Some((index_id, keys)) = &self.views[id].default_idx {
+        let valid_index = self.catalog.indexes()[id]
+            .iter()
+            .find(|(id, _keys)| self.indexes.contains_key(*id));
+        if let Some((index_id, keys)) = valid_index {
             let index_desc = IndexDesc {
                 on_id: *id,
                 keys: keys.to_vec(),
@@ -1774,15 +1755,9 @@ where
                         // If the arrangement exists, import it. It may not exist, in which
                         // case we should import the source to be sure that we have access
                         // to the collection to arrange it ourselves.
-                        if let Some(view) = self.views.get(on_id) {
-                            if let Some(ids) = view.primary_idxes.get(key_set) {
-                                dataflow.add_index_import(
-                                    *ids.first().unwrap(),
-                                    index_desc,
-                                    typ.clone(),
-                                    *view_id,
-                                );
-                            }
+                        let indexes = &self.catalog.indexes()[on_id];
+                        if let Some((id, _)) = indexes.iter().find(|(_id, keys)| keys == key_set) {
+                            dataflow.add_index_import(*id, index_desc, typ.clone(), *view_id);
                         }
                     }
                 }
@@ -1804,8 +1779,8 @@ where
     ) {
         self.import_source_or_view(&index.on, &mut dataflow);
         dataflow.add_index_to_build(*id, index.on.clone(), on_type.clone(), index.keys.clone());
-        dataflow.add_index_export(*id, index.on, on_type, index.keys.clone());
-        self.insert_index(*id, &index, self.logical_compaction_window_ms);
+        dataflow.add_index_export(*id, index.on, on_type, index.keys);
+        self.insert_index(*id, self.logical_compaction_window_ms);
         self.validate_dataflow(&mut dataflow);
         self.broadcast_dataflow_creation(dataflow);
     }
@@ -2012,13 +1987,10 @@ where
         )
     }
 
-    fn drop_indexes(&mut self, indexes: Vec<(GlobalId, &catalog::Index)>) {
+    fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
         let mut trace_keys = Vec::new();
-        for (id, idx) in indexes {
+        for id in indexes {
             if self.indexes.remove(&id).is_some() {
-                if let Some(view_state) = self.views.get_mut(&idx.on) {
-                    view_state.drop_primary_idx(&idx.keys, id);
-                }
                 trace_keys.push(id);
             }
         }
@@ -2226,11 +2198,7 @@ where
         // TODO: The logic that follows is at variance from PEEK logic which consults the
         // "queryable" state of its inputs. We might want those to line up, but it is only
         // a "might".
-        else if let Some(Some((index_id, _))) = self
-            .views
-            .get(&source_id)
-            .map(|view_state| &view_state.default_idx)
-        {
+        else if let Some((index_id, _)) = self.catalog.indexes()[&source_id].first() {
             let upper = self
                 .indexes
                 .upper_of(index_id)
@@ -2282,15 +2250,7 @@ where
     }
 
     /// Add an index to a view in the coordinator.
-    fn insert_index(
-        &mut self,
-        id: GlobalId,
-        index: &catalog::Index,
-        latency_ms: Option<Timestamp>,
-    ) {
-        if let Some(viewstate) = self.views.get_mut(&index.on) {
-            viewstate.add_primary_idx(&index.keys, id);
-        } // else the view is temporary
+    fn insert_index(&mut self, id: GlobalId, latency_ms: Option<Timestamp>) {
         let index_state = Frontiers::new(self.num_timely_workers, latency_ms);
         self.indexes.insert(id, index_state);
     }
@@ -2390,58 +2350,6 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
     ExecuteResponse::SendingRows(Box::pin(rx.err_into()))
 }
 
-/// Per-view state.
-#[derive(Debug)]
-pub struct ViewState {
-    /// keys of default index
-    default_idx: Option<(GlobalId, Vec<ScalarExpr>)>,
-    // TODO(andiwang): only allow one primary index?
-    /// Currently all indexes are primary indexes
-    primary_idxes: BTreeMap<Vec<ScalarExpr>, Vec<GlobalId>>,
-    // TODO(andiwang): materialize#220 Implement seconary indexes
-    // secondary_idxes: BTreeMap<Vec<ScalarExpr>, Vec<GlobalId>>,
-}
-
-impl ViewState {
-    fn new() -> Self {
-        ViewState {
-            default_idx: None,
-            primary_idxes: BTreeMap::new(),
-            //secondary_idxes: BTreeMap::new(),
-        }
-    }
-
-    pub fn add_primary_idx(&mut self, primary_idx: &[ScalarExpr], id: GlobalId) {
-        if self.default_idx.is_none() {
-            self.default_idx = Some((id, primary_idx.to_owned()));
-        }
-        self.primary_idxes
-            .entry(primary_idx.to_owned())
-            .or_insert_with(Vec::new)
-            .push(id);
-    }
-
-    pub fn drop_primary_idx(&mut self, primary_idx: &[ScalarExpr], id: GlobalId) {
-        let entry = self.primary_idxes.get_mut(primary_idx).unwrap();
-        entry.retain(|i| i != &id);
-        if entry.is_empty() {
-            self.primary_idxes.remove(primary_idx);
-        }
-        let is_default = if let Some((_, keys)) = &self.default_idx {
-            &keys[..] == primary_idx
-        } else {
-            unreachable!()
-        };
-        if is_default {
-            self.default_idx = self
-                .primary_idxes
-                .iter()
-                .next()
-                .map(|(keys, ids)| (*ids.first().unwrap(), keys.to_owned()));
-        }
-    }
-}
-
 pub fn auto_generate_primary_idx(
     index_name: String,
     on_name: FullName,
@@ -2528,6 +2436,9 @@ pub mod arrangement_state {
         }
         pub fn get_mut(&mut self, id: &GlobalId) -> Option<&mut Frontiers<T>> {
             self.index.get_mut(id)
+        }
+        pub fn contains_key(&self, id: GlobalId) -> bool {
+            self.index.contains_key(&id)
         }
         pub fn insert(&mut self, id: GlobalId, state: Frontiers<T>) -> Option<Frontiers<T>> {
             self.index.insert(id, state)
