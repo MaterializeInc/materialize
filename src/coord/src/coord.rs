@@ -273,14 +273,13 @@ where
                     // TODO(rkhaitan): this part is kind of a mess rn and does not play well with the
                     // persister
                     if let Some(persister) = &coord.persister {
-                        let connector = block_on(handle_persistence(
+                        let connector = augment_connector_for_persistence(
                             source.connector.clone(),
                             persister.config.path.clone(),
                             *id,
-                        ))
-                        .with_context(|| format!("recreating source {}", name))?;
+                        )?;
 
-                        // If handle_persistence gave us back a new connector, we need to take some
+                        // If we got back a new connector, we need to take some
                         // additional action.
                         if let Some(connector) = connector {
                             coord.handle_source_connector_persistence(*id, &connector);
@@ -2329,7 +2328,7 @@ pub fn index_sql(
 }
 
 // Wire up persistence and augment the given SourceConnector with that information, returning it.
-pub async fn handle_persistence(
+fn augment_connector_for_persistence(
     connector: SourceConnector,
     path: PathBuf,
     id: GlobalId,
@@ -2347,7 +2346,7 @@ pub async fn handle_persistence(
                 // This connector has no persistence, so do nothing.
                 Ok(None)
             } else {
-                if let Some(connector) = handle_persistence_inner(connector, path, id).await? {
+                if let Some(connector) = augment_connector(connector, path, id)? {
                     Ok(Some(SourceConnector::External {
                         connector,
                         encoding,
@@ -2365,7 +2364,7 @@ pub async fn handle_persistence(
     }
 }
 
-async fn handle_persistence_inner(
+fn augment_connector(
     mut connector: ExternalSourceConnector,
     path: PathBuf,
     id: GlobalId,
@@ -2392,7 +2391,8 @@ async fn handle_persistence_inner(
 
                     paths.push(path);
 
-                    // TODO this is lazy and incomplete
+                    // TODO: we need to be more careful here to handle the case where we are for
+                    // some reason missing some values here.
                     match read_offsets.get(&meta.partition_id) {
                         None => {
                             read_offsets.insert(meta.partition_id, meta.end_offset);

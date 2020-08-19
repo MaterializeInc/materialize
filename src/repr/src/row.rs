@@ -453,7 +453,7 @@ impl Row {
     }
 
     // TODO(justin): find a better place to put this.
-    pub fn from_data(data: Vec<u8>) -> Self {
+    pub fn new(data: Vec<u8>) -> Self {
         Row { data: data.into() }
     }
 

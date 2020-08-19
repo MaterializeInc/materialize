@@ -737,6 +737,7 @@ impl PartitionMetrics {
 /// Iterator through a persisted set of records.
 pub struct RecordIter {
     data: Vec<u8>,
+    offset: usize,
 }
 
 /// A single record from a persisted file.
@@ -747,29 +748,23 @@ pub struct Record {
     data: Vec<u8>,
 }
 
-impl RecordIter {
-    // TODO(justin): this seems to do a whole bunch of extra copies for no reason, but I'm not sure
-    // how to get rid of them?
-    fn next_rec(&mut self) -> Row {
-        let len = NetworkEndian::read_u32(&self.data);
-        let (_, rest) = self.data.split_at_mut(4);
-        let (row, data) = rest.split_at_mut(len as usize);
-        let row = row.to_vec();
-        // TODO: slow! figure out how not to copy here?
-        self.data = data.to_vec();
-        Row::from_data(row)
-    }
-}
-
 impl Iterator for RecordIter {
     type Item = Record;
 
     fn next(&mut self) -> Option<Record> {
-        if self.data.len() == 0 {
+        if self.offset >= self.data.len() {
             return None;
         }
-        let rec = self.next_rec();
+
+        let (_, data) = self.data.split_at_mut(self.offset);
+        let len = NetworkEndian::read_u32(&data) as usize;
+        let (_, rest) = data.split_at_mut(4);
+        let row = rest[..len].to_vec();
+        self.offset += 4 + len;
+
+        let rec = Row::new(row);
         let row = rec.unpack();
+
         let offset = row[0].unwrap_int64();
         let time = row[1].unwrap_int64();
         let data = row[2].unwrap_bytes();
@@ -899,19 +894,18 @@ where
                 }
             };
 
-            // TODO(justin): is there a nicer way to make this just fire once?
-            if !read_persisted_files {
-                let msgs = source_info.read_persisted_files(&persisted_files);
-                for m in msgs {
-                    let ts_cap = cap.delayed(&m.1);
-                    output
-                        .session(&ts_cap)
-                        .give(Ok(SourceOutput::new(vec![], m.0, Some(m.2))));
-                }
-                read_persisted_files = true;
-            }
-
             if active {
+                if !read_persisted_files {
+                    let msgs = source_info.read_persisted_files(&persisted_files);
+                    for m in msgs {
+                        let ts_cap = cap.delayed(&m.1);
+                        output
+                            .session(&ts_cap)
+                            .give(Ok(SourceOutput::new(vec![], m.0, Some(m.2))));
+                    }
+                    read_persisted_files = true;
+                }
+
                 // Bound execution of operator to prevent a single operator from hogging
                 // the CPU if there are many messages to process
                 let timer = Instant::now();
