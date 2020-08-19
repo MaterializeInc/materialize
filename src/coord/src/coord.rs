@@ -2029,7 +2029,7 @@ where
             return;
         }
         // A valid index is any index on `id` that is known to the dataflow
-        // layer, as indicated by its presence in `self.indexes`.s
+        // layer, as indicated by its presence in `self.indexes`.
         let valid_index = self.catalog.indexes()[id]
             .iter()
             .find(|(id, _keys)| self.indexes.contains_key(*id));
