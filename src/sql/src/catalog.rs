@@ -130,6 +130,22 @@ pub trait Catalog: fmt::Debug {
     /// Panics if `id` does not specify a valid item.
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem;
 
+    /// Reports whether the specified catalog item is queryable.
+    ///
+    /// A queryable catalog item is one for which a timestamp can be determined.
+    /// In practice, this means a catalog item whose transitive dependency set
+    /// does not include any unmaterialized sources.
+    ///
+    /// Panics if `id` does not specify an object on which indexes can be built.
+    fn is_queryable(&self, id: GlobalId) -> bool;
+
+    /// Reports whether the specified catalog item is materialized.
+    ///
+    /// A materialized catalog item has at least one index.
+    ///
+    /// Panics if `id` does not specify an object on which indexes can be built.
+    fn is_materialized(&self, id: GlobalId) -> bool;
+
     /// Expresses whether or not the catalog allows experimental mode features.
     fn experimental_mode(&self) -> bool;
 }
@@ -295,6 +311,14 @@ impl Catalog for DummyCatalog {
 
     fn get_item_by_id(&self, _: &GlobalId) -> &dyn CatalogItem {
         unimplemented!();
+    }
+
+    fn is_queryable(&self, _: GlobalId) -> bool {
+        false
+    }
+
+    fn is_materialized(&self, _: GlobalId) -> bool {
+        false
     }
 
     fn experimental_mode(&self) -> bool {

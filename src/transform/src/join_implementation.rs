@@ -32,8 +32,9 @@ impl crate::Transform for JoinImplementation {
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut arranged = HashMap::new();
-        for (k, v) in args.indexes {
-            arranged.insert(Id::Global(*k), v.clone());
+        for (on_id, idxs) in args.indexes {
+            let keys = idxs.iter().map(|(_id, keys)| keys.clone()).collect();
+            arranged.insert(Id::Global(*on_id), keys);
         }
         self.action_recursive(relation, &mut arranged);
         Ok(())

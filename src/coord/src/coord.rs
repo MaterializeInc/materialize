@@ -17,7 +17,7 @@
 //! must accumulate to the same value as would an un-compacted trace.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
@@ -26,12 +26,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context};
+use differential_dataflow::lattice::Lattice;
 use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
-use timely::progress::frontier::Antichain;
-use timely::progress::ChangeBatch;
+use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -40,8 +40,8 @@ use dataflow_types::{
     SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{
-    GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
-    SourceInstanceId,
+    GlobalId, Id, IdHumanizer, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
+    ScalarExpr, SourceInstanceId,
 };
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker};
@@ -66,6 +66,8 @@ use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
+
+mod arrangement_state;
 
 pub enum Message {
     Command(Command),
@@ -116,9 +118,6 @@ where
     optimizer: Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
-    /// Maps (global Id of view) -> (existing indexes)
-    views: HashMap<GlobalId, ViewState>,
-    tables: HashSet<GlobalId>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
@@ -239,8 +238,6 @@ where
             optimizer: Default::default(),
             catalog,
             symbiosis,
-            views: HashMap::new(),
-            tables: BUILTINS.tables().map(|v| v.index_id).collect(),
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
@@ -268,9 +265,7 @@ where
 
         for (id, name, item) in &catalog_entries {
             match item {
-                CatalogItem::Table(_) => {
-                    coord.views.insert(*id, ViewState::new(false, vec![]));
-                }
+                CatalogItem::Table(_) | CatalogItem::View(_) => (),
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
                 //about how it was built. If we start building multiple sinks and/or indexes
@@ -278,10 +273,6 @@ where
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
                     coord.handle_source_connector_persistence(*id, &source.connector);
-                    coord.views.insert(*id, ViewState::new(false, vec![]));
-                }
-                CatalogItem::View(view) => {
-                    coord.insert_view(*id, &view);
                 }
                 CatalogItem::Sink(sink) => {
                     let builder = match &sink.connector {
@@ -299,7 +290,7 @@ where
                     .with_context(|| format!("recreating sink {}", name))?;
                     coord.handle_sink_connector_ready(*id, connector);
                 }
-                CatalogItem::Index(index) => {
+                CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == *id) {
                         // Indexes on logging views are special, as they are
                         // already installed in the dataflow plane via
@@ -310,9 +301,11 @@ where
                         // TODO(benesch): why is this hardcoded to 1000?
                         // Should it not be the same logical compaction window
                         // that everything else uses?
-                        coord.insert_index(*id, &index, Some(1_000));
+                        coord
+                            .indexes
+                            .insert(*id, Frontiers::new(coord.num_timely_workers, Some(1_000)));
                     } else {
-                        coord.create_index_dataflow(name.to_string(), *id, index.clone())
+                        coord.ship_dataflow(coord.build_index_dataflow(*id));
                     }
                 }
             }
@@ -573,7 +566,7 @@ where
                 }
 
                 Message::Command(Command::CancelRequest { conn_id }) => {
-                    self.sequence_cancel(conn_id);
+                    self.handle_cancel(conn_id);
                 }
 
                 Message::Command(Command::DumpCatalog { tx }) => {
@@ -634,7 +627,7 @@ where
                             .send(PersistenceMetadata::Shutdown)
                             .unwrap();
                     }
-                    self.shutdown();
+                    broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown);
                     break;
                 }
             }
@@ -670,6 +663,140 @@ where
         while block_on(messages.next()).is_some() {}
     }
 
+    /// Updates the upper frontier of a named view.
+    fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
+        if let Some(index_state) = self.indexes.get_mut(name) {
+            let changes: Vec<_> = index_state.upper.update_iter(changes.drain()).collect();
+            if !changes.is_empty() {
+                // Advance the compaction frontier to trail the new frontier.
+                // If the compaction latency is `None` compaction messages are
+                // not emitted, and the trace should be broadly useable.
+                // TODO: If the frontier advances surprisingly quickly, e.g. in
+                // the case of a constant collection, this compaction is actively
+                // harmful. We should reconsider compaction policy with an eye
+                // towards minimizing unexpected screw-ups.
+                if let Some(compaction_latency_ms) = index_state.compaction_latency_ms {
+                    // Decline to compact complete collections. This would have the
+                    // effect of making the collection unusable. Instead, we would
+                    // prefer to compact collections only when we believe it would
+                    // reduce the volume of the collection, but we don't have that
+                    // information here.
+                    if !index_state.upper.frontier().is_empty() {
+                        let mut compaction_frontier = Antichain::new();
+                        for time in index_state.upper.frontier().iter() {
+                            compaction_frontier.insert(time.saturating_sub(compaction_latency_ms));
+                        }
+                        index_state.advance_since(&compaction_frontier);
+                        self.since_updates
+                            .push((name.clone(), index_state.since.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Perform maintenance work associated with the coordinator.
+    ///
+    /// Primarily, this involves sequencing compaction commands, which should be
+    /// issued whenever available.
+    fn maintenance(&mut self) {
+        // Take this opportunity to drain `since_update` commands.
+        // Don't try to compact to an empty frontier. There may be a good reason to do this
+        // in principle, but not in any current Mz use case.
+        // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
+        self.since_updates
+            .retain(|(_, frontier)| frontier != &Antichain::new());
+        if !self.since_updates.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::AllowCompaction(std::mem::replace(
+                    &mut self.since_updates,
+                    Vec::new(),
+                )),
+            );
+        }
+    }
+
+    fn handle_statement(
+        &mut self,
+        session: &Session,
+        stmt: sql::ast::Statement,
+        params: &sql::plan::Params,
+    ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
+        let pcx = PlanContext::default();
+
+        // When symbiosis mode is enabled, use symbiosis planning for:
+        //  - CREATE TABLE
+        //  - DROP TABLE
+        //  - INSERT
+        // When these statements are routed through symbiosis, table information
+        // is created and maintained locally, which is required for other statements
+        // to be executed correctly.
+        if let Statement::CreateTable(CreateTableStatement { .. })
+        | Statement::DropObjects(DropObjectsStatement {
+            object_type: ObjectType::Table,
+            ..
+        })
+        | Statement::Insert { .. } = &stmt
+        {
+            if let Some(ref mut postgres) = self.symbiosis {
+                let plan =
+                    block_on(postgres.execute(&pcx, &self.catalog.for_session(session), &stmt))?;
+                return Ok((pcx, plan));
+            }
+        }
+
+        match sql::plan::plan(
+            &pcx,
+            &self.catalog.for_session(session),
+            stmt.clone(),
+            params,
+        ) {
+            Ok(plan) => Ok((pcx, plan)),
+            Err(err) => match self.symbiosis {
+                Some(ref mut postgres) if postgres.can_handle(&stmt) => {
+                    let plan = block_on(postgres.execute(
+                        &pcx,
+                        &self.catalog.for_session(session),
+                        &stmt,
+                    ))?;
+                    Ok((pcx, plan))
+                }
+                _ => Err(err),
+            },
+        }
+    }
+
+    fn handle_describe(
+        &self,
+        session: &mut Session,
+        name: String,
+        stmt: Option<Statement>,
+        param_types: Vec<Option<pgrepr::Type>>,
+    ) -> Result<(), anyhow::Error> {
+        let (desc, param_types) = if let Some(stmt) = stmt.clone() {
+            match sql::plan::describe(
+                &self.catalog.for_session(session),
+                stmt.clone(),
+                &param_types,
+            ) {
+                Ok((desc, param_types)) => (desc, param_types),
+                // Describing the query failed. If we're running in symbiosis with
+                // Postgres, see if Postgres can handle it. Note that Postgres
+                // only handles commands that do not return rows, so the
+                // `RelationDesc` is always `None`.
+                Err(err) => match self.symbiosis {
+                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
+                    _ => return Err(err),
+                },
+            }
+        } else {
+            (None, vec![])
+        };
+        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
+        Ok(())
+    }
+
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`. This means canceling the active PEEK or TAIL, if
     /// one exists.
@@ -677,7 +804,7 @@ where
     /// NOTE(benesch): this function makes the assumption that a connection can
     /// only have one active query at a time. This is true today, but will not
     /// be true once we have full support for portals.
-    pub fn sequence_cancel(&mut self, conn_id: u32) {
+    fn handle_cancel(&mut self, conn_id: u32) {
         if let Some(name) = self.active_tails.remove(&conn_id) {
             // A TAIL is known to be active, so drop the dataflow that is
             // servicing it. No need to try to cancel PEEKs in this case,
@@ -696,7 +823,7 @@ where
 
     /// Terminate any temporary objects created by the named `conn_id`
     /// stored on the Coordinator.
-    pub fn handle_terminate(&mut self, conn_id: u32) {
+    fn handle_terminate(&mut self, conn_id: u32) {
         if let Some(name) = self.active_tails.remove(&conn_id) {
             self.drop_sinks(vec![name]);
         }
@@ -708,6 +835,58 @@ where
         self.catalog
             .drop_temporary_schema(conn_id)
             .expect("unable to drop temporary schema");
+    }
+
+    fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {
+        // Update catalog entry with sink connector.
+        let entry = self.catalog.get_by_id(&id);
+        let name = entry.name().clone();
+        let mut sink = match entry.item() {
+            CatalogItem::Sink(sink) => sink.clone(),
+            _ => unreachable!(),
+        };
+        sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
+        let ops = vec![
+            catalog::Op::DropItem(id),
+            catalog::Op::CreateItem {
+                id,
+                name: name.clone(),
+                item: CatalogItem::Sink(sink.clone()),
+            },
+        ];
+        self.catalog
+            .transact(ops)
+            .expect("replacing a sink cannot fail");
+
+        self.ship_dataflow(self.build_sink_dataflow(name.to_string(), id, sink.from, connector))
+    }
+
+    fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
+        let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
+        self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)));
+    }
+
+    /// Insert a single row into a given catalog view.
+    fn update_catalog_view<I>(&mut self, index_id: GlobalId, updates: I)
+    where
+        I: IntoIterator<Item = (Row, isize)>,
+    {
+        let timestamp = self.get_write_ts();
+        let updates = updates
+            .into_iter()
+            .map(|(row, diff)| Update {
+                row,
+                diff,
+                timestamp,
+            })
+            .collect();
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::Insert {
+                id: index_id,
+                updates,
+            },
+        );
     }
 
     fn sequence_plan(
@@ -888,16 +1067,6 @@ where
 
             Plan::Insert { id, values } => tx.send(self.sequence_insert(id, values), session),
 
-            Plan::ShowViews {
-                ids,
-                full,
-                show_queryable,
-                limit_materialized,
-            } => tx.send(
-                self.sequence_show_views(ids, full, show_queryable, limit_materialized),
-                session,
-            ),
-
             Plan::AlterItemRename {
                 id,
                 to_name,
@@ -966,21 +1135,17 @@ where
         match self.catalog_transact(vec![
             catalog::Op::CreateItem {
                 id: table_id,
-                name: name.clone(),
-                item: CatalogItem::Table(table.clone()),
+                name,
+                item: CatalogItem::Table(table),
             },
             catalog::Op::CreateItem {
                 id: index_id,
                 name: index_name,
-                item: CatalogItem::Index(index.clone()),
+                item: CatalogItem::Index(index),
             },
         ]) {
             Ok(_) => {
-                self.views.insert(table_id, ViewState::new(false, vec![]));
-                let mut dataflow = DataflowDesc::new(name.to_string());
-                self.import_source_or_view(&table_id, &mut dataflow);
-                self.build_arrangement(&index_id, index, table.desc.typ().clone(), dataflow);
-                self.tables.insert(index_id);
+                self.ship_dataflow(self.build_index_dataflow(index_id));
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1008,37 +1173,25 @@ where
             name: name.clone(),
             item: CatalogItem::Source(source.clone()),
         }];
-        let (index_id, index) = if materialized {
+        let index_id = if materialized {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index = auto_generate_primary_idx(
-                index_name.item.clone(),
-                name.clone(),
-                source_id,
-                &source.desc,
-            );
+            let index =
+                auto_generate_primary_idx(index_name.item.clone(), name, source_id, &source.desc);
             let index_id = self.catalog.allocate_id()?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
                 name: index_name,
-                item: CatalogItem::Index(index.clone()),
+                item: CatalogItem::Index(index),
             });
-            (Some(index_id), Some(index))
+            Some(index_id)
         } else {
-            (None, None)
+            None
         };
         match self.catalog_transact(ops) {
             Ok(()) => {
-                self.views.insert(source_id, ViewState::new(false, vec![]));
-                if materialized {
-                    let mut dataflow = DataflowDesc::new(name.to_string());
-                    self.import_source_or_view(&source_id, &mut dataflow);
-                    self.build_arrangement(
-                        &index_id.unwrap(),
-                        index.unwrap(),
-                        source.desc.typ().clone(),
-                        dataflow,
-                    );
+                if let Some(index_id) = index_id {
+                    self.ship_dataflow(self.build_index_dataflow(index_id));
                 }
 
                 self.handle_source_connector_persistence(source_id, &source.connector);
@@ -1157,38 +1310,26 @@ where
             name: name.clone(),
             item: CatalogItem::View(view.clone()),
         });
-        let (index_id, index) = if materialize {
+        let index_id = if materialize {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index = auto_generate_primary_idx(
-                index_name.item.clone(),
-                name.clone(),
-                view_id,
-                &view.desc,
-            );
+            let index =
+                auto_generate_primary_idx(index_name.item.clone(), name, view_id, &view.desc);
 
             let index_id = self.catalog.allocate_id()?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
                 name: index_name,
-                item: CatalogItem::Index(index.clone()),
+                item: CatalogItem::Index(index),
             });
-            (Some(index_id), Some(index))
+            Some(index_id)
         } else {
-            (None, None)
+            None
         };
         match self.catalog_transact(ops) {
             Ok(()) => {
-                self.insert_view(view_id, &view);
-                if materialize {
-                    let mut dataflow = DataflowDesc::new(name.to_string());
-                    self.build_view_collection(&view_id, &view, &mut dataflow);
-                    self.build_arrangement(
-                        &index_id.unwrap(),
-                        index.unwrap(),
-                        view.desc.typ().clone(),
-                        dataflow,
-                    );
+                if let Some(index_id) = index_id {
+                    self.ship_dataflow(self.build_index_dataflow(index_id));
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -1213,12 +1354,12 @@ where
         let id = self.catalog.allocate_id()?;
         let op = catalog::Op::CreateItem {
             id,
-            name: name.clone(),
-            item: CatalogItem::Index(index.clone()),
+            name,
+            item: CatalogItem::Index(index),
         };
         match self.catalog_transact(vec![op]) {
             Ok(()) => {
-                self.create_index_dataflow(name.to_string(), id, index);
+                self.ship_dataflow(self.build_index_dataflow(id));
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
@@ -1366,7 +1507,7 @@ where
                 typ: _,
             } = source.as_ref()
             {
-                if let Some(Some((index_id, _))) = self.views.get(&id).map(|v| &v.default_idx) {
+                if let Some((index_id, _)) = self.catalog.indexes()[&id].first() {
                     (true, *index_id)
                 } else if materialize {
                     (false, self.catalog.allocate_id()?)
@@ -1380,47 +1521,20 @@ where
                 (false, self.catalog.allocate_id()?)
             };
 
-            let index = if !fast_path {
+            if !fast_path {
                 // Slow path. We need to perform some computation, so build
                 // a new transient dataflow that will be dropped after the
                 // peek completes.
                 let typ = source.as_ref().typ();
-                let ncols = typ.column_types.len();
-                // Cheat a little bit here to get a relation description. A
-                // relation description is just a relation type with column
-                // names, but we don't know the column names for `source`
-                // here. Nothing in the dataflow layer cares about column
-                // names, so just set them all to `None`. The column names
-                // will ultimately be correctly transmitted to the client
-                // because they are safely stashed in the connection's
-                // session.
-                let desc = RelationDesc::new(
-                    typ.clone(),
-                    iter::repeat::<Option<ColumnName>>(None).take(ncols),
-                );
+                let key: Vec<_> = (0..typ.arity()).map(ScalarExpr::Column).collect();
                 let view_id = self.catalog.allocate_id()?;
-                let view_name = FullName {
-                    database: DatabaseSpecifier::Ambient,
-                    schema: "temp".into(),
-                    item: format!("temp-view-{}", view_id),
-                };
-                let index_name = format!("temp-index-on-{}", view_id);
-                let mut dataflow = DataflowDesc::new(view_name.to_string());
+                let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
                 dataflow.set_as_of(Antichain::from_elem(timestamp));
-                let view = catalog::View {
-                    create_sql: "<none>".into(),
-                    plan_cx: PlanContext::default(),
-                    optimized_expr: source,
-                    desc,
-                    conn_id: None,
-                };
-                self.build_view_collection(&view_id, &view, &mut dataflow);
-                let index = auto_generate_primary_idx(index_name, view_name, view_id, &view.desc);
-                self.build_arrangement(&index_id, index.clone(), typ, dataflow);
-                Some(index)
-            } else {
-                None
-            };
+                self.import_view_into_dataflow(&view_id, &source, &mut dataflow);
+                dataflow.add_index_to_build(index_id, view_id, typ.clone(), key.clone());
+                dataflow.add_index_export(index_id, view_id, typ, key);
+                self.ship_dataflow(dataflow);
+            }
 
             broadcast(
                 &mut self.broadcast_tx,
@@ -1436,7 +1550,7 @@ where
             );
 
             if !fast_path {
-                self.drop_indexes(vec![(index_id, &index.unwrap())]);
+                self.drop_indexes(vec![index_id]);
             }
 
             let rows_rx = rows_rx
@@ -1486,7 +1600,7 @@ where
         self.active_tails.insert(conn_id, sink_id);
         let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
-        self.create_sink_dataflow(
+        self.ship_dataflow(self.build_sink_dataflow(
             sink_name,
             sink_id,
             source_id,
@@ -1495,8 +1609,186 @@ where
                 frontier,
                 strict: !with_snapshot,
             }),
-        );
+        ));
         Ok(ExecuteResponse::Tailing { rx })
+    }
+
+    /// Extracts an optional projection around an optional filter.
+    ///
+    /// This extraction is done to allow workers to process a larger class of queries
+    /// without building explicit dataflows, avoiding latency, allocation and general
+    /// load on the system. The worker performs the filter and projection in place.
+    fn plan_peek(expr: &mut RelationExpr) -> (Option<Vec<usize>>, Vec<expr::ScalarExpr>) {
+        let mut outputs_plan = None;
+        if let RelationExpr::Project { input, outputs } = expr {
+            outputs_plan = Some(outputs.clone());
+            *expr = input.take_dangerous();
+        }
+        let mut predicates_plan = Vec::new();
+        if let RelationExpr::Filter { input, predicates } = expr {
+            predicates_plan.extend(predicates.iter().cloned());
+            *expr = input.take_dangerous();
+        }
+
+        // We only apply this transformation if the result is a `Get`.
+        // It is harmful to apply it otherwise, as we materialize more data than
+        // we would have if we applied the filter and projection beforehand.
+        if let RelationExpr::Get { .. } = expr {
+            (outputs_plan, predicates_plan)
+        } else {
+            if !predicates_plan.is_empty() {
+                *expr = expr.take_dangerous().filter(predicates_plan);
+            }
+            if let Some(outputs) = outputs_plan {
+                *expr = expr.take_dangerous().project(outputs);
+            }
+            (None, Vec::new())
+        }
+    }
+
+    /// A policy for determining the timestamp for a peek.
+    ///
+    /// The result may be `None` in the case that the `when` policy cannot be satisfied,
+    /// which is possible due to the restricted validity of traces (each has a `since`
+    /// and `upper` frontier, and are only valid after `since` and sure to be available
+    /// not after `upper`).
+    fn determine_timestamp(
+        &mut self,
+        source: &RelationExpr,
+        when: PeekWhen,
+    ) -> Result<Timestamp, anyhow::Error> {
+        // Each involved trace has a validity interval `[since, upper)`.
+        // The contents of a trace are only guaranteed to be correct when
+        // accumulated at a time greater or equal to `since`, and they
+        // are only guaranteed to be currently present for times not
+        // greater or equal to `upper`.
+        //
+        // The plan is to first determine a timestamp, based on the requested
+        // timestamp policy, and then determine if it can be satisfied using
+        // the compacted arrangements we have at hand. It remains unresolved
+        // what to do if it cannot be satisfied (perhaps the query should use
+        // a larger timestamp and block, perhaps the user should intervene).
+        let uses_ids = &source.global_uses();
+        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
+
+        // First determine the candidate timestamp, which is either the explicitly requested
+        // timestamp, or the latest timestamp known to be immediately available.
+        let timestamp = match when {
+            // Explicitly requested timestamps should be respected.
+            PeekWhen::AtTimestamp(timestamp) => timestamp,
+
+            // These two strategies vary in terms of which traces drive the
+            // timestamp determination process: either the trace itself or the
+            // original sources on which they depend.
+            PeekWhen::Immediately => {
+                if !indexes_complete {
+                    bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
+                }
+                if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
+                    // If the view depends on any tables, we enforce
+                    // linearizability by choosing the latest input time.
+                    self.get_read_ts()
+                } else {
+                    let upper = self.indexes.greatest_open_upper(index_ids.iter().cloned());
+                    // We peek at the largest element not in advance of `upper`, which
+                    // involves a subtraction. If `upper` contains a zero timestamp there
+                    // is no "prior" answer, and we do not want to peek at it as it risks
+                    // hanging awaiting the response to data that may never arrive.
+                    if let Some(candidate) = upper.elements().get(0) {
+                        if *candidate > 0 {
+                            candidate.saturating_sub(1)
+                        } else {
+                            let unstarted = index_ids
+                                .iter()
+                                .filter(|id| {
+                                    self.indexes
+                                        .upper_of(id)
+                                        .expect("id not found")
+                                        .less_equal(&0)
+                                })
+                                .collect::<Vec<_>>();
+                            bail!(
+                                "At least one input has no complete timestamps yet: {:?}",
+                                unstarted
+                            );
+                        }
+                    } else {
+                        // A complete trace can be read in its final form with this time.
+                        //
+                        // This should only happen for literals that have no sources
+                        Timestamp::max_value()
+                    }
+                }
+            }
+        };
+
+        // Determine the valid lower bound of times that can produce correct outputs.
+        // This bound is determined by the arrangements contributing to the query,
+        // and does not depend on the transitive sources.
+        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
+
+        // If the timestamp is greater or equal to some element in `since` we are
+        // assured that the answer will be correct.
+        if since.less_equal(&timestamp) {
+            Ok(timestamp)
+        } else {
+            let invalid = index_ids
+                .iter()
+                .filter(|id| {
+                    !self
+                        .indexes
+                        .since_of(id)
+                        .expect("id not found")
+                        .less_equal(&timestamp)
+                })
+                .map(|id| (id, self.indexes.since_of(id)))
+                .collect::<Vec<_>>();
+            bail!(
+                "Timestamp ({}) is not valid for all inputs: {:?}",
+                timestamp,
+                invalid
+            );
+        }
+    }
+
+    /// Determine the frontier of updates to start *from*.
+    /// Updates greater or equal to this frontier will be produced.
+    fn determine_frontier(
+        &mut self,
+        as_of: Option<u64>,
+        source_id: GlobalId,
+    ) -> Result<Antichain<u64>, anyhow::Error> {
+        let frontier = if let Some(ts) = as_of {
+            // If a timestamp was explicitly requested, use that.
+            Antichain::from_elem(self.determine_timestamp(
+                &RelationExpr::Get {
+                    id: Id::Global(source_id),
+                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
+                    typ: RelationType::empty(),
+                },
+                PeekWhen::AtTimestamp(ts),
+            )?)
+        }
+        // TODO: The logic that follows is at variance from PEEK logic which consults the
+        // "queryable" state of its inputs. We might want those to line up, but it is only
+        // a "might".
+        else if let Some((index_id, _)) = self.catalog.indexes()[&source_id].first() {
+            let upper = self
+                .indexes
+                .upper_of(index_id)
+                .expect("name missing at coordinator");
+
+            if let Some(ts) = upper.get(0) {
+                Antichain::from_elem(ts.saturating_sub(1))
+            } else {
+                Antichain::from_elem(Timestamp::max_value())
+            }
+        } else {
+            // TODO: This should more carefully consider `since` frontiers of its input.
+            // This will be forcibly corrected if any inputs are compacted.
+            Antichain::from_elem(0)
+        };
+        Ok(frontier)
     }
 
     fn sequence_explain_plan(
@@ -1607,60 +1899,6 @@ where
         }
     }
 
-    fn sequence_show_views(
-        &mut self,
-        ids: Vec<(String, GlobalId)>,
-        full: bool,
-        show_queryable: bool,
-        limit_materialized: bool,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
-        let view_information = ids
-            .into_iter()
-            .filter_map(|(name, id)| {
-                let class = match id {
-                    GlobalId::System(_) => "SYSTEM",
-                    GlobalId::User(_) => "USER",
-                };
-                if let Some(view_state) = self.views.get(&id) {
-                    if !limit_materialized || view_state.default_idx.is_some() {
-                        Some((
-                            name,
-                            class,
-                            view_state.queryable,
-                            view_state.default_idx.is_some(),
-                        ))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let mut rows = view_information
-            .into_iter()
-            .map({
-                let mut row_packer = RowPacker::new();
-                move |(name, class, queryable, materialized)| {
-                    let mut datums = vec![Datum::from(name.as_str())];
-                    if full {
-                        datums.push(Datum::from(class));
-                        if show_queryable {
-                            datums.push(Datum::from(queryable));
-                        }
-                        if !limit_materialized {
-                            datums.push(Datum::from(materialized));
-                        }
-                    }
-                    row_packer.pack(&datums)
-                }
-            })
-            .collect::<Vec<_>>();
-        rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
-        Ok(send_immediate_rows(rows))
-    }
-
     fn sequence_alter_item_rename(
         &mut self,
         id: Option<GlobalId>,
@@ -1681,7 +1919,6 @@ where
 
     fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), anyhow::Error> {
         let mut sources_to_drop = vec![];
-        let mut views_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
 
@@ -1697,9 +1934,8 @@ where
                     match entry.item() {
                         CatalogItem::Table(_) | CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
-                            views_to_drop.push(entry.id());
                         }
-                        CatalogItem::View(_) => views_to_drop.push(entry.id()),
+                        CatalogItem::View(_) => (),
                         CatalogItem::Sink(catalog::Sink {
                             connector: SinkConnectorState::Ready(connector),
                             ..
@@ -1736,7 +1972,7 @@ where
                             // If the sink connector state is pending, the sink
                             // dataflow was never created, so nothing to drop.
                         }
-                        CatalogItem::Index(idx) => indexes_to_drop.push((entry.id(), idx)),
+                        CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
                     }
                 }
                 _ => (),
@@ -1749,11 +1985,6 @@ where
                 SequencedCommand::DropSources(sources_to_drop),
             );
         }
-        if !views_to_drop.is_empty() {
-            for id in views_to_drop {
-                self.views.remove(&id);
-            }
-        }
         if !sinks_to_drop.is_empty() {
             broadcast(
                 &mut self.broadcast_tx,
@@ -1761,24 +1992,48 @@ where
             );
         }
         if !indexes_to_drop.is_empty() {
-            // It might be a table; just blindly remove it from `self.tables`
-            // in case it is.
-            for (id, _) in &indexes_to_drop {
-                let _ = self.tables.remove(id);
-            }
             self.drop_indexes(indexes_to_drop);
         }
 
         Ok(())
     }
 
-    fn import_source_or_view(&self, id: &GlobalId, dataflow: &mut DataflowDesc) {
+    fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::DropSinks(dataflow_names),
+        )
+    }
+
+    fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
+        let mut trace_keys = Vec::new();
+        for id in indexes {
+            if self.indexes.remove(&id).is_some() {
+                trace_keys.push(id);
+            }
+        }
+        if !trace_keys.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropIndexes(trace_keys),
+            )
+        }
+    }
+
+    /// Imports the view, source, or table with `id` into the provided
+    /// dataflow description.
+    fn import_into_dataflow(&self, id: &GlobalId, dataflow: &mut DataflowDesc) {
         if dataflow.objects_to_build.iter().any(|bd| &bd.id == id)
             || dataflow.source_imports.iter().any(|(i, _)| i == id)
         {
             return;
         }
-        if let Some((index_id, keys)) = &self.views[id].default_idx {
+        // A valid index is any index on `id` that is known to the dataflow
+        // layer, as indicated by its presence in `self.indexes`.s
+        let valid_index = self.catalog.indexes()[id]
+            .iter()
+            .find(|(id, _keys)| self.indexes.contains_key(*id));
+        if let Some((index_id, keys)) = valid_index {
             let index_desc = IndexDesc {
                 on_id: *id,
                 keys: keys.to_vec(),
@@ -1798,32 +2053,34 @@ where
                     dataflow.add_source_import(*id, source.connector.clone(), source.desc.clone());
                 }
                 CatalogItem::View(view) => {
-                    self.build_view_collection(id, &view, dataflow);
+                    self.import_view_into_dataflow(id, &view.optimized_expr, dataflow);
                 }
                 _ => unreachable!(),
             }
         }
     }
 
-    fn build_view_collection(
+    /// Imports the view with the specified ID and expression into the provided
+    /// dataflow description.
+    fn import_view_into_dataflow(
         &self,
         view_id: &GlobalId,
-        view: &catalog::View,
+        view: &OptimizedRelationExpr,
         dataflow: &mut DataflowDesc,
     ) {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
-        view.optimized_expr.as_ref().visit(&mut |e| {
+        view.as_ref().visit(&mut |e| {
             if let RelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
             } = e
             {
-                self.import_source_or_view(&id, dataflow);
+                self.import_into_dataflow(&id, dataflow);
                 dataflow.add_dependency(*view_id, *id)
             }
         });
         // Collect sources, views, and indexes used.
-        view.optimized_expr.as_ref().visit(&mut |e| {
+        view.as_ref().visit(&mut |e| {
             if let RelationExpr::ArrangeBy { input, keys } = e {
                 if let RelationExpr::Get {
                     id: Id::Global(on_id),
@@ -1838,51 +2095,60 @@ where
                         // If the arrangement exists, import it. It may not exist, in which
                         // case we should import the source to be sure that we have access
                         // to the collection to arrange it ourselves.
-                        if let Some(view) = self.views.get(on_id) {
-                            if let Some(ids) = view.primary_idxes.get(key_set) {
-                                dataflow.add_index_import(
-                                    *ids.first().unwrap(),
-                                    index_desc,
-                                    typ.clone(),
-                                    *view_id,
-                                );
-                            }
+                        let indexes = &self.catalog.indexes()[on_id];
+                        if let Some((id, _)) = indexes.iter().find(|(_id, keys)| keys == key_set) {
+                            dataflow.add_index_import(*id, index_desc, typ.clone(), *view_id);
                         }
                     }
                 }
             }
         });
-        dataflow.add_view_to_build(
-            *view_id,
-            view.optimized_expr.clone(),
-            view.desc.typ().clone(),
-        );
+        dataflow.add_view_to_build(*view_id, view.clone(), view.as_ref().typ());
     }
 
-    fn build_arrangement(
-        &mut self,
-        id: &GlobalId,
-        index: catalog::Index,
-        on_type: RelationType,
-        mut dataflow: DataflowDesc,
-    ) {
-        self.import_source_or_view(&index.on, &mut dataflow);
-        dataflow.add_index_to_build(*id, index.on.clone(), on_type.clone(), index.keys.clone());
-        dataflow.add_index_export(*id, index.on, on_type, index.keys.clone());
-        self.insert_index(*id, &index, self.logical_compaction_window_ms);
-        self.validate_dataflow(&mut dataflow);
-        self.broadcast_dataflow_creation(dataflow);
+    /// Builds a dataflow description for the index with the specified ID.
+    fn build_index_dataflow(&self, id: GlobalId) -> DataflowDesc {
+        let index_entry = self.catalog.get_by_id(&id);
+        let index = match index_entry.item() {
+            CatalogItem::Index(index) => index,
+            _ => unreachable!("cannot create index dataflow on non-index"),
+        };
+        let on_entry = self.catalog.get_by_id(&index.on);
+        let on_type = on_entry.desc().unwrap().typ().clone();
+        let mut dataflow = DataflowDesc::new(index_entry.name().to_string());
+        self.import_into_dataflow(&index.on, &mut dataflow);
+        dataflow.add_index_to_build(id, index.on.clone(), on_type.clone(), index.keys.clone());
+        dataflow.add_index_export(id, index.on, on_type, index.keys.clone());
+        dataflow
     }
 
-    /// Performs some sanity checking on the dataflow before shipping it.
+    /// Builds a dataflow description for the sink with the specified name,
+    /// ID, source, and output connector.
+    fn build_sink_dataflow(
+        &self,
+        name: String,
+        id: GlobalId,
+        from: GlobalId,
+        connector: SinkConnector,
+    ) -> DataflowDesc {
+        let mut dataflow = DataflowDesc::new(name);
+        dataflow.set_as_of(connector.get_frontier());
+        self.import_into_dataflow(&from, &mut dataflow);
+        let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
+        dataflow.add_sink_export(id, from, from_type, connector);
+        dataflow
+    }
+
+    /// Finalizes a dataflow and then broadcasts it to all workers.
+    ///
+    /// Finalization includes optimization, but also validation of various
+    /// invariants such as ensuring that the `as_of` frontier is in advance of
+    /// the various `since` frontiers of participating data inputs.
     ///
     /// In particular, there are requirement on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
-    fn validate_dataflow(&mut self, dataflow: &mut DataflowDesc) {
-        use differential_dataflow::lattice::Lattice;
-        use timely::progress::timestamp::Timestamp;
-
+    fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) {
         // The identity for `join` is the minimum element.
         let mut since = Antichain::from_elem(Timestamp::minimum());
 
@@ -1902,12 +2168,33 @@ where
             );
         }
 
-        // For each produced arrangement, force its compaction frontier to be at least `since`.
+        // For each produced arrangement, start tracking the arrangement with
+        // a compaction frontier of at least `since`.
         for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-            self.indexes
-                .get_mut(global_id)
-                .expect("global id missing at coordinator")
-                .advance_since(&since);
+            let mut frontiers =
+                Frontiers::new(self.num_timely_workers, self.logical_compaction_window_ms);
+            frontiers.advance_since(&since);
+            self.indexes.insert(*global_id, frontiers);
+        }
+
+        for (id, sink) in &dataflow.sink_exports {
+            match &sink.connector {
+                SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
+                    let row = Row::pack(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String(topic.as_str()),
+                    ]);
+                    self.update_catalog_view(MZ_KAFKA_SINKS.id, iter::once((row, 1)));
+                }
+                SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
+                    let row = Row::pack(&[
+                        Datum::String(&id.to_string()),
+                        Datum::Bytes(&path.clone().into_os_string().into_vec()),
+                    ]);
+                    self.update_catalog_view(MZ_AVRO_OCF_SINKS.id, iter::once((row, 1)));
+                }
+                _ => (),
+            }
         }
 
         // TODO: Produce "valid from" information for each sink.
@@ -1937,42 +2224,15 @@ where
             // Bind the since frontier to the dataflow description.
             dataflow.set_as_of(since);
         }
-    }
 
-    fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: catalog::Index) {
-        let dataflow = DataflowDesc::new(name);
-        let on_type = self
-            .catalog
-            .get_by_id(&index.on)
-            .desc()
-            .unwrap()
-            .typ()
-            .clone();
-        self.build_arrangement(&id, index, on_type, dataflow);
-    }
+        // Optimize the dataflow across views, and any other ways that appeal.
+        transform::optimize_dataflow(&mut dataflow);
 
-    fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {
-        // Update catalog entry with sink connector.
-        let entry = self.catalog.get_by_id(&id);
-        let name = entry.name().clone();
-        let mut sink = match entry.item() {
-            CatalogItem::Sink(sink) => sink.clone(),
-            _ => unreachable!(),
-        };
-        sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
-        let ops = vec![
-            catalog::Op::DropItem(id),
-            catalog::Op::CreateItem {
-                id,
-                name: name.clone(),
-                item: CatalogItem::Sink(sink.clone()),
-            },
-        ];
-        self.catalog
-            .transact(ops)
-            .expect("replacing a sink cannot fail");
-
-        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
+        // Finalize the dataflow by broadcasting its construction to all workers.
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::CreateDataflows(vec![dataflow]),
+        );
     }
 
     // Tell the persister that we have a new source to persist
@@ -1996,529 +2256,6 @@ where
             }
         }
     }
-
-    /// Insert a single row into a given catalog view.
-    fn update_catalog_view<I>(&mut self, index_id: GlobalId, updates: I)
-    where
-        I: IntoIterator<Item = (Row, isize)>,
-    {
-        let timestamp = self.get_write_ts();
-        let updates = updates
-            .into_iter()
-            .map(|(row, diff)| Update {
-                row,
-                diff,
-                timestamp,
-            })
-            .collect();
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::Insert {
-                id: index_id,
-                updates,
-            },
-        );
-    }
-
-    fn create_sink_dataflow(
-        &mut self,
-        name: String,
-        id: GlobalId,
-        from: GlobalId,
-        connector: SinkConnector,
-    ) {
-        match &connector {
-            SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                let row = Row::pack(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(topic.as_str()),
-                ]);
-                self.update_catalog_view(MZ_KAFKA_SINKS.id, iter::once((row, 1)));
-            }
-            SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                let row = Row::pack(&[
-                    Datum::String(&id.to_string()),
-                    Datum::Bytes(&path.clone().into_os_string().into_vec()),
-                ]);
-                self.update_catalog_view(MZ_AVRO_OCF_SINKS.id, iter::once((row, 1)));
-            }
-            _ => (),
-        }
-        let mut dataflow = DataflowDesc::new(name);
-        dataflow.set_as_of(connector.get_frontier());
-        self.import_source_or_view(&from, &mut dataflow);
-        let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
-        dataflow.add_sink_export(id, from, from_type, connector);
-        self.validate_dataflow(&mut dataflow);
-        self.broadcast_dataflow_creation(dataflow);
-    }
-
-    // Finalizes the dataflow and broadcasts it to all workers.
-    //
-    // Finalization includes optimization, but also validation of various invariants
-    // such as ensuring that the `as_of` frontier is in advance of the various `since`
-    // frontiers of participating data inputs.
-    fn broadcast_dataflow_creation(&mut self, mut dataflow: DataflowDesc) {
-        // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow);
-
-        // Finalize the dataflow by broadcasting its construction to all workers.
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::CreateDataflows(vec![dataflow]),
-        );
-    }
-
-    fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::DropSinks(dataflow_names),
-        )
-    }
-
-    fn drop_indexes(&mut self, indexes: Vec<(GlobalId, &catalog::Index)>) {
-        let mut trace_keys = Vec::new();
-        for (id, idx) in indexes {
-            if self.indexes.remove(&id).is_some() {
-                if let Some(view_state) = self.views.get_mut(&idx.on) {
-                    view_state.drop_primary_idx(&idx.keys, id);
-                    if view_state.default_idx.is_none() {
-                        view_state.queryable = false;
-                        self.propagate_queryability(&idx.on);
-                    }
-                }
-                trace_keys.push(id);
-            }
-        }
-        if !trace_keys.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropIndexes(trace_keys),
-            )
-        }
-    }
-
-    pub fn enable_feedback(&mut self) -> comm::mpsc::Receiver<WorkerFeedbackWithMeta> {
-        let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
-        broadcast(&mut self.broadcast_tx, SequencedCommand::EnableFeedback(tx));
-        rx
-    }
-
-    pub fn shutdown(&mut self) {
-        broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown)
-    }
-
-    fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
-        let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
-        self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)));
-    }
-
-    /// Perform maintenance work associated with the coordinator.
-    ///
-    /// Primarily, this involves sequencing compaction commands, which should be
-    /// issued whenever available.
-    pub fn maintenance(&mut self) {
-        // Take this opportunity to drain `since_update` commands.
-        // Don't try to compact to an empty frontier. There may be a good reason to do this
-        // in principle, but not in any current Mz use case.
-        // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
-        self.since_updates
-            .retain(|(_, frontier)| frontier != &Antichain::new());
-        if !self.since_updates.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::AllowCompaction(std::mem::replace(
-                    &mut self.since_updates,
-                    Vec::new(),
-                )),
-            );
-        }
-    }
-
-    /// Extracts an optional projection around an optional filter.
-    ///
-    /// This extraction is done to allow workers to process a larger class of queries
-    /// without building explicit dataflows, avoiding latency, allocation and general
-    /// load on the system. The worker performs the filter and projection in place.
-    fn plan_peek(expr: &mut RelationExpr) -> (Option<Vec<usize>>, Vec<expr::ScalarExpr>) {
-        let mut outputs_plan = None;
-        if let RelationExpr::Project { input, outputs } = expr {
-            outputs_plan = Some(outputs.clone());
-            *expr = input.take_dangerous();
-        }
-        let mut predicates_plan = Vec::new();
-        if let RelationExpr::Filter { input, predicates } = expr {
-            predicates_plan.extend(predicates.iter().cloned());
-            *expr = input.take_dangerous();
-        }
-
-        // We only apply this transformation if the result is a `Get`.
-        // It is harmful to apply it otherwise, as we materialize more data than
-        // we would have if we applied the filter and projection beforehand.
-        if let RelationExpr::Get { .. } = expr {
-            (outputs_plan, predicates_plan)
-        } else {
-            if !predicates_plan.is_empty() {
-                *expr = expr.take_dangerous().filter(predicates_plan);
-            }
-            if let Some(outputs) = outputs_plan {
-                *expr = expr.take_dangerous().project(outputs);
-            }
-            (None, Vec::new())
-        }
-    }
-
-    fn propagate_queryability(&mut self, id: &GlobalId) {
-        let mut ids_to_propagate = Vec::new();
-        for used_by_id in self.catalog.get_by_id(id).used_by().to_owned() {
-            //if view is not materialized
-            if self.views.contains_key(&used_by_id) && self.views[&used_by_id].default_idx.is_none()
-            {
-                let new_queryability = self.views[&used_by_id]
-                    .uses_views
-                    .iter()
-                    .all(|id| self.views[id].queryable);
-                if let Some(view_state) = self.views.get_mut(&used_by_id) {
-                    // we only need to continue propagating if there is a change in queryability
-                    if view_state.queryable != new_queryability {
-                        ids_to_propagate.push(used_by_id);
-                        view_state.queryable = new_queryability;
-                    }
-                }
-            }
-        }
-        for id in ids_to_propagate {
-            self.propagate_queryability(&id);
-        }
-    }
-
-    fn find_dependent_indexes(&self, id: &GlobalId) -> Vec<GlobalId> {
-        let mut results = Vec::new();
-        let view_state = &self.views[id];
-        if view_state.primary_idxes.is_empty() {
-            for id in view_state.uses_views.iter() {
-                results.append(&mut self.find_dependent_indexes(id));
-            }
-        } else {
-            for ids in view_state.primary_idxes.values() {
-                results.extend(ids.clone());
-            }
-        }
-        results.sort();
-        results.dedup();
-        results
-    }
-
-    /// A policy for determining the timestamp for a peek.
-    ///
-    /// The result may be `None` in the case that the `when` policy cannot be satisfied,
-    /// which is possible due to the restricted validity of traces (each has a `since`
-    /// and `upper` frontier, and are only valid after `since` and sure to be available
-    /// not after `upper`).
-    fn determine_timestamp(
-        &mut self,
-        source: &RelationExpr,
-        when: PeekWhen,
-    ) -> Result<Timestamp, anyhow::Error> {
-        // Each involved trace has a validity interval `[since, upper)`.
-        // The contents of a trace are only guaranteed to be correct when
-        // accumulated at a time greater or equal to `since`, and they
-        // are only guaranteed to be currently present for times not
-        // greater or equal to `upper`.
-        //
-        // The plan is to first determine a timestamp, based on the requested
-        // timestamp policy, and then determine if it can be satisfied using
-        // the compacted arrangements we have at hand. It remains unresolved
-        // what to do if it cannot be satisfied (perhaps the query should use
-        // a larger timestamp and block, perhaps the user should intervene).
-        let mut uses_ids = source.global_uses();
-        if when == PeekWhen::Immediately
-            && uses_ids.iter().any(|id| {
-                if let Some(view_state) = self.views.get(id) {
-                    !view_state.queryable
-                } else {
-                    true
-                }
-            })
-        {
-            bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
-        }
-        uses_ids = uses_ids
-            .into_iter()
-            .flat_map(|id| self.find_dependent_indexes(&id))
-            .collect();
-
-        // First determine the candidate timestamp, which is either the explicitly requested
-        // timestamp, or the latest timestamp known to be immediately available.
-        let timestamp = match when {
-            // Explicitly requested timestamps should be respected.
-            PeekWhen::AtTimestamp(timestamp) => timestamp,
-
-            // These two strategies vary in terms of which traces drive the
-            // timestamp determination process: either the trace itself or the
-            // original sources on which they depend.
-            PeekWhen::Immediately => {
-                if uses_ids.iter().any(|id| self.tables.contains(id)) {
-                    // If the view depends on any tables, we enforce
-                    // linearizability by choosing the latest input time.
-                    self.get_read_ts()
-                } else {
-                    let upper = self.indexes.greatest_open_upper(uses_ids.iter().cloned());
-                    // We peek at the largest element not in advance of `upper`, which
-                    // involves a subtraction. If `upper` contains a zero timestamp there
-                    // is no "prior" answer, and we do not want to peek at it as it risks
-                    // hanging awaiting the response to data that may never arrive.
-                    if let Some(candidate) = upper.elements().get(0) {
-                        if *candidate > 0 {
-                            candidate.saturating_sub(1)
-                        } else {
-                            let unstarted = uses_ids
-                                .iter()
-                                .filter(|id| {
-                                    self.indexes
-                                        .upper_of(id)
-                                        .expect("id not found")
-                                        .less_equal(&0)
-                                })
-                                .collect::<Vec<_>>();
-                            bail!(
-                                "At least one input has no complete timestamps yet: {:?}",
-                                unstarted
-                            );
-                        }
-                    } else {
-                        // A complete trace can be read in its final form with this time.
-                        //
-                        // This should only happen for literals that have no sources
-                        Timestamp::max_value()
-                    }
-                }
-            }
-        };
-
-        // Determine the valid lower bound of times that can produce correct outputs.
-        // This bound is determined by the arrangements contributing to the query,
-        // and does not depend on the transitive sources.
-        let since = self.indexes.least_valid_since(uses_ids.iter().cloned());
-
-        // If the timestamp is greater or equal to some element in `since` we are
-        // assured that the answer will be correct.
-        if since.less_equal(&timestamp) {
-            Ok(timestamp)
-        } else {
-            let invalid = uses_ids
-                .iter()
-                .filter(|id| {
-                    !self
-                        .indexes
-                        .since_of(id)
-                        .expect("id not found")
-                        .less_equal(&timestamp)
-                })
-                .map(|id| (id, self.indexes.since_of(id)))
-                .collect::<Vec<_>>();
-            bail!(
-                "Timestamp ({}) is not valid for all inputs: {:?}",
-                timestamp,
-                invalid
-            );
-        }
-    }
-
-    /// Determine the frontier of updates to start *from*.
-    /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(
-        &mut self,
-        as_of: Option<u64>,
-        source_id: GlobalId,
-    ) -> Result<Antichain<u64>, anyhow::Error> {
-        let frontier = if let Some(ts) = as_of {
-            // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(self.determine_timestamp(
-                &RelationExpr::Get {
-                    id: Id::Global(source_id),
-                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
-                    typ: RelationType::empty(),
-                },
-                PeekWhen::AtTimestamp(ts),
-            )?)
-        }
-        // TODO: The logic that follows is at variance from PEEK logic which consults the
-        // "queryable" state of its inputs. We might want those to line up, but it is only
-        // a "might".
-        else if let Some(Some((index_id, _))) = self
-            .views
-            .get(&source_id)
-            .map(|view_state| &view_state.default_idx)
-        {
-            let upper = self
-                .indexes
-                .upper_of(index_id)
-                .expect("name missing at coordinator");
-
-            if let Some(ts) = upper.get(0) {
-                Antichain::from_elem(ts.saturating_sub(1))
-            } else {
-                Antichain::from_elem(Timestamp::max_value())
-            }
-        } else {
-            // TODO: This should more carefully consider `since` frontiers of its input.
-            // This will be forcibly corrected if any inputs are compacted.
-            Antichain::from_elem(0)
-        };
-        Ok(frontier)
-    }
-
-    /// Updates the upper frontier of a named view.
-    fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
-        if let Some(index_state) = self.indexes.get_mut(name) {
-            let changes: Vec<_> = index_state.upper.update_iter(changes.drain()).collect();
-            if !changes.is_empty() {
-                // Advance the compaction frontier to trail the new frontier.
-                // If the compaction latency is `None` compaction messages are
-                // not emitted, and the trace should be broadly useable.
-                // TODO: If the frontier advances surprisingly quickly, e.g. in
-                // the case of a constant collection, this compaction is actively
-                // harmful. We should reconsider compaction policy with an eye
-                // towards minimizing unexpected screw-ups.
-                if let Some(compaction_latency_ms) = index_state.compaction_latency_ms {
-                    // Decline to compact complete collections. This would have the
-                    // effect of making the collection unusable. Instead, we would
-                    // prefer to compact collections only when we believe it would
-                    // reduce the volume of the collection, but we don't have that
-                    // information here.
-                    if !index_state.upper.frontier().is_empty() {
-                        let mut compaction_frontier = Antichain::new();
-                        for time in index_state.upper.frontier().iter() {
-                            compaction_frontier.insert(time.saturating_sub(compaction_latency_ms));
-                        }
-                        index_state.advance_since(&compaction_frontier);
-                        self.since_updates
-                            .push((name.clone(), index_state.since.clone()));
-                    }
-                }
-            }
-        }
-    }
-
-    /// Inserts a view into the coordinator.
-    ///
-    /// Initializes managed state and logs the insertion (and removal of any existing view).
-    fn insert_view(&mut self, view_id: GlobalId, view: &catalog::View) {
-        self.views.remove(&view_id);
-        let uses = view.optimized_expr.as_ref().global_uses();
-        self.views.insert(
-            view_id,
-            ViewState::new(
-                uses.iter().all(|id| {
-                    if let Some(view_state) = self.views.get(&id) {
-                        view_state.queryable
-                    } else {
-                        false
-                    }
-                }),
-                uses,
-            ),
-        );
-    }
-
-    /// Add an index to a view in the coordinator.
-    fn insert_index(
-        &mut self,
-        id: GlobalId,
-        index: &catalog::Index,
-        latency_ms: Option<Timestamp>,
-    ) {
-        if let Some(viewstate) = self.views.get_mut(&index.on) {
-            viewstate.add_primary_idx(&index.keys, id);
-            if !viewstate.queryable {
-                viewstate.queryable = true;
-                self.propagate_queryability(&index.on);
-            }
-        } // else the view is temporary
-        let index_state = Frontiers::new(self.num_timely_workers, latency_ms);
-        self.indexes.insert(id, index_state);
-    }
-
-    fn handle_statement(
-        &mut self,
-        session: &Session,
-        stmt: sql::ast::Statement,
-        params: &sql::plan::Params,
-    ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
-        let pcx = PlanContext::default();
-
-        // When symbiosis mode is enabled, use symbiosis planning for:
-        //  - CREATE TABLE
-        //  - DROP TABLE
-        //  - INSERT
-        // When these statements are routed through symbiosis, table information
-        // is created and maintained locally, which is required for other statements
-        // to be executed correctly.
-        if let Statement::CreateTable(CreateTableStatement { .. })
-        | Statement::DropObjects(DropObjectsStatement {
-            object_type: ObjectType::Table,
-            ..
-        })
-        | Statement::Insert { .. } = &stmt
-        {
-            if let Some(ref mut postgres) = self.symbiosis {
-                let plan =
-                    block_on(postgres.execute(&pcx, &self.catalog.for_session(session), &stmt))?;
-                return Ok((pcx, plan));
-            }
-        }
-
-        match sql::plan::plan(
-            &pcx,
-            &self.catalog.for_session(session),
-            stmt.clone(),
-            params,
-        ) {
-            Ok(plan) => Ok((pcx, plan)),
-            Err(err) => match self.symbiosis {
-                Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                    let plan = block_on(postgres.execute(
-                        &pcx,
-                        &self.catalog.for_session(session),
-                        &stmt,
-                    ))?;
-                    Ok((pcx, plan))
-                }
-                _ => Err(err),
-            },
-        }
-    }
-
-    fn handle_describe(
-        &self,
-        session: &mut Session,
-        name: String,
-        stmt: Option<Statement>,
-        param_types: Vec<Option<pgrepr::Type>>,
-    ) -> Result<(), anyhow::Error> {
-        let (desc, param_types) = if let Some(stmt) = stmt.clone() {
-            match sql::plan::describe(
-                &self.catalog.for_session(session),
-                stmt.clone(),
-                &param_types,
-            ) {
-                Ok((desc, param_types)) => (desc, param_types),
-                // Describing the query failed. If we're running in symbiosis with
-                // Postgres, see if Postgres can handle it. Note that Postgres
-                // only handles commands that do not return rows, so the
-                // `RelationDesc` is always `None`.
-                Err(err) => match self.symbiosis {
-                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
-                    _ => return Err(err),
-                },
-            }
-        } else {
-            (None, vec![])
-        };
-        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
-        Ok(())
-    }
 }
 
 fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {
@@ -2535,64 +2272,7 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
     ExecuteResponse::SendingRows(Box::pin(rx.err_into()))
 }
 
-/// Per-view state.
-#[derive(Debug)]
-pub struct ViewState {
-    /// Only views, not sources, on which the view depends
-    uses_views: Vec<GlobalId>,
-    queryable: bool,
-    /// keys of default index
-    default_idx: Option<(GlobalId, Vec<ScalarExpr>)>,
-    // TODO(andiwang): only allow one primary index?
-    /// Currently all indexes are primary indexes
-    primary_idxes: BTreeMap<Vec<ScalarExpr>, Vec<GlobalId>>,
-    // TODO(andiwang): materialize#220 Implement seconary indexes
-    // secondary_idxes: BTreeMap<Vec<ScalarExpr>, Vec<GlobalId>>,
-}
-
-impl ViewState {
-    fn new(queryable: bool, uses_views: Vec<GlobalId>) -> Self {
-        ViewState {
-            queryable,
-            uses_views,
-            default_idx: None,
-            primary_idxes: BTreeMap::new(),
-            //secondary_idxes: BTreeMap::new(),
-        }
-    }
-
-    pub fn add_primary_idx(&mut self, primary_idx: &[ScalarExpr], id: GlobalId) {
-        if self.default_idx.is_none() {
-            self.default_idx = Some((id, primary_idx.to_owned()));
-        }
-        self.primary_idxes
-            .entry(primary_idx.to_owned())
-            .or_insert_with(Vec::new)
-            .push(id);
-    }
-
-    pub fn drop_primary_idx(&mut self, primary_idx: &[ScalarExpr], id: GlobalId) {
-        let entry = self.primary_idxes.get_mut(primary_idx).unwrap();
-        entry.retain(|i| i != &id);
-        if entry.is_empty() {
-            self.primary_idxes.remove(primary_idx);
-        }
-        let is_default = if let Some((_, keys)) = &self.default_idx {
-            &keys[..] == primary_idx
-        } else {
-            unreachable!()
-        };
-        if is_default {
-            self.default_idx = self
-                .primary_idxes
-                .iter()
-                .next()
-                .map(|(keys, ids)| (*ids.first().unwrap(), keys.to_owned()));
-        }
-    }
-}
-
-pub fn auto_generate_primary_idx(
+fn auto_generate_primary_idx(
     index_name: String,
     on_name: FullName,
     on_id: GlobalId,
@@ -2632,151 +2312,4 @@ pub fn index_sql(
         if_not_exists: false,
     }
     .to_ast_string_stable()
-}
-
-/// Loads the catalog stored at `path` and returns its serialized state.
-///
-/// There are no guarantees about the format of the serialized state, except
-/// that the serialized state for two identical catalogs will compare
-/// identically.
-pub fn dump_catalog(path: &Path) -> Result<String, anyhow::Error> {
-    let catalog = Catalog::open(catalog::Config {
-        path: Some(path),
-        enable_logging: true,
-        experimental_mode: None,
-    })?;
-    Ok(catalog.dump())
-}
-
-/// Frontier state for each arrangement.
-pub mod arrangement_state {
-
-    use std::collections::HashMap;
-
-    use differential_dataflow::lattice::Lattice;
-    use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
-    use timely::progress::Timestamp;
-
-    use expr::GlobalId;
-
-    /// A map from global identifiers to arrangement frontier state.
-    pub struct ArrangementFrontiers<T: Timestamp> {
-        index: HashMap<GlobalId, Frontiers<T>>,
-    }
-
-    impl<T: Timestamp> Default for ArrangementFrontiers<T> {
-        fn default() -> Self {
-            Self {
-                index: HashMap::new(),
-            }
-        }
-    }
-
-    impl<T: Timestamp> ArrangementFrontiers<T> {
-        pub fn get(&self, id: &GlobalId) -> Option<&Frontiers<T>> {
-            self.index.get(id)
-        }
-        pub fn get_mut(&mut self, id: &GlobalId) -> Option<&mut Frontiers<T>> {
-            self.index.get_mut(id)
-        }
-        pub fn insert(&mut self, id: GlobalId, state: Frontiers<T>) -> Option<Frontiers<T>> {
-            self.index.insert(id, state)
-        }
-        pub fn remove(&mut self, id: &GlobalId) -> Option<Frontiers<T>> {
-            self.index.remove(id)
-        }
-
-        /// The upper frontier of a maintained index, if it exists.
-        pub fn upper_of(&self, name: &GlobalId) -> Option<AntichainRef<T>> {
-            if let Some(index_state) = self.get(name) {
-                Some(index_state.upper.frontier())
-            } else {
-                None
-            }
-        }
-
-        /// The since frontier of a maintained index, if it exists.
-        pub fn since_of(&self, name: &GlobalId) -> Option<&Antichain<T>> {
-            if let Some(index_state) = self.get(name) {
-                Some(&index_state.since)
-            } else {
-                None
-            }
-        }
-
-        /// Reports the greatest frontier less than all identified `upper` frontiers.
-        pub fn greatest_open_upper<I>(&self, identifiers: I) -> Antichain<T>
-        where
-            I: IntoIterator<Item = GlobalId>,
-            T: Lattice,
-        {
-            // Form lower bound on available times
-            let mut min_upper = Antichain::new();
-            for id in identifiers {
-                // To track the meet of `upper` we just extend with the upper frontier.
-                // This was almost `meet_assign` but our uppers are `MutableAntichain`s.
-                min_upper.extend(self.upper_of(&id).unwrap().iter().cloned());
-            }
-            min_upper
-        }
-
-        /// Reports the minimal frontier greater than all identified `since` frontiers.
-        pub fn least_valid_since<I>(&self, identifiers: I) -> Antichain<T>
-        where
-            I: IntoIterator<Item = GlobalId>,
-            T: Lattice,
-        {
-            let mut max_since = Antichain::from_elem(T::minimum());
-            for id in identifiers {
-                // TODO: We could avoid repeated allocation by swapping two buffers.
-                max_since.join_assign(self.since_of(&id).expect("Since missing at coordinator"));
-            }
-            max_since
-        }
-    }
-
-    pub struct Frontiers<T: Timestamp> {
-        /// The most recent frontier for new data.
-        /// All further changes will be in advance of this bound.
-        pub upper: MutableAntichain<T>,
-        /// The compaction frontier.
-        /// All peeks in advance of this frontier will be correct,
-        /// but peeks not in advance of this frontier may not be.
-        pub since: Antichain<T>,
-        /// Compaction delay.
-        ///
-        /// This timestamp drives the advancement of the since frontier as a
-        /// function of the upper frontier, trailing it by exactly this much.
-        pub compaction_latency_ms: Option<T>,
-    }
-
-    impl<T: Timestamp> Frontiers<T> {
-        /// Creates an empty index state from a number of workers.
-        pub fn new(workers: usize, compaction_latency_ms: Option<T>) -> Self {
-            let mut upper = MutableAntichain::new();
-            upper.update_iter(Some((T::minimum(), workers as i64)));
-            Self {
-                upper,
-                since: Antichain::from_elem(T::minimum()),
-                compaction_latency_ms,
-            }
-        }
-
-        /// Sets the latency behind the collection frontier at which compaction occurs.
-        #[allow(dead_code)]
-        pub fn set_compaction_latency(&mut self, latency_ms: Option<T>) {
-            self.compaction_latency_ms = latency_ms;
-        }
-
-        /// Advances `since` to the least upper bound of itself and `frontier`.
-        ///
-        /// It is important that we only ever advance `since`, as winding it backwards
-        /// does not make the data backing the arrangement any more valid.
-        pub fn advance_since(&mut self, frontier: &Antichain<T>)
-        where
-            T: Lattice,
-        {
-            self.since.join_assign(frontier);
-        }
-    }
 }

@@ -30,7 +30,8 @@ mod util;
 
 pub mod session;
 
-pub use self::coord::{dump_catalog, Config, Coordinator};
-pub use self::persistence::PersistenceConfig;
-pub use self::timestamp::TimestampConfig;
-pub use command::{Command, ExecuteResponse, Response, RowsFuture, StartupMessage};
+pub use crate::catalog::dump as dump_catalog;
+pub use crate::command::{Command, ExecuteResponse, Response, RowsFuture, StartupMessage};
+pub use crate::coord::{Config, Coordinator};
+pub use crate::persistence::PersistenceConfig;
+pub use crate::timestamp::TimestampConfig;
