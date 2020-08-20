@@ -17,7 +17,6 @@ use differential_dataflow::operators::{Reduce, Threshold};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
-use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, RelationExpr};
@@ -27,12 +26,6 @@ use repr::{Datum, Row, RowArena, RowPacker};
 use super::context::Context;
 use crate::render::context::Arrangement;
 
-// impl<G, T> Context<G, RelationExpr, Row, T>
-// where
-//     G: Scope,
-//     G::Timestamp: Lattice + Refines<T>,
-//     T: Timestamp + Lattice,
-// {
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G, RelationExpr, Row, dataflow_types::Timestamp>
 where
