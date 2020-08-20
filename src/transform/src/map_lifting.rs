@@ -414,26 +414,30 @@ impl LiteralLifting {
                 // Literals can just be lifted out of threshold.
                 self.action(input, gets)
             }
-            RelationExpr::Union { left, right } => {
-                // We cannot, in general, lift literals out of unions.
-                let mut l_literals = self.action(left, gets);
-                let mut r_literals = self.action(right, gets);
+            RelationExpr::Union { base, inputs } => {
+                let mut base_literals = self.action(base, gets);
+                for input in inputs {
+                    let mut input_literals = self.action(input, gets);
 
-                let mut results = Vec::new();
-                while !l_literals.is_empty() && l_literals.last() == r_literals.last() {
-                    l_literals.pop();
-                    results.push(r_literals.pop().unwrap());
-                }
-                results.reverse();
+                    let mut results = Vec::new();
+                    while !base_literals.is_empty() && base_literals.last() == input_literals.last()
+                    {
+                        base_literals.pop();
+                        results.push(input_literals.pop().unwrap());
+                    }
+                    results.reverse();
 
-                if !l_literals.is_empty() {
-                    **left = left.take_dangerous().map(l_literals);
+                    if !base_literals.is_empty() {
+                        **base = base.take_dangerous().map(base_literals);
+                    }
+                    if !input_literals.is_empty() {
+                        *input = input.take_dangerous().map(input_literals);
+                    }
+
+                    // TODO(frank): extract non-terminal literals.
+                    base_literals = results;
                 }
-                if !r_literals.is_empty() {
-                    **right = right.take_dangerous().map(r_literals);
-                }
-                // TODO(frank): extract non-terminal literals.
-                results
+                base_literals
             }
             RelationExpr::ArrangeBy { input, keys } => {
                 // TODO(frank): Not sure if this is the right behavior,

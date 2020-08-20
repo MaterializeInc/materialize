@@ -215,14 +215,16 @@ impl RedundantJoin {
 
             RelationExpr::Map { input, .. } => self.action(input, lets),
 
-            RelationExpr::Union { left, right } => {
-                let prov_l = self.action(left, lets);
-                let prov_r = self.action(right, lets);
-                let mut result = Vec::new();
-                for l in prov_l {
-                    result.extend(prov_r.iter().flat_map(|r| l.meet(r)))
+            RelationExpr::Union { base, inputs } => {
+                let mut prov = self.action(base, lets);
+                for input in inputs {
+                    let mut new_prov = Vec::new();
+                    for l in prov {
+                        new_prov.extend(self.action(input, lets).iter().flat_map(|r| l.meet(r)))
+                    }
+                    prov = new_prov;
                 }
-                result
+                prov
             }
 
             RelationExpr::Constant { .. } => Vec::new(),

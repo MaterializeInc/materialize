@@ -13,3 +13,4 @@ pub mod filter;
 pub mod join;
 pub mod map;
 pub mod project;
+pub mod union;

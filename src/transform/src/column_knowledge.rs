@@ -11,10 +11,13 @@
 
 use std::collections::HashMap;
 
-use crate::TransformArgs;
+use itertools::Itertools;
+
 use expr::{RelationExpr, ScalarExpr, UnaryFunc};
 use repr::Datum;
 use repr::{ColumnType, RelationType, ScalarType};
+
+use crate::TransformArgs;
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
@@ -241,22 +244,23 @@ impl ColumnKnowledge {
             RelationExpr::TopK { input, .. } => ColumnKnowledge::harvest(input, knowledge)?,
             RelationExpr::Negate { input } => ColumnKnowledge::harvest(input, knowledge)?,
             RelationExpr::Threshold { input } => ColumnKnowledge::harvest(input, knowledge)?,
-            RelationExpr::Union { left, right } => {
-                let know1 = ColumnKnowledge::harvest(left, knowledge)?;
-                let know2 = ColumnKnowledge::harvest(right, knowledge)?;
-
-                know1
-                    .into_iter()
-                    .zip(know2)
-                    .map(|(k1, k2)| DatumKnowledge {
-                        value: if k1.value == k2.value {
-                            k1.value.clone()
-                        } else {
-                            None
-                        },
-                        nullable: k1.nullable || k2.nullable,
-                    })
-                    .collect()
+            RelationExpr::Union { base, inputs } => {
+                let mut know = ColumnKnowledge::harvest(base, knowledge)?;
+                for input in inputs {
+                    know = know
+                        .into_iter()
+                        .zip_eq(ColumnKnowledge::harvest(input, knowledge)?)
+                        .map(|(k1, k2)| DatumKnowledge {
+                            value: if k1.value == k2.value {
+                                k1.value.clone()
+                            } else {
+                                None
+                            },
+                            nullable: k1.nullable || k2.nullable,
+                        })
+                        .collect();
+                }
+                know
             }
         })
     }

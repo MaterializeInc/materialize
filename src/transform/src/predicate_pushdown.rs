@@ -423,10 +423,11 @@ impl PredicatePushdown {
                     }
                     *relation = result;
                 }
-                RelationExpr::Union { left, right } => {
-                    let left = left.take_dangerous().filter(predicates.clone());
-                    let right = right.take_dangerous().filter(predicates.clone());
-                    *relation = left.union(right);
+                RelationExpr::Union { base, inputs } => {
+                    *base = Box::new(base.take_dangerous().filter(predicates.clone()));
+                    for input in inputs {
+                        *input = input.take_dangerous().filter(predicates.clone());
+                    }
                 }
                 RelationExpr::Negate { input: inner } => {
                     let predicates = std::mem::replace(predicates, Vec::new());

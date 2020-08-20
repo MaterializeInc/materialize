@@ -12,8 +12,10 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
+use ore::collections::CollectionExt;
 use repr::{ColumnType, Datum, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
@@ -180,14 +182,14 @@ pub enum RelationExpr {
         /// The source collection.
         input: Box<RelationExpr>,
     },
-    /// Adds the frequencies of elements in both sets.
+    /// Adds the frequencies of elements in contained sets.
     ///
     /// The runtime memory footprint of this operator is zero.
     Union {
         /// A source collection.
-        left: Box<RelationExpr>,
-        /// A source collection.
-        right: Box<RelationExpr>,
+        base: Box<RelationExpr>,
+        /// Source collections to union.
+        inputs: Vec<RelationExpr>,
     },
     /// Technically a no-op. Used to render an index. Will be used to optimize queries
     /// on finer grain
@@ -436,20 +438,17 @@ impl RelationExpr {
                 typ
             }
             RelationExpr::Threshold { input } => input.typ(),
-            RelationExpr::Union { left, right } => {
-                let left_typ = left.typ();
-                let right_typ = right.typ();
-                assert_eq!(left_typ.column_types.len(), right_typ.column_types.len());
-                RelationType::new(
-                    left_typ
-                        .column_types
-                        .iter()
-                        .zip(right_typ.column_types.iter())
-                        .map(|(l, r)| l.union(r))
-                        .collect::<Result<Vec<_>, _>>()
-                        .map_err(|e| format!("{}\nIn {:#?}", e, self))
-                        .unwrap(),
-                )
+            RelationExpr::Union { base, inputs } => {
+                let mut base_cols = base.typ().column_types;
+                for input in inputs {
+                    for (base_col, col) in base_cols.iter_mut().zip_eq(input.typ().column_types) {
+                        *base_col = base_col
+                            .union(&col)
+                            .map_err(|e| format!("{}\nIn {:#?}", e, self))
+                            .unwrap();
+                    }
+                }
+                RelationType::new(base_cols)
                 // Important: do not inherit keys of either input, as not unique.
             }
             RelationExpr::ArrangeBy { input, .. } => input.typ(),
@@ -680,11 +679,28 @@ impl RelationExpr {
         }
     }
 
+    /// Unions together any number inputs.
+    ///
+    /// If `inputs` is empty, then an empty relation of type `typ` is
+    /// constructed.
+    pub fn union_many(mut inputs: Vec<Self>, typ: RelationType) -> Self {
+        if inputs.len() == 0 {
+            RelationExpr::Constant { rows: vec![], typ }
+        } else if inputs.len() == 1 {
+            inputs.into_element()
+        } else {
+            RelationExpr::Union {
+                base: Box::new(inputs.remove(0)),
+                inputs,
+            }
+        }
+    }
+
     /// Produces one collection where each row is present with the sum of its frequencies in each input.
     pub fn union(self, other: Self) -> Self {
         RelationExpr::Union {
-            left: Box::new(self),
-            right: Box::new(other),
+            base: Box::new(self),
+            inputs: vec![other],
         }
     }
 
@@ -770,9 +786,11 @@ impl RelationExpr {
             }
             RelationExpr::Negate { input } => f(input)?,
             RelationExpr::Threshold { input } => f(input)?,
-            RelationExpr::Union { left, right } => {
-                f(left)?;
-                f(right)?;
+            RelationExpr::Union { base, inputs } => {
+                f(base)?;
+                for input in inputs {
+                    f(input)?;
+                }
             }
             RelationExpr::ArrangeBy { input, .. } => {
                 f(input)?;
@@ -847,9 +865,11 @@ impl RelationExpr {
             }
             RelationExpr::Negate { input } => f(input)?,
             RelationExpr::Threshold { input } => f(input)?,
-            RelationExpr::Union { left, right } => {
-                f(left)?;
-                f(right)?;
+            RelationExpr::Union { base, inputs } => {
+                f(base)?;
+                for input in inputs {
+                    f(input)?;
+                }
             }
             RelationExpr::ArrangeBy { input, .. } => {
                 f(input)?;
@@ -979,7 +999,7 @@ impl RelationExpr {
             }
             | RelationExpr::Negate { input: _ }
             | RelationExpr::Threshold { input: _ }
-            | RelationExpr::Union { left: _, right: _ } => (),
+            | RelationExpr::Union { base: _, inputs: _ } => (),
         })
     }
 

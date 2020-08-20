@@ -482,12 +482,16 @@ fn plan_values(
 
     // Build constant relation.
     let typ = RelationType::new(col_types);
-    let mut out = RelationExpr::constant(vec![], typ);
+    let mut rows = vec![];
     for _ in 0..nrows {
         let row: Vec<_> = (0..ncols).map(|i| col_iters[i].next().unwrap()).collect();
         let empty = RelationExpr::constant(vec![vec![]], RelationType::new(vec![]));
-        out = out.union(empty.map(row));
+        rows.push(empty.map(row));
     }
+    let out = RelationExpr::Union {
+        base: Box::new(RelationExpr::constant(vec![], typ)),
+        inputs: rows,
+    };
 
     // Build column names.
     let mut scope = Scope::empty(Some(qcx.outer_scope.clone()));

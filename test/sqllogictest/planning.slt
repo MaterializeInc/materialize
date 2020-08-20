@@ -53,3 +53,21 @@ EXPLAIN PLAN FOR VIEW plan_test1
 | Project (#4, #0, #1)
 
 EOF
+
+# Test that chained unions get planned with a single union operator.
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM test1 UNION ALL SELECT * FROM test1 UNION ALL SELECT * FROM test1
+----
+%0 =
+| Get materialize.public.test1 (u1)
+
+%1 =
+| Get materialize.public.test1 (u1)
+
+%2 =
+| Get materialize.public.test1 (u1)
+
+%3 =
+| Union %0 %1 %2
+
+EOF

@@ -212,6 +212,7 @@ impl Default for Optimizer {
                     Box::new(crate::fusion::filter::Filter),
                     Box::new(crate::fusion::project::Project),
                     Box::new(crate::fusion::map::Map),
+                    Box::new(crate::fusion::union::Union),
                     Box::new(crate::empty_map::EmptyMap),
                     Box::new(crate::join_elision::JoinElision),
                     Box::new(crate::reduce_elision::ReduceElision),

@@ -10,6 +10,7 @@
 //! Replace operators on constants collections with constant collections.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::iter;
 
 use expr::RelationExpr;
 use repr::{Datum, RowArena};
@@ -319,50 +320,24 @@ impl FoldConstants {
                 }
                 // TODO: General constant folding for all constant inputs.
             }
-            RelationExpr::Union { .. } => {
-                let mut can_reduce = false;
-                if let RelationExpr::Union { left, right } = relation {
-                    if let (RelationExpr::Constant { .. }, RelationExpr::Constant { .. }) =
-                        (&mut **left, &mut **right)
-                    {
-                        can_reduce = true;
+            RelationExpr::Union { base, inputs } => {
+                let mut rows = vec![];
+                let mut new_inputs = vec![];
+
+                for input in iter::once(&mut **base).chain(&mut *inputs) {
+                    match input.take_dangerous() {
+                        RelationExpr::Constant { rows: rs, typ: _ } => rows.extend(rs),
+                        input => new_inputs.push(input),
                     }
+                }
+                if !rows.is_empty() {
+                    new_inputs.push(RelationExpr::Constant {
+                        rows,
+                        typ: relation_type.clone(),
+                    });
                 }
 
-                if can_reduce {
-                    let metadata = relation.typ();
-                    if let RelationExpr::Union { left, right } = relation {
-                        if let (
-                            RelationExpr::Constant {
-                                rows: rows_left,
-                                typ: typ_left,
-                            },
-                            RelationExpr::Constant {
-                                rows: rows_right,
-                                typ: _,
-                            },
-                        ) = (&mut **left, &mut **right)
-                        {
-                            rows_left.append(rows_right);
-                            if rows_left.is_empty() {
-                                relation.take_safely();
-                            } else {
-                                *typ_left = metadata;
-                                *relation = left.take_dangerous();
-                            }
-                        }
-                    }
-                }
-
-                // The guard above to compute metadata doesn't apply here.
-                if let RelationExpr::Union { left, right } = relation {
-                    match (left.is_empty(), right.is_empty()) {
-                        (true, true) => unreachable!(), // both must be constants, so handled above
-                        (true, false) => *relation = right.take_dangerous(),
-                        (false, true) => *relation = left.take_dangerous(),
-                        (false, false) => (),
-                    }
-                }
+                *relation = RelationExpr::union_many(new_inputs, relation_type);
             }
             RelationExpr::ArrangeBy { input, .. } => {
                 if let RelationExpr::Constant { .. } = &**input {

@@ -304,8 +304,18 @@ impl RelationExpr {
                 Threshold { .. } => {
                     write!(pretty, "Threshold").unwrap();
                 }
-                Union { left, right } => {
-                    write!(pretty, "Union %{} %{}", expr_chain(left), expr_chain(right)).unwrap();
+                Union { base, inputs } => {
+                    let input_chains: Vec<_> = inputs
+                        .iter()
+                        .map(|input| Bracketed("%", "", expr_chain(input)))
+                        .collect();
+                    write!(
+                        pretty,
+                        "Union %{} {}",
+                        expr_chain(base),
+                        Separated(" ", input_chains)
+                    )
+                    .unwrap();
                 }
                 ArrangeBy { keys, .. } => {
                     write!(
