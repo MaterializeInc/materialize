@@ -327,7 +327,8 @@ where
         // Track time relative to the Unix epoch, rather than when the server
         // started, so that the logging sources can be joined with tables and
         // other real time sources for semi-sensible results.
-        let epoch = Instant::now() - UNIX_EPOCH.elapsed().expect("time went backwards");
+        let now = Instant::now();
+        let unix = UNIX_EPOCH.elapsed().expect("time went backwards");
 
         // Establish loggers first, so we can either log the logging or not, as we like.
         let t_linked = std::rc::Rc::new(EventLink::new());
@@ -345,21 +346,21 @@ where
         // Register each logger endpoint.
         self.timely_worker.log_register().insert_logger(
             "timely",
-            Logger::new(epoch, self.timely_worker.index(), move |time, data| {
+            Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
                 t_logger.publish_batch(time, data)
             }),
         );
 
         self.timely_worker.log_register().insert_logger(
             "differential/arrange",
-            Logger::new(epoch, self.timely_worker.index(), move |time, data| {
+            Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
                 d_logger.publish_batch(time, data)
             }),
         );
 
         self.timely_worker.log_register().insert_logger(
             "materialized",
-            Logger::new(epoch, self.timely_worker.index(), move |time, data| {
+            Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
                 m_logger.publish_batch(time, data)
             }),
         );
