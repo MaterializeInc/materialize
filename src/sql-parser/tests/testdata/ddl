@@ -755,3 +755,94 @@ parse-statement roundtrip
 CREATE TABLE IF NOT EXISTS foo (bar int)
 ----
 CREATE TABLE IF NOT EXISTS foo (bar int)
+
+parse-statement
+ALTER INDEX name SET (property = true)
+----
+ALTER INDEX name SET (property = true)
+=>
+AlterIndexOptions(AlterIndexOptionsStatement { index_name: ObjectName([Ident("name")]), if_exists: false, options: Set([SqlOption { name: Ident("property"), value: Boolean(true) }]) })
+
+parse-statement
+ALTER INDEX name RESET (property)
+----
+ALTER INDEX name RESET (property)
+=>
+AlterIndexOptions(AlterIndexOptionsStatement { index_name: ObjectName([Ident("name")]), if_exists: false, options: Reset([Ident("property")]) })
+
+parse-statement
+ALTER INDEX IF EXISTS name SET (property = true)
+----
+ALTER INDEX IF EXISTS name SET (property = true)
+=>
+AlterIndexOptions(AlterIndexOptionsStatement { index_name: ObjectName([Ident("name")]), if_exists: true, options: Set([SqlOption { name: Ident("property"), value: Boolean(true) }]) })
+
+parse-statement
+ALTER INDEX name SET ()
+----
+error:
+Parse error:
+ALTER INDEX name SET ()
+                      ^
+Expected identifier, found: )
+
+parse-statement
+ALTER INDEX name RESET ()
+----
+error:
+Parse error:
+ALTER INDEX name RESET ()
+                        ^
+Expected identifier, found: )
+
+parse-statement
+ALTER INDEX name SET (property)
+----
+error:
+Parse error:
+ALTER INDEX name SET (property)
+                              ^
+Expected =, found: )
+
+parse-statement
+ALTER INDEX name RESET (property = true)
+----
+error:
+Parse error:
+ALTER INDEX name RESET (property = true)
+                                 ^
+Expected ), found: =
+
+parse-statement
+ALTER SOURCE name SET (property = true)
+----
+error:
+Parse error:
+ALTER SOURCE name SET (property = true)
+                  ^^^
+Expected RENAME, found: SET
+
+parse-statement
+ALTER VIEW name SET (property = true)
+----
+error:
+Parse error:
+ALTER VIEW name SET (property = true)
+                ^^^
+Expected RENAME, found: SET
+
+parse-statement
+ALTER SINK name SET (property = true)
+----
+error:
+Parse error:
+ALTER SINK name SET (property = true)
+                ^^^
+Expected RENAME, found: SET
+
+parse-statement
+ALTER INDEX name RENAME TO name2
+----
+ALTER INDEX name RENAME TO name2
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: ObjectName([Ident("name")]), to_item_name: Ident("name2") })

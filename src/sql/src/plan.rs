@@ -26,6 +26,8 @@
 // `plan_root_query` and fanning out based on the contents of the `SELECT`
 // statement.
 
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -154,6 +156,7 @@ pub enum Plan {
         to_name: String,
         object_type: ObjectType,
     },
+    AlterIndexLogicalCompactionWindow(Option<AlterIndexLogicalCompactionWindow>),
 }
 
 #[derive(Clone, Debug)]
@@ -206,6 +209,22 @@ pub enum MutationKind {
     Insert,
     Update,
     Delete,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct AlterIndexLogicalCompactionWindow {
+    pub index: GlobalId,
+    pub logical_compaction_window: LogicalCompactionWindow,
+}
+
+/// Specifies what value the `logical_compaction_window` parameter should be set to.
+#[derive(Debug, PartialEq)]
+pub enum LogicalCompactionWindow {
+    /// Disable logical compaction.
+    Off,
+    /// Set compaction to the system wide default.
+    Default,
+    Custom(Duration),
 }
 
 /// A vector of values to which parameter references should be bound.

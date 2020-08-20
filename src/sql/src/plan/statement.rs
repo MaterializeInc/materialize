@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -34,16 +34,17 @@ use ore::collections::CollectionExt;
 use repr::{strconv, ColumnName};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AlterObjectRenameStatement, AvroSchema, BinaryOperator, ColumnOption, Connector,
-    CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateViewStatement, DropDatabaseStatement,
-    DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
-    IfExistsBehavior, InsertStatement, Join, JoinConstraint, JoinOperator, ObjectName, ObjectType,
-    OrderByExpr, Query, Select, SelectItem, SelectStatement, SetExpr, SetVariableStatement,
-    SetVariableValue, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
-    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
-    ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter,
-    ShowVariableStatement, SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
+    AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
+    BinaryOperator, ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement,
+    CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateViewStatement, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
+    ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement, Join,
+    JoinConstraint, JoinOperator, ObjectName, ObjectType, OrderByExpr, Query, Select, SelectItem,
+    SelectStatement, SetExpr, SetVariableStatement, SetVariableValue, ShowColumnsStatement,
+    ShowCreateIndexStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
+    ShowCreateTableStatement, ShowCreateViewStatement, ShowDatabasesStatement,
+    ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
+    SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -55,8 +56,8 @@ use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::transform_ast::transform_query;
 use crate::plan::{
-    query, scalar_type_from_sql, Index, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table,
-    View,
+    query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, Index, LogicalCompactionWindow,
+    Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, View,
 };
 use crate::pure::Schema;
 
@@ -131,6 +132,7 @@ pub fn describe_statement(
         | Statement::Rollback(_)
         | Statement::Commit(_)
         | Statement::AlterObjectRename(_)
+        | Statement::AlterIndexOptions(_)
         | Statement::Insert(_) => (None, vec![]),
 
         Statement::Explain(ExplainStatement {
@@ -301,6 +303,7 @@ pub fn handle_statement(
         Statement::DropDatabase(stmt) => handle_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => handle_drop_objects(scx, stmt),
         Statement::AlterObjectRename(stmt) => handle_alter_object_rename(scx, stmt),
+        Statement::AlterIndexOptions(stmt) => handle_alter_index_options(scx, stmt),
         Statement::ShowColumns(stmt) => handle_show_columns(scx, stmt),
         Statement::ShowCreateIndex(stmt) => handle_show_create_index(scx, stmt),
         Statement::ShowCreateSink(stmt) => handle_show_create_sink(scx, stmt),
@@ -426,6 +429,75 @@ fn handle_alter_object_rename(
         to_name: normalize::ident(to_item_name),
         object_type,
     })
+}
+
+fn handle_alter_index_options(
+    scx: &StatementContext,
+    AlterIndexOptionsStatement {
+        index_name,
+        if_exists,
+        options,
+    }: AlterIndexOptionsStatement,
+) -> Result<Plan, anyhow::Error> {
+    let alter_index = match scx.resolve_item(index_name) {
+        Ok(name) => {
+            let entry = scx.catalog.get_item(&name);
+            if entry.item_type() != CatalogItemType::Index {
+                bail!("{} is a {} not a index", name, entry.item_type())
+            }
+
+            let logical_compaction_window = match options {
+                AlterIndexOptionsList::Reset(o) => {
+                    let mut options: HashSet<_> =
+                        o.iter().map(|x| normalize::ident(x.clone())).collect();
+                    // Follow Postgres and don't complain if unknown parameters
+                    // are passed into ALTER INDEX ... RESET
+                    if options.remove("logical_compaction_window") {
+                        Some(LogicalCompactionWindow::Default)
+                    } else {
+                        None
+                    }
+                }
+                AlterIndexOptionsList::Set(o) => {
+                    let mut options = normalize::options(&o);
+
+                    let logical_compaction_window = match options
+                        .remove("logical_compaction_window")
+                    {
+                        Some(Value::String(window)) => match window.as_str() {
+                            "off" => Some(LogicalCompactionWindow::Off),
+                            s => Some(LogicalCompactionWindow::Custom(parse_duration::parse(s)?)),
+                        },
+                        Some(_) => bail!("\"logical_compaction_window\" must be a string"),
+                        None => None,
+                    };
+
+                    if !options.is_empty() {
+                        bail!("unrecognized parameter: \"{}\". Only \"logical_compaction_window\" is currently supported.",
+                              options.keys().next().expect("known to exist"))
+                    }
+
+                    logical_compaction_window
+                }
+            };
+
+            if let Some(logical_compaction_window) = logical_compaction_window {
+                Some(AlterIndexLogicalCompactionWindow {
+                    index: entry.id(),
+                    logical_compaction_window,
+                })
+            } else {
+                None
+            }
+        }
+        Err(_) if if_exists => {
+            // TODO(rkhaitan): better message indicating that the index does not exist.
+            None
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    Ok(Plan::AlterIndexLogicalCompactionWindow(alter_index))
 }
 
 fn finish_show_where(

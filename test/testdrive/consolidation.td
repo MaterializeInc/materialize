@@ -92,3 +92,59 @@ $ kafka-ingest format=avro topic=data-consistency timestamp=1 schema=${trxschema
 
 $ kafka-verify format=avro sink=materialize.public.snk1
 {"before": null, "after": {"num": 3, "name": "three"}}
+
+$ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=2
+{"before": {"num": 3, "name": "three"}, "after": {"num": 4, "name": "four"}}
+{"before": {"num": 4, "name": "four"}, "after": {"num": 5, "name": "five"}}
+
+$ kafka-ingest format=avro topic=data-consistency timestamp=2 schema=${trxschemakey}
+{"id": "2"}
+{"id": "3"}
+
+$ kafka-ingest format=avro topic=data-consistency timestamp=2 schema=${trxschema}
+{"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
+{"status":"END","id":"2","event_count":1,"data_collections":[{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+{"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
+{"status":"END","id":"3","event_count":1,"data_collections":[{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+
+> SELECT * FROM names AS OF 2;
+num name
+---------
+4 "four"
+
+> ALTER INDEX materialize.public.names_primary_idx SET(logical_compaction_window='1ms')
+
+$ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=3
+{"before": {"num": 5, "name": "five"}, "after": {"num": 6, "name": "six"}}
+
+$ kafka-ingest format=avro topic=data-consistency timestamp=3 schema=${trxschemakey}
+{"id": "4"}
+
+$ kafka-ingest format=avro topic=data-consistency timestamp=3 schema=${trxschema}
+{"status":"BEGIN","id":"4","event_count":null,"data_collections":null}
+{"status":"END","id":"4","event_count":1,"data_collections":[{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+
+! SELECT * FROM names AS OF 2;
+Timestamp (2) is not valid for all inputs
+
+# Reset the compaction window back to default (currently 60,000)
+> ALTER INDEX materialize.public.names_primary_idx RESET(logical_compaction_window)
+
+$ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=4
+{"before": {"num": 6, "name": "six"}, "after": {"num": 7, "name": "seven"}}
+{"before": {"num": 7, "name": "seven"}, "after": {"num": 8, "name": "eight"}}
+
+$ kafka-ingest format=avro topic=data-consistency timestamp=4 schema=${trxschemakey}
+{"id": "5"}
+{"id": "6"}
+
+$ kafka-ingest format=avro topic=data-consistency timestamp=4 schema=${trxschema}
+{"status":"BEGIN","id":"5","event_count":null,"data_collections":null}
+{"status":"END","id":"5","event_count":1,"data_collections":[{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+{"status":"BEGIN","id":"6","event_count":null,"data_collections":null}
+{"status":"END","id":"6","event_count":1,"data_collections":[{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+
+> SELECT * FROM names AS OF 4;
+num name
+---------
+6 "six"

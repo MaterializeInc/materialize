@@ -124,7 +124,6 @@ impl<T: Timestamp> Frontiers<T> {
     }
 
     /// Sets the latency behind the collection frontier at which compaction occurs.
-    #[allow(dead_code)]
     pub fn set_compaction_window_ms(&mut self, window_ms: Option<T>) {
         self.compaction_window_ms = window_ms;
     }

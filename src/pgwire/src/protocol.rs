@@ -809,6 +809,7 @@ where
             }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
+            ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
         }
     }
 
