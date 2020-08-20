@@ -383,6 +383,7 @@ define_keywords!(
     RENAME,
     REPEATABLE,
     REPLACE,
+    RESET,
     RESTRICT,
     RESULT,
     RETURN,

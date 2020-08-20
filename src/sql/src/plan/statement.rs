@@ -129,6 +129,7 @@ pub fn describe_statement(
         | Statement::Rollback(_)
         | Statement::Commit(_)
         | Statement::AlterObjectRename(_)
+        | Statement::AlterIndexOptions(_)
         | Statement::Insert(_) => (None, vec![]),
 
         Statement::Explain(ExplainStatement {
@@ -299,6 +300,9 @@ pub fn handle_statement(
         Statement::DropDatabase(stmt) => handle_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => handle_drop_objects(scx, stmt),
         Statement::AlterObjectRename(stmt) => handle_alter_object_rename(scx, stmt),
+        Statement::AlterIndexOptions(_) => {
+            bail!("ALTER INDEX ... {RESET, SET} statements are not currently supported")
+        }
         Statement::ShowColumns(stmt) => handle_show_columns(scx, stmt),
         Statement::ShowCreateIndex(stmt) => handle_show_create_index(scx, stmt),
         Statement::ShowCreateSink(stmt) => handle_show_create_sink(scx, stmt),
