@@ -281,12 +281,11 @@ where
         if hierarchical {
             if monotonic && is_min_or_max(&func) {
                 use differential_dataflow::operators::iterate::Variable;
-                use differential_dataflow::operators::Consolidate;
                 let delay = std::time::Duration::from_nanos(10_000_000_000);
                 let retractions = Variable::new(&mut partial.scope(), delay.as_millis() as u64);
                 let thinned = partial.concat(&retractions.negate());
                 let result = build_hierarchical(thinned, &func);
-                retractions.set(&partial.concat(&result.negate()).consolidate());
+                retractions.set(&partial.concat(&result.negate()));
                 partial = result
             } else {
                 partial = build_hierarchical(partial, &func)

@@ -38,12 +38,11 @@ where
             // For monotonic inputs, we are able to retract inputs not produced as outputs.
             if *monotonic {
                 use differential_dataflow::operators::iterate::Variable;
-                use differential_dataflow::operators::Consolidate;
                 let delay = std::time::Duration::from_nanos(10_000_000_000);
                 let retractions = Variable::new(&mut ok_input.scope(), delay.as_millis() as u64);
                 let thinned = ok_input.concat(&retractions.negate());
                 let result = build_topk(thinned, group_key, order_key, *offset, *limit, arity);
-                retractions.set(&ok_input.concat(&result.negate()).consolidate());
+                retractions.set(&ok_input.concat(&result.negate()));
                 self.collections
                     .insert(relation_expr.clone(), (result, err_input));
             } else {
