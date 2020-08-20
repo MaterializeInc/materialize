@@ -156,10 +156,13 @@ pub mod monotonic {
                 *monotonic = is_monotonic(input, sources);
                 false
             }
-            RelationExpr::Union { left, right } => {
-                let monotonic_l = is_monotonic(left, sources);
-                let monotonic_r = is_monotonic(right, sources);
-                monotonic_l && monotonic_r
+            RelationExpr::Union { base, inputs } => {
+                let mut monotonic = is_monotonic(base, sources);
+                for input in inputs.iter_mut() {
+                    let monotonic_i = is_monotonic(input, sources);
+                    monotonic = monotonic && monotonic_i;
+                }
+                monotonic
             }
             RelationExpr::ArrangeBy { input, .. } => is_monotonic(input, sources),
             _ => {
