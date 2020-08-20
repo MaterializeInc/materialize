@@ -681,11 +681,17 @@ where
                     if !index_state.upper.frontier().is_empty() {
                         let mut compaction_frontier = Antichain::new();
                         for time in index_state.upper.frontier().iter() {
-                            compaction_frontier.insert(time.saturating_sub(compaction_latency_ms));
+                            compaction_frontier.insert(
+                                compaction_latency_ms
+                                    * (time.saturating_sub(compaction_latency_ms)
+                                        / compaction_latency_ms),
+                            );
                         }
-                        index_state.advance_since(&compaction_frontier);
-                        self.since_updates
-                            .push((name.clone(), index_state.since.clone()));
+                        if index_state.since != compaction_frontier {
+                            index_state.advance_since(&compaction_frontier);
+                            self.since_updates
+                                .push((name.clone(), index_state.since.clone()));
+                        }
                     }
                 }
             }
