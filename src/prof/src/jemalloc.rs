@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//!
 //! Various profiling utilities:
 //!
 //! (1) Turn jemalloc profiling on and off, and dump heap profiles (`PROF_CTL`)
@@ -22,8 +21,8 @@ use jemalloc_ctl::{epoch, raw, stats};
 use lazy_static::lazy_static;
 use tempfile::NamedTempFile;
 
+use super::{ProfStartTime, StackProfile, WeightedStack};
 use anyhow::bail;
-use prof_common::{ProfStartTime, StackProfile, WeightedStack};
 
 lazy_static! {
     pub static ref PROF_CTL: Option<Arc<Mutex<JemallocProfCtl>>> = {

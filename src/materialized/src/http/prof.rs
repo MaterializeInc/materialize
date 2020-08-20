@@ -16,9 +16,10 @@ use askama::Template;
 use cfg_if::cfg_if;
 use hyper::{Body, Request, Response};
 
+use prof::{collate_stacks, time::prof_time, ProfStartTime, StackProfile};
+
 use super::util;
 use crate::http::Server;
-use prof_common::{collate_stacks, time::prof_time, ProfStartTime, StackProfile};
 
 impl Server {
     pub fn handle_prof(
@@ -67,7 +68,7 @@ async fn time_prof<'a>(
         if #[cfg(target_os = "macos")] {
             ctl_lock = ();
         } else {
-            ctl_lock = if let Some(ctl) = prof_jemalloc::PROF_CTL.as_ref() {
+            ctl_lock = if let Some(ctl) = prof::jemalloc::PROF_CTL.as_ref() {
                 let mut borrow = ctl.lock().await;
                 borrow.deactivate()?;
                 Some(borrow)
@@ -174,7 +175,7 @@ mod enabled {
     use tokio::sync::Mutex;
     use url::form_urlencoded;
 
-    use prof_jemalloc::{parse_jeheap, JemallocProfCtl, JemallocProfMetadata, PROF_CTL};
+    use prof::jemalloc::{parse_jeheap, JemallocProfCtl, JemallocProfMetadata, PROF_CTL};
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;

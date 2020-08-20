@@ -9,6 +9,8 @@
 
 use std::{collections::HashMap, ffi::c_void, time::Instant};
 
+#[cfg(feature = "jemalloc")]
+pub mod jemalloc;
 pub mod time;
 
 #[derive(Copy, Clone, Debug)]
