@@ -148,7 +148,13 @@ pub mod monotonic {
                 input, monotonic, ..
             } => {
                 *monotonic = is_monotonic(input, sources);
-                *monotonic
+                false
+            }
+            RelationExpr::Reduce {
+                input, monotonic, ..
+            } => {
+                *monotonic = is_monotonic(input, sources);
+                false
             }
             RelationExpr::Union { left, right } => {
                 let monotonic_l = is_monotonic(left, sources);

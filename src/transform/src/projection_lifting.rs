@@ -196,6 +196,7 @@ impl ProjectionLifting {
                 input,
                 group_key,
                 aggregates,
+                monotonic: _,
             } => {
                 // Reduce *absorbs* projections, which is amazing!
                 self.action(input, gets);

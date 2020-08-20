@@ -150,6 +150,8 @@ pub enum RelationExpr {
         group_key: Vec<ScalarExpr>,
         /// Expressions which determine values to append to each row, after the group keys.
         aggregates: Vec<AggregateExpr>,
+        /// True iff the input is known to monotonically increase (only addition of records).
+        monotonic: bool,
     },
     /// Groups and orders within each group, limiting output.
     ///
@@ -389,6 +391,7 @@ impl RelationExpr {
                 input,
                 group_key,
                 aggregates,
+                monotonic: _,
             } => {
                 let input_typ = input.typ();
                 let mut column_types = group_key
@@ -631,6 +634,7 @@ impl RelationExpr {
             input: Box::new(self),
             group_key: group_key.into_iter().map(ScalarExpr::Column).collect(),
             aggregates,
+            monotonic: false,
         }
     }
 
@@ -954,6 +958,7 @@ impl RelationExpr {
                 group_key,
                 aggregates,
                 input: _,
+                monotonic: _,
             } => {
                 for s in group_key {
                     s.visit_mut(f);

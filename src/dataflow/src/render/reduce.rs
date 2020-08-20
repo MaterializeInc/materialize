@@ -27,11 +27,16 @@ use repr::{Datum, Row, RowArena, RowPacker};
 use super::context::Context;
 use crate::render::context::Arrangement;
 
-impl<G, T> Context<G, RelationExpr, Row, T>
+// impl<G, T> Context<G, RelationExpr, Row, T>
+// where
+//     G: Scope,
+//     G::Timestamp: Lattice + Refines<T>,
+//     T: Timestamp + Lattice,
+// {
+// The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
+impl<G> Context<G, RelationExpr, Row, dataflow_types::Timestamp>
 where
-    G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G: Scope<Timestamp = dataflow_types::Timestamp>,
 {
     /// Renders a `RelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
@@ -40,6 +45,7 @@ where
             input,
             group_key,
             aggregates,
+            monotonic,
         } = relation_expr
         {
             // The reduce operator may have multiple aggregation functions, some of
@@ -156,7 +162,7 @@ where
             } else if aggregates.len() == 1 {
                 // If we have a single aggregate, we need not stage aggregations separately.
                 (
-                    build_aggregate_stage(ok_input, 0, &aggregates[0], true),
+                    build_aggregate_stage(ok_input, 0, &aggregates[0], true, *monotonic),
                     err_input,
                 )
             } else {
@@ -171,8 +177,13 @@ where
                     // position in the final results. To be followed by a merge reduction.
                     for (index, aggr) in aggregates.iter().enumerate() {
                         // Collect the now-aggregated partial result, annotated with its position.
-                        let ok_partial =
-                            build_aggregate_stage(ok_input.enter(region), index, aggr, false);
+                        let ok_partial = build_aggregate_stage(
+                            ok_input.enter(region),
+                            index,
+                            aggr,
+                            false,
+                            *monotonic,
+                        );
                         ok_partials.push(
                             ok_partial
                                 .as_collection(move |key, val| (key.clone(), (index, val.clone())))
@@ -237,10 +248,10 @@ fn build_aggregate_stage<G>(
     index: usize,
     aggr: &AggregateExpr,
     prepend_key: bool,
+    monotonic: bool,
 ) -> Arrangement<G, Row>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
+    G: Scope<Timestamp = dataflow_types::Timestamp>,
 {
     let AggregateExpr {
         func,
@@ -275,7 +286,18 @@ where
         // If hierarchical, we can repeatedly digest the groups, to minimize the incremental
         // update costs on relatively small updates.
         if hierarchical {
-            partial = build_hierarchical(partial, &func)
+            if monotonic && is_min_or_max(&func) {
+                use differential_dataflow::operators::iterate::Variable;
+                use differential_dataflow::operators::Consolidate;
+                let delay = std::time::Duration::from_nanos(10_000_000_000);
+                let retractions = Variable::new(&mut partial.scope(), delay.as_millis() as u64);
+                let thinned = partial.concat(&retractions.negate());
+                let result = build_hierarchical(thinned, &func);
+                retractions.set(&partial.concat(&result.negate()).consolidate());
+                partial = result
+            } else {
+                partial = build_hierarchical(partial, &func)
+            }
         }
 
         // Perform a final aggregation, on potentially hierarchically reduced data.
@@ -563,5 +585,32 @@ fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
         | AggregateFunc::MinTimestamp
         | AggregateFunc::MinTimestampTz => (false, true),
         AggregateFunc::JsonbAgg => (false, false),
+    }
+}
+
+/// True if the function is min or max.
+fn is_min_or_max(func: &AggregateFunc) -> bool {
+    match func {
+        AggregateFunc::MaxInt32
+        | AggregateFunc::MaxInt64
+        | AggregateFunc::MaxFloat32
+        | AggregateFunc::MaxFloat64
+        | AggregateFunc::MaxDecimal
+        | AggregateFunc::MaxBool
+        | AggregateFunc::MaxString
+        | AggregateFunc::MaxDate
+        | AggregateFunc::MaxTimestamp
+        | AggregateFunc::MaxTimestampTz
+        | AggregateFunc::MinInt32
+        | AggregateFunc::MinInt64
+        | AggregateFunc::MinFloat32
+        | AggregateFunc::MinFloat64
+        | AggregateFunc::MinDecimal
+        | AggregateFunc::MinBool
+        | AggregateFunc::MinString
+        | AggregateFunc::MinDate
+        | AggregateFunc::MinTimestamp
+        | AggregateFunc::MinTimestampTz => true,
+        _ => false,
     }
 }
