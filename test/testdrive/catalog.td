@@ -48,6 +48,12 @@ Database
 ----
 materialize
 
+# This SELECT should always return the same result as SHOW DATABASES.
+> SELECT * FROM mz_catalog.mz_databases
+global_id   database
+-----------------------
+1           materialize
+
 # Creating a database should be reflected in the output of SHOW DATABASES.
 > CREATE DATABASE d
 > SHOW DATABASES
@@ -55,6 +61,12 @@ Database
 ----
 d
 materialize
+
+> SELECT * FROM mz_catalog.mz_databases
+global_id   database
+-----------------------
+1           materialize
+2           d
 
 # Creating a database with a name that already exists should fail.
 ! CREATE DATABASE d
@@ -108,6 +120,10 @@ Expected end of statement, found: RESTRICT
 Database
 ----
 materialize
+> SELECT * FROM mz_catalog.mz_databases
+global_id   database
+-----------------------
+1           materialize
 
 # The session database should remain set to the dropped database, but future
 # queries that depend on the session database should fail with sensible error
@@ -169,6 +185,12 @@ Database
 d
 d2
 materialize
+> SELECT * FROM mz_catalog.mz_databases
+global_id   database
+-----------------------
+1           materialize
+2           d
+4           d2
 
 > SHOW VIEWS FROM d2.public;
  VIEWS
@@ -197,7 +219,7 @@ mz_catalog_names
 mz_kafka_sinks
 mz_view_foreign_keys
 mz_view_keys
-mz_database
+mz_databases
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

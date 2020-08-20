@@ -696,7 +696,16 @@ impl Catalog {
                     Some(schema) => Ok(schema),
                     None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
                 },
-                None => Err(SqlCatalogError::UnknownDatabase(name.to_owned())),
+                None => {
+                    // Materialize allows you to drop the current database, meaning
+                    // that the current database may not exist when trying to get its
+                    // schema. If the current database isn't found, try to get the schema
+                    // from the set of ambient schemas, instead.
+                    match self.ambient_schemas.get(schema_name) {
+                        Some(schema) => Ok(schema),
+                        None => Err(SqlCatalogError::UnknownDatabase(name.to_owned())),
+                    }
+                }
             },
         }
     }
@@ -722,7 +731,16 @@ impl Catalog {
                     Some(schema) => Ok(schema),
                     None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
                 },
-                None => Err(SqlCatalogError::UnknownDatabase(name.to_owned())),
+                None => {
+                    // Materialize allows you to drop the current database, meaning
+                    // that the current database may not exist when trying to get its
+                    // schema. If the current database isn't found, try to get the schema
+                    // from the set of ambient schemas, instead.
+                    match self.ambient_schemas.get_mut(schema_name) {
+                        Some(schema) => Ok(schema),
+                        None => Err(SqlCatalogError::UnknownDatabase(name.to_owned())),
+                    }
+                }
             },
         }
     }
