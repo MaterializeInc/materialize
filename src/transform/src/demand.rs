@@ -271,9 +271,11 @@ impl Demand {
                 let arity = input.arity();
                 self.action(input, (0..arity).collect(), gets);
             }
-            RelationExpr::Union { left, right } => {
-                self.action(left, columns.clone(), gets);
-                self.action(right, columns, gets);
+            RelationExpr::Union { base, inputs } => {
+                self.action(base, columns.clone(), gets);
+                for input in inputs {
+                    self.action(input, columns.clone(), gets);
+                }
             }
             RelationExpr::ArrangeBy { input, keys } => {
                 for key_set in keys {

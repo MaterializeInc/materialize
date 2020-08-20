@@ -383,11 +383,15 @@ impl RelationExpr {
                     })
                 })
             }
-            Union { left, right } => {
+            Union { base, inputs } => {
                 // Union is uncomplicated.
-                let left = left.applied_to(id_gen, get_outer.clone(), col_map);
-                let right = right.applied_to(id_gen, get_outer, col_map);
-                left.union(right)
+                SR::Union {
+                    base: Box::new(base.applied_to(id_gen, get_outer.clone(), col_map)),
+                    inputs: inputs
+                        .into_iter()
+                        .map(|input| input.applied_to(id_gen, get_outer.clone(), col_map))
+                        .collect(),
+                }
             }
             Reduce {
                 input,

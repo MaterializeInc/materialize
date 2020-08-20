@@ -12,6 +12,7 @@
 //! Projections can be re-introduced in the physical planning stage.
 
 use std::collections::HashMap;
+use std::mem;
 
 use crate::TransformArgs;
 use expr::{Id, RelationExpr};
@@ -260,27 +261,44 @@ impl ProjectionLifting {
                 // action on weights need to accumulate the restricted rows.
                 self.action(input, gets);
             }
-            RelationExpr::Union { left, right } => {
+            RelationExpr::Union { base, inputs } => {
                 // We cannot, in general, lift projections out of unions.
-                self.action(left, gets);
-                self.action(right, gets);
+                self.action(base, gets);
+                for input in &mut *inputs {
+                    self.action(input, gets);
+                }
 
-                if let (
-                    RelationExpr::Project {
-                        input: input1,
-                        outputs: output1,
-                    },
-                    RelationExpr::Project {
-                        input: input2,
-                        outputs: output2,
-                    },
-                ) = (&mut **left, &mut **right)
+                if let RelationExpr::Project {
+                    input: base_input,
+                    outputs: base_outputs,
+                } = &mut **base
                 {
-                    if output1 == output2 && input1.typ() == input2.typ() {
-                        let outputs = output1.clone();
-                        **left = input1.take_dangerous();
-                        **right = input2.take_dangerous();
-                        *relation = relation.take_dangerous().project(outputs);
+                    let base_typ = base_input.typ();
+
+                    let mut can_lift = true;
+                    for input in &mut *inputs {
+                        match input {
+                            RelationExpr::Project { input, outputs }
+                                if input.typ() == base_typ && outputs == base_outputs => {}
+                            _ => {
+                                can_lift = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if can_lift {
+                        let base_outputs = mem::take(base_outputs);
+                        **base = base_input.take_dangerous();
+                        for inp in inputs {
+                            match inp {
+                                RelationExpr::Project { input, .. } => {
+                                    *inp = input.take_dangerous();
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        *relation = relation.take_dangerous().project(base_outputs);
                     }
                 }
             }

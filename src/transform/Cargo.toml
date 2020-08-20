@@ -8,4 +8,5 @@ publish = false
 [dependencies]
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
+itertools = "0.9"
 repr = { path = "../repr" }

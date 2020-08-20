@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::mem;
 
 use anyhow::bail;
+use itertools::Itertools;
 
 use ore::collections::CollectionExt;
 use repr::*;
@@ -102,8 +103,8 @@ pub enum RelationExpr {
         input: Box<RelationExpr>,
     },
     Union {
-        left: Box<RelationExpr>,
-        right: Box<RelationExpr>,
+        base: Box<RelationExpr>,
+        inputs: Vec<RelationExpr>,
     },
 }
 
@@ -367,19 +368,17 @@ impl RelationExpr {
             RelationExpr::Distinct { input }
             | RelationExpr::Negate { input }
             | RelationExpr::Threshold { input } => input.typ(outers, params),
-            RelationExpr::Union { left, right } => {
-                let left_typ = left.typ(outers, params);
-                let right_typ = right.typ(outers, params);
-                assert_eq!(left_typ.column_types.len(), right_typ.column_types.len());
-                RelationType::new(
-                    left_typ
-                        .column_types
-                        .iter()
-                        .zip(right_typ.column_types.iter())
-                        .map(|(l, r)| l.union(r))
-                        .collect::<Result<Vec<_>, _>>()
-                        .unwrap(),
-                )
+            RelationExpr::Union { base, inputs } => {
+                let mut base_cols = base.typ(outers, params).column_types;
+                for input in inputs {
+                    for (base_col, col) in base_cols
+                        .iter_mut()
+                        .zip_eq(input.typ(outers, params).column_types)
+                    {
+                        *base_col = base_col.union(&col).unwrap();
+                    }
+                }
+                RelationType::new(base_cols)
             }
         }
     }
@@ -397,7 +396,7 @@ impl RelationExpr {
             | RelationExpr::Negate { input }
             | RelationExpr::Threshold { input } => input.arity(),
             RelationExpr::Join { left, right, .. } => left.arity() + right.arity(),
-            RelationExpr::Union { left, .. } => left.arity(),
+            RelationExpr::Union { base, .. } => base.arity(),
             RelationExpr::Reduce {
                 group_key,
                 aggregates,
@@ -497,8 +496,8 @@ impl RelationExpr {
 
     pub fn union(self, other: Self) -> Self {
         RelationExpr::Union {
-            left: Box::new(self),
-            right: Box::new(other),
+            base: Box::new(self),
+            inputs: vec![other],
         }
     }
 
@@ -564,9 +563,11 @@ impl RelationExpr {
             RelationExpr::Threshold { input } => {
                 f(input);
             }
-            RelationExpr::Union { left, right } => {
-                f(left);
-                f(right);
+            RelationExpr::Union { base, inputs } => {
+                f(base);
+                for input in inputs {
+                    f(input);
+                }
             }
         }
     }
@@ -615,9 +616,11 @@ impl RelationExpr {
             RelationExpr::Threshold { input } => {
                 f(input);
             }
-            RelationExpr::Union { left, right } => {
-                f(left);
-                f(right);
+            RelationExpr::Union { base, inputs } => {
+                f(base);
+                for input in inputs {
+                    f(input);
+                }
             }
         }
     }
@@ -668,9 +671,11 @@ impl RelationExpr {
                 }
                 input.visit_columns(depth, f);
             }
-            RelationExpr::Union { left, right } => {
-                left.visit_columns(depth, f);
-                right.visit_columns(depth, f);
+            RelationExpr::Union { base, inputs } => {
+                base.visit_columns(depth, f);
+                for input in inputs {
+                    input.visit_columns(depth, f);
+                }
             }
             RelationExpr::Project { input, .. }
             | RelationExpr::Distinct { input }

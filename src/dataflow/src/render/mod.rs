@@ -100,6 +100,7 @@
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
+use std::iter;
 use std::rc::Rc;
 use std::rc::Weak;
 
@@ -997,15 +998,17 @@ where
                     self.render_threshold(relation_expr);
                 }
 
-                RelationExpr::Union { left, right } => {
-                    self.ensure_rendered(left, scope, worker_index);
-                    self.ensure_rendered(right, scope, worker_index);
+                RelationExpr::Union { base, inputs } => {
+                    let (oks, errs): (Vec<_>, Vec<_>) = iter::once(&**base)
+                        .chain(inputs)
+                        .map(|input| {
+                            self.ensure_rendered(input, scope, worker_index);
+                            self.collection(input).unwrap()
+                        })
+                        .unzip();
 
-                    let (ok1, err1) = self.collection(left).unwrap();
-                    let (ok2, err2) = self.collection(right).unwrap();
-
-                    let ok = ok1.concat(&ok2);
-                    let err = err1.concat(&err2);
+                    let ok = differential_dataflow::collection::concatenate(scope, oks);
+                    let err = differential_dataflow::collection::concatenate(scope, errs);
 
                     self.collections.insert(relation_expr.clone(), (ok, err));
                 }
