@@ -23,7 +23,7 @@ use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context};
 use differential_dataflow::lattice::Lattice;
@@ -139,9 +139,6 @@ where
     // Channel to communicate source status updates and shutdown notifications to the persister
     // thread.
     persistence_metadata_tx: Option<std::sync::mpsc::Sender<PersistenceMetadata>>,
-    /// The startup time of the coordinator, from which local input timstamps are generated
-    /// relative to.
-    start_time: Instant,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -250,7 +247,6 @@ where
             feedback_rx: Some(rx),
             persister,
             persistence_metadata_tx,
-            start_time: Instant::now(),
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,
@@ -392,12 +388,13 @@ where
         // This is a hack. In a perfect world we would represent time as having a "real" dimension
         // and a "coordinator" dimension so that clients always observed linearizability from
         // things the coordinator did without being related to the real dimension.
-        let ts = self
-            .start_time
-            .elapsed()
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("failed to get millis since epoch")
             .as_millis()
             .try_into()
-            .expect("system time did not fit in u64");
+            .expect("current time did not fit into u64");
+
         if ts < self.read_lower_bound {
             self.read_lower_bound
         } else {
