@@ -1806,6 +1806,16 @@ fn handle_insert(
     match source {
         InsertSource::Query(query) => {
             let table = scx.catalog.get_item(&scx.resolve_item(table_name)?);
+            if table.id().is_system() {
+                bail!("cannot insert into system table '{}'", table.name());
+            }
+            if table.item_type() != CatalogItemType::Table {
+                bail!(
+                    "cannot insert into {} '{}'",
+                    table.item_type(),
+                    table.name()
+                );
+            }
             if let SetExpr::Values(values) = &query.body {
                 let column_info: Vec<(Option<&ColumnName>, &ColumnType)> =
                     table.desc()?.iter().collect();

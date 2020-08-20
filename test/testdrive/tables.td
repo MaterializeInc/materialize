@@ -40,6 +40,9 @@ Source_or_view        Key_name                          Column_name  Expression 
 materialize.public.t  materialize.public.t_primary_idx  a            <null>      true              1
 materialize.public.t  materialize.public.t_primary_idx  b            <null>      false             2
 
+! DROP INDEX t_primary_idx
+cannot drop 'materialize.public.t_primary_idx' as it is the default index for a table
+
 > SHOW COLUMNS in t;
 Field      Nullable  Type
 -------------------------
@@ -96,6 +99,15 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > SELECT * FROM t CROSS JOIN mz_dataflow_operators LIMIT 0
 
 > DROP SOURCE data
+
+# Ensure that tables work after creating a custom index, and that the custom
+# index is not subject to the same no-drop restriction as the default index.
+> CREATE INDEX t_custom_idx ON t (b)
+> SELECT * FROM t;
+a    b
+---------
+1    "a"
+> DROP INDEX t_custom_idx
 
 ! INSERT INTO t (a) VALUES (1, 'a');
 INSERT statement with specified columns not yet supported
@@ -179,6 +191,13 @@ SOURCES
 
 ! CREATE TABLE s (a int primary key);
 CREATE TABLE with column constraint: PRIMARY KEY
+
+> CREATE VIEW view AS SELECT 1
+! INSERT INTO view VALUES (1)
+cannot insert into view 'materialize.public.view'
+
+! INSERT INTO mz_kafka_sinks VALUES ('bad', 'bad')
+cannot insert into system table 'mz_catalog.mz_kafka_sinks'
 
 # Test that a fairly large INSERT completes.
 > CREATE TABLE large (a int)

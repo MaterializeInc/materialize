@@ -298,6 +298,11 @@ impl CatalogEntry {
         }
     }
 
+    /// Reports whether this catalog entry is a table.
+    pub fn is_table(&self) -> bool {
+        matches!(self.item(), CatalogItem::Table(_))
+    }
+
     /// Collects the identifiers of the dataflows that this dataflow depends
     /// upon.
     pub fn uses(&self) -> Vec<GlobalId> {
@@ -896,6 +901,13 @@ impl Catalog {
         }
 
         let temporary_ids = self.temporary_ids(&ops)?;
+        let drop_ids: HashSet<_> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::DropItem(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
         let mut actions = Vec::with_capacity(ops.len());
         let mut storage = self.storage();
         let mut tx = storage.transaction()?;
@@ -976,7 +988,20 @@ impl Catalog {
                     }]
                 }
                 Op::DropItem(id) => {
-                    if !self.get_by_id(&id).item().is_temporary() {
+                    let entry = self.get_by_id(&id);
+                    // Prevent dropping a table's default index unless the table
+                    // is being dropped too.
+                    if let CatalogItem::Index(Index { on, .. }) = entry.item() {
+                        if self.get_by_id(on).is_table()
+                            && self.default_index_for(*on) == Some(id)
+                            && !drop_ids.contains(on)
+                        {
+                            return Err(Error::new(ErrorKind::MandatoryTableIndex(
+                                entry.name().to_string(),
+                            )));
+                        }
+                    }
+                    if !entry.item().is_temporary() {
                         tx.remove_item(id)?;
                     }
                     vec![Action::DropItem(id)]
@@ -1266,6 +1291,16 @@ impl Catalog {
     /// each item in the catalog.
     pub fn indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>> {
         &self.indexes
+    }
+
+    /// Returns the default index for the specified `id`.
+    ///
+    /// Panics if `id` does not exist, or if `id` is not an object on which
+    /// indexes can be built.
+    pub fn default_index_for(&self, id: GlobalId) -> Option<GlobalId> {
+        // The default index is just whatever index happens to appear first in
+        // self.indexes.
+        self.indexes[&id].first().map(|(id, _keys)| *id)
     }
 
     /// Finds the nearest indexes that can satisfy the views or sources whose
