@@ -16,7 +16,7 @@
 //! versions of Materialize.
 //!
 //! Builtin's names, columns, and types are part of the stable API of
-//! Materialize. Be careful to maintain backwards compatibile when changing
+//! Materialize. Be careful to maintain backwards compatibility when changing
 //! definitions of existing builtins!
 
 use std::collections::BTreeMap;
@@ -235,6 +235,14 @@ lazy_static! {
         id: GlobalId::System(2009),
         index_id: GlobalId::System(2010),
     };
+    pub static ref MZ_DATABASE: BuiltinTable = BuiltinTable {
+        name: "mz_database",
+        desc: RelationDesc::empty()
+            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("database", ScalarType::String.nullable(false)),
+        id: GlobalId::System(2011),
+        index_id: GlobalId::System(2012),
+    };
 }
 
 pub const MZ_ADDRESSES_WITH_UNIT_LENGTHS: BuiltinView = BuiltinView {
@@ -432,6 +440,7 @@ lazy_static! {
             Builtin::Table(&MZ_CATALOG_NAMES),
             Builtin::Table(&MZ_KAFKA_SINKS),
             Builtin::Table(&MZ_AVRO_OCF_SINKS),
+            Builtin::Table(&MZ_DATABASE),
             Builtin::View(&MZ_ADDRESSES_WITH_UNIT_LENGTHS),
             Builtin::View(&MZ_DATAFLOW_NAMES),
             Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
