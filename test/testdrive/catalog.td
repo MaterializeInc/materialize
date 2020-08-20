@@ -197,6 +197,7 @@ mz_catalog_names
 mz_kafka_sinks
 mz_view_foreign_keys
 mz_view_keys
+mz_database
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length
