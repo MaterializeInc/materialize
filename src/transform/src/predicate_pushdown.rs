@@ -302,6 +302,7 @@ impl PredicatePushdown {
                     input: inner,
                     group_key,
                     aggregates,
+                    monotonic: _,
                 } => {
                     let mut retain = Vec::new();
                     let mut push_down = Vec::new();

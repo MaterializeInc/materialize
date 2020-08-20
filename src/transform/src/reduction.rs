@@ -47,6 +47,7 @@ impl FoldConstants {
                 input,
                 group_key,
                 aggregates,
+                monotonic: _,
             } => {
                 for aggregate in aggregates.iter_mut() {
                     aggregate.expr.reduce(&input.typ());

@@ -335,6 +335,7 @@ impl LiteralLifting {
                 input,
                 group_key,
                 aggregates,
+                monotonic: _,
             } => {
                 let literals = self.action(input, gets);
                 if !literals.is_empty() {
@@ -394,6 +395,7 @@ impl LiteralLifting {
                 order_key,
                 limit: _,
                 offset: _,
+                monotonic: _,
             } => {
                 let literals = self.action(input, gets);
                 if !literals.is_empty() {

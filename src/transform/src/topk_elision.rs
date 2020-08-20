@@ -38,6 +38,7 @@ impl TopKElision {
             order_key: _,
             limit,
             offset,
+            monotonic: _,
         } = relation
         {
             if limit.is_none() && *offset == 0 {

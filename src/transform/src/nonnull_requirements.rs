@@ -189,6 +189,7 @@ impl NonNullRequirements {
                 input,
                 group_key,
                 aggregates,
+                monotonic: _,
             } => {
                 let mut new_columns = HashSet::new();
                 for column in columns {

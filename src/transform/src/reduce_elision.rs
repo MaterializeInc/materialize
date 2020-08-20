@@ -39,6 +39,7 @@ impl ReduceElision {
             input,
             group_key,
             aggregates,
+            monotonic: _,
         } = relation
         {
             let input_type = input.typ();

@@ -61,6 +61,7 @@ impl NonNullable {
                 input,
                 group_key: _,
                 aggregates,
+                monotonic: _,
             } => {
                 if aggregates.iter().any(|a| {
                     scalar_contains_isnull(&(a).expr)

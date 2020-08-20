@@ -66,6 +66,7 @@ impl ProjectionExtraction {
             input: _,
             group_key,
             aggregates,
+            monotonic: _,
         } = relation
         {
             // If any entry of aggregates exists earlier in aggregates, we can remove it

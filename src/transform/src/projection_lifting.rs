@@ -197,6 +197,7 @@ impl ProjectionLifting {
                 input,
                 group_key,
                 aggregates,
+                monotonic: _,
             } => {
                 // Reduce *absorbs* projections, which is amazing!
                 self.action(input, gets);
@@ -220,6 +221,7 @@ impl ProjectionLifting {
                 order_key,
                 limit,
                 offset,
+                monotonic: _,
             } => {
                 self.action(input, gets);
                 if let RelationExpr::Project {

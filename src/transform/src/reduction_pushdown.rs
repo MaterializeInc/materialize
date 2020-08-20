@@ -37,6 +37,7 @@ impl ReductionPushdown {
             input,
             group_key,
             aggregates,
+            monotonic: _,
         } = relation
         {
             // Map expressions can be absorbed into the Reduce at no cost.
