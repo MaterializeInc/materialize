@@ -634,10 +634,10 @@ impl Catalog {
     }
 
     /// Returns a (name, id) pair for each database in the catalog.
-    pub fn databases(&self) -> Vec<(String, i64)> {
+    pub fn databases(&self) -> Vec<(&str, i64)> {
         self.by_name
             .iter()
-            .map(|(name, db)| (name.clone(), db.id))
+            .map(|(name, db)| (name.as_str(), db.id))
             .collect()
     }
 
@@ -1086,10 +1086,7 @@ impl Catalog {
                 }
 
                 Action::DropDatabase { name } => {
-                    let id = match self.by_name.remove(&name) {
-                        Some(db) => Some(db.id),
-                        None => None,
-                    };
+                    let id = self.by_name.remove(&name).map(|db| db.id);
                     OpStatus::DroppedDatabase(name, id)
                 }
 

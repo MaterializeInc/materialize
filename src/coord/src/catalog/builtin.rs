@@ -235,8 +235,8 @@ lazy_static! {
         id: GlobalId::System(2009),
         index_id: GlobalId::System(2010),
     };
-    pub static ref MZ_DATABASE: BuiltinTable = BuiltinTable {
-        name: "mz_database",
+    pub static ref MZ_DATABASES: BuiltinTable = BuiltinTable {
+        name: "mz_databases",
         desc: RelationDesc::empty()
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("database", ScalarType::String.nullable(false)),
@@ -440,7 +440,7 @@ lazy_static! {
             Builtin::Table(&MZ_CATALOG_NAMES),
             Builtin::Table(&MZ_KAFKA_SINKS),
             Builtin::Table(&MZ_AVRO_OCF_SINKS),
-            Builtin::Table(&MZ_DATABASE),
+            Builtin::Table(&MZ_DATABASES),
             Builtin::View(&MZ_ADDRESSES_WITH_UNIT_LENGTHS),
             Builtin::View(&MZ_DATAFLOW_NAMES),
             Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
