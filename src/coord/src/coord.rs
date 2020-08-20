@@ -2248,7 +2248,23 @@ where
         );
     }
 
-    // Tell the persister that we have a new source to persist
+    fn update_item<F>(&mut self, id: GlobalId, mut f: F)
+    where
+        F: FnMut(CatalogItem) -> CatalogItem,
+    {
+        let entry = self.catalog.get_by_id(&id);
+        let name = entry.name().clone();
+        let item = f(entry.item().clone());
+        let ops = vec![
+            catalog::Op::DropItem(id),
+            catalog::Op::CreateItem { id, name, item },
+        ];
+        self.catalog
+            .transact(ops)
+            .expect("replacing a source cannot fail");
+    }
+
+    // Handle metadata surrounding marking a source as persisted.
     fn handle_source_connector_persistence(
         &mut self,
         id: GlobalId,
@@ -2267,6 +2283,14 @@ where
                     );
                 }
             }
+
+            self.update_item(id, |item| match item {
+                CatalogItem::Source(mut source) => {
+                    source.connector = source_connector.clone();
+                    CatalogItem::Source(source)
+                }
+                _ => unreachable!(),
+            });
         }
     }
 }

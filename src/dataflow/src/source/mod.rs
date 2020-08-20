@@ -745,6 +745,7 @@ pub struct RecordIter {
 pub struct Record {
     offset: i64,
     time: i64,
+    key: Vec<u8>,
     data: Vec<u8>,
 }
 
@@ -758,6 +759,13 @@ impl Iterator for RecordIter {
 
         let (_, data) = self.data.split_at_mut(self.offset);
         let len = NetworkEndian::read_u32(&data) as usize;
+        assert!(
+            len >= 16,
+            format!(
+                "expected to see at least 16 bytes in record, but saw {}",
+                len
+            )
+        );
         let (_, rest) = data.split_at_mut(4);
         let row = rest[..len].to_vec();
         self.offset += 4 + len;
@@ -767,10 +775,12 @@ impl Iterator for RecordIter {
 
         let offset = row[0].unwrap_int64();
         let time = row[1].unwrap_int64();
-        let data = row[2].unwrap_bytes();
+        let key = row[2].unwrap_bytes();
+        let data = row[3].unwrap_bytes();
         Some(Record {
             offset,
             time,
+            key: key.into(),
             data: data.into(),
         })
     }
