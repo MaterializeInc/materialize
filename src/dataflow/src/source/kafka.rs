@@ -337,6 +337,8 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         self.buffered_metadata.insert(consumer.pid);
     }
 
+    // TODO(rkhaitan): reading files all in one shot like this could cause the system to become
+    // unresponsive
     fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Vec<u8>, Timestamp, i64)> {
         files
             .iter()
@@ -348,7 +350,14 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 self.has_partition(meta.partition_id)
             })
             .flat_map(|f| {
-                let data = fs::read(f).unwrap();
+                let data = fs::read(f).unwrap_or_else(|e| {
+                    error!(
+                        "failed to read source persistence file {}: {}",
+                        f.display(),
+                        e
+                    );
+                    vec![]
+                });
                 RecordIter { data, offset: 0 }.map(|r| (r.key, r.data, r.time as u64, r.offset))
             })
             .collect()

@@ -2308,7 +2308,7 @@ where
         ];
         self.catalog
             .transact(ops)
-            .expect("replacing a source cannot fail");
+            .expect("replacing an item cannot fail");
     }
 
     // Handle metadata surrounding marking a source as persisted.
@@ -2324,6 +2324,7 @@ where
                         .send(PersistenceMetadata::AddSource(id))
                         .expect("Failed to send CREATE SOURCE message to persister");
 
+                    // TODO(jjaffray): fix this to make it work for materialized sources
                     self.update_item(id, |item| match item {
                         CatalogItem::Source(mut source) => {
                             source.connector = source_connector.clone();
