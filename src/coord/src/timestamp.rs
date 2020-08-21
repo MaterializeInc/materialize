@@ -127,7 +127,6 @@ pub enum TimestampMessage {
 /// about topics and offset for real-time consistency
 struct RtTimestampConsumer {
     connector: RtTimestampConnector,
-    _max_ts_batch: i64,
 }
 
 enum RtTimestampConnector {
@@ -171,8 +170,6 @@ struct ByoTimestampConsumer {
     last_offset: MzOffset,
     /// The total number of partitions for the data topic
     current_partition_count: i32,
-    /// This is the maximum number of timestamp updates that we process in one run
-    max_ts_batch: i64,
 }
 
 impl ByoTimestampConsumer {
@@ -293,17 +290,10 @@ struct ByoFileConnector<Out, Err> {
 
 fn byo_query_source(consumer: &mut ByoTimestampConsumer) -> Vec<ValueEncoding> {
     let mut messages = vec![];
-    let mut msg_count = 0;
     match &mut consumer.connector {
         ByoTimestampConnector::Kafka(kafka_connector) => {
             while let Some(payload) = kafka_get_next_message(&mut kafka_connector.consumer) {
                 messages.push(ValueEncoding::Bytes(payload));
-                msg_count += 1;
-                if msg_count == consumer.max_ts_batch {
-                    // Make sure to bound the number of timestamp updates we have at once,
-                    // to avoid overflowing the system
-                    break;
-                }
             }
         }
         ByoTimestampConnector::Kinesis(_kinesis_consumer) => {
@@ -312,23 +302,11 @@ fn byo_query_source(consumer: &mut ByoTimestampConsumer) -> Vec<ValueEncoding> {
         ByoTimestampConnector::File(file_consumer) => {
             while let Some(payload) = file_get_next_message(file_consumer) {
                 messages.push(ValueEncoding::Bytes(payload));
-                msg_count += 1;
-                if msg_count == consumer.max_ts_batch {
-                    // Make sure to bound the number of timestamp updates we have at once,
-                    // to avoid overflowing the system
-                    break;
-                }
             }
         }
         ByoTimestampConnector::Ocf(file_consumer) => {
             while let Some(payload) = file_get_next_message(file_consumer) {
                 messages.push(ValueEncoding::Avro(payload));
-                msg_count += 1;
-                if msg_count == consumer.max_ts_batch {
-                    // Make sure to bound the number of timestamp updates we have at once,
-                    // to avoid overflowing the system
-                    break;
-                }
             }
         }
     }
@@ -787,16 +765,15 @@ impl Timestamper {
         while let Ok(update) = self.rx.try_recv() {
             match update {
                 TimestampMessage::Add(id, sc) => {
-                    let (sc, enc, env, cons, max_ts_batch) = if let SourceConnector::External {
+                    let (sc, enc, env, cons) = if let SourceConnector::External {
                         connector,
                         encoding,
                         envelope,
                         consistency,
-                        max_ts_batch,
                         ts_frequency: _,
                     } = sc
                     {
-                        (connector, encoding, envelope, consistency, max_ts_batch)
+                        (connector, encoding, envelope, consistency)
                     } else {
                         panic!("A Local Source should never be timestamped");
                     };
@@ -804,22 +781,16 @@ impl Timestamper {
                         // Did not know about source, must update
                         match cons {
                             Consistency::RealTime => {
-                                info!("Timestamping Source {} with Real Time Consistency. Max Timestamp Batch {}", id, max_ts_batch);
-                                let consumer = self.create_rt_connector(id, sc, max_ts_batch);
+                                info!("Timestamping Source {} with Real Time Consistency.", id);
+                                let consumer = self.create_rt_connector(id, sc);
                                 if let Some(consumer) = consumer {
                                     self.rt_sources.insert(id, consumer);
                                 }
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
-                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}. Max Timestamp Batch: {}", id, consistency_topic, max_ts_batch);
-                                let consumer = self.create_byo_connector(
-                                    id,
-                                    sc,
-                                    enc,
-                                    env,
-                                    consistency_topic,
-                                    max_ts_batch,
-                                );
+                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}.", id, consistency_topic);
+                                let consumer =
+                                    self.create_byo_connector(id, sc, enc, env, consistency_topic);
                                 if let Some(consumer) = consumer {
                                     self.byo_sources.insert(id, consumer);
                                 }
@@ -1059,33 +1030,30 @@ impl Timestamper {
         &self,
         id: SourceInstanceId,
         sc: ExternalSourceConnector,
-        max_ts_batch: i64,
     ) -> Option<RtTimestampConsumer> {
         match sc {
             ExternalSourceConnector::Kafka(kc) => {
                 self.create_rt_kafka_connector(id, kc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Kafka(connector),
-                        _max_ts_batch: max_ts_batch,
                     })
             }
-            ExternalSourceConnector::File(fc) => self
-                .create_rt_file_connector(id, fc, max_ts_batch)
-                .map(|connector| RtTimestampConsumer {
-                    connector: RtTimestampConnector::File(connector),
-                    _max_ts_batch: max_ts_batch,
-                }),
-            ExternalSourceConnector::AvroOcf(fc) => self
-                .create_rt_ocf_connector(id, fc, max_ts_batch)
-                .map(|connector| RtTimestampConsumer {
-                    connector: RtTimestampConnector::Ocf(connector),
-                    _max_ts_batch: max_ts_batch,
-                }),
+            ExternalSourceConnector::File(fc) => {
+                self.create_rt_file_connector(id, fc)
+                    .map(|connector| RtTimestampConsumer {
+                        connector: RtTimestampConnector::File(connector),
+                    })
+            }
+            ExternalSourceConnector::AvroOcf(fc) => {
+                self.create_rt_ocf_connector(id, fc)
+                    .map(|connector| RtTimestampConsumer {
+                        connector: RtTimestampConnector::Ocf(connector),
+                    })
+            }
             ExternalSourceConnector::Kinesis(kinc) => self
                 .create_rt_kinesis_connector(id, kinc)
                 .map(|connector| RtTimestampConsumer {
                     connector: RtTimestampConnector::Kinesis(connector),
-                    _max_ts_batch: max_ts_batch,
                 }),
         }
     }
@@ -1095,14 +1063,9 @@ impl Timestamper {
         _id: SourceInstanceId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
-        max_ts_batch: i64,
     ) -> Option<ByoFileConnector<std::vec::Vec<u8>, anyhow::Error>> {
         let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
-        let (tx, rx) = if max_ts_batch > 0 {
-            std::sync::mpsc::sync_channel(max_ts_batch as usize)
-        } else {
-            std::sync::mpsc::sync_channel(10000)
-        };
+        let (tx, rx) = std::sync::mpsc::sync_channel(10000);
         let tail = if fc.tail {
             FileReadStyle::TailFollowFd
         } else {
@@ -1217,7 +1180,6 @@ impl Timestamper {
         &self,
         _id: SourceInstanceId,
         _fc: FileSourceConnector,
-        _max_ts_batch: i64,
     ) -> Option<RtFileConnector> {
         Some(RtFileConnector {})
     }
@@ -1226,7 +1188,6 @@ impl Timestamper {
         &self,
         _id: SourceInstanceId,
         _fc: FileSourceConnector,
-        _max_ts_batch: i64,
     ) -> Option<RtFileConnector> {
         Some(RtFileConnector {})
     }
@@ -1236,7 +1197,6 @@ impl Timestamper {
         _id: SourceInstanceId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
-        max_ts_batch: i64,
     ) -> Option<ByoFileConnector<avro::types::Value, anyhow::Error>> {
         let ctor = move |file| avro::Reader::new(file);
         let tail = if fc.tail {
@@ -1244,11 +1204,7 @@ impl Timestamper {
         } else {
             FileReadStyle::ReadOnce
         };
-        let (tx, rx) = if max_ts_batch > 0 {
-            std::sync::mpsc::sync_channel(max_ts_batch as usize)
-        } else {
-            std::sync::mpsc::sync_channel(10000 as usize)
-        };
+        let (tx, rx) = std::sync::mpsc::sync_channel(10000 as usize);
         std::thread::spawn(move || {
             read_file_task(PathBuf::from(timestamp_topic), tx, None, tail, ctor);
         });
@@ -1264,7 +1220,6 @@ impl Timestamper {
         enc: DataEncoding,
         env: Envelope,
         timestamp_topic: String,
-        max_ts_batch: i64,
     ) -> Option<ByoTimestampConsumer> {
         match sc {
             ExternalSourceConnector::Kafka(kc) => {
@@ -1277,21 +1232,19 @@ impl Timestamper {
                         last_partition_ts: HashMap::new(),
                         last_ts: 0,
                         current_partition_count: 1,
-                        max_ts_batch,
                         last_offset: MzOffset { offset: 0 },
                     }),
                     None => None,
                 }
             }
             ExternalSourceConnector::File(fc) => {
-                match self.create_byo_file_connector(id, &fc, timestamp_topic, max_ts_batch) {
+                match self.create_byo_file_connector(id, &fc, timestamp_topic) {
                     Some(consumer) => Some(ByoTimestampConsumer {
                         source_name: fc.path.to_string_lossy().into_owned(),
                         connector: ByoTimestampConnector::File(consumer),
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
                         last_ts: 0,
-                        max_ts_batch,
                         current_partition_count: 1,
                         last_offset: MzOffset { offset: 0 },
                     }),
@@ -1299,14 +1252,13 @@ impl Timestamper {
                 }
             }
             ExternalSourceConnector::AvroOcf(fc) => {
-                match self.create_byo_ocf_connector(id, &fc, timestamp_topic, max_ts_batch) {
+                match self.create_byo_ocf_connector(id, &fc, timestamp_topic) {
                     Some(consumer) => Some(ByoTimestampConsumer {
                         source_name: fc.path.to_string_lossy().into_owned(),
                         connector: ByoTimestampConnector::Ocf(consumer),
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
                         last_ts: 0,
-                        max_ts_batch,
                         current_partition_count: 1,
                         last_offset: MzOffset { offset: 0 },
                     }),
@@ -1322,7 +1274,6 @@ impl Timestamper {
                         last_partition_ts: HashMap::new(),
                         last_ts: 0,
                         current_partition_count: 1,
-                        max_ts_batch,
                         last_offset: MzOffset { offset: 0 },
                     }),
                     None => None,

@@ -2404,7 +2404,6 @@ fn augment_connector_for_persistence(
             encoding,
             envelope,
             consistency,
-            max_ts_batch,
             ts_frequency,
         } => {
             if !connector.persistence_enabled() {
@@ -2417,7 +2416,6 @@ fn augment_connector_for_persistence(
                         encoding,
                         envelope,
                         consistency,
-                        max_ts_batch,
                         ts_frequency,
                     }))
                 } else {

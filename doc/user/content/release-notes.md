@@ -57,6 +57,11 @@ Wrap your release notes at the 80 character mark.
 
   This fixes a regression introduced in v0.4.1.
 
+- Remove the `max_timestamp_batch_size`
+  [`WITH` option](https://materialize.io/docs/sql/create-source/avro-kafka/#with-options)
+  from sources. Materialize now automatically selects the optimal batch size.
+  **Backwards-incompatible change.**
+
 <span id="v0.4.1"></span>
 ## v0.4.1
 

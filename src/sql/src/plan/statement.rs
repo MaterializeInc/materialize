@@ -1092,25 +1092,6 @@ fn handle_create_view(
     })
 }
 
-fn extract_batch_size_option(
-    with_options: &mut HashMap<String, Value>,
-) -> Result<i64, anyhow::Error> {
-    match with_options.remove("max_timestamp_batch_size") {
-        None => Ok(0),
-        Some(Value::Number(n)) => match n.parse::<i64>() {
-            Ok(n) => {
-                if n < 0 {
-                    bail!("max_ts_batch must be greater than zero")
-                } else {
-                    Ok(n)
-                }
-            }
-            _ => bail!("max_timestamp_batch_size must be an i64"),
-        },
-        Some(_) => bail!("max_timestamp_batch_size must be an i64"),
-    }
-}
-
 fn extract_timestamp_frequency_option(
     with_options: &mut HashMap<String, Value>,
 ) -> Result<Duration, anyhow::Error> {
@@ -1246,7 +1227,6 @@ fn handle_create_source(
     let mut with_options = normalize::with_options(with_options);
 
     let mut consistency = Consistency::RealTime;
-    let mut max_ts_batch = 0;
     let mut ts_frequency = Duration::from_secs(1);
 
     let (external_connector, mut encoding) = match connector {
@@ -1265,7 +1245,6 @@ fn handle_create_source(
                 Some(_) => bail!("group_id_prefix must be a string"),
             };
 
-            max_ts_batch = extract_batch_size_option(&mut with_options)?;
             ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
 
             // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
@@ -1387,7 +1366,6 @@ fn handle_create_source(
                 Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
                 Some(_) => bail!("consistency must be a string"),
             };
-            max_ts_batch = extract_batch_size_option(&mut with_options)?;
             ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
 
             let connector = ExternalSourceConnector::File(FileSourceConnector {
@@ -1409,7 +1387,6 @@ fn handle_create_source(
                 Some(_) => bail!("consistency must be a string"),
             };
 
-            max_ts_batch = extract_batch_size_option(&mut with_options)?;
             ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
@@ -1541,7 +1518,6 @@ fn handle_create_source(
             encoding,
             envelope,
             consistency,
-            max_ts_batch,
             ts_frequency,
         },
         desc,

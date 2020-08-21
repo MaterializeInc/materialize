@@ -86,11 +86,6 @@ pub struct Args {
     #[structopt(long)]
     pub check_sink: bool,
 
-    #[structopt(long)]
-    /// The maximum batch size to associate with this source. If none is supplied, Materialize,
-    /// Materialize will create a source with no upper bound on batch size
-    pub batch_size: Option<u64>,
-
     /// Whether or not the billing demo should create a new source topic.
     #[structopt(
         long,
@@ -155,7 +150,6 @@ impl Args {
             low_memory: self.low_memory,
             seed: self.seed,
             check_sink: self.check_sink,
-            batch_size: self.batch_size,
         }
     }
 
@@ -194,5 +188,4 @@ pub struct MzConfig {
     pub low_memory: bool,
     pub seed: u64,
     pub check_sink: bool,
-    pub batch_size: Option<u64>,
 }
