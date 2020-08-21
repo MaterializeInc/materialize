@@ -259,7 +259,6 @@ where
                 encoding,
                 envelope,
                 consistency,
-                max_ts_batch: _,
                 ts_frequency,
             } => {
                 // TODO(benesch): this match arm is hard to follow. Refactor.

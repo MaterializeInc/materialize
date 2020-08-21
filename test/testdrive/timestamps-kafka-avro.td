@@ -80,7 +80,7 @@ $ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
 
 > CREATE MATERIALIZED SOURCE data3_byo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data3-${testdrive.seed}'
-      WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}', max_timestamp_batch_size=2)
+      WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED SOURCE data_rt
@@ -89,7 +89,6 @@ $ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
 
 > CREATE MATERIALIZED SOURCE data2_rt
     FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
-       WITH(max_timestamp_batch_size=3)
     FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW view_byo AS SELECT b, sum(a) FROM data_byo GROUP BY b

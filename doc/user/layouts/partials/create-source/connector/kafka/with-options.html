@@ -4,7 +4,6 @@
 `statistics_interval_ms` | `int` | `librdkafka` statistics emit interval in `ms`. Accepts values [0, 86400000]. The granularity is 1000ms. A value of 0 disables statistics.
 `ignore_source_keys` | `bool` | Default: `false`. If `true`, do not perform optimizations assuming uniqueness of primary keys in schemas.
 `timestamp_frequency_ms`| `int` | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently timestamps advance in the system. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
-`max_timestamp_batch_size` | `int` | Default: `0`. Bounds the maximum number of messages that can be assigned to the same batch. A value of 0 creates no upper bound.
 `topic_metadata_refresh_interval_ms` | `int` | Default: `30000`. Sets the frequency in `ms` at which the system checks for new partitions. Accepts values [0,3600000].
 
 #### SSL `WITH` options
