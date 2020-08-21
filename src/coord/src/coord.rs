@@ -57,8 +57,8 @@ use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_KAFKA_SINKS, MZ_VIEW_FOREIGN_KEYS,
-    MZ_VIEW_KEYS,
+    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_DATABASES, MZ_KAFKA_SINKS,
+    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
 use crate::persistence::{PersistenceConfig, PersistenceMetadata, Persister};
@@ -311,6 +311,25 @@ where
             // Mirror each recovered catalog entry.
             coord.report_catalog_update(id, name.to_string(), 1);
         }
+
+        // Insert initial named objects into system tables.
+        // Databases:
+        let databases: Vec<(String, i64)> = coord
+            .catalog
+            .databases()
+            .iter()
+            .map(|(name, db)| (name.to_string(), *db))
+            .collect();
+        for (name, db) in databases {
+            coord.update_catalog_view(
+                MZ_DATABASES.id,
+                iter::once((
+                    Row::pack(&[Datum::String(&format!("{}", db)), Datum::String(&name)]),
+                    1,
+                )),
+            );
+        }
+        // Todo@jldlaughlin: insert rest of named objects!
 
         // Announce primary and foreign key relationships.
         if coord.logging_granularity.is_some() {
@@ -1922,9 +1941,31 @@ where
         let statuses = self.catalog.transact(ops)?;
         for status in &statuses {
             match status {
+                catalog::OpStatus::CreatedDatabase(name, id) => {
+                    // Keep the `mz_catalog.mz_databases` system view current.
+                    self.update_catalog_view(
+                        MZ_DATABASES.id,
+                        iter::once((
+                            Row::pack(&[Datum::String(&id.to_string()), Datum::String(name)]),
+                            1,
+                        )),
+                    );
+                }
                 catalog::OpStatus::CreatedItem(id) => {
                     let name = self.catalog.humanize_id(expr::Id::Global(*id)).unwrap();
                     self.report_catalog_update(*id, name, 1);
+                }
+                catalog::OpStatus::DroppedDatabase(name, database) => {
+                    // Keep the `mz_catalog.mz_databases` system view current.
+                    if let Some(id) = database {
+                        self.update_catalog_view(
+                            MZ_DATABASES.id,
+                            iter::once((
+                                Row::pack(&[Datum::String(&id.to_string()), Datum::String(name)]),
+                                -1,
+                            )),
+                        );
+                    }
                 }
                 catalog::OpStatus::DroppedItem(entry) => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), -1);

@@ -634,8 +634,16 @@ impl Catalog {
     }
 
     /// Returns an iterator over the name of each database in the catalog.
-    pub fn databases(&self) -> impl Iterator<Item = &str> {
+    pub fn list_databases(&self) -> impl Iterator<Item = &str> {
         self.by_name.keys().map(String::as_str)
+    }
+
+    /// Returns a (name, id) pair for each database in the catalog.
+    pub fn databases(&self) -> Vec<(&str, i64)> {
+        self.by_name
+            .iter()
+            .map(|(name, db)| (name.as_str(), db.id))
+            .collect()
     }
 
     /// Creates a new schema in the `Catalog` for temporary items
@@ -1068,13 +1076,13 @@ impl Catalog {
                 Action::CreateDatabase { id, name } => {
                     info!("create database {}", name);
                     self.by_name.insert(
-                        name,
+                        name.clone(),
                         Database {
                             id,
                             schemas: BTreeMap::new(),
                         },
                     );
-                    OpStatus::CreatedDatabase
+                    OpStatus::CreatedDatabase(name, id)
                 }
 
                 Action::CreateSchema {
@@ -1103,8 +1111,8 @@ impl Catalog {
                 }
 
                 Action::DropDatabase { name } => {
-                    self.by_name.remove(&name);
-                    OpStatus::DroppedDatabase
+                    let id = self.by_name.remove(&name).map(|db| db.id);
+                    OpStatus::DroppedDatabase(name, id)
                 }
 
                 Action::DropSchema {
@@ -1413,10 +1421,10 @@ pub enum Op {
 
 #[derive(Debug, Clone)]
 pub enum OpStatus {
-    CreatedDatabase,
+    CreatedDatabase(String, i64),
     CreatedSchema,
     CreatedItem(GlobalId),
-    DroppedDatabase,
+    DroppedDatabase(String, Option<i64>),
     DroppedSchema,
     DroppedItem(CatalogEntry),
     UpdatedItem,
@@ -1508,7 +1516,7 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
     }
 
     fn list_databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
-        Box::new(self.catalog.databases())
+        Box::new(self.catalog.list_databases())
     }
 
     fn list_schemas<'a>(
