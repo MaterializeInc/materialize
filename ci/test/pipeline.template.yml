@@ -40,6 +40,17 @@ steps:
     agents:
       queue: builder
 
+  - id: lint-macos
+    label: ":mac: clippy"
+    command: bin/check
+    inputs:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/*.rs"
+    timeout_in_minutes: 30
+    agents:
+      queue: mac
+
   - id: lint-docs
     label: ":briefcase: lint docs"
     command: bin/ci-builder run stable ci/www/lint.sh

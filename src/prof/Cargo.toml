@@ -1,0 +1,18 @@
+[package]
+name = "prof"
+description = "CPU and memory profiling tools."
+edition = "2018"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1.0.32"
+backtrace = "0.3"
+jemalloc-ctl = { version = "0.3", features = ["use_std"], optional = true }
+lazy_static = "1.4.0"
+pprof = "0.3.18"
+tempfile = "3.1"
+tokio = { version = "0.2", features = ["time"] }
+
+[features]
+jemalloc = ["jemalloc-ctl"]

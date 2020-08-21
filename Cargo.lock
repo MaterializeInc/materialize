@@ -1785,6 +1785,7 @@ dependencies = [
  "krb5-src",
  "lazy_static",
  "log",
+ "materialized-not-macos",
  "once_cell",
  "openssl",
  "openssl-sys",
@@ -1795,8 +1796,7 @@ dependencies = [
  "postgres",
  "postgres-openssl",
  "predicates",
- "prof-common",
- "prof-jemalloc",
+ "prof",
  "prometheus",
  "rdkafka-sys",
  "repr",
@@ -1811,6 +1811,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "materialized-not-macos"
+version = "0.1.0"
+dependencies = [
+ "prof",
 ]
 
 [[package]]
@@ -2734,24 +2741,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "prof-common"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "backtrace",
- "pprof",
- "tokio",
-]
-
-[[package]]
-name = "prof-jemalloc"
+name = "prof"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "backtrace",
  "jemalloc-ctl",
  "lazy_static",
- "prof-common",
+ "pprof",
  "tempfile",
  "tokio",
 ]
