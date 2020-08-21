@@ -167,31 +167,16 @@ where
                 }
                 column_demand.extend(demand.iter().cloned());
 
-                // Identify the *indexes* of columns that are demanded by any
-                // remaining predicates and equivalence classes.
-                let prev_vals = source_columns
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, c)| {
-                        if column_demand.contains(c) {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
                 let next_vals = (0..arities[*input])
                     .filter(|c| column_demand.contains(&(prior_arities[*input] + c)))
                     .collect::<Vec<_>>();
 
-                // Identify the columns we intend to retain.
-                source_columns = prev_vals
-                    .iter()
-                    .map(|i| source_columns[*i])
-                    .chain(next_vals.iter().map(|i| prior_arities[*input] + *i))
-                    .collect();
-
                 let (j, es) = if input_index == 0 && start_arr.is_some() {
+                    // Identify the columns we intend to retain.
+                    source_columns = source_columns
+                        .into_iter()
+                        .chain(next_vals.iter().map(|i| prior_arities[*input] + *i))
+                        .collect();
                     // if a starting arrangement has been specified, use that
                     let start_arr = start_arr.as_ref().unwrap();
                     match self.arrangement(&inputs[*start], start_arr) {
@@ -220,7 +205,30 @@ where
                 } else {
                     // Otherwise, build a new arrangement from the collection of
                     // joins of previous inputs.
-                    // We exploit the demand information to restrict `prev` to its demanded columns.
+                    // We exploit the demand information to restrict `prev` to
+                    // its demanded columns.
+
+                    // Identify the *indexes* of columns that are demanded by any
+                    // remaining predicates and equivalence classes.
+                    let prev_vals = source_columns
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, c)| {
+                            if column_demand.contains(c) {
+                                Some(i)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    // Identify the columns we intend to retain.
+                    source_columns = prev_vals
+                        .iter()
+                        .map(|i| source_columns[*i])
+                        .chain(next_vals.iter().map(|i| prior_arities[*input] + *i))
+                        .collect();
+
                     let (prev_keyed, es) = joined.map_fallible({
                         let mut row_packer = repr::RowPacker::new();
                         move |row| {
