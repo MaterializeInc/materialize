@@ -631,11 +631,7 @@ impl<'a> Orderer<'a> {
 
         // calculate characteristics of an arrangement, if any on the starting input
         // by default, there is no arrangement on the starting input
-        let mut start_tuple = (
-            Characteristics::new(false, 0, false, start),
-            vec![],
-            start,
-        );
+        let mut start_tuple = (Characteristics::new(false, 0, false, start), vec![], start);
         // use an arrangement if there exists one that lines up with the keys of
         // the second input
         if let Some((_, key, second)) = self.order.get(0) {
@@ -653,7 +649,7 @@ impl<'a> Orderer<'a> {
                     let key_equivalence = self
                         .equivalences
                         .iter()
-                        .position(|e| e.iter().find(|expr| expr == &&k).is_some())
+                        .position(|e| e.iter().any(|expr| expr == &k))
                         .unwrap();
                     // ... then within that equivalence, find the position
                     // of an expression that came from start ...

@@ -39,7 +39,7 @@ INSERT INTO baz VALUES (3, 0), (5, 2)
 
 # indexes exist on foo(a), bar(a), and baz(a). baz(a) is a unique key
 query T multiline
-EXPLAIN PLAN FOR 
+EXPLAIN PLAN FOR
 select foo.a, baz.b
 from foo, bar, baz
 where foo.a = bar.a
@@ -89,7 +89,7 @@ CREATE INDEX baz_idx on baz(a);
 
 # indexes exist on foo(a), bar(a), and baz(a)
 query T multiline
-EXPLAIN PLAN FOR 
+EXPLAIN PLAN FOR
 select foo.a, baz.b
 from foo, bar, baz
 where foo.a = bar.a
