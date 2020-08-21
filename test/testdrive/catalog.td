@@ -120,10 +120,8 @@ Expected end of statement, found: RESTRICT
 Database
 ----
 materialize
-> SELECT * FROM mz_catalog.mz_databases
-global_id   database
------------------------
-1           materialize
+! SELECT * FROM mz_catalog.mz_databases
+unknown database 'd'
 
 # The session database should remain set to the dropped database, but future
 # queries that depend on the session database should fail with sensible error
