@@ -10,10 +10,8 @@
 use async_trait::async_trait;
 use log::error;
 
-use dataflow_types::Timestamp;
-use expr::Diff;
 use interchange::protobuf::{self, Decoder};
-use repr::Row;
+use repr::{Diff, Row, Timestamp};
 
 use super::{DecoderState, PushSession};
 use crate::metrics::EVENTS_COUNTER;

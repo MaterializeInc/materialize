@@ -20,9 +20,8 @@ use timely::logging::WorkerIdentifier;
 
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
-use dataflow_types::Timestamp;
 use expr::GlobalId;
-use repr::Datum;
+use repr::{Datum, Timestamp};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;

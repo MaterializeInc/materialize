@@ -32,3 +32,9 @@ pub mod strconv;
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{datum_size, DatumDict, DatumList, Row, RowArena, RowPacker};
 pub use scalar::{Datum, ScalarType};
+
+// Concrete types used throughout Materialize for the generic parameters in Timely/Differential Dataflow.
+/// System-wide timestamp type.
+pub type Timestamp = u64;
+/// System-wide record count difference type.
+pub type Diff = isize;

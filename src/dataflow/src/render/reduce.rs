@@ -27,9 +27,9 @@ use super::context::Context;
 use crate::render::context::Arrangement;
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G, RelationExpr, Row, dataflow_types::Timestamp>
+impl<G> Context<G, RelationExpr, Row, repr::Timestamp>
 where
-    G: Scope<Timestamp = dataflow_types::Timestamp>,
+    G: Scope<Timestamp = repr::Timestamp>,
 {
     /// Renders a `RelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
@@ -244,7 +244,7 @@ fn build_aggregate_stage<G>(
     monotonic: bool,
 ) -> Arrangement<G, Row>
 where
-    G: Scope<Timestamp = dataflow_types::Timestamp>,
+    G: Scope<Timestamp = repr::Timestamp>,
 {
     let AggregateExpr {
         func,

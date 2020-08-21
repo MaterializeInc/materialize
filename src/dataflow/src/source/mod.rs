@@ -23,9 +23,7 @@ use timely::dataflow::{
     operators::Capability,
 };
 
-use dataflow_types::{
-    Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError, Timestamp,
-};
+use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError};
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::error;
@@ -35,6 +33,7 @@ use prometheus::{
     register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec,
     IntGaugeVec, UIntGauge, UIntGaugeVec,
 };
+use repr::Timestamp;
 use timely::dataflow::Scope;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;

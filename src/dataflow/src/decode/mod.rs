@@ -24,12 +24,11 @@ use timely::dataflow::{
 
 use ::avro::{types::Value, Schema};
 use dataflow_types::LinearOperator;
-use dataflow_types::{DataEncoding, Envelope, RegexEncoding, Timestamp};
-use expr::Diff;
+use dataflow_types::{DataEncoding, Envelope, RegexEncoding};
 use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair};
 use log::error;
 use repr::Datum;
-use repr::{Row, RowPacker};
+use repr::{Diff, Row, RowPacker, Timestamp};
 
 use self::csv::csv;
 use self::regex::regex as regex_fn;

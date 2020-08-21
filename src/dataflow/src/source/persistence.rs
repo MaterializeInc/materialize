@@ -18,11 +18,10 @@ use std::pin::Pin;
 use anyhow::{bail, Error};
 use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
 
-use dataflow_types::Timestamp;
 use expr::GlobalId;
 use futures::sink::Sink;
 use log::error;
-use repr::{Datum, Row};
+use repr::{Datum, Row, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::server::PersistenceMessage;

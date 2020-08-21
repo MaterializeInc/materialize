@@ -15,7 +15,7 @@ pub mod timely;
 
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
 use dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
-use dataflow_types::Timestamp;
+use repr::Timestamp;
 use std::time::Duration;
 
 /// Logs events as a timely stream, with progress statements.

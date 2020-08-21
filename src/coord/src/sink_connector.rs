@@ -18,10 +18,10 @@ use rdkafka::config::ClientConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
     KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, SinkConnector, SinkConnectorBuilder,
-    Timestamp,
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
+use repr::Timestamp;
 use timely::progress::Antichain;
 
 pub async fn build(

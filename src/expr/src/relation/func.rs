@@ -20,10 +20,9 @@ use serde::{Deserialize, Serialize};
 use ore::cast::CastFrom;
 use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
-use repr::{ColumnType, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, RowPacker, ScalarType};
 
 use crate::scalar::func::jsonb_stringify;
-use crate::Diff;
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435

@@ -121,13 +121,12 @@ use timely::worker::Worker as TimelyWorker;
 
 use avro::types::Value;
 use avro::Schema;
-use dataflow_types::Timestamp;
 use dataflow_types::*;
 use expr::{GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
 use ore::cast::CastFrom;
 use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
-use repr::{Datum, RelationType, Row, RowArena};
+use repr::{Datum, RelationType, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::decode::{decode_avro_values, decode_values};
