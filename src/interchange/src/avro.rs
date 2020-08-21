@@ -1688,7 +1688,7 @@ impl Encoder {
                 null_variant: Some(0),
             },
             Some(row) => {
-                let row = self.row_to_avro(row.unpack());
+                let row = self.row_to_avro(row.iter());
                 Value::Union {
                     index: 1,
                     inner: Box::new(row),
@@ -1705,7 +1705,7 @@ impl Encoder {
                 null_variant: Some(0),
             },
             Some(row) => {
-                let row = self.row_to_avro(row.unpack());
+                let row = self.row_to_avro(row.iter());
                 Value::Union {
                     index: 1,
                     inner: Box::new(row),
@@ -1733,75 +1733,103 @@ impl Encoder {
         Value::Record(fields)
     }
 
-    fn row_to_avro(&self, row: Vec<Datum>) -> Value {
-        let fields = self
-            .columns
-            .iter()
-            .zip_eq(row)
-            .map(|((name, typ), datum)| {
-                let name = name.as_str().to_owned();
-                if typ.nullable && datum.is_null() {
-                    return (
-                        name,
-                        Value::Union {
-                            index: 0,
-                            inner: Box::new(Value::Null),
-                            n_variants: 2,
-                            null_variant: Some(0),
-                        },
-                    );
-                }
-                let mut val = match &typ.scalar_type {
-                    ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
-                    ScalarType::Int32 => Value::Int(datum.unwrap_int32()),
-                    ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
-                    ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
-                    ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
-                    ScalarType::Decimal(p, s) => Value::Decimal(DecimalValue {
-                        unscaled: datum.unwrap_decimal().as_i128().to_be_bytes().to_vec(),
-                        precision: (*p).into(),
-                        scale: (*s).into(),
-                    }),
-                    ScalarType::Date => Value::Date(datum.unwrap_date()),
-                    ScalarType::Time => Value::Long({
-                        let time = datum.unwrap_time();
-                        (time.num_seconds_from_midnight() * 1_000_000) as i64
-                            + (time.nanosecond() as i64) / 1_000
-                    }),
-                    ScalarType::Timestamp => Value::Timestamp(datum.unwrap_timestamp()),
-                    ScalarType::TimestampTz => {
-                        Value::Timestamp(datum.unwrap_timestamptz().naive_utc())
-                    }
-                    // This feature isn't actually supported by the Avro Java
-                    // client (https://issues.apache.org/jira/browse/AVRO-2123),
-                    // so no one is likely to be using it, so we're just using
-                    // our own very convenient format.
-                    ScalarType::Interval => Value::Fixed(20, {
-                        let iv = datum.unwrap_interval();
-                        let mut buf = Vec::with_capacity(24);
-                        buf.extend(&iv.months.to_le_bytes());
-                        buf.extend(&iv.duration.to_le_bytes());
-                        debug_assert_eq!(buf.len(), 20);
-                        buf
-                    }),
-                    ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
-                    ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
-                    ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
-                    ScalarType::List(_t) => unimplemented!("list types"),
-                    ScalarType::Record { .. } => unimplemented!("record types"),
+    pub fn row_to_avro<'a, I>(&self, row: I) -> Value
+    where
+        I: IntoIterator<Item = Datum<'a>>,
+    {
+        encode_datums_as_avro(row, &self.columns)
+    }
+}
+
+/// Encodes a sequence of `Datum` as Avro, using supplied column names and types.
+pub fn encode_datums_as_avro<'a, I>(datums: I, names_types: &[(ColumnName, ColumnType)]) -> Value
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let fields = names_types
+        .iter()
+        .zip_eq(datums)
+        .map(|((name, typ), datum)| {
+            let name = name.as_str().to_owned();
+            use avro::types::ToAvro;
+            (name, TypedDatum::new(datum, typ.clone()).avro())
+        })
+        .collect();
+    Value::Record(fields)
+}
+
+/// Bundled information sufficient to encode as Avro.
+#[derive(Debug)]
+pub struct TypedDatum<'a> {
+    datum: Datum<'a>,
+    typ: ColumnType,
+}
+
+impl<'a> TypedDatum<'a> {
+    /// Pairs a datum and its type, for Avro encoding.
+    pub fn new(datum: Datum<'a>, typ: ColumnType) -> Self {
+        Self { datum, typ }
+    }
+}
+
+impl<'a> avro::types::ToAvro for TypedDatum<'a> {
+    fn avro(self) -> Value {
+        let TypedDatum { datum, typ } = self;
+        if typ.nullable && datum.is_null() {
+            Value::Union {
+                index: 0,
+                inner: Box::new(Value::Null),
+                n_variants: 2,
+                null_variant: Some(0),
+            }
+        } else {
+            let mut val = match &typ.scalar_type {
+                ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
+                ScalarType::Int32 => Value::Int(datum.unwrap_int32()),
+                ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
+                ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
+                ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
+                ScalarType::Decimal(p, s) => Value::Decimal(DecimalValue {
+                    unscaled: datum.unwrap_decimal().as_i128().to_be_bytes().to_vec(),
+                    precision: (*p).into(),
+                    scale: (*s).into(),
+                }),
+                ScalarType::Date => Value::Date(datum.unwrap_date()),
+                ScalarType::Time => Value::Long({
+                    let time = datum.unwrap_time();
+                    (time.num_seconds_from_midnight() * 1_000_000) as i64
+                        + (time.nanosecond() as i64) / 1_000
+                }),
+                ScalarType::Timestamp => Value::Timestamp(datum.unwrap_timestamp()),
+                ScalarType::TimestampTz => Value::Timestamp(datum.unwrap_timestamptz().naive_utc()),
+                // This feature isn't actually supported by the Avro Java
+                // client (https://issues.apache.org/jira/browse/AVRO-2123),
+                // so no one is likely to be using it, so we're just using
+                // our own very convenient format.
+                ScalarType::Interval => Value::Fixed(20, {
+                    let iv = datum.unwrap_interval();
+                    let mut buf = Vec::with_capacity(24);
+                    buf.extend(&iv.months.to_le_bytes());
+                    buf.extend(&iv.duration.to_le_bytes());
+                    debug_assert_eq!(buf.len(), 20);
+                    buf
+                }),
+                ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
+                ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
+                ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
+                ScalarType::List(_t) => unimplemented!("list types"),
+                ScalarType::Record { .. } => unimplemented!("record types"),
+            };
+            if typ.nullable {
+                val = Value::Union {
+                    index: 1,
+                    inner: Box::new(val),
+                    n_variants: 2,
+                    null_variant: Some(0),
                 };
-                if typ.nullable {
-                    val = Value::Union {
-                        index: 1,
-                        inner: Box::new(val),
-                        n_variants: 2,
-                        null_variant: Some(0),
-                    };
-                }
-                (name, val)
-            })
-            .collect();
-        Value::Record(fields)
+            }
+            val
+        }
     }
 }
 
@@ -1953,7 +1981,7 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
-            let avro_value = Encoder::new(desc, false).row_to_avro(vec![datum]);
+            let avro_value = Encoder::new(desc, false).row_to_avro(std::iter::once(datum));
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
                 avro_value
