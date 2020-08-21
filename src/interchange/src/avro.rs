@@ -1981,7 +1981,7 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
-            let avro_value = Encoder::new(desc, false).row_to_avro(std::iter::Once(datum));
+            let avro_value = Encoder::new(desc, false).row_to_avro(std::iter::once(datum));
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
                 avro_value
