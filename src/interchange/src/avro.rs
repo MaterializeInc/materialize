@@ -1590,32 +1590,7 @@ impl fmt::Debug for Encoder {
 
 impl Encoder {
     pub fn new(desc: RelationDesc, include_transaction: bool) -> Self {
-        // Invent names for columns that don't have a name.
-        let mut columns: Vec<_> = desc
-            .into_iter()
-            .enumerate()
-            .map(|(i, (name, ty))| match name {
-                None => (ColumnName::from(format!("column{}", i + 1)), ty),
-                Some(name) => (name, ty),
-            })
-            .collect();
-
-        // Deduplicate names.
-        let mut seen = HashSet::new();
-        for (name, _ty) in &mut columns {
-            let stem_len = name.as_str().len();
-            let mut i = 1;
-            while seen.contains(name) {
-                name.as_mut_str().truncate(stem_len);
-                if name.as_str().ends_with(|c: char| c.is_ascii_digit()) {
-                    name.as_mut_str().push('_');
-                }
-                name.as_mut_str().push_str(&i.to_string());
-                i += 1;
-            }
-            seen.insert(name);
-        }
-
+        let columns = column_names_and_types(desc);
         let writer_schema = build_schema(&columns, include_transaction);
         Encoder {
             columns,
@@ -1739,6 +1714,36 @@ impl Encoder {
     {
         encode_datums_as_avro(row, &self.columns)
     }
+}
+
+/// Extracts deduplicated column names and types from a relation description.
+pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType)> {
+    // Invent names for columns that don't have a name.
+    let mut columns: Vec<_> = desc
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, ty))| match name {
+            None => (ColumnName::from(format!("column{}", i + 1)), ty),
+            Some(name) => (name, ty),
+        })
+        .collect();
+
+    // Deduplicate names.
+    let mut seen = HashSet::new();
+    for (name, _ty) in &mut columns {
+        let stem_len = name.as_str().len();
+        let mut i = 1;
+        while seen.contains(name) {
+            name.as_mut_str().truncate(stem_len);
+            if name.as_str().ends_with(|c: char| c.is_ascii_digit()) {
+                name.as_mut_str().push('_');
+            }
+            name.as_mut_str().push_str(&i.to_string());
+            i += 1;
+        }
+        seen.insert(name);
+    }
+    columns
 }
 
 /// Encodes a sequence of `Datum` as Avro, using supplied column names and types.
@@ -1873,6 +1878,208 @@ impl SchemaCache {
                 }
             }
         }
+    }
+}
+
+/// Logic for the Avro representation of the CDCv2 protocol.
+pub mod cdc_v2 {
+
+    use repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
+    use serde_json::json;
+
+    use avro::schema::Schema;
+    use avro::types::Value;
+
+    /// Collected state to encode update batches and progress statements.
+    #[derive(Debug)]
+    pub struct Encoder {
+        columns: Vec<(ColumnName, ColumnType)>,
+        schema: Schema,
+    }
+
+    impl Encoder {
+        /// Creates a new CDCv2 encoder from a relation description.
+        pub fn new(desc: RelationDesc) -> Self {
+            let columns = super::column_names_and_types(desc);
+            let schema = build_schema(&columns);
+            Self { columns, schema }
+        }
+
+        /// Encodes a batch of updates as an Avro value.
+        pub fn encode_updates(&self, updates: &[(Row, i64, i64)]) -> Value {
+            let mut enc_updates = Vec::new();
+            for (data, time, diff) in updates {
+                let enc_data = super::encode_datums_as_avro(data, &self.columns);
+                let enc_time = Value::Long(time.clone());
+                let enc_diff = Value::Long(diff.clone());
+                let mut enc_update = Vec::new();
+                enc_update.push(("data".to_string(), enc_data));
+                enc_update.push(("time".to_string(), enc_time));
+                enc_update.push(("diff".to_string(), enc_diff));
+                enc_updates.push(Value::Record(enc_update));
+            }
+            Value::Union {
+                index: 0,
+                inner: Box::new(Value::Array(enc_updates)),
+                n_variants: 2,
+                null_variant: None,
+            }
+        }
+
+        /// Encodes the contents of a progress statement as an Avro value.
+        pub fn encode_progress(
+            &self,
+            lower: &[i64],
+            upper: &[i64],
+            counts: &[(i64, i64)],
+        ) -> Value {
+            let enc_lower =
+                Value::Array(lower.iter().map(|time| Value::Long(time.clone())).collect());
+            let enc_upper =
+                Value::Array(upper.iter().map(|time| Value::Long(time.clone())).collect());
+            let enc_counts = Value::Array(
+                counts
+                    .iter()
+                    .map(|(time, count)| {
+                        Value::Record(vec![
+                            ("time".to_string(), Value::Long(time.clone())),
+                            ("count".to_string(), Value::Long(count.clone())),
+                        ])
+                    })
+                    .collect(),
+            );
+            let enc_progress = Value::Record(vec![
+                ("lower".to_string(), enc_lower),
+                ("upper".to_string(), enc_upper),
+                ("counts".to_string(), enc_counts),
+            ]);
+
+            Value::Union {
+                index: 1,
+                inner: Box::new(enc_progress),
+                n_variants: 2,
+                null_variant: None,
+            }
+        }
+    }
+
+    /// Construct the schema for the CDC V2 protocol.
+    pub fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
+        let mut fields = Vec::new();
+        for (name, typ) in columns.iter() {
+            let mut field_type = match &typ.scalar_type {
+                ScalarType::Bool => json!("boolean"),
+                ScalarType::Int32 => json!("int"),
+                ScalarType::Int64 => json!("long"),
+                ScalarType::Float32 => json!("float"),
+                ScalarType::Float64 => json!("double"),
+                ScalarType::Decimal(p, s) => json!({
+                    "type": "bytes",
+                    "logicalType": "decimal",
+                    "precision": p,
+                    "scale": s,
+                }),
+                ScalarType::Date => json!({
+                    "type": "int",
+                    "logicalType": "date",
+                }),
+                ScalarType::Time => json!({
+                    "type": "long",
+                    "logicalType": "time-micros",
+                }),
+                ScalarType::Timestamp | ScalarType::TimestampTz => json!({
+                    "type": "long",
+                    "logicalType": "timestamp-micros"
+                }),
+                ScalarType::Interval => json!({
+                    "type": "fixed",
+                    "size": 12,
+                    "logicalType": "duration"
+                }),
+                ScalarType::Bytes => json!("bytes"),
+                ScalarType::String => json!("string"),
+                ScalarType::Jsonb => json!({
+                    "type": "string",
+                }),
+                ScalarType::List(_t) => unimplemented!("list types"),
+                ScalarType::Record { .. } => unimplemented!("record types"),
+            };
+            if typ.nullable {
+                field_type = json!(["null", field_type]);
+            }
+            fields.push(json!({
+                "name": name,
+                "type": field_type,
+            }));
+        }
+
+        let mut update_schema = Vec::new();
+        update_schema.push(json!({
+            "name": "data",
+            "type": "record",
+            "fields": fields,
+
+        }));
+        update_schema.push(json!({
+            "name": "time",
+            "type": "long",
+        }));
+        update_schema.push(json!({
+            "name": "diff",
+            "type": "long",
+        }));
+
+        let mut updates_schema = Vec::new();
+        updates_schema.push(json!({
+            "name": "updates",
+            "type": "array",
+            "items": update_schema,
+        }));
+
+        let mut progress_schema = Vec::new();
+        progress_schema.push(json!({
+            "name": "lower",
+            "type": "array",
+            "items": {
+                "name": "time",
+                "type": "long",
+            }
+        }));
+        progress_schema.push(json!({
+            "name": "upper",
+            "type": "array",
+            "items": {
+                "name": "time",
+                "type": "long",
+            }
+        }));
+        progress_schema.push(json!({
+            "name": "counts",
+            "type": "array",
+            "items": {
+                "name": "counts",
+                "type": [
+                    {
+                        "name": "time",
+                        "type": "long",
+                    },
+                    {
+                        "name": "count",
+                        "type": "long",
+                    },
+                ],
+            }
+        }));
+
+        let message_schema = json!({
+            "name": "message",
+            "type": [
+                updates_schema,
+                progress_schema,
+            ]
+        });
+
+        Schema::parse(&message_schema).expect("schema constrution failed")
     }
 }
 
