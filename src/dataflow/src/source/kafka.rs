@@ -337,7 +337,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         self.buffered_metadata.insert(consumer.pid);
     }
 
-    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Timestamp, i64)> {
+    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Vec<u8>, Timestamp, i64)> {
         files
             .iter()
             .filter(|f| {
@@ -349,7 +349,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             })
             .flat_map(|f| {
                 let data = fs::read(f).unwrap();
-                RecordIter { data, offset: 0 }.map(|r| (r.data, r.time as u64, r.offset))
+                RecordIter { data, offset: 0 }.map(|r| (r.key, r.data, r.time as u64, r.offset))
             })
             .collect()
     }

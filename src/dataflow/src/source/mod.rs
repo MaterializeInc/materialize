@@ -321,10 +321,11 @@ pub trait SourceInfo<Out> {
         // Default implementation is to do nothing
     }
 
-    /// ...
-    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Out, Timestamp, i64)> {
+    /// Read back any files we previously persisted
+    /// TODO(rkhaitan): clean this up to return a proper type and potentially a iterator.
+    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Out, Timestamp, i64)> {
         if !files.is_empty() {
-            panic!("unimplemented: this source does not support reading persisted files");
+            error!("unimplemented: this source does not support reading persisted files");
         }
         vec![]
     }
@@ -908,10 +909,10 @@ where
                 if !read_persisted_files {
                     let msgs = source_info.read_persisted_files(&persisted_files);
                     for m in msgs {
-                        let ts_cap = cap.delayed(&m.1);
+                        let ts_cap = cap.delayed(&m.2);
                         output
                             .session(&ts_cap)
-                            .give(Ok(SourceOutput::new(vec![], m.0, Some(m.2))));
+                            .give(Ok(SourceOutput::new(m.0, m.1, Some(m.3))));
                     }
                     read_persisted_files = true;
                 }
