@@ -1889,6 +1889,7 @@ pub mod cdc_v2 {
 
     use avro::schema::Schema;
     use avro::types::Value;
+    use avro::{GeneralDeserializer, ValueDecoder};
 
     /// Collected state to encode update batches and progress statements.
     #[derive(Debug)]
@@ -1933,10 +1934,8 @@ pub mod cdc_v2 {
             upper: &[i64],
             counts: &[(i64, i64)],
         ) -> Value {
-            let enc_lower =
-                Value::Array(lower.iter().map(|time| Value::Long(time.clone())).collect());
-            let enc_upper =
-                Value::Array(upper.iter().map(|time| Value::Long(time.clone())).collect());
+            let enc_lower = Value::Array(lower.iter().cloned().map(Value::Long).collect());
+            let enc_upper = Value::Array(upper.iter().cloned().map(Value::Long).collect());
             let enc_counts = Value::Array(
                 counts
                     .iter()
@@ -1963,8 +1962,155 @@ pub mod cdc_v2 {
         }
     }
 
-    /// Construct the schema for the CDC V2 protocol.
-    pub fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
+    /// Collected state to decode update batches and progress statements.
+    #[derive(Debug)]
+    pub struct Decoder {
+        row_schema: Schema,
+    }
+
+    impl Decoder {
+        pub fn new(desc: RelationDesc) -> Self {
+            let columns = super::column_names_and_types(desc);
+            let schema = build_row_schema_json(&columns);
+            let row_schema = Schema::parse(&schema).expect("schema constrution failed");
+            Self { row_schema }
+        }
+        /// Decodes Avro-encoded `bytes` into either a batch of updates or a progress statement.
+        pub fn decode(
+            &self,
+            mut bytes: &[u8],
+        ) -> Result<Vec<(Row, i64, i64)>, (Vec<i64>, Vec<i64>, Vec<(i64, i64)>)> {
+            // The first byte is a magic byte (0) that indicates the Confluent
+            // serialization format version, and the next four bytes are a big
+            // endian 32-bit schema ID.
+            //
+            // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+            if bytes.len() < 5 {
+                panic!(
+                    "avro datum is too few bytes: expected at least 5 bytes, got {}",
+                    bytes.len()
+                );
+            }
+            let magic = bytes[0];
+            use byteorder::ByteOrder;
+            let _schema_id = byteorder::BigEndian::read_i32(&bytes[1..5]);
+            bytes = &bytes[5..];
+
+            if magic != 0 {
+                panic!("wrong avro serialization magic: expected 0, got {}", magic);
+            }
+
+            let mut dsr: GeneralDeserializer = GeneralDeserializer {
+                schema: self.row_schema.top_node(),
+            };
+            let decoder = ValueDecoder;
+            use avro::AvroDeserializer;
+            let value = dsr
+                .deserialize(&mut bytes, decoder)
+                .expect("what the heck?");
+
+            if let Value::Union { index, inner, .. } = value {
+                match index {
+                    0 => {
+                        // We now expect a vector of (data, time, diff) triples.
+                        if let Value::Array(values) = *inner {
+                            let updates = values
+                                .into_iter()
+                                .map(|value| {
+                                    if let Value::Record(mut fields) = value {
+                                        let (_, data) = fields.remove(0);
+                                        let (_, time) = fields.remove(0);
+                                        let (_, diff) = fields.remove(0);
+                                        let row = super::extract_row(
+                                            data,
+                                            None,
+                                            self.row_schema.top_node(),
+                                        )
+                                        .expect("CDCv2 doesn't like your row");
+                                        if let (Some(row), Value::Long(time), Value::Long(diff)) =
+                                            (row, time, diff)
+                                        {
+                                            (row, time, diff)
+                                        } else {
+                                            panic!("CDCv2 is not happy with your data");
+                                        }
+                                    } else {
+                                        panic!("CDCv2 update must be a record");
+                                    }
+                                })
+                                .collect();
+                            Ok(updates)
+                        } else {
+                            panic!("CDCv2 updates must be an array");
+                        }
+                    }
+                    1 => {
+                        if let Value::Record(mut fields) = *inner {
+                            let (_, lower) = fields.remove(0);
+                            let (_, upper) = fields.remove(0);
+                            let (_, counts) = fields.remove(0);
+                            if let (
+                                Value::Array(lower),
+                                Value::Array(upper),
+                                Value::Array(counts),
+                            ) = (lower, upper, counts)
+                            {
+                                let lower = lower
+                                    .into_iter()
+                                    .map(|v| {
+                                        if let Value::Long(time) = v {
+                                            time
+                                        } else {
+                                            panic!()
+                                        }
+                                    })
+                                    .collect::<Vec<_>>();
+                                let upper = upper
+                                    .into_iter()
+                                    .map(|v| {
+                                        if let Value::Long(time) = v {
+                                            time
+                                        } else {
+                                            panic!()
+                                        }
+                                    })
+                                    .collect::<Vec<_>>();
+                                let counts = counts
+                                    .into_iter()
+                                    .map(|v| {
+                                        if let Value::Record(mut fields) = v {
+                                            let (_, time) = fields.remove(0);
+                                            let (_, count) = fields.remove(0);
+                                            if let (Value::Long(time), Value::Long(count)) =
+                                                (time, count)
+                                            {
+                                                (time, count)
+                                            } else {
+                                                panic!()
+                                            }
+                                        } else {
+                                            panic!()
+                                        }
+                                    })
+                                    .collect::<Vec<_>>();
+                                Err((lower, upper, counts))
+                            } else {
+                                panic!()
+                            }
+                        } else {
+                            panic!("geez!")
+                        }
+                    }
+                    _ => panic!("Invalid variant"),
+                }
+            } else {
+                panic!("CDCv2 messages must be a union");
+            }
+        }
+    }
+
+    /// Builds the JSON for the row schema, which can be independenly useful.
+    pub fn build_row_schema_json(columns: &[(ColumnName, ColumnType)]) -> serde_json::value::Value {
         let mut fields = Vec::new();
         for (name, typ) in columns.iter() {
             let mut field_type = match &typ.scalar_type {
@@ -2012,74 +2158,129 @@ pub mod cdc_v2 {
                 "type": field_type,
             }));
         }
-
-        let mut update_schema = Vec::new();
-        update_schema.push(json!({
+        json!({
             "name": "data",
             "type": "record",
-            "fields": fields,
+            "fields": fields.clone(),
+        })
+    }
 
-        }));
-        update_schema.push(json!({
-            "name": "time",
-            "type": "long",
-        }));
-        update_schema.push(json!({
-            "name": "diff",
-            "type": "long",
-        }));
+    /// Construct the schema for the CDC V2 protocol.
+    pub fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
+        let fields = build_row_schema_json(columns);
 
-        let mut updates_schema = Vec::new();
-        updates_schema.push(json!({
+        let updates_schema = json!({
             "name": "updates",
             "type": "array",
-            "items": update_schema,
-        }));
-
-        let mut progress_schema = Vec::new();
-        progress_schema.push(json!({
-            "name": "lower",
-            "type": "array",
             "items": {
-                "name": "time",
-                "type": "long",
-            }
-        }));
-        progress_schema.push(json!({
-            "name": "upper",
-            "type": "array",
-            "items": {
-                "name": "time",
-                "type": "long",
-            }
-        }));
-        progress_schema.push(json!({
-            "name": "counts",
-            "type": "array",
-            "items": {
-                "name": "counts",
-                "type": [
+                "name" : "update",
+                "type" : "record",
+                "fields" : [
+                    fields,
                     {
-                        "name": "time",
-                        "type": "long",
+                        "name" : "time",
+                        "type" : "long",
                     },
                     {
-                        "name": "count",
-                        "type": "long",
+                        "name" : "diff",
+                        "type" : "long",
                     },
                 ],
-            }
-        }));
+            },
+        });
+
+        let progress_schema = json!({
+            "name" : "progress",
+            "type" : "record",
+            "fields" : [
+                {
+                    "name": "lower",
+                    "type": "array",
+                    "items": {
+                        "name": "time",
+                        "type": "long",
+                    }
+                },
+                {
+                    "name": "upper",
+                    "type": "array",
+                    "items": {
+                        "name": "time",
+                        "type": "long",
+                    }
+                },
+                {
+                    "name": "counts",
+                    "type": "array",
+                    "items": {
+                        "name": "counts",
+                        "type": [
+                            {
+                                "name": "time",
+                                "type": "long",
+                            },
+                            {
+                                "name": "count",
+                                "type": "long",
+                            },
+                        ],
+                    }
+                },
+            ],
+        });
+
+        // println!("{:?}", updates_schema);
+        // Schema::parse(&updates_schema).expect("schema constrution failed");
+
+        // println!("{:?}", progress_schema);
+        // Schema::parse(&progress_schema).expect("schema constrution failed");
 
         let message_schema = json!({
             "name": "message",
             "type": [
                 updates_schema,
                 progress_schema,
-            ]
+            ],
         });
 
+        // println!("{:?}", message_schema);
+
         Schema::parse(&message_schema).expect("schema constrution failed")
+    }
+
+    #[cfg(test)]
+    mod tests {
+
+        use super::*;
+
+        #[test]
+        fn test_roundtrip() {
+            let desc = RelationDesc::empty()
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("price", ScalarType::Float64.nullable(true));
+
+            let encoder = Encoder::new(desc.clone());
+            let decoder = Decoder::new(desc.clone());
+            let schema = build_schema(&crate::avro::column_names_and_types(desc));
+
+            let mut values = Vec::new();
+            use avro::encode::encode_to_vec;;
+            values.push(encode_to_vec(&encoder.encode_updates(&[]), &schema));
+            values.push(encode_to_vec(
+                &encoder.encode_progress(&[0], &[3], &[]),
+                &schema,
+            ));
+            values.push(encode_to_vec(&encoder.encode_updates(&[]), &schema));
+            values.push(encode_to_vec(
+                &encoder.encode_progress(&[3], &[], &[]),
+                &schema,
+            ));
+
+            assert!(decoder.decode(&values.remove(0)).is_ok());
+            assert!(decoder.decode(&values.remove(0)).is_err());
+            assert!(decoder.decode(&values.remove(0)).is_ok());
+            assert!(decoder.decode(&values.remove(0)).is_err());
+        }
     }
 }
 
