@@ -2401,33 +2401,20 @@ pub fn index_sql(
 
 // Wire up persistence and augment the given SourceConnector with that information, returning it.
 fn augment_connector_for_persistence(
-    connector: SourceConnector,
+    mut source_connector: SourceConnector,
     path: PathBuf,
     id: GlobalId,
 ) -> Result<Option<SourceConnector>, anyhow::Error> {
-    match connector {
+    match &mut source_connector {
         SourceConnector::External {
-            connector,
-            encoding,
-            envelope,
-            consistency,
-            ts_frequency,
+            ref mut connector, ..
         } => {
             if !connector.persistence_enabled() {
                 // This connector has no persistence, so do nothing.
                 Ok(None)
             } else {
-                if let Some(connector) = augment_connector(connector, path, id)? {
-                    Ok(Some(SourceConnector::External {
-                        connector,
-                        encoding,
-                        envelope,
-                        consistency,
-                        ts_frequency,
-                    }))
-                } else {
-                    Ok(None)
-                }
+                augment_connector(connector, path, id)?;
+                Ok(Some(source_connector))
             }
         }
         SourceConnector::Local => Ok(None),
@@ -2435,11 +2422,11 @@ fn augment_connector_for_persistence(
 }
 
 fn augment_connector(
-    mut connector: ExternalSourceConnector,
+    connector: &mut ExternalSourceConnector,
     path: PathBuf,
     id: GlobalId,
-) -> Result<Option<ExternalSourceConnector>, anyhow::Error> {
-    match &mut connector {
+) -> Result<(), anyhow::Error> {
+    match connector {
         ExternalSourceConnector::Kafka(k) => {
             // TODO fix this string literal situation
             let file_prefix = format!("materialize-{}", id);
@@ -2482,5 +2469,5 @@ fn augment_connector(
         _ => bail!("persistence only enabled for Kafka sources at this time"),
     }
 
-    Ok(Some(connector))
+    Ok(())
 }
