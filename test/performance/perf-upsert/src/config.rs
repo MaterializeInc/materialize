@@ -43,6 +43,10 @@ pub struct Args {
     #[structopt(long)]
     pub preserve_source: bool,
 
+    /// Whether or not to run the test with source persistence enabled
+    #[structopt(long)]
+    pub enable_persistence: bool,
+
     /// Whether or not the perf test should create a new source topic.
     #[structopt(
         long,
@@ -91,6 +95,7 @@ impl Args {
             kafka_url: self.kafka_url(),
             kafka_topic: self.kafka_topic.clone(),
             preserve_source: self.preserve_source,
+            enable_persistence: self.enable_persistence,
         }
     }
 
@@ -122,4 +127,5 @@ pub struct MzConfig {
     pub kafka_url: String,
     pub kafka_topic: String,
     pub preserve_source: bool,
+    pub enable_persistence: bool,
 }
