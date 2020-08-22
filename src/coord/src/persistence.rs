@@ -18,6 +18,7 @@ use futures::select;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
 
+use dataflow::source::persistence::PersistedRecord;
 use dataflow::PersistenceMessage;
 use dataflow_types::Timestamp;
 use expr::GlobalId;
@@ -33,14 +34,6 @@ pub struct PersistenceConfig {
     pub flush_min_records: usize,
     /// Directory where all persistence information is stored.
     pub path: PathBuf,
-}
-
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct PersistedRecord {
-    offset: i64,
-    timestamp: Timestamp,
-    key: Vec<u8>,
-    payload: Vec<u8>,
 }
 
 #[derive(Debug)]

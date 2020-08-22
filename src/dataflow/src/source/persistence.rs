@@ -12,8 +12,10 @@
 use anyhow::{anyhow, Error};
 use byteorder::{ByteOrder, NetworkEndian};
 
+use dataflow_types::Timestamp;
 use expr::GlobalId;
 use repr::Row;
+use serde::{Deserialize, Serialize};
 
 /// A single record from a persisted file.
 #[derive(Debug, Clone)]
@@ -108,4 +110,35 @@ impl PersistedFileMetadata {
             is_complete,
         })
     }
+}
+
+/// Source data that gets sent to the persistence thread to place in persistent storage.
+/// TODO currently fairly Kafka input-centric.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkerPersistenceData {
+    /// Global Id of the Source whose data is being persisted.
+    pub source_id: GlobalId,
+    /// Partition the record belongs to.
+    pub partition: i32,
+    /// Offset where we found the message.
+    pub offset: i64,
+    /// Timestamp assigned to the message.
+    pub timestamp: Timestamp,
+    /// The key of the message.
+    pub key: Vec<u8>,
+    /// The data of the message.
+    pub payload: Vec<u8>,
+}
+
+/// TODO remove this
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct PersistedRecord {
+    /// ...
+    pub offset: i64,
+    /// ...
+    pub timestamp: Timestamp,
+    /// ...
+    pub key: Vec<u8>,
+    /// ...
+    pub payload: Vec<u8>,
 }

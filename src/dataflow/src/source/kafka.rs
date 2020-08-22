@@ -34,9 +34,9 @@ use log::{error, info, log_enabled, warn};
 
 use crate::server::{
     PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-    TimestampMetadataUpdates, WorkerPersistenceData,
+    TimestampMetadataUpdates,
 };
-use crate::source::persistence::{PersistedFileMetadata, RecordIter};
+use crate::source::persistence::{PersistedFileMetadata, RecordIter, WorkerPersistenceData};
 use crate::source::{
     ConsistencyInfo, PartitionMetrics, PersistenceSender, SourceConstructor, SourceInfo,
     SourceMessage,
