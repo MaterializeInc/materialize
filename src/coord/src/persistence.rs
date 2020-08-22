@@ -12,8 +12,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
-use byteorder::{NetworkEndian, WriteBytesExt};
+use anyhow::{anyhow, Context};
 use futures::select;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
@@ -21,7 +20,6 @@ use log::{error, info, trace};
 use dataflow::source::persistence::Record;
 use dataflow::PersistenceMessage;
 use expr::GlobalId;
-use repr::{Datum, Row};
 
 #[derive(Clone, Debug)]
 pub struct PersistenceConfig {
@@ -135,14 +133,7 @@ impl Source {
                 // We have a "large enough" prefix. Lets write it to a file
                 let mut buf = Vec::new();
                 for record in partition.pending.drain(..prefix_length) {
-                    let row = Row::pack(&[
-                        Datum::Int64(record.offset),
-                        Datum::Int64(record.timestamp as i64),
-                        Datum::Bytes(&record.key),
-                        Datum::Bytes(&record.value),
-                    ]);
-
-                    encode_row(&row, &mut buf)?;
+                    record.write_record(&mut buf)?;
                 }
 
                 // The offsets we put in this filename are 1-indexed
@@ -328,18 +319,4 @@ impl Persister {
             }
         }
     }
-}
-
-/// Write a length-prefixed Row to a buffer
-fn encode_row(row: &Row, buf: &mut Vec<u8>) -> Result<(), anyhow::Error> {
-    let data = row.data();
-
-    if data.len() >= u32::MAX as usize {
-        bail!("failed to encode row: row too large");
-    }
-
-    buf.write_u32::<NetworkEndian>(data.len() as u32)
-        .expect("writes to vec cannot fail");
-    buf.extend_from_slice(data);
-    Ok(())
 }

@@ -8,13 +8,16 @@
 // by the Apache License, Version 2.0.
 
 //! Types related to source persistence.
+//
+// TODO: currently everything is fairly Kafka-centric and we should probably
+// not directly usable for some other source types.
 
-use anyhow::{anyhow, Error};
-use byteorder::{ByteOrder, NetworkEndian};
+use anyhow::{anyhow, bail, Error};
+use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
 
 use dataflow_types::Timestamp;
 use expr::GlobalId;
-use repr::Row;
+use repr::{Datum, Row};
 use serde::{Deserialize, Serialize};
 
 /// A single record from a source and partition that can be written to disk by
@@ -29,6 +32,21 @@ pub struct Record {
     pub key: Vec<u8>,
     /// Record value.
     pub value: Vec<u8>,
+}
+
+impl Record {
+    /// Encode the record as a length-prefixed Row, and then append that Row to the buffer.
+    /// This function will throw an error if the row is larger than 4 GB.
+    pub fn write_record(&self, buf: &mut Vec<u8>) -> Result<(), anyhow::Error> {
+        let row = Row::pack(&[
+            Datum::Int64(self.offset),
+            Datum::Int64(self.timestamp as i64),
+            Datum::Bytes(&self.key),
+            Datum::Bytes(&self.value),
+        ]);
+
+        encode_row(&row, buf)
+    }
 }
 
 /// Iterator through a persisted set of records.
@@ -113,7 +131,6 @@ impl PersistedFileMetadata {
 }
 
 /// Source data that gets sent to the persistence thread to place in persistent storage.
-/// TODO currently fairly Kafka input-centric.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkerPersistenceData {
     /// Global Id of the Source whose data is being persisted.
@@ -122,4 +139,18 @@ pub struct WorkerPersistenceData {
     pub partition: i32,
     /// The record itself.
     pub record: Record,
+}
+
+/// Write a length-prefixed Row to a buffer
+fn encode_row(row: &Row, buf: &mut Vec<u8>) -> Result<(), anyhow::Error> {
+    let data = row.data();
+
+    if data.len() >= u32::MAX as usize {
+        bail!("failed to encode row: row too large");
+    }
+
+    buf.write_u32::<NetworkEndian>(data.len() as u32)
+        .expect("writes to vec cannot fail");
+    buf.extend_from_slice(data);
+    Ok(())
 }
