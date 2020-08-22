@@ -17,18 +17,18 @@ use expr::GlobalId;
 use repr::Row;
 use serde::{Deserialize, Serialize};
 
-/// A single record from a persisted file.
-#[derive(Debug, Clone)]
+/// A single record from a source and partition that can be written to disk by
+/// the persister thread, and read back in and sent to the ingest pipeline later.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Record {
     /// Offset of record in a partition.
     pub offset: i64,
     /// Timestamp of record.
-    pub time: i64,
-
+    pub timestamp: Timestamp,
     /// Record key.
     pub key: Vec<u8>,
-    /// Record value
-    pub data: Vec<u8>,
+    /// Record value.
+    pub value: Vec<u8>,
 }
 
 /// Iterator through a persisted set of records.
@@ -64,14 +64,14 @@ impl Iterator for RecordIter {
         let row = rec.unpack();
 
         let offset = row[0].unwrap_int64();
-        let time = row[1].unwrap_int64();
+        let timestamp = row[1].unwrap_int64() as Timestamp;
         let key = row[2].unwrap_bytes();
-        let data = row[3].unwrap_bytes();
+        let value = row[3].unwrap_bytes();
         Some(Record {
             offset,
-            time,
+            timestamp,
             key: key.into(),
-            data: data.into(),
+            value: value.into(),
         })
     }
 }
@@ -120,25 +120,6 @@ pub struct WorkerPersistenceData {
     pub source_id: GlobalId,
     /// Partition the record belongs to.
     pub partition: i32,
-    /// Offset where we found the message.
-    pub offset: i64,
-    /// Timestamp assigned to the message.
-    pub timestamp: Timestamp,
-    /// The key of the message.
-    pub key: Vec<u8>,
-    /// The data of the message.
-    pub payload: Vec<u8>,
-}
-
-/// TODO remove this
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct PersistedRecord {
-    /// ...
-    pub offset: i64,
-    /// ...
-    pub timestamp: Timestamp,
-    /// ...
-    pub key: Vec<u8>,
-    /// ...
-    pub payload: Vec<u8>,
+    /// The record itself.
+    pub record: Record,
 }

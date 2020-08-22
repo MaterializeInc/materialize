@@ -36,7 +36,9 @@ use crate::server::{
     PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
     TimestampMetadataUpdates,
 };
-use crate::source::persistence::{PersistedFileMetadata, RecordIter, WorkerPersistenceData};
+use crate::source::persistence::{
+    PersistedFileMetadata, Record, RecordIter, WorkerPersistenceData,
+};
 use crate::source::{
     ConsistencyInfo, PartitionMetrics, PersistenceSender, SourceConstructor, SourceInfo,
     SourceMessage,
@@ -359,7 +361,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     );
                     vec![]
                 });
-                RecordIter { data, offset: 0 }.map(|r| (r.key, r.data, r.time as u64, r.offset))
+                RecordIter { data, offset: 0 }.map(|r| (r.key, r.value, r.timestamp, r.offset))
             })
             .collect()
     }
@@ -380,15 +382,17 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             // TODO(rkhaitan): let's experiment with wrapping these in a
             // Arc so we don't have to clone.
             let key = message.key.clone().unwrap_or_default();
-            let payload = message.payload.clone().unwrap_or_default();
+            let value = message.payload.clone().unwrap_or_default();
 
             let persistence_data = PersistenceMessage::Data(WorkerPersistenceData {
                 source_id: self.source_global_id,
                 partition: partition_id,
-                offset: message.offset.offset,
-                timestamp,
-                key,
-                payload,
+                record: Record {
+                    offset: message.offset.offset,
+                    timestamp,
+                    key,
+                    value,
+                },
             });
 
             let mut connector = persistence_tx.as_mut();

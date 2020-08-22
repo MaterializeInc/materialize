@@ -18,9 +18,8 @@ use futures::select;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
 
-use dataflow::source::persistence::PersistedRecord;
+use dataflow::source::persistence::Record;
 use dataflow::PersistenceMessage;
-use dataflow_types::Timestamp;
 use expr::GlobalId;
 use repr::{Datum, Row};
 
@@ -39,7 +38,7 @@ pub struct PersistenceConfig {
 #[derive(Debug)]
 struct Partition {
     last_persisted_offset: Option<i64>,
-    pending: Vec<PersistedRecord>,
+    pending: Vec<Record>,
 }
 
 #[derive(Debug)]
@@ -62,14 +61,7 @@ impl Source {
         }
     }
 
-    pub fn insert_record(
-        &mut self,
-        partition_id: i32,
-        offset: i64,
-        timestamp: Timestamp,
-        key: Vec<u8>,
-        payload: Vec<u8>,
-    ) {
+    pub fn insert_record(&mut self, partition_id: i32, record: Record) {
         // Start tracking this partition id if we are not already
         self.partitions.entry(partition_id).or_insert(Partition {
             last_persisted_offset: None,
@@ -78,22 +70,17 @@ impl Source {
 
         if let Some(partition) = self.partitions.get_mut(&partition_id) {
             if let Some(last_persisted_offset) = partition.last_persisted_offset {
-                if offset <= last_persisted_offset {
+                if record.offset <= last_persisted_offset {
                     // The persister does not assume that dataflow workers will send data in
                     // any ordering. We can filter out the records that we have obviously do not
                     // need to think about here.
                     trace!("Received an offset ({}) for source: {} partition: {} that was
                            lower than the most recent offset flushed to persistent storage {}. Ignoring.",
-                           offset, self.id, partition_id, last_persisted_offset);
+                           record.offset, self.id, partition_id, last_persisted_offset);
                     return;
                 }
             }
-            partition.pending.push(PersistedRecord {
-                offset,
-                timestamp,
-                key,
-                payload,
-            });
+            partition.pending.push(record);
         }
     }
 
@@ -152,7 +139,7 @@ impl Source {
                         Datum::Int64(record.offset),
                         Datum::Int64(record.timestamp as i64),
                         Datum::Bytes(&record.key),
-                        Datum::Bytes(&record.payload),
+                        Datum::Bytes(&record.value),
                     ]);
 
                     encode_row(&row, &mut buf)?;
@@ -271,13 +258,7 @@ impl Persister {
                 }
 
                 if let Some(source) = self.sources.get_mut(&data.source_id) {
-                    source.insert_record(
-                        data.partition,
-                        data.offset,
-                        data.timestamp,
-                        data.key,
-                        data.payload,
-                    );
+                    source.insert_record(data.partition, data.record);
                 }
             }
             PersistenceMessage::AddSource(id) => {
