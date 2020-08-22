@@ -7,19 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use byteorder::{NetworkEndian, WriteBytesExt};
-use futures::executor::block_on;
+use futures::select;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
 
-use dataflow::WorkerPersistenceData;
+use dataflow::PersistenceMessage;
 use dataflow_types::Timestamp;
 use expr::GlobalId;
 use repr::{Datum, Row};
@@ -52,7 +51,8 @@ struct Partition {
 
 #[derive(Debug)]
 struct Source {
-    // TODO(rkhaitan): key on SourceInstanceId.
+    // Multiple source instances will send data to the same Source object
+    // but the data will be deduplicated before it is persisted.
     id: GlobalId,
     path: PathBuf,
     // TODO: in a future where persistence supports more than just Kafka this
@@ -87,9 +87,9 @@ impl Source {
             if let Some(last_persisted_offset) = partition.last_persisted_offset {
                 if offset <= last_persisted_offset {
                     // The persister does not assume that dataflow workers will send data in
-                    // any ordering. This is a fairly low effort sanity check against obviously
-                    // bad duplication.
-                    error!("Received an offset ({}) for source: {} partition: {} that was
+                    // any ordering. We can filter out the records that we have obviously do not
+                    // need to think about here.
+                    trace!("Received an offset ({}) for source: {} partition: {} that was
                            lower than the most recent offset flushed to persistent storage {}. Ignoring.",
                            offset, self.id, partition_id, last_persisted_offset);
                     return;
@@ -106,16 +106,18 @@ impl Source {
 
     /// Determine the longest contiguous prefix of offsets available per partition
     // and if the prefix is sufficiently large, write it to disk.
-    pub fn persist(&mut self, flush_min_records: usize) -> Result<(), anyhow::Error> {
+    pub fn maybe_flush(&mut self, flush_min_records: usize) -> Result<(), anyhow::Error> {
         for (partition_id, partition) in self.partitions.iter_mut() {
             if partition.pending.is_empty() {
                 // No data to persist here
                 continue;
             }
 
-            // TODO we should probably be extra careful and deduplicate by offset
-            // here as well.
+            // Sort the data we have received by offset, timestamp
             partition.pending.sort();
+
+            // Keep only the minimum timestamp we received for every offset
+            partition.pending.dedup_by_key(|x| x.offset);
 
             let mut prev = partition.last_persisted_offset;
             let mut prefix_length = 0;
@@ -160,7 +162,7 @@ impl Source {
                         Datum::Bytes(&record.payload),
                     ]);
 
-                    encode_row(&row, &mut buf);
+                    encode_row(&row, &mut buf)?;
                 }
 
                 // The offsets we put in this filename are 1-indexed
@@ -189,161 +191,181 @@ impl Source {
     }
 }
 
-#[derive(Debug)]
-pub enum PersistenceMetadata {
-    AddSource(GlobalId),
-    DropSource(GlobalId),
-    Shutdown,
-}
-
 pub struct Persister {
-    data_rx: comm::mpsc::Receiver<WorkerPersistenceData>,
-    metadata_rx: std::sync::mpsc::Receiver<PersistenceMetadata>,
+    rx: Option<comm::mpsc::Receiver<PersistenceMessage>>,
     sources: HashMap<GlobalId, Source>,
+    disabled_sources: HashSet<GlobalId>,
     pub config: PersistenceConfig,
 }
 
 impl Persister {
-    pub fn new(
-        data_rx: comm::mpsc::Receiver<WorkerPersistenceData>,
-        metadata_rx: std::sync::mpsc::Receiver<PersistenceMetadata>,
-        config: PersistenceConfig,
-    ) -> Self {
+    pub fn new(rx: comm::mpsc::Receiver<PersistenceMessage>, config: PersistenceConfig) -> Self {
         Persister {
-            data_rx,
-            metadata_rx,
+            rx: Some(rx),
             sources: HashMap::new(),
+            disabled_sources: HashSet::new(),
             config,
         }
     }
 
-    async fn update_persistence(&mut self) -> Result<bool, anyhow::Error> {
-        while let Ok(metadata) = self.metadata_rx.try_recv() {
-            match metadata {
-                PersistenceMetadata::AddSource(id) => {
-                    // Check if we already have a source
-                    if self.sources.contains_key(&id) {
+    async fn persist(&mut self) -> Result<(), anyhow::Error> {
+        // We need to bound the amount of time spent reading from the data channel to ensure we
+        // don't neglect our other tasks of writing the data down.
+        let mut rx_stream = self
+            .rx
+            .take()
+            .unwrap()
+            .map(|m| match m {
+                Ok(m) => m,
+                Err(_) => panic!("persister thread failed to read from channel"),
+            })
+            .fuse();
+
+        let mut interval = tokio::time::interval(self.config.flush_interval).fuse();
+        loop {
+            select! {
+                data = rx_stream.next() => {
+                    let shutdown = if let Some(data) = data {
+                        self.handle_persistence_message(data)?
+                    } else {
+                        // TODO not sure if this should be a stronger error
+                        error!("Persistence thread receiver hung up. Shutting down persistence");
+                        break;
+                   };
+
+                   if shutdown {
+                       break;
+                   }
+                }
+                _ = interval.next() => {
+                    for (_, s) in self.sources.iter_mut() {
+                        s.maybe_flush(self.config.flush_min_records)?;
+                    }
+
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Process a new PersistenceMessage and return true if we should halt processing.
+    fn handle_persistence_message(
+        &mut self,
+        data: PersistenceMessage,
+    ) -> Result<bool, anyhow::Error> {
+        match data {
+            PersistenceMessage::Data(data) => {
+                if !self.sources.contains_key(&data.source_id) {
+                    if self.disabled_sources.contains(&data.source_id) {
+                        // It's possible that there was a delay between when the coordinator
+                        // deleted a source and when dataflow threads learned about that delete.
                         error!(
+                            "Received data for source {} that has disabled persistence. Ignoring.",
+                            data.source_id
+                        );
+                    } else {
+                        // We got data for a source that we don't currently track persistence data for
+                        // and we've never deleted. This isn't possible in the current implementation,
+                        // as the coordinatr sends a CreateSource message to the persister before sending
+                        // anything to the dataflow workers, but this could become possible in the future.
+
+                        self.disabled_sources.insert(data.source_id);
+                        error!("Received data for unknown source {}. Disabling persistence on the source.", data.source_id);
+                    }
+
+                    return Ok(false);
+                }
+
+                if let Some(source) = self.sources.get_mut(&data.source_id) {
+                    source.insert_record(
+                        data.partition,
+                        data.offset,
+                        data.timestamp,
+                        data.key,
+                        data.payload,
+                    );
+                }
+            }
+            PersistenceMessage::AddSource(id) => {
+                // Check if we already have a source
+                if self.sources.contains_key(&id) {
+                    error!(
                             "Received signal to enable persistence for {} but it is already persisted. Ignoring.",
                             id
                         );
-                        continue;
-                    }
-
-                    // Create a new subdirectory to store this source's data.
-                    let mut source_path = self.config.path.clone();
-                    source_path.push(format!("{}/", id));
-                    fs::create_dir_all(&source_path).with_context(|| {
-                        anyhow!(
-                            "trying to create persistence directory: {:#?} for source: {}",
-                            source_path,
-                            id
-                        )
-                    })?;
-
-                    let source = Source::new(id, source_path);
-                    self.sources.insert(id, source);
-                    info!("Enabled persistence for source: {}", id);
+                    return Ok(false);
                 }
-                PersistenceMetadata::DropSource(id) => {
-                    if !self.sources.contains_key(&id) {
-                        // This will actually happen fairly often because the
-                        // coordinator doesn't see which sources had persistence
-                        // enabled on delete, so notifies the persistence thread
-                        // for all drops.
-                        trace!("Received signal to disable persistence for {} but it is not persisted. Ignoring.", id);
-                        continue;
-                    }
 
+                if self.disabled_sources.contains(&id) {
+                    error!("Received signal to enable persistence for {} but it has already been disabled. Ignoring.", id);
+                    return Ok(false);
+                }
+
+                // Create a new subdirectory to store this source's data.
+                let mut source_path = self.config.path.clone();
+                source_path.push(format!("{}/", id));
+                fs::create_dir_all(&source_path).with_context(|| {
+                    anyhow!(
+                        "trying to create persistence directory: {:#?} for source: {}",
+                        source_path,
+                        id
+                    )
+                })?;
+
+                let source = Source::new(id, source_path);
+                self.sources.insert(id, source);
+                info!("Enabled persistence for source: {}", id);
+            }
+            PersistenceMessage::DropSource(id) => {
+                if !self.sources.contains_key(&id) {
+                    // This will actually happen fairly often because the
+                    // coordinator doesn't see which sources had persistence
+                    // enabled on delete, so notifies the persistence thread
+                    // for all drops.
+                    trace!("Received signal to disable persistence for {} but it is not persisted. Ignoring.", id);
+                } else {
                     self.sources.remove(&id);
+                    self.disabled_sources.insert(id);
                     info!("Disabled persistence for source: {}", id);
                 }
-                PersistenceMetadata::Shutdown => {
-                    return Ok(true);
-                }
-            };
-        }
-
-        // We need to bound the amount of time spent reading from the data channel to ensure we
-        // don't neglect our other tasks.
-        // TODO(rkhaitan): rework this loop to select from a timer and the channel(s).
-        let timer = Instant::now();
-        loop {
-            match tokio::time::timeout(Duration::from_millis(5), self.data_rx.next()).await {
-                Ok(None) => break,
-                Ok(Some(Ok(data))) => {
-                    if !self.sources.contains_key(&data.source_id) {
-                        // TODO(rkhaitan): dropping here is not actually a correct thing to do, as
-                        // there may be a race between when we see the metadata informing
-                        // us to track this source vs when we see the data itself.
-                        error!(
-                            "Received data for source {} that is not currently persisted. Ignoring.",
-                            data.source_id
-                        );
-                        continue;
-                    }
-
-                    if let Some(source) = self.sources.get_mut(&data.source_id) {
-                        source.insert_record(
-                            data.partition,
-                            data.offset,
-                            data.timestamp,
-                            data.key,
-                            data.payload,
-                        );
-                    }
-                }
-                Ok(Some(Err(e))) => {
-                    error!("received error from persistence rx: {}", e);
-                    break;
-                }
-                Err(tokio::time::Elapsed { .. }) => break,
             }
-
-            if timer.elapsed() > self.config.flush_interval {
-                break;
+            PersistenceMessage::Shutdown => {
+                return Ok(true);
             }
-        }
-
-        for (_, s) in self.sources.iter_mut() {
-            s.persist(self.config.flush_min_records)?;
-        }
+        };
 
         Ok(false)
     }
-}
 
-// TODO(rkhaitan): make this a method on Persister.
-pub fn update(persister: Option<Persister>) {
-    if let Some(mut persister) = persister {
+    pub async fn run(&mut self) {
         info!("Persistence thread starting with flush_interval: {:#?}, flush_min_records: {}, path: {}",
-              persister.config.flush_interval,
-              persister.config.flush_min_records,
-              persister.config.path.display());
-        loop {
-            thread::sleep(persister.config.flush_interval);
-            trace!("Persistence thread checking for updates.");
-            let ret = block_on(async { persister.update_persistence().await });
+              self.config.flush_interval,
+              self.config.flush_min_records,
+              self.config.path.display());
+        trace!("Persistence thread checking for updates.");
+        let ret = self.persist().await;
 
-            match ret {
-                Ok(true) => break,
-                Err(e) => {
-                    error!("Persistence thread encountered error: {:#}", e);
-                    error!("Persistence thread shutting down.
-                           All current and future persisted sources on this materialized process will not continue to be persisted.");
-                    break;
-                }
-                Ok(false) => continue,
+        match ret {
+            Ok(_) => (),
+            Err(e) => {
+                error!("Persistence thread encountered error: {:#}", e);
+                error!("All persisted sources on this process will not continue to be persisted.");
             }
         }
     }
 }
 
 /// Write a length-prefixed Row to a buffer
-fn encode_row(row: &Row, buf: &mut Vec<u8>) {
-    // TODO assert that the row is small enough for its length to fit in 4 bytes
+fn encode_row(row: &Row, buf: &mut Vec<u8>) -> Result<(), anyhow::Error> {
     let data = row.data();
+
+    if data.len() >= u32::MAX as usize {
+        bail!("failed to encode row: row too large");
+    }
+
     buf.write_u32::<NetworkEndian>(data.len() as u32)
         .expect("writes to vec cannot fail");
     buf.extend_from_slice(data);
+    Ok(())
 }

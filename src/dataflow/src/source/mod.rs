@@ -47,8 +47,8 @@ use timely::Data;
 use super::source::util::source;
 use crate::operator::StreamExt;
 use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-    WorkerPersistenceData,
+    PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
+    TimestampMetadataUpdates,
 };
 
 mod file;
@@ -96,7 +96,7 @@ pub struct SourceConfig<'a, G> {
     pub persisted_files: Vec<PathBuf>,
 }
 
-type PersistenceSender = Pin<Box<dyn Sink<WorkerPersistenceData, Error = comm::Error> + Send>>;
+type PersistenceSender = Pin<Box<dyn Sink<PersistenceMessage, Error = comm::Error> + Send>>;
 
 #[derive(Clone, Serialize, Deserialize)]
 /// A record produced by a source
@@ -321,10 +321,11 @@ pub trait SourceInfo<Out> {
         // Default implementation is to do nothing
     }
 
-    /// ...
-    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Out, Timestamp, i64)> {
+    /// Read back any files we previously persisted
+    /// TODO(rkhaitan): clean this up to return a proper type and potentially a iterator.
+    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Out, Timestamp, i64)> {
         if !files.is_empty() {
-            panic!("unimplemented: this source does not support reading persisted files");
+            error!("unimplemented: this source does not support reading persisted files");
         }
         vec![]
     }
@@ -908,10 +909,10 @@ where
                 if !read_persisted_files {
                     let msgs = source_info.read_persisted_files(&persisted_files);
                     for m in msgs {
-                        let ts_cap = cap.delayed(&m.1);
+                        let ts_cap = cap.delayed(&m.2);
                         output
                             .session(&ts_cap)
-                            .give(Ok(SourceOutput::new(vec![], m.0, Some(m.2))));
+                            .give(Ok(SourceOutput::new(m.0, m.1, Some(m.3))));
                     }
                     read_persisted_files = true;
                 }

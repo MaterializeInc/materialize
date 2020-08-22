@@ -33,8 +33,8 @@ use kafka_util::KafkaAddrs;
 use log::{error, info, log_enabled, warn};
 
 use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-    WorkerPersistenceData,
+    PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
+    TimestampMetadataUpdates, WorkerPersistenceData,
 };
 use crate::source::{
     ConsistencyInfo, PartitionMetrics, PersistedFileMetadata, PersistenceSender, RecordIter,
@@ -337,7 +337,9 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         self.buffered_metadata.insert(consumer.pid);
     }
 
-    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Timestamp, i64)> {
+    // TODO(rkhaitan): reading files all in one shot like this could cause the system to become
+    // unresponsive
+    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Vec<u8>, Timestamp, i64)> {
         files
             .iter()
             .filter(|f| {
@@ -348,8 +350,15 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 self.has_partition(meta.partition_id)
             })
             .flat_map(|f| {
-                let data = fs::read(f).unwrap();
-                RecordIter { data, offset: 0 }.map(|r| (r.data, r.time as u64, r.offset))
+                let data = fs::read(f).unwrap_or_else(|e| {
+                    error!(
+                        "failed to read source persistence file {}: {}",
+                        f.display(),
+                        e
+                    );
+                    vec![]
+                });
+                RecordIter { data, offset: 0 }.map(|r| (r.key, r.data, r.time as u64, r.offset))
             })
             .collect()
     }
@@ -372,14 +381,14 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             let key = message.key.clone().unwrap_or_default();
             let payload = message.payload.clone().unwrap_or_default();
 
-            let persistence_data = WorkerPersistenceData {
+            let persistence_data = PersistenceMessage::Data(WorkerPersistenceData {
                 source_id: self.source_global_id,
                 partition: partition_id,
                 offset: message.offset.offset,
                 timestamp,
                 key,
                 payload,
-            };
+            });
 
             let mut connector = persistence_tx.as_mut();
 

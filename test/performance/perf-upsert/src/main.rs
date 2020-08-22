@@ -43,12 +43,13 @@ async fn run() -> Result<()> {
     let mz_config = config.mz_config();
 
     log::info!(
-        "starting up message_count={} mzd={}:{} kafka={} preserve_source={}",
+        "starting up message_count={} mzd={}:{} kafka={} preserve_source={} enable_persistence={}",
         config.message_count,
         config.materialized_host,
         config.materialized_port,
         config.kafka_url(),
         config.preserve_source,
+        config.enable_persistence,
     );
 
     let k = tokio::spawn(async move { create_kafka_messages(k_config).await });
@@ -130,14 +131,23 @@ async fn create_upsert_text_source(
     kafka_url: &impl std::fmt::Display,
     kafka_topic_name: &str,
     source_name: &str,
+    enable_persistence: bool,
 ) -> Result<()> {
-    let query = format!(
-        "CREATE MATERIALIZED SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
-            FORMAT TEXT ENVELOPE UPSERT",
+    let query_prefix = format!(
+        "CREATE MATERIALIZED SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}'",
         kafka_url = kafka_url,
         topic = kafka_topic_name,
         source = source_name,
     );
+
+    let query = if enable_persistence {
+        format!(
+            "{} WITH (persistence = true) FORMAT TEXT ENVELOPE UPSERT",
+            query_prefix
+        )
+    } else {
+        format!("{} FORMAT TEXT ENVELOPE UPSERT", query_prefix)
+    };
     log::debug!("creating source=> {}", query);
 
     mz_client.execute(&*query, &[]).await?;
@@ -158,6 +168,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
             &config.kafka_url,
             &config.kafka_topic,
             config::KAFKA_SOURCE_NAME,
+            config.enable_persistence,
         )
         .await?;
     } else {
