@@ -36,9 +36,10 @@ use crate::server::{
     PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
     TimestampMetadataUpdates, WorkerPersistenceData,
 };
+use crate::source::persistence::{PersistedFileMetadata, RecordIter};
 use crate::source::{
-    ConsistencyInfo, PartitionMetrics, PersistedFileMetadata, PersistenceSender, RecordIter,
-    SourceConstructor, SourceInfo, SourceMessage,
+    ConsistencyInfo, PartitionMetrics, PersistenceSender, SourceConstructor, SourceInfo,
+    SourceMessage,
 };
 
 /// Contains all information necessary to ingest data from Kafka

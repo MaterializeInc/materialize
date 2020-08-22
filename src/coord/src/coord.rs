@@ -34,10 +34,8 @@ use futures::sink::{Sink, SinkExt};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 
-use dataflow::{
-    PersistedFileMetadata, PersistenceMessage, SequencedCommand, WorkerFeedback,
-    WorkerFeedbackWithMeta,
-};
+use dataflow::source::persistence::PersistedFileMetadata;
+use dataflow::{PersistenceMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, ExternalSourceConnector, IndexDesc, KafkaSinkConnector,

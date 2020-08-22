@@ -26,5 +26,3 @@ pub use server::{
     serve, BroadcastToken, PersistenceMessage, SequencedCommand, WorkerFeedback,
     WorkerFeedbackWithMeta, WorkerPersistenceData,
 };
-
-pub use source::PersistedFileMetadata;
