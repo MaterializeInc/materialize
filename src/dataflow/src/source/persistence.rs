@@ -37,6 +37,7 @@ pub struct Record {
 impl Record {
     /// Encode the record as a length-prefixed Row, and then append that Row to the buffer.
     /// This function will throw an error if the row is larger than 4 GB.
+    /// TODO: could this be made more efficient with a RowArena?
     pub fn write_record(&self, buf: &mut Vec<u8>) -> Result<(), anyhow::Error> {
         let row = Row::pack(&[
             Datum::Int64(self.offset),
@@ -46,6 +47,52 @@ impl Record {
         ]);
 
         encode_row(&row, buf)
+    }
+
+    /// Read a encoded length-prefixed Row from a buffer at an offset, and try
+    /// to convert it back to a record. Returns the record and the next offset
+    /// to read from, if possible.
+    pub fn read_record(buf: &[u8], offset: usize) -> Option<(Self, usize)> {
+        if offset >= buf.len() {
+            return None;
+        }
+
+        // Let's start by only looking at the buffer at the offset.
+        let (_, data) = buf.split_at(offset);
+
+        // Read in the length of the encoded row.
+        let len = NetworkEndian::read_u32(&data) as usize;
+        assert!(
+            len >= 16,
+            format!(
+                "expected to see at least 16 bytes in record, but saw {}",
+                len
+            )
+        );
+
+        // Grab the next len bytes after the 4 byte length header, and turn
+        // it into a vector so that we can extract things from it as a Row.
+        // TODO: could we avoid the extra allocation here?
+        let (_, rest) = data.split_at(4);
+        let row = rest[..len].to_vec();
+
+        let rec = Row::new(row);
+        let row = rec.unpack();
+
+        let source_offset = row[0].unwrap_int64();
+        let timestamp = row[1].unwrap_int64() as Timestamp;
+        let key = row[2].unwrap_bytes();
+        let value = row[3].unwrap_bytes();
+
+        Some((
+            Record {
+                offset: source_offset,
+                timestamp,
+                key: key.into(),
+                value: value.into(),
+            },
+            offset + len + 4,
+        ))
     }
 }
 
@@ -61,36 +108,12 @@ impl Iterator for RecordIter {
     type Item = Record;
 
     fn next(&mut self) -> Option<Record> {
-        if self.offset >= self.data.len() {
-            return None;
+        if let Some((record, next_offset)) = Record::read_record(&self.data, self.offset) {
+            self.offset = next_offset;
+            Some(record)
+        } else {
+            None
         }
-
-        let (_, data) = self.data.split_at_mut(self.offset);
-        let len = NetworkEndian::read_u32(&data) as usize;
-        assert!(
-            len >= 16,
-            format!(
-                "expected to see at least 16 bytes in record, but saw {}",
-                len
-            )
-        );
-        let (_, rest) = data.split_at_mut(4);
-        let row = rest[..len].to_vec();
-        self.offset += 4 + len;
-
-        let rec = Row::new(row);
-        let row = rec.unpack();
-
-        let offset = row[0].unwrap_int64();
-        let timestamp = row[1].unwrap_int64() as Timestamp;
-        let key = row[2].unwrap_bytes();
-        let value = row[3].unwrap_bytes();
-        Some(Record {
-            offset,
-            timestamp,
-            key: key.into(),
-            value: value.into(),
-        })
     }
 }
 
