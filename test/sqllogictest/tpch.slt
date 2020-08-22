@@ -421,6 +421,7 @@ ORDER BY
 
 %2 =
 | Get materialize.public.lineitem (u21)
+| ArrangeBy (#0)
 
 %3 =
 | Get materialize.public.supplier (u8)
@@ -436,7 +437,7 @@ ORDER BY
 
 %6 =
 | Join %0 %1 %2 %3 %4 %5 (= #0 #9) (= #3 #36 #40) (= #8 #17) (= #19 #33) (= #42 #44)
-| | implementation = Differential %2 %1.(#0) %0.(#0) %3.(#0, #3) %4.(#0) %5.(#0)
+| | implementation = Differential %2.(#0) %1.(#0) %0.(#0) %3.(#0, #3) %4.(#0) %5.(#0)
 | | demand = (#12, #22, #23, #41, #45)
 | Filter (#45 = "ASIA"), (#12 < 1995-01-01), (#12 >= 1994-01-01)
 | Reduce group=(#41) sum((#22 * (100dec - #23)))
