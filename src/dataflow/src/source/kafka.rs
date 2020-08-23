@@ -36,9 +36,7 @@ use crate::server::{
     PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
     TimestampMetadataUpdates,
 };
-use crate::source::persistence::{
-    PersistedFileMetadata, Record, RecordIter, WorkerPersistenceData,
-};
+use crate::source::persistence::{Record, RecordFileMetadata, RecordIter, WorkerPersistenceData};
 use crate::source::{
     ConsistencyInfo, PartitionMetrics, PersistenceSender, SourceConstructor, SourceInfo,
     SourceMessage,
@@ -349,8 +347,16 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 // We partition the given partitions up amongst workers, so we need to be
                 // careful not to process a partition that this worker was not allocated (or
                 // else we would process files multiple times).
-                let meta = PersistedFileMetadata::from_fname(f.to_str().unwrap()).unwrap();
-                self.has_partition(meta.partition_id)
+                match RecordFileMetadata::from_path(f) {
+                    Ok(Some(meta)) => {
+                        assert_eq!(self.source_global_id, meta.source_id);
+                        self.has_partition(meta.partition_id)
+                    }
+                    _ => {
+                        error!("Failed to parse path: {}", f.display());
+                        false
+                    }
+                }
             })
             .flat_map(|f| {
                 let data = fs::read(f).unwrap_or_else(|e| {
@@ -386,7 +392,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
 
             let persistence_data = PersistenceMessage::Data(WorkerPersistenceData {
                 source_id: self.source_global_id,
-                partition: partition_id,
+                partition_id,
                 record: Record {
                     offset: message.offset.offset,
                     timestamp,

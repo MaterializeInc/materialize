@@ -17,7 +17,7 @@ use futures::select;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
 
-use dataflow::source::persistence::Record;
+use dataflow::source::persistence::{Record, RecordFileMetadata};
 use dataflow::PersistenceMessage;
 use expr::GlobalId;
 
@@ -139,12 +139,11 @@ impl Source {
                 // The offsets we put in this filename are 1-indexed
                 // MzOffsets, so the starting number is off by 1 for something like
                 // Kafka
-                let filename = format!(
-                    "materialize-{}-{}-{}-{}",
+                let filename = RecordFileMetadata::generate_file_name(
                     self.id,
-                    partition_id,
+                    *partition_id,
                     prefix_start_offset.unwrap(),
-                    prefix_end_offset
+                    prefix_end_offset,
                 );
 
                 // We'll write down the data to a file with a `-tmp` prefix to
@@ -249,7 +248,7 @@ impl Persister {
                 }
 
                 if let Some(source) = self.sources.get_mut(&data.source_id) {
-                    source.insert_record(data.partition, data.record);
+                    source.insert_record(data.partition_id, data.record);
                 }
             }
             PersistenceMessage::AddSource(id) => {

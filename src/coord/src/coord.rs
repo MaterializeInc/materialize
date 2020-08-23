@@ -34,7 +34,7 @@ use futures::sink::{Sink, SinkExt};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 
-use dataflow::source::persistence::PersistedFileMetadata;
+use dataflow::source::persistence::RecordFileMetadata;
 use dataflow::{PersistenceMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
@@ -2418,38 +2418,33 @@ fn augment_connector(
 ) -> Result<(), anyhow::Error> {
     match connector {
         ExternalSourceConnector::Kafka(k) => {
-            // TODO fix this string literal situation
-            let file_prefix = format!("materialize-{}", id);
             let mut read_offsets: HashMap<i32, i64> = HashMap::new();
             let mut paths = Vec::new();
 
-            let files = std::fs::read_dir(format!("{}/{}", &path.to_str().unwrap(), id))
-                .expect("reading directory cannot fail");
+            let source_path = path.join(id.to_string());
+            let entries = std::fs::read_dir(&source_path).with_context(|| {
+                format!("Failed to read from directory {}", source_path.display())
+            })?;
 
-            for f in files {
-                // TODO(justin): cleaner way to do this?
-                let path = f.expect("file known to exist").path();
-                let filename = path.file_name().unwrap().to_str().unwrap().to_owned();
-                if filename.starts_with(&file_prefix) {
-                    let meta = PersistedFileMetadata::from_fname(&filename)?;
-                    if !meta.is_complete {
-                        continue;
-                    }
+            for entry in entries {
+                if let Ok(file) = entry {
+                    let path = file.path();
+                    if let Some(metadata) = RecordFileMetadata::from_path(&path)? {
+                        paths.push(path);
 
-                    paths.push(path);
-
-                    // TODO: we need to be more careful here to handle the case where we are for
-                    // some reason missing some values here.
-                    match read_offsets.get(&meta.partition_id) {
-                        None => {
-                            read_offsets.insert(meta.partition_id, meta.end_offset);
-                        }
-                        Some(o) => {
-                            if meta.end_offset > *o {
-                                read_offsets.insert(meta.partition_id, meta.end_offset);
+                        // TODO: we need to be more careful here to handle the case where we are for
+                        // some reason missing some values here.
+                        match read_offsets.get(&metadata.partition_id) {
+                            None => {
+                                read_offsets.insert(metadata.partition_id, metadata.end_offset);
                             }
-                        }
-                    };
+                            Some(o) => {
+                                if metadata.end_offset > *o {
+                                    read_offsets.insert(metadata.partition_id, metadata.end_offset);
+                                }
+                            }
+                        };
+                    }
                 }
             }
 

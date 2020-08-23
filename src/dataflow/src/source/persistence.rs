@@ -12,13 +12,18 @@
 // TODO: currently everything is fairly Kafka-centric and we should probably
 // not directly usable for some other source types.
 
-use anyhow::{anyhow, bail, Error};
+use std::path::Path;
+
+use anyhow::{bail, Error};
 use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
 
 use dataflow_types::Timestamp;
 use expr::GlobalId;
+use log::error;
 use repr::{Datum, Row};
 use serde::{Deserialize, Serialize};
+
+static RECORD_FILE_PREFIX: &str = "materialize";
 
 /// A single record from a source and partition that can be written to disk by
 /// the persister thread, and read back in and sent to the ingest pipeline later.
@@ -119,9 +124,9 @@ impl Iterator for RecordIter {
 
 /// Describes what is provided from a persisted file.
 #[derive(Debug)]
-pub struct PersistedFileMetadata {
+pub struct RecordFileMetadata {
     /// The source global ID this file represents.
-    pub id: GlobalId,
+    pub source_id: GlobalId,
     /// The partition ID this file represents.
     pub partition_id: i32,
     /// The inclusive lower bound of offsets provided by this file.
@@ -132,24 +137,65 @@ pub struct PersistedFileMetadata {
     pub is_complete: bool,
 }
 
-impl PersistedFileMetadata {
-    /// Parse a file's metadata from its filename.
-    pub fn from_fname(s: &str) -> Result<Self, Error> {
-        let parts: Vec<&str> = s.split('-').collect();
-        if parts.len() < 5 || parts.len() > 6 {
-            return Err(anyhow!(
-                "expected filename to have 5 (or 6) parts, but it was {}",
-                s
-            ));
+impl RecordFileMetadata {
+    /// Parse a file's metadata from its path.
+    pub fn from_path(path: &Path) -> Result<Option<Self>, Error> {
+        let file_name = path.file_name();
+
+        if file_name.is_none() {
+            // Path ends in .. . This should never happen but let's
+            // just ignore for now.
+            return Ok(None);
         }
-        let is_complete = parts.len() < 6 || parts[5] != "tmp";
-        Ok(PersistedFileMetadata {
-            id: parts[1].parse()?,
+
+        let file_name = file_name.expect("known to have a file name").to_str();
+
+        if file_name.is_none() {
+            // Path cannot be converted to a UTF-8 string. This
+            // should not be the case for persistence files as we
+            // control every aspect of the name.
+            // TODO(rkhaitan): Make sure this assumption is valid.
+            return Ok(None);
+        }
+
+        let file_name = file_name.expect("known to be a valid UTF-8 file name");
+
+        if !file_name.starts_with(RECORD_FILE_PREFIX) {
+            // File name doesn't match the prefix we use to write
+            // down persistence data.
+            return Ok(None);
+        }
+
+        let parts: Vec<_> = file_name.split('-').collect();
+
+        if parts.len() != 5 {
+            // File is either partially written, or entirely irrelevant.
+            error!(
+                "Found invalid persistence file name: {}. Ignoring",
+                file_name
+            );
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            source_id: parts[1].parse()?,
             partition_id: parts[2].parse()?,
             start_offset: parts[3].parse()?,
             end_offset: parts[4].parse()?,
-            is_complete,
-        })
+            is_complete: false,
+        }))
+    }
+
+    /// Generate a file name that can later be parsed into metadata.
+    pub fn generate_file_name(
+        source_id: GlobalId,
+        partition_id: i32,
+        start_offset: i64,
+        end_offset: i64,
+    ) -> String {
+        format!(
+            "{}-{}-{}-{}-{}",
+            RECORD_FILE_PREFIX, source_id, partition_id, start_offset, end_offset
+        )
     }
 }
 
@@ -159,7 +205,7 @@ pub struct WorkerPersistenceData {
     /// Global Id of the Source whose data is being persisted.
     pub source_id: GlobalId,
     /// Partition the record belongs to.
-    pub partition: i32,
+    pub partition_id: i32,
     /// The record itself.
     pub record: Record,
 }
