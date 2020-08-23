@@ -12,13 +12,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use futures::select;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
 
 use dataflow::source::persistence::{Record, RecordFileMetadata};
 use dataflow::PersistenceMessage;
+use dataflow_types::{ExternalSourceConnector, SourceConnector};
 use expr::GlobalId;
 
 #[derive(Clone, Debug)]
@@ -267,8 +268,7 @@ impl Persister {
                 }
 
                 // Create a new subdirectory to store this source's data.
-                let mut source_path = self.config.path.clone();
-                source_path.push(format!("{}/", id));
+                let source_path = self.config.path.join(id.to_string());
                 fs::create_dir_all(&source_path).with_context(|| {
                     anyhow!(
                         "trying to create persistence directory: {:#?} for source: {}",
@@ -318,4 +318,90 @@ impl Persister {
             }
         }
     }
+}
+
+/// Check if there are any persisted files available for this source and if so,
+/// use them, and start reading from the source at the appropriate offsets.
+/// Returns a newly constructed source connector if the source was persistence enabled
+/// which may or may not have new data around previously persisted files.
+pub fn augment_connector(
+    mut source_connector: SourceConnector,
+    persistence_directory: PathBuf,
+    source_id: GlobalId,
+) -> Result<Option<SourceConnector>, anyhow::Error> {
+    match &mut source_connector {
+        SourceConnector::External {
+            ref mut connector, ..
+        } => {
+            if !connector.persistence_enabled() {
+                // This connector has no persistence, so do nothing.
+                Ok(None)
+            } else {
+                augment_connector_inner(connector, persistence_directory, source_id)?;
+                Ok(Some(source_connector))
+            }
+        }
+        SourceConnector::Local => Ok(None),
+    }
+}
+
+fn augment_connector_inner(
+    connector: &mut ExternalSourceConnector,
+    persistence_directory: PathBuf,
+    source_id: GlobalId,
+) -> Result<(), anyhow::Error> {
+    match connector {
+        ExternalSourceConnector::Kafka(k) => {
+            let mut read_offsets: HashMap<i32, i64> = HashMap::new();
+            let mut paths = Vec::new();
+
+            let source_path = persistence_directory.join(source_id.to_string());
+
+            // Not safe to assume that the directory we are trying to read will be there
+            // so if its not lets just early exit.
+            let entries = match std::fs::read_dir(&source_path) {
+                Ok(entries) => entries,
+                Err(e) => {
+                    error!(
+                        "Failed to read from persistence data from {}: {}",
+                        source_path.display(),
+                        e
+                    );
+                    return Ok(());
+                }
+            };
+
+            for entry in entries {
+                if let Ok(file) = entry {
+                    let path = file.path();
+                    if let Some(metadata) = RecordFileMetadata::from_path(&path)? {
+                        if metadata.source_id != source_id {
+                            continue;
+                        }
+
+                        paths.push(path);
+
+                        // TODO: we need to be more careful here to handle the case where we are for
+                        // some reason missing some values here.
+                        match read_offsets.get(&metadata.partition_id) {
+                            None => {
+                                read_offsets.insert(metadata.partition_id, metadata.end_offset);
+                            }
+                            Some(o) => {
+                                if metadata.end_offset > *o {
+                                    read_offsets.insert(metadata.partition_id, metadata.end_offset);
+                                }
+                            }
+                        };
+                    }
+                }
+            }
+
+            k.start_offsets = read_offsets;
+            k.persisted_files = Some(paths);
+        }
+        _ => bail!("persistence only enabled for Kafka sources at this time"),
+    }
+
+    Ok(())
 }

@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
@@ -28,7 +27,6 @@ use dataflow_types::{
     Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError, Timestamp,
 };
 use expr::{PartitionId, SourceInstanceId};
-use futures::sink::Sink;
 use lazy_static::lazy_static;
 use log::error;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -44,9 +42,9 @@ use timely::Data;
 use super::source::util::source;
 use crate::operator::StreamExt;
 use crate::server::{
-    PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-    TimestampMetadataUpdates,
+    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
+use crate::source::persistence::PersistenceSender;
 
 mod file;
 mod kafka;
@@ -94,8 +92,6 @@ pub struct SourceConfig<'a, G> {
     /// Files to read on startup.
     pub persisted_files: Vec<PathBuf>,
 }
-
-type PersistenceSender = Pin<Box<dyn Sink<PersistenceMessage, Error = comm::Error> + Send>>;
 
 #[derive(Clone, Serialize, Deserialize)]
 /// A record produced by a source

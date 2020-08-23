@@ -13,17 +13,24 @@
 // not directly usable for some other source types.
 
 use std::path::Path;
+use std::pin::Pin;
 
 use anyhow::{bail, Error};
 use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
 
 use dataflow_types::Timestamp;
 use expr::GlobalId;
+use futures::sink::Sink;
 use log::error;
 use repr::{Datum, Row};
 use serde::{Deserialize, Serialize};
 
+use crate::server::PersistenceMessage;
+
 static RECORD_FILE_PREFIX: &str = "materialize";
+
+/// Type alias for object that sends data to the persister.
+pub type PersistenceSender = Pin<Box<dyn Sink<PersistenceMessage, Error = comm::Error> + Send>>;
 
 /// A single record from a source and partition that can be written to disk by
 /// the persister thread, and read back in and sent to the ingest pipeline later.
