@@ -64,7 +64,7 @@ impl Record {
     /// Read a encoded length-prefixed Row from a buffer at an offset, and try
     /// to convert it back to a record. Returns the record and the next offset
     /// to read from, if possible.
-    pub fn read_record(buf: &[u8], offset: usize) -> Option<(Self, usize)> {
+    fn read_record(buf: &[u8], offset: usize) -> Option<(Self, usize)> {
         if offset >= buf.len() {
             return None;
         }
@@ -140,8 +140,6 @@ pub struct RecordFileMetadata {
     pub start_offset: i64,
     /// The exclusive upper bound of offsets provided by this file.
     pub end_offset: i64,
-    /// Whether or not this file was completely written.
-    pub is_complete: bool,
 }
 
 impl RecordFileMetadata {
@@ -188,7 +186,6 @@ impl RecordFileMetadata {
             partition_id: parts[2].parse()?,
             start_offset: parts[3].parse()?,
             end_offset: parts[4].parse()?,
-            is_complete: false,
         }))
     }
 
