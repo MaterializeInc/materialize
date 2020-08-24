@@ -10,7 +10,7 @@ name = "test-correctness"
 path = "checker.rs"
 
 [dependencies]
-chrono = "0.4.13"
+chrono = "0.4.15"
 env_logger = "0.7.1"
 futures = "0.3"
 getopts = "0.2"
