@@ -604,6 +604,7 @@ impl_display!(ShowVariableStatement);
 /// `SHOW DATABASES`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowDatabasesStatement {
+    pub query: Box<Query>,
     pub filter: Option<ShowStatementFilter>,
 }
 

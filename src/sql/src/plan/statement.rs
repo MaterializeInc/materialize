@@ -60,7 +60,7 @@ use crate::pure::Schema;
 
 lazy_static! {
     static ref SHOW_DATABASES_DESC: RelationDesc =
-        RelationDesc::empty().with_column("Database", ScalarType::String.nullable(false));
+        RelationDesc::empty().with_column("database", ScalarType::String.nullable(false));
     static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::empty()
         .with_column("Source_or_view", ScalarType::String.nullable(false))
         .with_column("Key_name", ScalarType::String.nullable(false))
@@ -458,29 +458,9 @@ fn finish_show_where_from_expr(
 
 fn handle_show_databases(
     scx: &StatementContext,
-    ShowDatabasesStatement { filter }: ShowDatabasesStatement,
+    ShowDatabasesStatement { query, filter }: ShowDatabasesStatement,
 ) -> Result<Plan, anyhow::Error> {
-    // RelationExpr::Get must stay in sync with the definition of
-    // MZ_DATABASES in BUILTINS.
-    let expr = RelationExpr::Project {
-        input: Box::new(RelationExpr::Get {
-            id: expr::Id::Global(GlobalId::System(2011)), // Hard-coded system id for mz_databases.
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType {
-                        nullable: false,
-                        scalar_type: ScalarType::String,
-                    },
-                    ColumnType {
-                        nullable: false,
-                        scalar_type: ScalarType::String,
-                    },
-                ],
-                keys: vec![],
-            },
-        }),
-        outputs: vec![1], // Only return the database name, not the id.
-    };
+    let (expr, _, _) = query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
     finish_show_where_from_expr(scx, filter, expr, &SHOW_DATABASES_DESC)
 }
 
