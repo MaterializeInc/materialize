@@ -120,15 +120,9 @@ fn run() -> Result<(), anyhow::Error> {
     );
     opts.optopt(
         "",
-        "persistence-flush-min-records",
-        "minimum number of new records that must be present on a partition before being flushed to persistent storage (default 1000)",
+        "persistence-max-pending-records",
+        "maximum number of records that have to be present before materialize will persist them immediately. (default 1000000)",
         "N",
-    );
-    opts.optopt(
-        "",
-        "persistence-flush-interval",
-        "interval between attempts to flush source data to persistent storage (default 60s)",
-        "DURATION",
     );
 
     // Logging options.
@@ -259,12 +253,8 @@ fn run() -> Result<(), anyhow::Error> {
         Some(d) => parse_duration::parse(&d)?,
     };
     let persistence_enabled = popts.opt_present("persistence");
-    let persistence_flush_min_records =
-        popts.opt_get_default("persistence-flush-min-records", 1000)?;
-    let persistence_flush_interval = match popts.opt_str("persistence-flush-interval").as_deref() {
-        None => Duration::from_secs(60),
-        Some(d) => parse_duration::parse(&d)?,
-    };
+    let persistence_max_pending_records =
+        popts.opt_get_default("persistence-max-pending-records", 1000000)?;
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
@@ -302,8 +292,7 @@ fn run() -> Result<(), anyhow::Error> {
         })?;
 
         Some(coord::PersistenceConfig {
-            flush_interval: persistence_flush_interval,
-            flush_min_records: persistence_flush_min_records,
+            max_pending_records: persistence_max_pending_records,
             path: persistence_directory,
         })
     } else {

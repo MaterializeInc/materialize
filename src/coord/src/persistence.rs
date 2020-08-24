@@ -22,14 +22,14 @@ use dataflow::PersistenceMessage;
 use dataflow_types::{ExternalSourceConnector, SourceConnector};
 use expr::GlobalId;
 
+// Interval at which Persister will try to flush out pending records
+static PERSISTENCE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
+
 #[derive(Clone, Debug)]
 pub struct PersistenceConfig {
-    /// Amount of time persister thread will sleep between consecutive attempts
-    /// to update persistent state.
-    pub flush_interval: Duration,
-    /// Mininum number of records that need to have accumulated in a prefix of
-    /// input data before that prefix can be flushed to persistent storage.
-    pub flush_min_records: usize,
+    /// Maximum number of records that are allowed to be pending for a source
+    /// before we attempt to flush that source immediately.
+    pub max_pending_records: usize,
     /// Directory where all persistence information is stored.
     pub path: PathBuf,
 }
@@ -46,21 +46,28 @@ struct Source {
     // but the data will be deduplicated before it is persisted.
     id: GlobalId,
     path: PathBuf,
+    // Number of records currently waiting to be written out.
+    pending_records: usize,
+    // Maximum number of records that are allowed to be pending before we
+    // attempt to write immediately.
+    max_pending_records: usize,
     // TODO: in a future where persistence supports more than just Kafka this
     // probably should be keyed on PartitionId
     partitions: BTreeMap<i32, Partition>,
 }
 
 impl Source {
-    pub fn new(id: GlobalId, path: PathBuf) -> Self {
+    fn new(id: GlobalId, path: PathBuf, max_pending_records: usize) -> Self {
         Source {
             id,
             path,
+            pending_records: 0,
+            max_pending_records,
             partitions: BTreeMap::new(),
         }
     }
 
-    pub fn insert_record(&mut self, partition_id: i32, record: Record) {
+    fn insert_record(&mut self, partition_id: i32, record: Record) -> Result<(), anyhow::Error> {
         // Start tracking this partition id if we are not already
         self.partitions.entry(partition_id).or_insert(Partition {
             last_persisted_offset: None,
@@ -76,16 +83,23 @@ impl Source {
                     trace!("Received an offset ({}) for source: {} partition: {} that was
                            lower than the most recent offset flushed to persistent storage {}. Ignoring.",
                            record.offset, self.id, partition_id, last_persisted_offset);
-                    return;
+                    return Ok(());
                 }
             }
             partition.pending.push(record);
+            self.pending_records += 1;
+            if self.pending_records > self.max_pending_records {
+                self.maybe_flush()?;
+            }
         }
+
+        Ok(())
     }
 
     /// Determine the longest contiguous prefix of offsets available per partition
     // and if the prefix is sufficiently large, write it to disk.
-    pub fn maybe_flush(&mut self, flush_min_records: usize) -> Result<(), anyhow::Error> {
+    fn maybe_flush(&mut self) -> Result<(), anyhow::Error> {
+        let mut persisted_records = 0;
         for (partition_id, partition) in self.partitions.iter_mut() {
             if partition.pending.is_empty() {
                 // No data to persist here
@@ -130,8 +144,8 @@ impl Source {
                 prefix_length
             );
 
-            if prefix_length > flush_min_records {
-                // We have a "large enough" prefix. Lets write it to a file
+            if prefix_length > 0 {
+                // We have a prefix. Lets write it to a file
                 let mut buf = Vec::new();
                 for record in partition.pending.drain(..prefix_length) {
                     record.write_record(&mut buf)?;
@@ -140,7 +154,7 @@ impl Source {
                 // The offsets we put in this filename are 1-indexed
                 // MzOffsets, so the starting number is off by 1 for something like
                 // Kafka
-                let filename = RecordFileMetadata::generate_file_name(
+                let file_name = RecordFileMetadata::generate_file_name(
                     self.id,
                     *partition_id,
                     prefix_start_offset.unwrap(),
@@ -150,14 +164,43 @@ impl Source {
                 // We'll write down the data to a file with a `-tmp` prefix to
                 // indicate a write was in progress, and then atomically rename
                 // when we are done to indicate the write is complete.
-                let tmp_path = self.path.join(format!("{}-tmp", filename));
+                let tmp_path = self.path.join(format!("{}-tmp", file_name));
+                let path = self.path.join(file_name);
 
-                std::fs::write(&tmp_path, buf)?;
-                let final_path = self.path.join(filename);
-                std::fs::rename(tmp_path, final_path)?;
+                tokio::spawn(Self::flush(path, tmp_path, buf));
                 partition.last_persisted_offset = Some(prefix_end_offset);
+                persisted_records += prefix_length;
             }
         }
+
+        assert!(
+            persisted_records <= self.pending_records,
+            "persisted {} records but only had {} pending",
+            persisted_records,
+            self.pending_records
+        );
+
+        self.pending_records -= persisted_records;
+
+        // TODO(rkhaitan): Reevaluate this. On the one hand, we need to have something like this to make sure
+        // we don't get spammed into trying to write every time on a topic with a missing offset / extreme
+        // out of order-ness. On the other hand, this error is extremely opaque for the end user, and it's
+        // unclear what a user could do to resolve it.
+        if self.pending_records > self.max_pending_records {
+            anyhow!(
+                "failed to flush enough for source {}. Currently {} pending but max allowed is {}",
+                self.id,
+                self.pending_records,
+                self.max_pending_records
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn flush(path: PathBuf, tmp_path: PathBuf, buf: Vec<u8>) -> Result<(), anyhow::Error> {
+        tokio::fs::write(&tmp_path, buf).await?;
+        tokio::fs::rename(tmp_path, path).await?;
         Ok(())
     }
 }
@@ -192,7 +235,7 @@ impl Persister {
             })
             .fuse();
 
-        let mut interval = tokio::time::interval(self.config.flush_interval).fuse();
+        let mut interval = tokio::time::interval(PERSISTENCE_FLUSH_INTERVAL).fuse();
         loop {
             select! {
                 data = rx_stream.next() => {
@@ -210,7 +253,7 @@ impl Persister {
                 }
                 _ = interval.next() => {
                     for (_, s) in self.sources.iter_mut() {
-                        s.maybe_flush(self.config.flush_min_records)?;
+                        s.maybe_flush()?;
                     }
 
                 }
@@ -249,7 +292,7 @@ impl Persister {
                 }
 
                 if let Some(source) = self.sources.get_mut(&data.source_id) {
-                    source.insert_record(data.partition_id, data.record);
+                    source.insert_record(data.partition_id, data.record)?;
                 }
             }
             PersistenceMessage::AddSource(id) => {
@@ -277,7 +320,7 @@ impl Persister {
                     )
                 })?;
 
-                let source = Source::new(id, source_path);
+                let source = Source::new(id, source_path, self.config.max_pending_records);
                 self.sources.insert(id, source);
                 info!("Enabled persistence for source: {}", id);
             }
@@ -303,10 +346,11 @@ impl Persister {
     }
 
     pub async fn run(&mut self) {
-        info!("Persistence thread starting with flush_interval: {:#?}, flush_min_records: {}, path: {}",
-              self.config.flush_interval,
-              self.config.flush_min_records,
-              self.config.path.display());
+        info!(
+            "Persistence thread starting with max_pending_records: {}, path: {}",
+            self.config.max_pending_records,
+            self.config.path.display()
+        );
         trace!("Persistence thread checking for updates.");
         let ret = self.persist().await;
 
