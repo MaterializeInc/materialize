@@ -275,7 +275,7 @@ where
                         // If we got back a new connector, we need to take some
                         // additional action.
                         if let Some(connector) = connector {
-                            coord.enable_source_connector_persistence(*id, &connector);
+                            coord.enable_source_connector_persistence(*id, connector);
                         }
                     }
                 }
@@ -1222,7 +1222,7 @@ where
                     self.ship_dataflow(self.build_index_dataflow(index_id));
                 }
 
-                self.enable_source_connector_persistence(source_id, &source.connector);
+                self.enable_source_connector_persistence(source_id, source.connector);
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
@@ -2284,41 +2284,18 @@ where
         );
     }
 
-    fn update_item<F>(&mut self, id: GlobalId, mut f: F)
-    where
-        F: FnMut(CatalogItem) -> CatalogItem,
-    {
-        let entry = self.catalog.get_by_id(&id);
-        let name = entry.name().clone();
-        let item = f(entry.item().clone());
-        let ops = vec![
-            catalog::Op::DropItem(id),
-            catalog::Op::CreateItem { id, name, item },
-        ];
-        self.catalog
-            .transact(ops)
-            .expect("replacing an item cannot fail");
-    }
-
     // Handle metadata surrounding marking a source as persisted.
     fn enable_source_connector_persistence(
         &mut self,
         id: GlobalId,
-        source_connector: &SourceConnector,
+        source_connector: SourceConnector,
     ) {
         if let SourceConnector::External { connector, .. } = &source_connector {
             if connector.persistence_enabled() {
                 if let Some(persistence_tx) = &mut self.persistence_tx {
                     block_on(persistence_tx.send(PersistenceMessage::AddSource(id)))
                         .expect("failed to send CREATE SOURCE notification to persistence thread");
-                    // TODO(jjaffray): fix this to make it work for materialized sources
-                    self.update_item(id, |item| match item {
-                        CatalogItem::Source(mut source) => {
-                            source.connector = source_connector.clone();
-                            CatalogItem::Source(source)
-                        }
-                        _ => unreachable!(),
-                    });
+                    self.catalog.set_source_connector(id, source_connector);
                 } else {
                     log::error!(
                         "trying to create a persistent source ({}) but persistence is disabled.",
