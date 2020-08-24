@@ -774,6 +774,17 @@ impl Catalog {
         self.by_id.insert(entry.id, entry);
     }
 
+    pub fn set_source_connector(&mut self, id: GlobalId, source_connector: &SourceConnector) {
+        let item = &mut self.by_id.get_mut(&id).unwrap().item;
+        *item = match item.clone() {
+            CatalogItem::Source(mut source) => {
+                source.connector = source_connector.clone();
+                CatalogItem::Source(source)
+            }
+            _ => unreachable!(),
+        }
+    }
+
     pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
         let mut ops = vec![];
         let mut seen = HashSet::new();
