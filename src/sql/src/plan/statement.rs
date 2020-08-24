@@ -38,11 +38,12 @@ use sql_parser::ast::{
     CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateViewStatement, DropDatabaseStatement, DropObjectsStatement,
     ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior,
-    InsertStatement, ObjectName, ObjectType, Query, SelectStatement, SetExpr, SetVariableStatement,
-    SetVariableValue, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
-    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
-    ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter,
-    ShowVariableStatement, SqlOption, Statement, TailStatement, Value,
+    InsertStatement, ObjectName, ObjectType, Query, Select, SelectItem, SelectStatement, SetExpr,
+    SetVariableStatement, SetVariableValue, ShowColumnsStatement, ShowCreateIndexStatement,
+    ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
+    ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
+    ShowStatementFilter, ShowVariableStatement, SqlOption, Statement, TableFactor, TableWithJoins,
+    TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -53,8 +54,8 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
-    query, scalar_type_from_sql, Index, Params, PeekWhen, Plan, PlanContext, RelationExpr, Sink,
-    Source, Table, View,
+    query, scalar_type_from_sql, Index, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table,
+    View,
 };
 use crate::pure::Schema;
 
@@ -426,27 +427,13 @@ fn handle_alter_object_rename(
     })
 }
 
-fn finish_show_where_from_rows(
+fn finish_show_where(
     scx: &StatementContext,
     filter: Option<ShowStatementFilter>,
     rows: Vec<Vec<Datum>>,
     desc: &RelationDesc,
 ) -> Result<Plan, anyhow::Error> {
-    finish_show_where_from_expr(
-        scx,
-        filter,
-        RelationExpr::constant(rows, desc.typ().clone()),
-        desc,
-    )
-}
-
-fn finish_show_where_from_expr(
-    scx: &StatementContext,
-    filter: Option<ShowStatementFilter>,
-    expr: RelationExpr,
-    desc: &RelationDesc,
-) -> Result<Plan, anyhow::Error> {
-    let (r, finishing) = query::plan_show_where(scx, filter, expr, desc)?;
+    let (r, finishing) = query::plan_show_where(scx, filter, rows, desc)?;
 
     Ok(Plan::Peek {
         source: r.decorrelate(),
@@ -458,10 +445,32 @@ fn finish_show_where_from_expr(
 
 fn handle_show_databases(
     scx: &StatementContext,
-    ShowDatabasesStatement { query, filter }: ShowDatabasesStatement,
+    ShowDatabasesStatement { filter }: ShowDatabasesStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let (expr, _, _) = query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
-    finish_show_where_from_expr(scx, filter, expr, &SHOW_DATABASES_DESC)
+    let select = Select::default()
+        .from(TableWithJoins {
+            relation: TableFactor::Table {
+                name: ObjectName(vec![Ident::new("mz_databases")]),
+                alias: None,
+            },
+            joins: vec![],
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("database")]),
+            alias: None,
+        })
+        .selection(filter);
+    handle_select(
+        scx,
+        SelectStatement {
+            query: Box::new(Query::select(select)),
+            as_of: None,
+        },
+        &Params {
+            datums: Row::pack(&[]),
+            types: vec![],
+        },
+    )
 }
 
 fn handle_show_objects(
@@ -512,7 +521,7 @@ fn handle_show_objects(
         }
         // TODO(justin): it's unfortunate that we call make_show_objects_desc twice, I think we
         // should be able to restructure this so that it only gets called once.
-        finish_show_where_from_rows(
+        finish_show_where(
             scx,
             filter,
             rows,
@@ -554,7 +563,7 @@ fn handle_show_objects(
                 }
             });
 
-        finish_show_where_from_rows(
+        finish_show_where(
             scx,
             filter,
             rows.collect(),
@@ -633,7 +642,7 @@ fn handle_show_indexes(
         })
         .collect();
 
-    finish_show_where_from_rows(scx, filter, rows, &SHOW_INDEXES_DESC)
+    finish_show_where(scx, filter, rows, &SHOW_INDEXES_DESC)
 }
 
 /// Create an immediate result that describes all the columns for the given table
@@ -670,7 +679,7 @@ fn handle_show_columns(
         })
         .collect();
 
-    finish_show_where_from_rows(scx, filter, rows, &SHOW_COLUMNS_DESC)
+    finish_show_where(scx, filter, rows, &SHOW_COLUMNS_DESC)
 }
 
 fn handle_show_create_view(

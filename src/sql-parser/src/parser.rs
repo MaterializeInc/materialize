@@ -2532,23 +2532,12 @@ impl Parser {
 
     fn parse_show(&mut self) -> Result<Statement, ParserError> {
         if self.parse_keyword("DATABASES") {
-            let select = Select::default()
-                .from(TableWithJoins {
-                    relation: TableFactor::Table {
-                        name: ObjectName(vec![Ident::new("mz_databases")]),
-                        alias: None,
-                    },
-                    joins: vec![],
-                })
-                .project(SelectItem::Expr {
-                    expr: Expr::Identifier(vec![Ident::new("database")]),
-                    alias: None,
-                });
-
-            return Ok(Statement::ShowDatabases(ShowDatabasesStatement {
-                query: Box::new(Query::select(select)),
-                filter: self.parse_show_statement_filter()?,
-            }));
+            let filter = if self.parse_keyword("WHERE") || self.parse_keyword("LIKE") {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            return Ok(Statement::ShowDatabases(ShowDatabasesStatement { filter }));
         }
 
         let extended = self.parse_keyword("EXTENDED");

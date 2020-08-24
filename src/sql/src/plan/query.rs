@@ -109,7 +109,7 @@ pub fn plan_root_query(
 pub fn plan_show_where(
     scx: &StatementContext,
     filter: Option<ShowStatementFilter>,
-    mut expr: RelationExpr,
+    rows: Vec<Vec<Datum>>,
     desc: &RelationDesc,
 ) -> Result<(RelationExpr, RowSetFinishing), anyhow::Error> {
     let names: Vec<Option<String>> = desc
@@ -118,6 +118,8 @@ pub fn plan_show_where(
         .collect();
 
     let num_cols = names.len();
+    let mut row_expr = RelationExpr::constant(rows, desc.typ().clone());
+
     if let Some(f) = filter {
         let mut predicate = match &f {
             ShowStatementFilter::Like(s) => Expr::BinaryOp {
@@ -135,17 +137,17 @@ pub fn plan_show_where(
             qcx: &qcx,
             name: "SHOW WHERE clause",
             scope: &scope,
-            relation_type: &qcx.relation_type(&expr),
+            relation_type: &qcx.relation_type(&row_expr),
             allow_aggregates: false,
             allow_subqueries: true,
         };
         transform_ast::transform_expr(&mut predicate)?;
-        let scalar_expr = plan_expr(&ecx, &predicate)?.type_as(&ecx, ScalarType::Bool)?;
-        expr = expr.filter(vec![scalar_expr]);
+        let expr = plan_expr(&ecx, &predicate)?.type_as(&ecx, ScalarType::Bool)?;
+        row_expr = row_expr.filter(vec![expr]);
     }
 
     Ok((
-        expr,
+        row_expr,
         RowSetFinishing {
             order_by: (0..num_cols)
                 .map(|c| ColumnOrder {

@@ -220,6 +220,11 @@ impl Select {
         self.projection.push(select_item);
         self
     }
+
+    pub fn selection(mut self, selection: Option<Expr>) -> Select {
+        self.selection = selection;
+        self
+    }
 }
 
 /// A single CTE (used after `WITH`): `alias [(col1, col2, ...)] AS ( query )`
