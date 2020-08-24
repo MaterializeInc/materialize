@@ -24,7 +24,5 @@ pub mod source;
 
 pub use server::{
     serve, BroadcastToken, PersistenceMessage, SequencedCommand, WorkerFeedback,
-    WorkerFeedbackWithMeta, WorkerPersistenceData,
+    WorkerFeedbackWithMeta,
 };
-
-pub use source::PersistedFileMetadata;

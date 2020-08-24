@@ -53,6 +53,7 @@ use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
 use crate::render::{self, RenderState};
 use crate::server::metrics::Metrics;
+use crate::source::persistence::WorkerPersistenceData;
 
 mod metrics;
 
@@ -155,24 +156,6 @@ pub struct WorkerFeedbackWithMeta {
     pub worker_id: usize,
     /// The feedback itself.
     pub message: WorkerFeedback,
-}
-
-/// Source data that gets sent to the persistence thread to place in persistent storage.
-/// TODO currently fairly Kafka input-centric.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WorkerPersistenceData {
-    /// Global Id of the Source whose data is being persisted.
-    pub source_id: GlobalId,
-    /// Partition the record belongs to.
-    pub partition: i32,
-    /// Offset where we found the message.
-    pub offset: i64,
-    /// Timestamp assigned to the message.
-    pub timestamp: Timestamp,
-    /// The key of the message.
-    pub key: Vec<u8>,
-    /// The data of the message.
-    pub payload: Vec<u8>,
 }
 
 /// All data and metadata messages that can be sent by dataflow workers or coordinator

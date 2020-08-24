@@ -9,16 +9,13 @@
 
 //! Types related to the creation of dataflow sources.
 
-use anyhow::{anyhow, Error};
 use avro::types::Value;
-use byteorder::{ByteOrder, NetworkEndian};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
@@ -29,8 +26,7 @@ use timely::dataflow::{
 use dataflow_types::{
     Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError, Timestamp,
 };
-use expr::{GlobalId, PartitionId, SourceInstanceId};
-use futures::sink::Sink;
+use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::error;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -39,7 +35,6 @@ use prometheus::{
     register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec,
     IntGaugeVec, UIntGauge, UIntGaugeVec,
 };
-use repr::Row;
 use timely::dataflow::Scope;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
@@ -47,14 +42,16 @@ use timely::Data;
 use super::source::util::source;
 use crate::operator::StreamExt;
 use crate::server::{
-    PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-    TimestampMetadataUpdates,
+    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
+use crate::source::persistence::PersistenceSender;
 
 mod file;
 mod kafka;
 mod kinesis;
 mod util;
+
+pub mod persistence;
 
 use differential_dataflow::Hashable;
 pub use file::read_file_task;
@@ -95,8 +92,6 @@ pub struct SourceConfig<'a, G> {
     /// Files to read on startup.
     pub persisted_files: Vec<PathBuf>,
 }
-
-type PersistenceSender = Pin<Box<dyn Sink<PersistenceMessage, Error = comm::Error> + Send>>;
 
 #[derive(Clone, Serialize, Deserialize)]
 /// A record produced by a source
@@ -732,94 +727,6 @@ impl PartitionMetrics {
                 |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
         }
-    }
-}
-
-/// Iterator through a persisted set of records.
-pub struct RecordIter {
-    data: Vec<u8>,
-    offset: usize,
-}
-
-/// A single record from a persisted file.
-#[derive(Debug, Clone)]
-pub struct Record {
-    offset: i64,
-    time: i64,
-    key: Vec<u8>,
-    data: Vec<u8>,
-}
-
-impl Iterator for RecordIter {
-    type Item = Record;
-
-    fn next(&mut self) -> Option<Record> {
-        if self.offset >= self.data.len() {
-            return None;
-        }
-
-        let (_, data) = self.data.split_at_mut(self.offset);
-        let len = NetworkEndian::read_u32(&data) as usize;
-        assert!(
-            len >= 16,
-            format!(
-                "expected to see at least 16 bytes in record, but saw {}",
-                len
-            )
-        );
-        let (_, rest) = data.split_at_mut(4);
-        let row = rest[..len].to_vec();
-        self.offset += 4 + len;
-
-        let rec = Row::new(row);
-        let row = rec.unpack();
-
-        let offset = row[0].unwrap_int64();
-        let time = row[1].unwrap_int64();
-        let key = row[2].unwrap_bytes();
-        let data = row[3].unwrap_bytes();
-        Some(Record {
-            offset,
-            time,
-            key: key.into(),
-            data: data.into(),
-        })
-    }
-}
-
-/// Describes what is provided from a persisted file.
-#[derive(Debug)]
-pub struct PersistedFileMetadata {
-    /// The source global ID this file represents.
-    pub id: GlobalId,
-    /// The partition ID this file represents.
-    pub partition_id: i32,
-    /// The inclusive lower bound of offsets provided by this file.
-    pub start_offset: i64,
-    /// The exclusive upper bound of offsets provided by this file.
-    pub end_offset: i64,
-    /// Whether or not this file was completely written.
-    pub is_complete: bool,
-}
-
-impl PersistedFileMetadata {
-    /// Parse a file's metadata from its filename.
-    pub fn from_fname(s: &str) -> Result<Self, Error> {
-        let parts: Vec<&str> = s.split('-').collect();
-        if parts.len() < 5 || parts.len() > 6 {
-            return Err(anyhow!(
-                "expected filename to have 5 (or 6) parts, but it was {}",
-                s
-            ));
-        }
-        let is_complete = parts.len() < 6 || parts[5] != "tmp";
-        Ok(PersistedFileMetadata {
-            id: parts[1].parse()?,
-            partition_id: parts[2].parse()?,
-            start_offset: parts[3].parse()?,
-            end_offset: parts[4].parse()?,
-            is_complete,
-        })
     }
 }
 

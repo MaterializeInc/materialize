@@ -34,11 +34,13 @@ use log::{error, info, log_enabled, warn};
 
 use crate::server::{
     PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-    TimestampMetadataUpdates, WorkerPersistenceData,
+    TimestampMetadataUpdates,
+};
+use crate::source::persistence::{
+    PersistenceSender, Record, RecordFileMetadata, RecordIter, WorkerPersistenceData,
 };
 use crate::source::{
-    ConsistencyInfo, PartitionMetrics, PersistedFileMetadata, PersistenceSender, RecordIter,
-    SourceConstructor, SourceInfo, SourceMessage,
+    ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
 
 /// Contains all information necessary to ingest data from Kafka
@@ -346,8 +348,16 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 // We partition the given partitions up amongst workers, so we need to be
                 // careful not to process a partition that this worker was not allocated (or
                 // else we would process files multiple times).
-                let meta = PersistedFileMetadata::from_fname(f.to_str().unwrap()).unwrap();
-                self.has_partition(meta.partition_id)
+                match RecordFileMetadata::from_path(f) {
+                    Ok(Some(meta)) => {
+                        assert_eq!(self.source_global_id, meta.source_id);
+                        self.has_partition(meta.partition_id)
+                    }
+                    _ => {
+                        error!("Failed to parse path: {}", f.display());
+                        false
+                    }
+                }
             })
             .flat_map(|f| {
                 let data = fs::read(f).unwrap_or_else(|e| {
@@ -358,7 +368,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     );
                     vec![]
                 });
-                RecordIter { data, offset: 0 }.map(|r| (r.key, r.data, r.time as u64, r.offset))
+                RecordIter { data, offset: 0 }.map(|r| (r.key, r.value, r.timestamp, r.offset))
             })
             .collect()
     }
@@ -379,15 +389,17 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             // TODO(rkhaitan): let's experiment with wrapping these in a
             // Arc so we don't have to clone.
             let key = message.key.clone().unwrap_or_default();
-            let payload = message.payload.clone().unwrap_or_default();
+            let value = message.payload.clone().unwrap_or_default();
 
             let persistence_data = PersistenceMessage::Data(WorkerPersistenceData {
                 source_id: self.source_global_id,
-                partition: partition_id,
-                offset: message.offset.offset,
-                timestamp,
-                key,
-                payload,
+                partition_id,
+                record: Record {
+                    offset: message.offset.offset,
+                    timestamp,
+                    key,
+                    value,
+                },
             });
 
             let mut connector = persistence_tx.as_mut();

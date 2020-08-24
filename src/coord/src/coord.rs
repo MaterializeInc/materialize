@@ -21,8 +21,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
+use std::path::Path;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -30,19 +29,16 @@ use anyhow::{bail, Context};
 use differential_dataflow::lattice::Lattice;
 use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
-use futures::sink::{Sink, SinkExt};
+use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 
-use dataflow::{
-    PersistedFileMetadata, PersistenceMessage, SequencedCommand, WorkerFeedback,
-    WorkerFeedbackWithMeta,
-};
+use dataflow::source::persistence::PersistenceSender;
+use dataflow::{PersistenceMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    AvroOcfSinkConnector, DataflowDesc, ExternalSourceConnector, IndexDesc, KafkaSinkConnector,
-    PeekResponse, SinkConnector, SourceConnector, TailSinkConnector, Timestamp,
-    TimestampSourceUpdate, Update,
+    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, SinkConnector,
+    SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
@@ -143,7 +139,7 @@ where
     persister: Option<Persister>,
     // Channel to communicate source status updates and shutdown notifications to the persister
     // thread.
-    persistence_tx: Option<Pin<Box<dyn Sink<PersistenceMessage, Error = comm::Error> + Send>>>,
+    persistence_tx: Option<PersistenceSender>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -267,11 +263,10 @@ where
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    // See if we have any previously persisted data that we need to capture
-                    // TODO(rkhaitan): this part is kind of a mess rn and does not play well with the
-                    // persister
+                    // See if we have any previously persisted data that we need to reread.
+                    // Only do this if persistence is enabled for Materialize.
                     if let Some(persister) = &coord.persister {
-                        let connector = augment_connector_for_persistence(
+                        let connector = crate::persistence::augment_connector(
                             source.connector.clone(),
                             persister.config.path.clone(),
                             *id,
@@ -2389,77 +2384,4 @@ pub fn index_sql(
         if_not_exists: false,
     }
     .to_ast_string_stable()
-}
-
-// Wire up persistence and augment the given SourceConnector with that information, returning it.
-fn augment_connector_for_persistence(
-    mut source_connector: SourceConnector,
-    path: PathBuf,
-    id: GlobalId,
-) -> Result<Option<SourceConnector>, anyhow::Error> {
-    match &mut source_connector {
-        SourceConnector::External {
-            ref mut connector, ..
-        } => {
-            if !connector.persistence_enabled() {
-                // This connector has no persistence, so do nothing.
-                Ok(None)
-            } else {
-                augment_connector(connector, path, id)?;
-                Ok(Some(source_connector))
-            }
-        }
-        SourceConnector::Local => Ok(None),
-    }
-}
-
-fn augment_connector(
-    connector: &mut ExternalSourceConnector,
-    path: PathBuf,
-    id: GlobalId,
-) -> Result<(), anyhow::Error> {
-    match connector {
-        ExternalSourceConnector::Kafka(k) => {
-            // TODO fix this string literal situation
-            let file_prefix = format!("materialize-{}", id);
-            let mut read_offsets: HashMap<i32, i64> = HashMap::new();
-            let mut paths = Vec::new();
-
-            let files = std::fs::read_dir(format!("{}/{}", &path.to_str().unwrap(), id))
-                .expect("reading directory cannot fail");
-
-            for f in files {
-                // TODO(justin): cleaner way to do this?
-                let path = f.expect("file known to exist").path();
-                let filename = path.file_name().unwrap().to_str().unwrap().to_owned();
-                if filename.starts_with(&file_prefix) {
-                    let meta = PersistedFileMetadata::from_fname(&filename)?;
-                    if !meta.is_complete {
-                        continue;
-                    }
-
-                    paths.push(path);
-
-                    // TODO: we need to be more careful here to handle the case where we are for
-                    // some reason missing some values here.
-                    match read_offsets.get(&meta.partition_id) {
-                        None => {
-                            read_offsets.insert(meta.partition_id, meta.end_offset);
-                        }
-                        Some(o) => {
-                            if meta.end_offset > *o {
-                                read_offsets.insert(meta.partition_id, meta.end_offset);
-                            }
-                        }
-                    };
-                }
-            }
-
-            k.start_offsets = read_offsets;
-            k.persisted_files = Some(paths);
-        }
-        _ => bail!("persistence only enabled for Kafka sources at this time"),
-    }
-
-    Ok(())
 }
