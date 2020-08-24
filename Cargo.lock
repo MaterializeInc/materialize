@@ -64,9 +64,9 @@ checksum = "6b602bfe940d21c130f3895acd65221e8a61270debe89d628b9cb4e3ccb8569b"
 
 [[package]]
 name = "arbitrary"
-version = "0.4.1"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75153c95fdedd7db9732dfbfc3702324a1627eec91ba56e37cd0ac78314ab2ed"
+checksum = "0922a3e746b5a44e111e5603feb6704e5cc959116f66737f50bb5cbd264e9d87"
 
 [[package]]
 name = "arc-swap"
@@ -1680,9 +1680,9 @@ checksum = "3286f09f7d4926fc486334f28d8d2e6ebe4f7f9994494b6dab27ddfad2c9b11b"
 
 [[package]]
 name = "libfuzzer-sys"
-version = "0.3.2"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d718794b8e23533b9069bd2c4597d69e41cc7ab1c02700a502971aca0cdcf24"
+checksum = "ee8c42ab62f43795ed77a965ed07994c5584cdc94fd0ebf14b22ac1524077acc"
 dependencies = [
  "arbitrary",
  "cc",
