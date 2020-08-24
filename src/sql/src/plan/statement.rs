@@ -53,8 +53,8 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
-    query, scalar_type_from_sql, Index, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table,
-    View,
+    query, scalar_type_from_sql, Index, Params, PeekWhen, Plan, PlanContext, RelationExpr, Sink,
+    Source, Table, View,
 };
 use crate::pure::Schema;
 
@@ -426,13 +426,27 @@ fn handle_alter_object_rename(
     })
 }
 
-fn finish_show_where(
+fn finish_show_where_from_rows(
     scx: &StatementContext,
     filter: Option<ShowStatementFilter>,
     rows: Vec<Vec<Datum>>,
     desc: &RelationDesc,
 ) -> Result<Plan, anyhow::Error> {
-    let (r, finishing) = query::plan_show_where(scx, filter, rows, desc)?;
+    finish_show_where_from_expr(
+        scx,
+        filter,
+        RelationExpr::constant(rows, desc.typ().clone()),
+        desc,
+    )
+}
+
+fn finish_show_where_from_expr(
+    scx: &StatementContext,
+    filter: Option<ShowStatementFilter>,
+    expr: RelationExpr,
+    desc: &RelationDesc,
+) -> Result<Plan, anyhow::Error> {
+    let (r, finishing) = query::plan_show_where(scx, filter, expr, desc)?;
 
     Ok(Plan::Peek {
         source: r.decorrelate(),
@@ -446,13 +460,26 @@ fn handle_show_databases(
     scx: &StatementContext,
     ShowDatabasesStatement { filter }: ShowDatabasesStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let rows = scx
-        .catalog
-        .list_databases()
-        .map(|database| vec![Datum::from(database)])
-        .collect();
-
-    finish_show_where(scx, filter, rows, &SHOW_DATABASES_DESC)
+    let expr = RelationExpr::Project {
+        input: Box::new(RelationExpr::Get {
+            id: expr::Id::Global(GlobalId::System(2011)),
+            typ: RelationType {
+                column_types: vec![
+                    ColumnType {
+                        nullable: false,
+                        scalar_type: ScalarType::String,
+                    },
+                    ColumnType {
+                        nullable: false,
+                        scalar_type: ScalarType::String,
+                    },
+                ],
+                keys: vec![],
+            },
+        }),
+        outputs: vec![1],
+    };
+    finish_show_where_from_expr(scx, filter, expr, &SHOW_DATABASES_DESC)
 }
 
 fn handle_show_objects(
@@ -503,7 +530,7 @@ fn handle_show_objects(
         }
         // TODO(justin): it's unfortunate that we call make_show_objects_desc twice, I think we
         // should be able to restructure this so that it only gets called once.
-        finish_show_where(
+        finish_show_where_from_rows(
             scx,
             filter,
             rows,
@@ -545,7 +572,7 @@ fn handle_show_objects(
                 }
             });
 
-        finish_show_where(
+        finish_show_where_from_rows(
             scx,
             filter,
             rows.collect(),
@@ -624,7 +651,7 @@ fn handle_show_indexes(
         })
         .collect();
 
-    finish_show_where(scx, filter, rows, &SHOW_INDEXES_DESC)
+    finish_show_where_from_rows(scx, filter, rows, &SHOW_INDEXES_DESC)
 }
 
 /// Create an immediate result that describes all the columns for the given table
@@ -661,7 +688,7 @@ fn handle_show_columns(
         })
         .collect();
 
-    finish_show_where(scx, filter, rows, &SHOW_COLUMNS_DESC)
+    finish_show_where_from_rows(scx, filter, rows, &SHOW_COLUMNS_DESC)
 }
 
 fn handle_show_create_view(
