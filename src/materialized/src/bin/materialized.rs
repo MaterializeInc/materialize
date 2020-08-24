@@ -33,13 +33,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
-use chrono::Utc;
 use lazy_static::lazy_static;
 use log::{info, trace, warn};
-use once_cell::sync::OnceCell;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
-
-static LOG_FILE: OnceCell<File> = OnceCell::new();
 
 fn main() {
     if let Err(err) = run() {
@@ -312,28 +307,44 @@ fn run() -> Result<(), anyhow::Error> {
 
     // Configure tracing.
     {
-        let filter = EnvFilter::try_from_env("MZ_LOG")
-            .or_else(|_| EnvFilter::try_new("info"))
-            .unwrap();
-        let subscriber = FmtSubscriber::builder().with_env_filter(filter);
-        let log_file = popts.opt_str("log-file");
-        if log_file.as_deref() == Some("stderr") {
-            subscriber.with_writer(io::stderr).init();
+        use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+        use tracing_subscriber::fmt;
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        let env_filter = EnvFilter::try_from_env("MZ_LOG")
+            .or_else(|_| EnvFilter::try_new("info")) // default log level
+            .unwrap()
+            .add_directive("panic=error".parse().unwrap()); // prevent suppressing logs about panics
+
+        if popts.opt_str("log-file").as_deref() == Some("stderr") {
+            // The user explicitly directed logs to stderr. Log only to stderr
+            // with the user-specified `env_filter`.
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(fmt::layer().with_writer(io::stderr))
+                .init();
         } else {
-            let path = match log_file {
-                Some(path) => PathBuf::from(path),
-                None => data_directory.join("materialized.log"),
-            };
-            let file = fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(path)?;
-            // The current design of tracing-subscriber means we need to store
-            // this file in a global variable. Stupid, but it works.
-            LOG_FILE.set(file).unwrap();
-            subscriber
-                .with_ansi(false)
-                .with_writer(|| LOG_FILE.get().unwrap())
+            // The user directed logs to a file. Use the user-specified
+            // `env_filter` to control what gets written to the file, but bubble
+            // any warnings and errors up to stderr as well.
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with({
+                    let path = match popts.opt_str("log-file") {
+                        Some(path) => PathBuf::from(path),
+                        None => data_directory.join("materialized.log"),
+                    };
+                    let file = fs::OpenOptions::new()
+                        .append(true)
+                        .create(true)
+                        .open(path)?;
+                    fmt::layer()
+                        .with_ansi(false)
+                        .with_writer(move || file.try_clone().expect("failed to clone log file"))
+                })
+                .with(LevelFilter::WARN)
+                .with(fmt::layer().with_writer(io::stderr))
                 .init();
         }
     }
@@ -428,29 +439,17 @@ fn handle_panic(panic_info: &PanicInfo) {
         },
     };
 
-    let backtrace = Backtrace::new();
-
-    let crash_message = format!(
+    log::error!(target: "panic", "{}: {}\n{:?}", thr_name, msg, Backtrace::new());
+    eprintln!(
         r#"materialized encountered an internal error and crashed.
 
 We rely on bug reports to diagnose and fix these errors. Please
-copy and paste the following details and file a report at:
+copy and paste the above details and file a report at:
 
     https://materialize.io/s/bug
 
-To protect your privacy, we do not collect crash reports automatically.
-
- thread: {}
-message: {}
-{:?}
-"#,
-        thr_name, msg, backtrace
+To protect your privacy, we do not collect crash reports automatically."#,
     );
-
-    if LOG_FILE.get().is_some() {
-        log::error!("{}", crash_message);
-    }
-    eprintln!("{} {}", Utc::now().format("%b %d %T%.3fZ"), crash_message);
     process::exit(1);
 }
 

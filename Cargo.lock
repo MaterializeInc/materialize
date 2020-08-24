@@ -1786,7 +1786,6 @@ dependencies = [
  "lazy_static",
  "log",
  "materialized-not-macos",
- "once_cell",
  "openssl",
  "openssl-sys",
  "ore",
