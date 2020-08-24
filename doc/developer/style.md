@@ -92,8 +92,20 @@ But please at least capitalize the obvious keywords, like `SELECT`, `INSERT`,
 
 ## Rust style
 
-No specific guidelines here yet. [Clippy] and [rustfmt] are enforced via CI,
-and they are opinionated enough for the moment.
+[Clippy] and [rustfmt] are enforced via CI, and they are quite opinionated on
+many matters of style.
+
+Consider also familiarizing yourself with the [Rust API guidelines][rust-api],
+which summarize many lessons learned by the Rust team as they designed the
+standard library. Not all of these guidelines generalize well to application
+code, so use your judgement.<sup>1</sup>
+
+<small><sup>1</sup> For example, the `C-EXAMPLE` guideline suggests that
+all public items (modules, traits, structs, enums, functions, methods,
+macros, and type definitions) should have rustdoc examples. This is a great
+standard for libraries, but total overkill for a fast-moving startup like
+Materialize.</small>
 
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [rustfmt]: https://github.com/rust-lang/rustfmt
+[rust-api]: https://rust-lang.github.io/api-guidelines/
