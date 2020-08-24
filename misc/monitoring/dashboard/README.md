@@ -16,7 +16,12 @@ The source of truth for this dashboard is http://grafana.mz/d/materialize-overvi
 which we keep up to date as we run load tests and discover better ways to monitor
 ourselves.
 
-Updating this dashboard is a matter of:
+If you want to modify the dashboard that we ship to users, you should instead modify the
+"Materialized Overview" dashboard in grafana.mz, and save it, keeping it canonical for
+ourselves.
+
+Before releases, or whenever we'd like to update the dashboard we ship to users, we sync
+the dashboard from grafana.mz to this directory, using the following procedure:
 
 * downloading the json model from http://grafana.mz/d/materialize-overview/materialize-overview-load-tests?editview=dashboard_json
 * running the `bin/dashboard-clean` script on that downloaded json
