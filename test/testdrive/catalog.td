@@ -44,7 +44,7 @@ schema 'materialize.s' cannot be dropped without CASCADE while it contains objec
 
 # What databases do we have by default?
 > SHOW DATABASES
-Database
+database
 ----
 materialize
 
@@ -57,7 +57,7 @@ global_id   database
 # Creating a database should be reflected in the output of SHOW DATABASES.
 > CREATE DATABASE d
 > SHOW DATABASES
-Database
+database
 ----
 d
 materialize
@@ -116,10 +116,8 @@ Expected end of statement, found: RESTRICT
 
 # DROP DATABASE should succeed even when there are objects in the database.
 > DROP DATABASE d
-> SHOW DATABASES
-Database
-----
-materialize
+! SHOW DATABASES
+unknown database 'd'
 ! SELECT * FROM mz_catalog.mz_databases
 unknown database 'd'
 
@@ -178,7 +176,7 @@ unknown database 'noexist'
 > CREATE VIEW d2.public.t AS SELECT * FROM d1.public.t;
 > DROP DATABASE d1;
 > SHOW DATABASES
-Database
+database
 ----
 d
 d2
