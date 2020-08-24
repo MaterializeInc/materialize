@@ -196,7 +196,9 @@ recommendations.
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [rustfmt]: https://github.com/rust-lang/rustfmt
 
-## Code review
+## Submitting and reviewing changes
+
+See [Developer guide: submitting and reviewing changes](guide-changes.md).
 
 ## Other repositories
 
