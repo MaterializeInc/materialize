@@ -235,6 +235,7 @@ lazy_static! {
         id: GlobalId::System(2009),
         index_id: GlobalId::System(2010),
     };
+    // Must stay in sync with RelationExpr in handle_show_databases().
     pub static ref MZ_DATABASES: BuiltinTable = BuiltinTable {
         name: "mz_databases",
         desc: RelationDesc::empty()

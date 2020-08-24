@@ -460,9 +460,11 @@ fn handle_show_databases(
     scx: &StatementContext,
     ShowDatabasesStatement { filter }: ShowDatabasesStatement,
 ) -> Result<Plan, anyhow::Error> {
+    // RelationExpr::Get must stay in sync with the definition of
+    // MZ_DATABASES in BUILTINS.
     let expr = RelationExpr::Project {
         input: Box::new(RelationExpr::Get {
-            id: expr::Id::Global(GlobalId::System(2011)),
+            id: expr::Id::Global(GlobalId::System(2011)), // Hard-coded system id for mz_databases.
             typ: RelationType {
                 column_types: vec![
                     ColumnType {
@@ -477,7 +479,7 @@ fn handle_show_databases(
                 keys: vec![],
             },
         }),
-        outputs: vec![1],
+        outputs: vec![1], // Only return the database name, not the id.
     };
     finish_show_where_from_expr(scx, filter, expr, &SHOW_DATABASES_DESC)
 }
