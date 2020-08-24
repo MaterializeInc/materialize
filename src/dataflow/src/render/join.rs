@@ -84,9 +84,10 @@ where
                 .collect::<Vec<_>>();
 
             let mut predicates = predicates.to_vec();
-            if start_arr.is_none() {
+            if start_arr.is_none() || inputs.len() == 1 {
                 // If there is no starting arrangement, then we can run filters
                 // directly on the starting collection.
+                // If there is only one input, we are done joining, so run filters
                 let (j, es) = crate::render::delta_join::build_filter(
                     joined,
                     &source_columns,
@@ -167,85 +168,97 @@ where
                 }
                 column_demand.extend(demand.iter().cloned());
 
-                // Identify the *indexes* of columns that are demanded by any
-                // remaining predicates and equivalence classes.
-                let prev_vals = source_columns
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, c)| {
-                        if column_demand.contains(c) {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
                 let next_vals = (0..arities[*input])
                     .filter(|c| column_demand.contains(&(prior_arities[*input] + c)))
                     .collect::<Vec<_>>();
 
-                // Identify the columns we intend to retain.
-                source_columns = prev_vals
-                    .iter()
-                    .map(|i| source_columns[*i])
-                    .chain(next_vals.iter().map(|i| prior_arities[*input] + *i))
-                    .collect();
+                let next_source_vals = next_vals.clone();
 
-                let (j, es) = if input_index == 0 && start_arr.is_some() {
-                    // if a starting arrangement has been specified, use that
-                    let start_arr = start_arr.as_ref().unwrap();
-                    match self.arrangement(&inputs[*start], start_arr) {
-                        Some(ArrangementFlavor::Local(oks, es)) => {
+                // When joining the first input, check to see if there is a
+                // convenient ready-made arrangement
+                let (j, es, prev_vals) =
+                    match (input_index, self.arrangement(&inputs[*start], &prev_keys)) {
+                        (0, Some(ArrangementFlavor::Local(oks, es))) => {
                             let (j, next_es) = self.differential_join(
                                 oks,
                                 &inputs[*input],
                                 &next_keys[..],
                                 next_vals,
                             );
-                            (j, es.as_collection(|k, _v| k.clone()).concat(&next_es))
+                            (
+                                j,
+                                es.as_collection(|k, _v| k.clone()).concat(&next_es),
+                                source_columns,
+                            )
                         }
-                        Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
+                        (0, Some(ArrangementFlavor::Trace(_gid, oks, es))) => {
                             let (j, next_es) = self.differential_join(
                                 oks,
                                 &inputs[*input],
                                 &next_keys[..],
                                 next_vals,
                             );
-                            (j, es.as_collection(|k, _v| k.clone()).concat(&next_es))
+                            (
+                                j,
+                                es.as_collection(|k, _v| k.clone()).concat(&next_es),
+                                source_columns,
+                            )
                         }
-                        None => {
-                            unreachable!("Start arrangement not present");
+                        _ => {
+                            // Otherwise, build a new arrangement from the collection of
+                            // joins of previous inputs.
+                            // We exploit the demand information to restrict `prev` to
+                            // its demanded columns.
+
+                            // Identify the *indexes* of columns that are demanded by any
+                            // remaining predicates and equivalence classes.
+                            let prev_vals = source_columns
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(i, c)| {
+                                    if column_demand.contains(c) {
+                                        Some(i)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
+                            // Identify the columns we intend to retain.
+                            let prev_source_vals =
+                                prev_vals.iter().map(|i| source_columns[*i]).collect();
+
+                            let (prev_keyed, es) = joined.map_fallible({
+                                let mut row_packer = repr::RowPacker::new();
+                                move |row| {
+                                    let datums = row.unpack();
+                                    let temp_storage = RowArena::new();
+                                    let key = Row::try_pack(
+                                        prev_keys.iter().map(|e| e.eval(&datums, &temp_storage)),
+                                    )?;
+                                    let row = row_packer.pack(prev_vals.iter().map(|i| datums[*i]));
+                                    Ok((key, row))
+                                }
+                            });
+                            let prev_keyed = prev_keyed.arrange_named::<OrdValSpine<_, _, _, _>>(
+                                &format!("JoinStage: {}", input),
+                            );
+                            let (j, next_es) = self.differential_join(
+                                prev_keyed,
+                                &inputs[*input],
+                                &next_keys[..],
+                                next_vals,
+                            );
+                            (j, es.concat(&next_es), prev_source_vals)
                         }
-                    }
-                } else {
-                    // Otherwise, build a new arrangement from the collection of
-                    // joins of previous inputs.
-                    // We exploit the demand information to restrict `prev` to its demanded columns.
-                    let (prev_keyed, es) = joined.map_fallible({
-                        let mut row_packer = repr::RowPacker::new();
-                        move |row| {
-                            let datums = row.unpack();
-                            let temp_storage = RowArena::new();
-                            let key = Row::try_pack(
-                                prev_keys.iter().map(|e| e.eval(&datums, &temp_storage)),
-                            )?;
-                            let row = row_packer.pack(prev_vals.iter().map(|i| datums[*i]));
-                            Ok((key, row))
-                        }
-                    });
-                    let prev_keyed = prev_keyed
-                        .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", input));
-                    let (j, next_es) = self.differential_join(
-                        prev_keyed,
-                        &inputs[*input],
-                        &next_keys[..],
-                        next_vals,
-                    );
-                    (j, es.concat(&next_es))
-                };
+                    };
 
                 joined = j;
                 errs = errs.concat(&es);
+                source_columns = prev_vals
+                    .into_iter()
+                    .chain(next_source_vals.iter().map(|i| prior_arities[*input] + *i))
+                    .collect();
 
                 let (j, es) = crate::render::delta_join::build_filter(
                     joined,

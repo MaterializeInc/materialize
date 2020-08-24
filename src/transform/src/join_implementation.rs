@@ -613,24 +613,86 @@ impl<'a> Orderer<'a> {
             }
         }
 
-        self.order_input(start);
-        let mut start_key_found = false;
-        while self.order.len() < self.inputs {
-            let (characteristics, key, input) = self.priority_queue.pop().unwrap();
-            // put the tuple into `self.order` unless the tuple with the same
-            // input is already in `self.order`. For all inputs other than
-            // start, `self.placed[input]` is an indication of whether a
-            // corresponding tuple is already in `self.order`.
-            if !self.placed[input] {
-                // non-starting inputs are ordered in decreasing priority
-                self.order.push((characteristics, key, input));
-                self.order_input(input);
-            } else if !start_key_found && input == start {
-                // starting input is always first
-                self.order.insert(0, (characteristics, key, input));
-                start_key_found = true;
+        if self.inputs > 1 {
+            self.order_input(start);
+            while self.order.len() < self.inputs - 1 {
+                let (characteristics, key, input) = self.priority_queue.pop().unwrap();
+                // put the tuple into `self.order` unless the tuple with the same
+                // input is already in `self.order`. For all inputs other than
+                // start, `self.placed[input]` is an indication of whether a
+                // corresponding tuple is already in `self.order`.
+                if !self.placed[input] {
+                    // non-starting inputs are ordered in decreasing priority
+                    self.order.push((characteristics, key, input));
+                    self.order_input(input);
+                }
             }
         }
+
+        // calculate characteristics of an arrangement, if any on the starting input
+        // by default, there is no arrangement on the starting input
+        let mut start_tuple = (Characteristics::new(false, 0, false, start), vec![], start);
+        // use an arrangement if there exists one that lines up with the keys of
+        // the second input
+        if let Some((_, key, second)) = self.order.get(0) {
+            // for each element in key ...
+            let candidate_start_key = key
+                .iter()
+                .filter_map(|k| {
+                    let mut k = k.clone();
+                    k.visit_mut(&mut |e| {
+                        if let ScalarExpr::Column(c) = e {
+                            *c += self.prior_arities[*second]
+                        }
+                    });
+                    // ... find the equivalence it belongs to ...
+                    let key_equivalence = self
+                        .equivalences
+                        .iter()
+                        .position(|e| e.iter().any(|expr| expr == &k))
+                        .unwrap();
+                    // ... then within that equivalence, find the position
+                    // of an expression that came from start ...
+                    let key_pos =
+                        self.reverse_equivalences[start]
+                            .iter()
+                            .find_map(|(idx, idx2)| {
+                                if idx == &key_equivalence {
+                                    Some(idx2)
+                                } else {
+                                    None
+                                }
+                            });
+                    // ... extract the expression that came from start
+                    // and shift the column numbers
+                    if let Some(key_pos) = key_pos {
+                        let mut result = self.equivalences[key_equivalence][*key_pos].clone();
+                        result.visit_mut(&mut |e| {
+                            if let ScalarExpr::Column(c) = e {
+                                *c -= self.prior_arities[start]
+                            }
+                        });
+                        Some(result)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            if candidate_start_key.len() == key.len() {
+                if let Some(pos) = self.arrangements[start]
+                    .iter()
+                    .position(|k| k == &candidate_start_key)
+                {
+                    let is_unique = self.unique_arrangement[start][pos];
+                    start_tuple = (
+                        Characteristics::new(is_unique, candidate_start_key.len(), true, start),
+                        candidate_start_key,
+                        start,
+                    );
+                }
+            }
+        }
+        self.order.insert(0, start_tuple);
 
         std::mem::replace(&mut self.order, Vec::new())
     }
