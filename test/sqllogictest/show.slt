@@ -24,7 +24,7 @@ SHOW DATABASES LIKE 'materialize'
 materialize
 
 query T
-SHOW DATABASES WHERE "Database" LIKE 'mat%'
+SHOW DATABASES WHERE database LIKE 'mat%'
 ----
 materialize
 
