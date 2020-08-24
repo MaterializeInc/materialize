@@ -47,6 +47,16 @@ metrics:
       - worker
       - name
       - operator
+  - metric_name: mz_records_per_dataflow_global
+    query: >-
+      SELECT name, records FROM mz_records_per_dataflow_global
+      ORDER BY name
+    help: How many records each named dataflow has
+    type: gauge
+    values:
+      - records
+    key_labels:
+      - name
   # durations histogram
   # histogram_quantile(1.0, sum(rate(mz_perf_peek_durations_bucket[30s])) by (le, worker))
   - metric_name: mz_perf_peek_durations_bucket
