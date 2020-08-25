@@ -426,6 +426,7 @@ mzconduct:
       - step: wait-for-tcp
         host: ${INFRA_HOST:-kafka}
         port: 9092
+        timeout_secs: 300
       - step: wait-for-tcp
         host: ${INFRA_HOST:-schema-registry}
         port: 8081
@@ -465,6 +466,7 @@ mzconduct:
       - step: wait-for-tcp
         host: ${MZ_HOST:-materialized}
         port: 6875
+        timeout_secs: 300
       - step: workflow
         workflow: heavy-load
 
