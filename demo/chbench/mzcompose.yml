@@ -409,7 +409,7 @@ mzconduct:
     # with cloud-benchmark-infra
     cloud-benchmark-mz:
       env:
-        MZ_PORT: 6875
+        MZ_PORT: *materialized
         KAFKA_HOST: ${INFRA_HOST:-kafka}
         KAFKA_PORT: 9092
         SR_HOST: ${INFRA_HOST:-schema-registry}
@@ -445,7 +445,7 @@ mzconduct:
         MZ_HOST: ${MZ_HOST:-materialized}
         MZ_PORT: 6875
         MYSQL_PORT: 3306
-        KAFKA_PORT: 9092
+        KAFKA_PORT: *kafka
         CC_PORT: 9021
         MYSQL_EXPORTER_PORT: "9399:9399"
       steps:
