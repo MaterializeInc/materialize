@@ -24,13 +24,27 @@ Before releases, or whenever we'd like to update the dashboard we ship to users,
 the dashboard from grafana.mz to this directory, using the following procedure:
 
 * downloading the json model from http://grafana.mz/d/materialize-overview/materialize-overview-load-tests?editview=dashboard_json
-* running the `bin/dashboard-clean` script on that downloaded json
-* ensuring that `conf/grafana/dashboards/overview.json` has the new model json
+  into a file. The rest of this guide will assume you used `/tmp/dashboard.json`
+* running the `bin/dashboard-clean` script on that downloaded json to overwrite the
+  conf file. Execute this from the root of the repo:
+  ```console
+  $ bin/dashboard-clean /tmp/dashboard.json > misc/monitoring/dashboard/conf/grafana/dashboards/overview.json
+  ```
 * building the dashboard locally `mzimage build dashboard`
 * running the dashboard inside a demo: `mzconduct run billing -w load-test`
-* editing the dashboard to remove some _more_ of our cruft
-* copying the json model again
-* running `bin/dashboard-clean` again
+* opening the dashboard and editing it to remove some _more_ of our cruft:
+  ```console
+  $ mzconduct web billing dashboard
+  ```
+  specifically, remove the "Meta" panel and make the "Materialize Build
+  Info" panel wide enough to look reasonable.
+* copying the json model into `/tmp/dashboard.json` again
+* running the `bin/dashboard-clean` comamnd from above, again
+* Run `mzimage build dashboard` and restart the load test to verify that
+  the changes look reasonable on a reload:
+  ```console
+  $ mzconduct down billing && mzimage build dashboard && mzconduct run billing -w load-test
+  ```
 
 ... that's all.
 
