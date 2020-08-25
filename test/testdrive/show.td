@@ -7,30 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SHOW DATABASES;
-database
---------
-materialize
-
-> SHOW DATABASES WHERE database = 'materialize';
-database
---------
-materialize
-
-> SHOW DATABASES WHERE database = 'bad';
-database
---------
-
-> SHOW DATABASES LIKE '%material%';
-database
---------
-materialize
-
-> SHOW DATABASES LIKE '%bad%';
-database
---------
-
-
 > CREATE VIEW select_constant as SELECT false;
 
 > CREATE MATERIALIZED VIEW select_constant2 as SELECT 'hello';

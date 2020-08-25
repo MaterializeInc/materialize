@@ -23,14 +23,14 @@ SHOW DATABASES
 ----
 SHOW DATABASES
 =>
-ShowDatabases(ShowDatabasesStatement { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("database")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("mz_databases")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, filter: None })
+ShowDatabases(ShowDatabasesStatement { filter: None })
 
 parse-statement
 SHOW DATABASES LIKE 'blah'
 ----
 SHOW DATABASES LIKE 'blah'
 =>
-ShowDatabases(ShowDatabasesStatement { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("database")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("mz_databases")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, filter: Some(Like("blah")) })
+ShowDatabases(ShowDatabasesStatement { filter: Some(Like("blah")) })
 
 parse-statement
 SHOW SCHEMAS

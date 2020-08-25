@@ -33,7 +33,7 @@ SHOW DATABASES WHERE (SELECT true)
 ----
 materialize
 
-statement error SHOW WHERE clause must have type bool, not type i32
+statement error WHERE clause must have type bool, not type i32
 SHOW DATABASES WHERE 7
 ----
 
