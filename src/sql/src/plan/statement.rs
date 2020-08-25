@@ -34,15 +34,16 @@ use ore::collections::CollectionExt;
 use repr::{strconv, ColumnName};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AlterObjectRenameStatement, AvroSchema, ColumnOption, Connector, CreateDatabaseStatement,
-    CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateViewStatement, DropDatabaseStatement, DropObjectsStatement,
-    ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior,
-    InsertStatement, ObjectName, ObjectType, Query, SelectStatement, SetExpr, SetVariableStatement,
-    SetVariableValue, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
-    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
-    ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter,
-    ShowVariableStatement, SqlOption, Statement, TailStatement, Value,
+    AlterObjectRenameStatement, AvroSchema, BinaryOperator, ColumnOption, Connector,
+    CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, CreateViewStatement, DropDatabaseStatement,
+    DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
+    IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query, Select, SelectItem,
+    SelectStatement, SetExpr, SetVariableStatement, SetVariableValue, ShowColumnsStatement,
+    ShowCreateIndexStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
+    ShowCreateTableStatement, ShowCreateViewStatement, ShowDatabasesStatement,
+    ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
+    SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -60,7 +61,7 @@ use crate::pure::Schema;
 
 lazy_static! {
     static ref SHOW_DATABASES_DESC: RelationDesc =
-        RelationDesc::empty().with_column("Database", ScalarType::String.nullable(false));
+        RelationDesc::empty().with_column("database", ScalarType::String.nullable(false));
     static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::empty()
         .with_column("Source_or_view", ScalarType::String.nullable(false))
         .with_column("Key_name", ScalarType::String.nullable(false))
@@ -446,13 +447,39 @@ fn handle_show_databases(
     scx: &StatementContext,
     ShowDatabasesStatement { filter }: ShowDatabasesStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let rows = scx
-        .catalog
-        .list_databases()
-        .map(|database| vec![Datum::from(database)])
-        .collect();
-
-    finish_show_where(scx, filter, rows, &SHOW_DATABASES_DESC)
+    let filter = match filter {
+        Some(ShowStatementFilter::Like(s)) => Some(Expr::BinaryOp {
+            left: Box::new(Expr::Identifier(vec![Ident::new("database")])),
+            op: BinaryOperator::Like,
+            right: Box::new(Expr::Value(Value::String(s))),
+        }),
+        Some(ShowStatementFilter::Where(selection)) => Some(selection),
+        None => None,
+    };
+    let select = Select::default()
+        .from(TableWithJoins {
+            relation: TableFactor::Table {
+                name: ObjectName(vec![Ident::new("mz_databases")]),
+                alias: None,
+            },
+            joins: vec![],
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("database")]),
+            alias: None,
+        })
+        .selection(filter);
+    handle_select(
+        scx,
+        SelectStatement {
+            query: Box::new(Query::select(select)),
+            as_of: None,
+        },
+        &Params {
+            datums: Row::pack(&[]),
+            types: vec![],
+        },
+    )
 }
 
 fn handle_show_objects(

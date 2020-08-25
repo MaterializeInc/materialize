@@ -633,11 +633,6 @@ impl Catalog {
         &self.by_id[id]
     }
 
-    /// Returns an iterator over the name of each database in the catalog.
-    pub fn list_databases(&self) -> impl Iterator<Item = &str> {
-        self.by_name.keys().map(String::as_str)
-    }
-
     /// Returns a (name, id) pair for each database in the catalog.
     pub fn databases(&self) -> Vec<(&str, i64)> {
         self.by_name
@@ -1522,10 +1517,6 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         Ok(self
             .catalog
             .resolve(self.database_spec(), self.search_path, name, self.conn_id)?)
-    }
-
-    fn list_databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
-        Box::new(self.catalog.list_databases())
     }
 
     fn list_schemas<'a>(
