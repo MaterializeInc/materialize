@@ -34,16 +34,16 @@ use ore::collections::CollectionExt;
 use repr::{strconv, ColumnName};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AlterObjectRenameStatement, AvroSchema, ColumnOption, Connector, CreateDatabaseStatement,
-    CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateViewStatement, DropDatabaseStatement, DropObjectsStatement,
-    ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior,
-    InsertStatement, ObjectName, ObjectType, Query, Select, SelectItem, SelectStatement, SetExpr,
-    SetVariableStatement, SetVariableValue, ShowColumnsStatement, ShowCreateIndexStatement,
-    ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
-    ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
-    ShowStatementFilter, ShowVariableStatement, SqlOption, Statement, TableFactor, TableWithJoins,
-    TailStatement, Value,
+    AlterObjectRenameStatement, AvroSchema, BinaryOperator, ColumnOption, Connector,
+    CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, CreateViewStatement, DropDatabaseStatement,
+    DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
+    IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query, Select, SelectItem,
+    SelectStatement, SetExpr, SetVariableStatement, SetVariableValue, ShowColumnsStatement,
+    ShowCreateIndexStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
+    ShowCreateTableStatement, ShowCreateViewStatement, ShowDatabasesStatement,
+    ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
+    SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -447,6 +447,15 @@ fn handle_show_databases(
     scx: &StatementContext,
     ShowDatabasesStatement { filter }: ShowDatabasesStatement,
 ) -> Result<Plan, anyhow::Error> {
+    let filter = match filter {
+        Some(ShowStatementFilter::Like(s)) => Some(Expr::BinaryOp {
+            left: Box::new(Expr::Identifier(vec![Ident::new("database")])),
+            op: BinaryOperator::Like,
+            right: Box::new(Expr::Value(Value::String(s))),
+        }),
+        Some(ShowStatementFilter::Where(selection)) => Some(selection),
+        None => None,
+    };
     let select = Select::default()
         .from(TableWithJoins {
             relation: TableFactor::Table {

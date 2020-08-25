@@ -2532,12 +2532,9 @@ impl Parser {
 
     fn parse_show(&mut self) -> Result<Statement, ParserError> {
         if self.parse_keyword("DATABASES") {
-            let filter = if self.parse_keyword("WHERE") || self.parse_keyword("LIKE") {
-                Some(self.parse_expr()?)
-            } else {
-                None
-            };
-            return Ok(Statement::ShowDatabases(ShowDatabasesStatement { filter }));
+            return Ok(Statement::ShowDatabases(ShowDatabasesStatement {
+                filter: self.parse_show_statement_filter()?,
+            }));
         }
 
         let extended = self.parse_keyword("EXTENDED");

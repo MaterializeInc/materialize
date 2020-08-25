@@ -604,7 +604,7 @@ impl_display!(ShowVariableStatement);
 /// `SHOW DATABASES`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowDatabasesStatement {
-    pub filter: Option<Expr>,
+    pub filter: Option<ShowStatementFilter>,
 }
 
 impl AstDisplay for ShowDatabasesStatement {
