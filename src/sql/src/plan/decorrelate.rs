@@ -845,3 +845,168 @@ impl AggregateExpr {
         }
     }
 }
+
+/// Attempts an efficient outer join, if `on` has equijoin structure.
+fn attempt_outer_join(
+    left: expr::RelationExpr,
+    right: expr::RelationExpr,
+    on: expr::ScalarExpr,
+    kind: JoinKind,
+    oa: usize,
+    id_gen: &mut expr::IdGen,
+) -> Option<expr::RelationExpr> {
+    use expr::BinaryFunc;
+
+    // Both `left` and `right` are decorrelated inputs, whose first `oa` calumns
+    // correspond to an outer context: we should do the outer join independently
+    // for each prefix. In the case that `on` is just some equality tests between
+    // columns of `left` and `right`, we can employ a relatively simple plan.
+
+    let la = left.arity() - oa;
+    let lt = left.typ();
+    let ra = right.arity() - oa;
+    let rt = right.typ();
+
+    // Deconstruct predicates that may be ands of multiple conditions.
+    let mut predicates = Vec::new();
+    let mut todo = vec![on];
+    while let Some(next) = todo.pop() {
+        if let expr::ScalarExpr::CallBinary {
+            expr1,
+            expr2,
+            func: BinaryFunc::And,
+        } = next
+        {
+            todo.push(*expr1);
+            todo.push(*expr2);
+        } else {
+            predicates.push(next)
+        }
+    }
+
+    // We restrict ourselves to predicates that test column equality between left and right.
+    let mut l_keys = Vec::new();
+    let mut r_keys = Vec::new();
+    for predicate in predicates.iter_mut() {
+        if let expr::ScalarExpr::CallBinary {
+            expr1,
+            expr2,
+            func: BinaryFunc::Eq,
+        } = predicate
+        {
+            if let (expr::ScalarExpr::Column(c1), expr::ScalarExpr::Column(c2)) =
+                (&mut **expr1, &mut **expr2)
+            {
+                if *c1 > *c2 {
+                    std::mem::swap(c1, c2);
+                }
+                if (oa <= *c1 && *c1 < oa + la) && (oa + la <= *c2 && *c2 < oa + la + ra) {
+                    l_keys.push(*c1);
+                    r_keys.push(*c2);
+                }
+            }
+        }
+    }
+    // If any predicates were not column equivs, give up.
+    if l_keys.len() < predicates.len() {
+        return None;
+    }
+
+    // If we've gotten this far, we can do the clever thing.
+    // We'll want to use left and right multiple times
+    let result = left.let_in(id_gen, |id_gen, get_left| {
+        right.let_in(id_gen, |id_gen, get_right| {
+            // TODO: we know that we can re-use the arrangements of left and right
+            // needed for the inner join with each of the conditional outer joins.
+            // It is not clear whether we should hint that, or just let the planner
+            // and optimizer run and see what happens.
+
+            // We'll want the inner join (minus repeated columns)
+            let join = expr::RelationExpr::join(
+                vec![get_left.clone(), get_right.clone()],
+                (0..oa)
+                    .map(|i| (i, i))
+                    .chain(l_keys.clone().into_iter().zip(r_keys.clone()))
+                    .map(|(l, r)| vec![(0, l), (1, r)])
+                    .collect(),
+            )
+            // remove those columns from `right` repeating the first `oa` columns.
+            .project(
+                (0..(oa + la))
+                    .chain((oa + la + oa)..(oa + la + oa + ra))
+                    .collect(),
+            );
+
+            // We'll want to re-use the results of the join multiple times.
+            join.let_in(id_gen, |_id_gen, get_join| {
+                let mut result = get_join.clone();
+
+                // The plan is now to determine the set of absent keys, right and left,
+                // to pair each up with the appropriate Null values, and then to join
+                // with the left and right (respectively) input relations to pick out
+                // those rows in each that matched nothing.
+
+                if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
+                    let left_present = get_join
+                        .clone()
+                        .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
+                        .distinct();
+                    let left_keys = get_left
+                        .clone()
+                        .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
+                        .distinct();
+                    let left_absent = left_present.negate().union(left_keys);
+                    let left_fill = left_absent.map(
+                        rt.column_types
+                            .into_iter()
+                            .map(|typ| expr::ScalarExpr::literal_null(typ))
+                            .collect(),
+                    );
+
+                    result = result.union(expr::RelationExpr::join(
+                        vec![get_left.clone(), left_fill],
+                        (0..oa)
+                            .chain(l_keys.clone())
+                            .enumerate()
+                            .map(|(i, c)| vec![(0, c), (1, i)])
+                            .collect::<Vec<_>>(),
+                    ))
+                }
+
+                if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
+                    let right_present = get_join
+                        .clone()
+                        .project((0..oa).chain(r_keys.clone()).collect::<Vec<_>>())
+                        .distinct();
+                    let right_keys = get_right
+                        .clone()
+                        .project(
+                            (0..oa)
+                                .chain(r_keys.clone().into_iter().map(|r| r - la))
+                                .collect::<Vec<_>>(),
+                        )
+                        .distinct();
+                    let right_absent = right_present.negate().union(right_keys);
+                    let right_fill = right_absent.map(
+                        lt.column_types
+                            .into_iter()
+                            .map(|typ| expr::ScalarExpr::literal_null(typ))
+                            .collect(),
+                    );
+
+                    result = result.union(expr::RelationExpr::join(
+                        vec![right_fill, get_right.clone()],
+                        (0..oa)
+                            .chain(r_keys.clone().into_iter().map(|r| r - la))
+                            .enumerate()
+                            .map(|(i, c)| vec![(0, i), (1, c)])
+                            .collect::<Vec<_>>(),
+                    ))
+                }
+
+                result
+            })
+        })
+    });
+    Some(result)
+}
