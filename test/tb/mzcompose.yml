@@ -1,0 +1,62 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+version: "3.7"
+services:
+  materialized:
+    mzbuild: materialized
+    command: -w1
+    ports: [6875]
+    volumes:
+      - tbshare:/tbshare
+  mysql:
+    image: debezium/example-mysql:1.1
+    ports: [3306]
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpw
+      - MYSQL_USER=mysqluser
+      - MYSQL_PASSWORD=mysqlpw
+  tb:
+    mzbuild: tb
+    command: -t mysql -p 3306 -H mysql -u root -P rootpw -d tb_test --dir /tbshare/data --save-file /tbshare/status
+    volumes:
+      - tbshare:/tbshare
+
+volumes:
+  tbshare:
+
+mzconduct:
+  workflows:
+    ci:
+      steps:
+      - step: start-services
+        services: [materialized, mysql]
+      - step: wait-for-mysql
+        timeout_secs: 30
+      - step: run-mysql
+        query: |
+            CREATE DATABASE tb_test;
+            USE tb_test;
+            CREATE TABLE stonks (ticker varchar(255) NOT NULL, price FLOAT NOT NULL);
+            INSERT INTO stonks VALUES ('AAPL', 499.30), ('GOOG', 1608.22);
+      - step: start-services
+        services: [tb]
+      - step: wait-for-mz
+        timeout_secs: 10
+        query: |
+            CREATE MATERIALIZED SOURCE stonks
+            FROM AVRO OCF '/tbshare/data/tb.tb_test.stonks' WITH (tail = true)
+            ENVELOPE DEBEZIUM;
+        expected: any
+      - step: wait-for-mz
+        timeout_secs: 10
+        query: SELECT * FROM stonks
+        expected:
+          - [AAPL, "499.30"]
+          - [GOOG, "1608.22"]

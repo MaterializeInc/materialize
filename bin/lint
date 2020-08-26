@@ -56,7 +56,7 @@ files=$(git diff --ignore-submodules=all --raw "$empty_tree" \
 
 copyright_files=$(grep -vE \
     -e '(^|/)LICENSE$' \
-    -e '(^|/)\.(git|vscode)ignore$' \
+    -e '(^|/)\.(docker|git|vscode)ignore$' \
     -e '(^|/)\.gitattributes$' \
     -e '(^|/)\.gitmodules$' \
     -e '(^|/)go\.sum$' \
