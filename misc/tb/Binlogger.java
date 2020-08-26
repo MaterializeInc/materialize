@@ -12,7 +12,10 @@ package io.materialize;
 import io.confluent.connect.avro.AvroData;
 import io.debezium.config.Configuration;
 import io.debezium.config.Configuration.Builder;
-import io.debezium.embedded.EmbeddedEngine;
+import io.debezium.engine.format.ChangeEventFormat;
+import io.debezium.engine.DebeziumEngine;
+import io.debezium.engine.RecordChangeEvent;
+import io.debezium.embedded.Connect;
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
@@ -26,16 +29,19 @@ import org.apache.log4j.BasicConfigurator;
 
 import java.io.*;
 import java.sql.SQLException;
+import java.util.function.Consumer;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.function.Consumer;
+import java.util.Properties;
 
 /**
  * Log tables to <a href="https://avro.apache.org/docs/1.8.2/spec.html#Object+Container+Files">
  * Avro Object Container Files</a>
  */
-public class Binlogger implements Consumer<SourceRecord> {
-    static FileOutputStream fos;
+public class Binlogger implements Consumer<RecordChangeEvent<SourceRecord>> {
     // The directory all avro data will go into
     String logDir;
 
@@ -59,23 +65,26 @@ public class Binlogger implements Consumer<SourceRecord> {
         }
     }
 
-    public void accept(SourceRecord s) {
-        try {
-            String keyName = s.topic();
-            Output<Object> output = schemaLogs.get(keyName);
-            if (output == null) {
-                File outFile = new File(logDir + "/" + keyName);
-                Schema kafkaSchema = s.valueSchema();
-                org.apache.avro.Schema schema = avroDataConverter.fromConnectSchema(kafkaSchema);
-                output = new Output<>(outFile, schema);
-                schemaLogs.put(keyName, output);
+    public void accept(RecordChangeEvent<SourceRecord> event) {
+        SourceRecord s = event.record();
+        synchronized (schemaLogs) {
+            try {
+                String keyName = s.topic();
+                Output<Object> output = schemaLogs.get(keyName);
+                if (output == null) {
+                    File outFile = new File(logDir + "/" + keyName);
+                    Schema kafkaSchema = s.valueSchema();
+                    org.apache.avro.Schema schema = avroDataConverter.fromConnectSchema(kafkaSchema);
+                    output = new Output<>(outFile, schema);
+                    schemaLogs.put(keyName, output);
+                }
+                // TODO: it seems like it should be possible not create the intermediate object, or at least
+                //  to cache the schema parsing
+                Object serializable = avroDataConverter.fromConnectData(s.valueSchema(), s.value());
+                output.fileWriter.append(serializable);
+            } catch (IOException ioe) {
+                ioe.printStackTrace();
             }
-            // TODO: it seems like it should be possible not create the intermediate object, or at least
-            //  to cache the schema parsing
-            Object serializable = avroDataConverter.fromConnectData(s.valueSchema(), s.value());
-            output.fileWriter.append(serializable);
-        } catch (IOException ioe) {
-            ioe.printStackTrace();
         }
     }
 
@@ -111,53 +120,54 @@ public class Binlogger implements Consumer<SourceRecord> {
         String type = getNsString(ns, "type");
         String logDir = getNsString(ns, "dir");
 
-        Builder b = Configuration.create()
-            .with("database.hostname", getNsString(ns, "hostname"))
-            .with("database.port", getNsString(ns, "port"))
-            .with("database.user", getNsString(ns, "user"))
-            .with("database.dbname", getNsString(ns, "database"))
-            .with("database.password", getNsString(ns, "password"))
-            .with("database.server.name", "tb")
-            // Need a distinct pg_replication_slots name, "debezium" is already taken via
-            // standard Materialize setup.
-            .with("slot.name", getNsString(ns, "replication_slot"))
-            .with("plugin.name", "pgoutput")
-            // TODO: we are writing to these files but the don't seem to be having an effect
-            .with("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore")
-            .with("offset.storage.file.filename", getNsString(ns, "save_file") + ".offsets")
-            .with("offset.flush.interval.ms", 100)
-            .with("database.history", "io.debezium.relational.history.FileDatabaseHistory")
-            .with("database.history.file.filename", getNsString(ns, "save_file") + ".history")
-            .with("provide.transaction.metadata", true)
-            .with("provide.transaction.metadata.file.filename", getNsString(ns, "save_file") + ".trx");
+        Properties config = new Properties();
+        config.setProperty("database.hostname", getNsString(ns, "hostname"));
+        config.setProperty("database.port", getNsString(ns, "port"));
+        config.setProperty("database.user", getNsString(ns, "user"));
+        config.setProperty("database.dbname", getNsString(ns, "database"));
+        config.setProperty("database.password", getNsString(ns, "password"));
+        config.setProperty("database.server.name", "tb");
+        // Need a distinct pg_replication_slots name, "debezium" is already taken via
+        // standard Materialize setup.
+        config.setProperty("slot.name", getNsString(ns, "replication_slot"));
+        config.setProperty("plugin.name", "pgoutput");
+        // TODO: we are writing to these files but the don't seem to be having an effect
+        config.setProperty("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore");
+        config.setProperty("offset.storage.file.filename", getNsString(ns, "save_file") + ".offsets");
+        config.setProperty("offset.flush.interval.ms", "100");
+        config.setProperty("database.history", "io.debezium.relational.history.FileDatabaseHistory");
+        config.setProperty("database.history.file.filename", getNsString(ns, "save_file") + ".history");
+        config.setProperty("provide.transaction.metadata", "true");
+        config.setProperty("provide.transaction.metadata.file.filename", getNsString(ns, "save_file") + ".trx");
 
         String whiteListField = ns.getString("whitelist");
         if (whiteListField != null) {
-            b = b.with("table.whitelist", whiteListField);
+            config.setProperty("table.whitelist", whiteListField);
         }
 
         if (type.equals("mysql")) {
-            b = b.with("connector.class", "io.debezium.connector.mysql.MySqlConnector").with("name",
-                    "my-sql-connector");
+            config.setProperty("connector.class", "io.debezium.connector.mysql.MySqlConnector");
+            config.setProperty("name", "mysql-connector");;
         } else if (type.equals("postgres")) {
-            b = b.with("connector.class", "io.debezium.connector.postgresql.PostgresConnector").with("name",
-                    "postgres-connector");
+            config.setProperty("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
+            config.setProperty("name", "postgres-connector");
         } else {
             System.out.printf("ERROR: unknown database type: %s\n", type);
             System.exit(1);
             return;
         }
 
-        Configuration config = b.build();
         Binlogger bl = new Binlogger(logDir);
 
-        // Create the engine with this configuration ...
-        EmbeddedEngine engine = EmbeddedEngine.create().using(config).notifying(bl::accept).build();
-        try {
-            engine.run();
-        } finally {
-            fos.close();
-        }
+
+        DebeziumEngine<RecordChangeEvent<SourceRecord>> engine = DebeziumEngine
+            .create(ChangeEventFormat.of(Connect.class))
+            .using(config)
+            .notifying(bl::accept)
+            .build();
+
+        ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
+        executor.execute(engine);
     }
 
 
