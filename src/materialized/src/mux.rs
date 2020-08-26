@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use futures::future::TryFutureExt;
 use futures::stream::{Stream, StreamExt};
@@ -126,7 +127,9 @@ impl ConnectionHandler for pgwire::Server {
     }
 
     async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
-        self.handle_connection(conn).await
+        self.handle_connection(conn)
+            .await
+            .context("in pgwire server")
     }
 }
 
@@ -137,7 +140,7 @@ impl ConnectionHandler for http::Server {
     }
 
     async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
-        self.handle_connection(conn).await
+        self.handle_connection(conn).await.context("in http server")
     }
 }
 
