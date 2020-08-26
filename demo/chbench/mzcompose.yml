@@ -54,7 +54,7 @@ services:
         read_only: true
   mysqlcli:
     image: debezium/example-mysql:1.1
-    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium", "--database=tpcch"]
+    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=rootpw", "--database=tpcch"]
     init: true
     depends_on:
       - mysql
@@ -483,7 +483,7 @@ mzconduct:
         services: [mysql]
       - step: wait-for-mysql
         user: root
-        password: debezium
+        password: rootpw
         timeout_secs: 30
       - step: start-services
         services: [connector-mysql]
