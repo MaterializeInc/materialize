@@ -571,6 +571,18 @@ class WorkflowStep:
         """Perform the action specified by this step"""
 
 
+@Steps.register("print-env")
+class PrintEnvStep(WorkflowStep):
+    """Prints the `env` `Dict` for this workflow.
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        print("Workflow has environment of", workflow.env)
+
+
 @Steps.register("start-services")
 class StartServicesStep(WorkflowStep):
     """

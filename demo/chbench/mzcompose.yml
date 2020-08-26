@@ -426,6 +426,7 @@ mzconduct:
         port: 6875
       - step: start-services
         services: [prometheus_sql_exporter_mz]
+      - step: print-env
       - step: wait-for-tcp
         host: ${INFRA_HOST:-kafka}
         port: 9092

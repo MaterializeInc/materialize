@@ -16,7 +16,7 @@ use std::result::Result as StdResult;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
-use log::debug;
+use log::{debug, info};
 use regex::Regex;
 use serde::{Deserialize, Deserializer};
 
@@ -426,14 +426,22 @@ fn substitute_config_env_vars(contents: &str) -> String {
     let mut parsed_contents = contents.to_string();
     for cap in BASHLIKE_ENV_VAR_PATTERN.captures_iter(contents) {
         let var = cap.name("var").unwrap().as_str();
-        let val = match env::var(var) {
-            Ok(val) => val,
-            Err(_) => cap
-                .name("default")
-                .unwrap_or_else(|| panic!("Env Var is not set and has no default: {}", var))
-                .as_str()
-                .to_string(),
+        let (val, is_env) = match env::var(var) {
+            Ok(val) => (val, true),
+            Err(_) => (
+                cap.name("default")
+                    .unwrap_or_else(|| panic!("Env Var is not set and has no default: {}", var))
+                    .as_str()
+                    .to_string(),
+                false,
+            ),
         };
+        info!(
+            "substituting config var {} w/ {} {}",
+            var,
+            if is_env { "env var" } else { "default val" },
+            val
+        );
         parsed_contents = parsed_contents.replace(cap.name("declaration").unwrap().as_str(), &val);
     }
     parsed_contents
