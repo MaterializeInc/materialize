@@ -212,6 +212,9 @@ services:
     ports:
       - ${MZ_SQL_EXPORTER_PORT:-9399}
   peeker:
+    environment:
+      KAFKA_HOST: ${KAFKA_HOST:-kafka}
+      SR_HOST: ${SR_HOST:-schema-registry}
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: peeker
     init: true
