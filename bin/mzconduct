@@ -13,6 +13,6 @@
 
 set -euo pipefail
 
-cd "$(dirname "${0}")/.."
+cd "$(dirname "$0")/.."
 
-exec "$(dirname "$0")"/pyactivate -m materialize.cli.mzconduct "$@"
+exec bin/pyactivate -m materialize.cli.mzconduct "$@"
