@@ -882,7 +882,7 @@ fn attempt_outer_join(
 
     // Deconstruct predicates that may be ands of multiple conditions.
     let mut predicates = Vec::new();
-    let mut todo = vec![on];
+    let mut todo = vec![on.clone()];
     while let Some(next) = todo.pop() {
         if let expr::ScalarExpr::CallBinary {
             expr1,
@@ -937,18 +937,16 @@ fn attempt_outer_join(
             // We'll want the inner join (minus repeated columns)
             let join = expr::RelationExpr::join(
                 vec![get_left.clone(), get_right.clone()],
-                (0..oa)
-                    .map(|i| (i, i))
-                    .chain(l_keys.clone().into_iter().zip(r_keys.clone()))
-                    .map(|(l, r)| vec![(0, l), (1, r)])
-                    .collect(),
+                (0..oa).map(|i| vec![(0, i), (1, i)]).collect(),
             )
             // remove those columns from `right` repeating the first `oa` columns.
             .project(
                 (0..(oa + la))
                     .chain((oa + la + oa)..(oa + la + oa + ra))
                     .collect(),
-            );
+            )
+            // apply the filter constraints here, to ensure nulls are not matched.
+            .filter(vec![on]);
 
             // We'll want to re-use the results of the join multiple times.
             join.let_in(id_gen, |id_gen, get_join| {
