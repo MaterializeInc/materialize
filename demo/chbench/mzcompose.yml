@@ -14,6 +14,7 @@
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
   - &kafka ${KAFKA_PORT:-9092:9092}
+  - &kafka-external 9093:9093
   - &schema-registry ${SR_PORT:-8081:8081}
   - &materialized ${MZ_PORT:-6875:6875}
   - &mysql ${MYSQL_PORT:-3306:3306}
@@ -84,10 +85,13 @@ services:
     image: confluentinc/cp-enterprise-kafka:5.3.0
     ports:
       - *kafka
+      - *kafka-external
     depends_on: [zookeeper]
     environment:
       KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,OUTSIDE:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,OUTSIDE://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,OUTSIDE://${KAFKA_HOST:-kafka}:9093
       KAFKA_METRIC_REPORTERS: "io.confluent.metrics.reporter.ConfluentMetricsReporter"
       KAFKA_BROKER_ID: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
@@ -214,6 +218,7 @@ services:
   peeker:
     environment:
       KAFKA_HOST: ${KAFKA_HOST:-kafka}
+      KAFKA_PORT: ${KAFKA_PORT:-9092}
       SR_HOST: ${SR_HOST:-schema-registry}
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: peeker
@@ -417,7 +422,7 @@ mzconduct:
       env:
         MZ_PORT: *materialized
         KAFKA_HOST: ${INFRA_HOST:-kafka}
-        KAFKA_PORT: 9092
+        KAFKA_PORT: 9093
         SR_HOST: ${INFRA_HOST:-schema-registry}
         PEEKER_PORT: "16875:16875"
         MZ_SQL_EXPORTER_PORT: "9400:9399"
@@ -432,7 +437,7 @@ mzconduct:
       - step: print-env
       - step: wait-for-tcp
         host: ${INFRA_HOST:-kafka}
-        port: 9092
+        port: 9093
         timeout_secs: 300
       - step: wait-for-tcp
         host: ${INFRA_HOST:-schema-registry}
@@ -454,7 +459,9 @@ mzconduct:
         MZ_HOST: ${MZ_HOST:-materialized}
         MZ_PORT: 6875
         MYSQL_PORT: 3306
+        KAFKA_HOST: ${INFRA_HOST:-kafka}
         KAFKA_PORT: *kafka
+        SR_HOST: ${INFRA_HOST:-schema-registry}
         SR_PORT: *schema-registry
         CC_PORT: 9021
         MYSQL_EXPORTER_PORT: "9399:9399"
