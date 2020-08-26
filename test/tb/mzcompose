@@ -9,10 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# mzconduct — conduct the runtime behavior of composed containers
+# mzcompose — runs Docker Compose with Materialize customizations.
 
-set -euo pipefail
-
-cd "$(dirname "$0")/.."
-
-exec bin/pyactivate -m materialize.cli.mzconduct "$@"
+exec "$(dirname "$0")/../../bin/mzcompose" "$@"

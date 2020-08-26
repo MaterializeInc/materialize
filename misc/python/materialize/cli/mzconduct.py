@@ -705,8 +705,8 @@ class WaitForMysqlStep(WorkflowStep):
     def __init__(
         self,
         *,
-        user: str,
-        password: str,
+        user: str = "root",
+        password: str = "rootpw",
         host: str = "localhost",
         port: Optional[int] = None,
         timeout_secs: int = 10,
@@ -737,6 +737,58 @@ class WaitForMysqlStep(WorkflowStep):
             port=port,
             timeout_secs=self._timeout_secs,
         )
+
+
+@Steps.register("run-mysql")
+class RunMysql(WorkflowStep):
+    """
+    Params:
+        host: The host mysql is running on
+        port: The port mysql is listening on (Default: discover host port)
+        user: The user to connect as (Default: root)
+        password: The password to use (Default: rootpw)
+        service: The name mysql is running as (Default: mysql)
+        query: The query to execute
+    """
+
+    def __init__(
+        self,
+        *,
+        user: str = "root",
+        password: str = "rootpw",
+        host: str = "localhost",
+        port: Optional[int] = None,
+        service: str = "mysql",
+        query: str,
+    ) -> None:
+        self._user = user
+        self._password = password
+        self._host = host
+        self._port = port
+        self._service = service
+        self._query = query
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        if self._port is None:
+            ports = comp.find_host_ports(self._service)
+            if len(ports) != 1:
+                raise Failed(
+                    f"Could not unambiguously determine port for {self._service} "
+                    f"found: {','.join(ports)}"
+                )
+            port = int(ports[0])
+        else:
+            port = self._port
+        conn = pymysql.connect(
+            user=self._user,
+            passwd=self._password,
+            host=self._host,
+            port=port,
+            client_flag=pymysql.constants.CLIENT.MULTI_STATEMENTS,
+            autocommit=True,
+        )
+        with conn.cursor() as cur:
+            cur.execute(self._query)
 
 
 @Steps.register("wait-for-tcp")
@@ -1224,8 +1276,6 @@ def wait_for_pg(
     args = f"dbname={dbname} host={host} port={port} user={user}"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
-    if isinstance(expected, tuple):
-        expected = list(expected)
     for remaining in ui.timeout_loop(timeout_secs):
         try:
             conn = pg8000.connect(
@@ -1233,18 +1283,13 @@ def wait_for_pg(
             )
             cur = conn.cursor()
             cur.execute(query)
-            result = cur.fetchall()
-            found_result = False
-            for row in result:
-                if expected == "any" or list(row) == expected:
-                    if not found_result:
-                        found_result = True
-                        ui.progress(" up and responding!", finish=True)
-                        if print_result:
-                            say("query result:")
-                    if print_result:
-                        print(" ".join([str(r) for r in row]))
-            if found_result:
+            if expected == "any" and cur.rowcount == -1:
+                say("success")
+                return
+            result = list(cur.fetchall())
+            if expected == "any" or result == expected:
+                if print_result:
+                    say(f"query result: {result}")
                 return
             else:
                 say(
@@ -1261,7 +1306,7 @@ def wait_for_mysql(
     timeout_secs: int, user: str, passwd: str, host: str, port: int
 ) -> None:
     args = f"mysql user={user} host={host} port={port}"
-    ui.progress(f"waitng for {args}", "C")
+    ui.progress(f"waiting for {args}", "C")
     error = None
     for _ in ui.timeout_loop(timeout_secs):
         try:

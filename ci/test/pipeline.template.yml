@@ -162,6 +162,15 @@ steps:
           workflow: ci
     timeout_in_minutes: 30
 
+  - id: tb
+    label: tb
+    depends_on: build
+    plugins:
+      - ./ci/plugins/mzconduct:
+          test: tb
+          workflow: ci
+    timeout_in_minutes: 30
+
   - id: catalog-compat
     label: ":book: catalog compatibility check"
     depends_on: build
