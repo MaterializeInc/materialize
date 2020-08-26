@@ -44,7 +44,7 @@ services:
     ports:
      - *mysql
     environment:
-     - MYSQL_ROOT_PASSWORD=debezium
+     - MYSQL_ROOT_PASSWORD=rootpw
      - MYSQL_USER=mysqluser
      - MYSQL_PASSWORD=mysqlpw
     volumes:

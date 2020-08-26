@@ -693,8 +693,8 @@ class WaitForMysqlStep(WorkflowStep):
     def __init__(
         self,
         *,
-        user: str,
-        password: str,
+        user: str = "root",
+        password: str = "rootpw",
         host: str = "localhost",
         port: Optional[int] = None,
         timeout_secs: int = 10,
