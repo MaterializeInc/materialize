@@ -343,7 +343,7 @@ where
                 MZ_DATABASES.id,
                 iter::once((
                     Row::pack(&[
-                        Datum::String(&format!("{}", database_id)),
+                        Datum::String(&database_id.to_string()),
                         Datum::String(&database_name),
                     ]),
                     1,
@@ -354,8 +354,8 @@ where
                     MZ_SCHEMAS.id,
                     iter::once((
                         Row::pack(&[
-                            Datum::String(&format!("{}", schema_id)),
-                            Datum::String(&database_name),
+                            Datum::String(&schema_id.to_string()),
+                            Datum::String(&database_id.to_string()),
                             Datum::String(&schema_name),
                             Datum::String("USER"),
                         ]),
@@ -370,12 +370,12 @@ where
             .ambient_schemas()
             .map(|(schema_name, schema)| (schema_name.to_string(), schema.id))
             .collect();
-        for (schema_name, id) in ambient_schemas {
+        for (schema_name, schema_id) in ambient_schemas {
             coord.update_catalog_view(
                 MZ_SCHEMAS.id,
                 iter::once((
                     Row::pack(&[
-                        Datum::String(&format!("{}", id)),
+                        Datum::String(&schema_id.to_string()),
                         Datum::String("AMBIENT"),
                         Datum::String(&schema_name),
                         Datum::String("SYSTEM"),
@@ -2020,13 +2020,17 @@ where
                         )),
                     );
                 }
-                catalog::OpStatus::CreatedSchema(database_name, schema_name, id) => {
+                catalog::OpStatus::CreatedSchema {
+                    database_id,
+                    schema_id,
+                    schema_name,
+                } => {
                     self.update_catalog_view(
                         MZ_SCHEMAS.id,
                         iter::once((
                             Row::pack(&[
-                                Datum::String(&id.to_string()),
-                                Datum::String(database_name),
+                                Datum::String(&schema_id.to_string()),
+                                Datum::String(&database_id.to_string()),
                                 Datum::String(schema_name),
                                 Datum::String("USER"),
                             ]),
@@ -2049,21 +2053,23 @@ where
                         );
                     }
                 }
-                catalog::OpStatus::DroppedSchema(database_name, schema_name, id) => {
-                    if let Some(id) = id {
-                        self.update_catalog_view(
-                            MZ_SCHEMAS.id,
-                            iter::once((
-                                Row::pack(&[
-                                    Datum::String(&id.to_string()),
-                                    Datum::String(database_name),
-                                    Datum::String(schema_name),
-                                    Datum::String("USER"),
-                                ]),
-                                -1,
-                            )),
-                        );
-                    }
+                catalog::OpStatus::DroppedSchema {
+                    database_id,
+                    schema_id,
+                    schema_name,
+                } => {
+                    self.update_catalog_view(
+                        MZ_SCHEMAS.id,
+                        iter::once((
+                            Row::pack(&[
+                                Datum::String(&schema_id.to_string()),
+                                Datum::String(&database_id.to_string()),
+                                Datum::String(schema_name),
+                                Datum::String("USER"),
+                            ]),
+                            -1,
+                        )),
+                    );
                 }
                 catalog::OpStatus::DroppedItem(entry) => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), -1);

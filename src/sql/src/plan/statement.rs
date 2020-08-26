@@ -38,12 +38,12 @@ use sql_parser::ast::{
     CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, CreateViewStatement, DropDatabaseStatement,
     DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
-    IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query, Select, SelectItem,
-    SelectStatement, SetExpr, SetVariableStatement, SetVariableValue, ShowColumnsStatement,
-    ShowCreateIndexStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
-    ShowCreateTableStatement, ShowCreateViewStatement, ShowDatabasesStatement,
-    ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
-    SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
+    IfExistsBehavior, InsertStatement, Join, JoinConstraint, JoinOperator, ObjectName, ObjectType,
+    Query, Select, SelectItem, SelectStatement, SetExpr, SetVariableStatement, SetVariableValue,
+    ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
+    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
+    ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter,
+    ShowVariableStatement, SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -510,45 +510,44 @@ fn handle_show_objects(
     };
 
     if let ObjectType::Schema = object_type {
-        // Build the filters for the SHOW SCHEMA query.
-        // Database name filter.
-        let database_name = if let Some(from) = from {
-            scx.resolve_database(from)?
-        } else {
-            scx.resolve_default_database()?.to_string()
-        };
-        let mut selection = Expr::BinaryOp {
-            left: Box::new(Expr::Identifier(vec![Ident::new("database")])),
-            op: BinaryOperator::Eq,
-            right: Box::new(Expr::Value(Value::String(database_name))),
-        };
-        // If extended, also show the schemas in the system's ambient database.
-        if extended {
-            selection = Expr::BinaryOp {
-                left: Box::new(selection),
-                op: BinaryOperator::Or,
-                right: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(vec![Ident::new("database")])),
-                    op: BinaryOperator::Eq,
-                    right: Box::new(Expr::Value(Value::String("AMBIENT".to_owned()))),
-                }),
+        let mut selection = {
+            let database_name = if let Some(from) = from {
+                scx.resolve_database(from)?
+            } else {
+                scx.resolve_default_database()?.to_string()
             };
-        }
-
-        // LIKE and WHERE filters.
+            let mut selection = Expr::BinaryOp {
+                left: Box::new(Expr::Identifier(vec![Ident::new("database")])),
+                op: BinaryOperator::Eq,
+                right: Box::new(Expr::Value(Value::String(database_name))),
+            };
+            if extended {
+                selection = Expr::BinaryOp {
+                    left: Box::new(selection),
+                    op: BinaryOperator::Or,
+                    right: Box::new(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![Ident::new("database_id")])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Value(Value::String("AMBIENT".to_owned()))),
+                    }),
+                }
+            }
+            selection
+        };
         if let Some(filter) = filter {
+            let filter = match filter {
+                ShowStatementFilter::Like(l) => Expr::BinaryOp {
+                    left: Box::new(Expr::Identifier(vec![Ident::new("schema")])),
+                    op: BinaryOperator::Like,
+                    right: Box::new(Expr::Value(Value::String(l))),
+                },
+                ShowStatementFilter::Where(w) => w,
+            };
             selection = Expr::BinaryOp {
                 left: Box::new(selection),
                 op: BinaryOperator::And,
-                right: Box::new(match filter {
-                    ShowStatementFilter::Like(s) => Expr::BinaryOp {
-                        left: Box::new(Expr::Identifier(vec![Ident::new("schema")])),
-                        op: BinaryOperator::Like,
-                        right: Box::new(Expr::Value(Value::String(s))),
-                    },
-                    ShowStatementFilter::Where(w) => w,
-                }),
-            };
+                right: Box::new(filter),
+            }
         }
 
         let mut select = Select::default()
@@ -557,13 +556,23 @@ fn handle_show_objects(
                     name: ObjectName(vec![Ident::new("mz_schemas")]),
                     alias: None,
                 },
-                joins: vec![],
+                joins: vec![Join {
+                    relation: TableFactor::Table {
+                        name: ObjectName(vec![Ident::new("mz_databases")]),
+                        alias: None,
+                    },
+                    join_operator: JoinOperator::LeftOuter(JoinConstraint::On(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![Ident::new("database_id")])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Identifier(vec![Ident::new("global_id")])),
+                    })),
+                }],
             })
+            .selection(Some(selection))
             .project(SelectItem::Expr {
                 expr: Expr::Identifier(vec![Ident::new("schema".to_owned())]),
                 alias: None,
-            })
-            .selection(Some(selection));
+            });
 
         if full {
             select.projection.push(SelectItem::Expr {

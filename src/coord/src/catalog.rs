@@ -1094,18 +1094,19 @@ impl Catalog {
                     schema_name,
                 } => {
                     info!("create schema {}.{}", database_name, schema_name);
-                    self.by_name
-                        .get_mut(&database_name)
-                        .unwrap()
-                        .schemas
-                        .insert(
-                            schema_name.clone(),
-                            Schema {
-                                id,
-                                items: BTreeMap::new(),
-                            },
-                        );
-                    OpStatus::CreatedSchema(database_name, schema_name, id)
+                    let db = self.by_name.get_mut(&database_name).unwrap();
+                    db.schemas.insert(
+                        schema_name.clone(),
+                        Schema {
+                            id,
+                            items: BTreeMap::new(),
+                        },
+                    );
+                    OpStatus::CreatedSchema {
+                        database_id: db.id,
+                        schema_id: id,
+                        schema_name,
+                    }
                 }
 
                 Action::CreateItem { id, name, item } => {
@@ -1122,14 +1123,15 @@ impl Catalog {
                     database_name,
                     schema_name,
                 } => {
-                    let id = self
-                        .by_name
-                        .get_mut(&database_name)
-                        .unwrap()
-                        .schemas
-                        .remove(&schema_name)
-                        .map(|db| db.id);
-                    OpStatus::DroppedSchema(database_name, schema_name, id)
+                    let db = self.by_name.get_mut(&database_name).unwrap();
+                    match db.schemas.remove(&schema_name) {
+                        Some(schema) => OpStatus::DroppedSchema {
+                            database_id: db.id,
+                            schema_id: schema.id,
+                            schema_name,
+                        },
+                        None => OpStatus::NoOp,
+                    }
                 }
 
                 Action::DropItem(id) => {
@@ -1427,12 +1429,21 @@ pub enum Op {
 #[derive(Debug, Clone)]
 pub enum OpStatus {
     CreatedDatabase(String, i64),
-    CreatedSchema(String, String, i64),
+    CreatedSchema {
+        database_id: i64,
+        schema_id: i64,
+        schema_name: String,
+    },
     CreatedItem(GlobalId),
     DroppedDatabase(String, Option<i64>),
-    DroppedSchema(String, String, Option<i64>),
+    DroppedSchema {
+        database_id: i64,
+        schema_id: i64,
+        schema_name: String,
+    },
     DroppedItem(CatalogEntry),
     UpdatedItem,
+    NoOp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
