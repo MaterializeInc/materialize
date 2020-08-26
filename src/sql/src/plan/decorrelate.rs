@@ -326,10 +326,23 @@ impl RelationExpr {
                         );
                         let old_arity = product.arity();
                         let on = on.applied_to(id_gen, col_map, &mut product);
-                        // TODO(frank): this is a moment to determine if `on` corresponds to an
-                        // equijoin, perhaps being the conjunction of equality tests. If so, we
-                        // should be able to implement a more efficient outer join based on keys
-                        // rather than values.
+
+                        // Attempt an efficient equijoin implementation, in which outer joins are
+                        // more efficiently rendered than in general. This can return `None` if
+                        // such a plan is not possible, for example if `on` does not describe an
+                        // equijoin between columns of `left` and `right`.
+                        if let Some(joined) = attempt_outer_join(
+                            get_left.clone(),
+                            get_right.clone(),
+                            on.clone(),
+                            kind.clone(),
+                            oa,
+                            id_gen,
+                        ) {
+                            return joined;
+                        }
+
+                        // Otherwise, perform a more general join.
                         let mut join = product.filter(vec![on]);
                         let new_arity = join.arity();
                         if old_arity != new_arity {
@@ -943,7 +956,6 @@ fn attempt_outer_join(
 
                 // A collection of keys present in both left and right collections.
                 let both_keys = get_join
-                    .clone()
                     .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
                     .distinct();
 
