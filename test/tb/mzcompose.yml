@@ -43,8 +43,8 @@ mzconduct:
         query: |
             CREATE DATABASE tb_test;
             USE tb_test;
-            CREATE TABLE stonks (ticker varchar(255) NOT NULL, price FLOAT NOT NULL);
-            INSERT INTO stonks VALUES ('AAPL', 499.30), ('GOOG', 1608.22);
+            CREATE TABLE stonks (ticker varchar(255) NOT NULL, price int NOT NULL);
+            INSERT INTO stonks VALUES ('AAPL', 499), ('GOOG', 1608);
       - step: start-services
         services: [tb]
       - step: wait-for-mz
@@ -56,7 +56,15 @@ mzconduct:
         expected: any
       - step: wait-for-mz
         timeout_secs: 10
-        query: SELECT * FROM stonks
+        query: SELECT * FROM stonks ORDER BY ticker
         expected:
-          - [AAPL, "499.30"]
-          - [GOOG, "1608.22"]
+          - [AAPL, 499]
+          - [GOOG, 1608]
+      - step: run-mysql
+        query: UPDATE tb_test.stonks SET price = 501 WHERE ticker = 'AAPL'
+      - step: wait-for-mz
+        timeout_secs: 10
+        query: SELECT * FROM stonks ORDER BY ticker
+        expected:
+          - [AAPL, 501]
+          - [GOOG, 1608]

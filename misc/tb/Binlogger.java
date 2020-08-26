@@ -168,6 +168,17 @@ public class Binlogger implements Consumer<RecordChangeEvent<SourceRecord>> {
 
         ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
         executor.execute(engine);
+        executor.scheduleWithFixedDelay(() -> {
+            synchronized (bl.schemaLogs) {
+                try {
+                    for (Map.Entry<String, Output> entry : bl.schemaLogs.entrySet()) {
+                        entry.getValue().fileWriter.flush();
+                    }
+                } catch (IOException ioe) {
+                    ioe.printStackTrace();
+                }
+            }
+        }, 0, 1, TimeUnit.SECONDS);
     }
 
 

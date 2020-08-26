@@ -1264,8 +1264,6 @@ def wait_for_pg(
     args = f"dbname={dbname} host={host} port={port} user={user}"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
-    if isinstance(expected, tuple):
-        expected = list(expected)
     for remaining in ui.timeout_loop(timeout_secs):
         try:
             conn = pg8000.connect(
@@ -1276,18 +1274,10 @@ def wait_for_pg(
             if expected == "any" and cur.rowcount == -1:
                 say("success")
                 return
-            result = cur.fetchall()
-            found_result = False
-            for row in result:
-                if expected == "any" or list(row) == expected:
-                    if not found_result:
-                        found_result = True
-                        ui.progress(" up and responding!", finish=True)
-                        if print_result:
-                            say("query result:")
-                    if print_result:
-                        print(" ".join([str(r) for r in row]))
-            if found_result:
+            result = list(cur.fetchall())
+            if expected == "any" or result == expected:
+                if print_result:
+                    say(f"query result: {result}")
                 return
             else:
                 say(
