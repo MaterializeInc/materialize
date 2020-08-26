@@ -35,6 +35,8 @@ mzconduct:
   workflows:
     ci:
       steps:
+      - step: down
+        destroy_volumes: true
       - step: start-services
         services: [materialized, mysql]
       - step: wait-for-mysql
