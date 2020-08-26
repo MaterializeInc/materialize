@@ -326,10 +326,23 @@ impl RelationExpr {
                         );
                         let old_arity = product.arity();
                         let on = on.applied_to(id_gen, col_map, &mut product);
-                        // TODO(frank): this is a moment to determine if `on` corresponds to an
-                        // equijoin, perhaps being the conjunction of equality tests. If so, we
-                        // should be able to implement a more efficient outer join based on keys
-                        // rather than values.
+
+                        // Attempt an efficient equijoin implementation, in which outer joins are
+                        // more efficiently rendered than in general. This can return `None` if
+                        // such a plan is not possible, for example if `on` does not describe an
+                        // equijoin between columns of `left` and `right`.
+                        if let Some(joined) = attempt_outer_join(
+                            get_left.clone(),
+                            get_right.clone(),
+                            on.clone(),
+                            kind.clone(),
+                            oa,
+                            id_gen,
+                        ) {
+                            return joined;
+                        }
+
+                        // Otherwise, perform a more general join.
                         let mut join = product.filter(vec![on]);
                         let new_arity = join.arity();
                         if old_arity != new_arity {
@@ -844,4 +857,178 @@ impl AggregateExpr {
             distinct,
         }
     }
+}
+
+/// Attempts an efficient outer join, if `on` has equijoin structure.
+fn attempt_outer_join(
+    left: expr::RelationExpr,
+    right: expr::RelationExpr,
+    on: expr::ScalarExpr,
+    kind: JoinKind,
+    oa: usize,
+    id_gen: &mut expr::IdGen,
+) -> Option<expr::RelationExpr> {
+    use expr::BinaryFunc;
+
+    // Both `left` and `right` are decorrelated inputs, whose first `oa` calumns
+    // correspond to an outer context: we should do the outer join independently
+    // for each prefix. In the case that `on` is just some equality tests between
+    // columns of `left` and `right`, we can employ a relatively simple plan.
+
+    let la = left.arity() - oa;
+    let lt = left.typ();
+    let ra = right.arity() - oa;
+    let rt = right.typ();
+
+    // Deconstruct predicates that may be ands of multiple conditions.
+    let mut predicates = Vec::new();
+    let mut todo = vec![on.clone()];
+    while let Some(next) = todo.pop() {
+        if let expr::ScalarExpr::CallBinary {
+            expr1,
+            expr2,
+            func: BinaryFunc::And,
+        } = next
+        {
+            todo.push(*expr1);
+            todo.push(*expr2);
+        } else {
+            predicates.push(next)
+        }
+    }
+
+    // We restrict ourselves to predicates that test column equality between left and right.
+    let mut l_keys = Vec::new();
+    let mut r_keys = Vec::new();
+    for predicate in predicates.iter_mut() {
+        if let expr::ScalarExpr::CallBinary {
+            expr1,
+            expr2,
+            func: BinaryFunc::Eq,
+        } = predicate
+        {
+            if let (expr::ScalarExpr::Column(c1), expr::ScalarExpr::Column(c2)) =
+                (&mut **expr1, &mut **expr2)
+            {
+                if *c1 > *c2 {
+                    std::mem::swap(c1, c2);
+                }
+                if (oa <= *c1 && *c1 < oa + la) && (oa + la <= *c2 && *c2 < oa + la + ra) {
+                    l_keys.push(*c1);
+                    r_keys.push(*c2 - la);
+                }
+            }
+        }
+    }
+    // If any predicates were not column equivs, give up.
+    if l_keys.len() < predicates.len() {
+        return None;
+    }
+
+    // If we've gotten this far, we can do the clever thing.
+    // We'll want to use left and right multiple times
+    let result = left.let_in(id_gen, |id_gen, get_left| {
+        right.let_in(id_gen, |id_gen, get_right| {
+            // TODO: we know that we can re-use the arrangements of left and right
+            // needed for the inner join with each of the conditional outer joins.
+            // It is not clear whether we should hint that, or just let the planner
+            // and optimizer run and see what happens.
+
+            // We'll want the inner join (minus repeated columns)
+            let join = expr::RelationExpr::join(
+                vec![get_left.clone(), get_right.clone()],
+                (0..oa).map(|i| vec![(0, i), (1, i)]).collect(),
+            )
+            // remove those columns from `right` repeating the first `oa` columns.
+            .project(
+                (0..(oa + la))
+                    .chain((oa + la + oa)..(oa + la + oa + ra))
+                    .collect(),
+            )
+            // apply the filter constraints here, to ensure nulls are not matched.
+            .filter(vec![on]);
+
+            // We'll want to re-use the results of the join multiple times.
+            join.let_in(id_gen, |id_gen, get_join| {
+                let mut result = get_join.clone();
+
+                // A collection of keys present in both left and right collections.
+                let both_keys = get_join
+                    .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
+                    .distinct();
+
+                // The plan is now to determine the left and right rows matched in the
+                // inner join, subtract them from left and right respectively, pad what
+                // remains with nulls, and fold them in to `result`.
+
+                both_keys.let_in(id_gen, |_id_gen, get_both| {
+                    if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
+                        // Rows in `left` that are matched in the inner equijoin.
+                        let left_present = expr::RelationExpr::join(
+                            vec![get_left.clone(), get_both.clone()],
+                            (0..oa)
+                                .chain(l_keys.clone())
+                                .enumerate()
+                                .map(|(i, c)| vec![(0, c), (1, i)])
+                                .collect::<Vec<_>>(),
+                        )
+                        .project((0..(oa + la)).collect());
+
+                        // Determine the types of nulls to use as filler.
+                        let right_fill = rt
+                            .column_types
+                            .into_iter()
+                            .skip(oa)
+                            .map(|typ| expr::ScalarExpr::literal_null(typ.nullable(true)))
+                            .collect();
+
+                        // Add to `result` absent elements, filled with typed nulls.
+                        result = left_present
+                            .negate()
+                            .union(get_left.clone())
+                            .map(right_fill)
+                            .union(result);
+                    }
+
+                    if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
+                        // Rows in `right` that are matched in the inner equijoin.
+                        let right_present = expr::RelationExpr::join(
+                            vec![get_right.clone(), get_both],
+                            (0..oa)
+                                .chain(r_keys.clone())
+                                .enumerate()
+                                .map(|(i, c)| vec![(0, c), (1, i)])
+                                .collect::<Vec<_>>(),
+                        )
+                        .project((0..(oa + ra)).collect());
+
+                        // Determine the types of nulls to use as filler.
+                        let left_fill = lt
+                            .column_types
+                            .into_iter()
+                            .skip(oa)
+                            .map(|typ| expr::ScalarExpr::literal_null(typ.nullable(true)))
+                            .collect();
+
+                        // Add to `result` absent elemetns, prepended with typed nulls.
+                        result = right_present
+                            .negate()
+                            .union(get_right.clone())
+                            .map(left_fill)
+                            // Permute left fill before right values.
+                            .project(
+                                (0..oa)
+                                    .chain(oa + ra..oa + ra + la)
+                                    .chain(oa..oa + ra)
+                                    .collect(),
+                            )
+                            .union(result)
+                    }
+
+                    result
+                })
+            })
+        })
+    });
+    Some(result)
 }
