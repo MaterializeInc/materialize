@@ -67,10 +67,11 @@ public class Binlogger implements Consumer<RecordChangeEvent<SourceRecord>> {
 
     public void accept(RecordChangeEvent<SourceRecord> event) {
         SourceRecord s = event.record();
+        Output<Object> output = null;
         synchronized (schemaLogs) {
             try {
                 String keyName = s.topic();
-                Output<Object> output = schemaLogs.get(keyName);
+                output = schemaLogs.get(keyName);
                 if (output == null) {
                     File outFile = new File(logDir + "/" + keyName);
                     Schema kafkaSchema = s.valueSchema();
@@ -78,12 +79,20 @@ public class Binlogger implements Consumer<RecordChangeEvent<SourceRecord>> {
                     output = new Output<>(outFile, schema);
                     schemaLogs.put(keyName, output);
                 }
-                // TODO: it seems like it should be possible not create the intermediate object, or at least
-                //  to cache the schema parsing
-                Object serializable = avroDataConverter.fromConnectData(s.valueSchema(), s.value());
-                output.fileWriter.append(serializable);
             } catch (IOException ioe) {
                 ioe.printStackTrace();
+            }
+        }
+        if (output != null) {
+            synchronized (output.fileWriter) {
+                try {
+                    // TODO: it seems like it should be possible not create the intermediate object, or at least
+                    //  to cache the schema parsing
+                    Object serializable = avroDataConverter.fromConnectData(s.valueSchema(), s.value());
+                    output.fileWriter.append(serializable);
+                } catch (IOException ioe) {
+                    ioe.printStackTrace();
+                }
             }
         }
     }
