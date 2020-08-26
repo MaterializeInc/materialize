@@ -14,6 +14,7 @@
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
   - &kafka ${KAFKA_PORT:-9092:9092}
+  - &schema-registry ${SR_PORT:-8081:8081}
   - &materialized ${MZ_PORT:-6875:6875}
   - &mysql ${MYSQL_PORT:-3306:3306}
   - &postgres ${POSTGRES_PORT:-5432:5432}
@@ -110,6 +111,8 @@ services:
     depends_on: [kafka, schema-registry]
   schema-registry:
     image: confluentinc/cp-schema-registry
+    ports:
+      - *schema-registry
     environment:
      - SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL=zookeeper:2181
      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
@@ -430,6 +433,7 @@ mzconduct:
       - step: wait-for-tcp
         host: ${INFRA_HOST:-schema-registry}
         port: 8081
+        timeout_secs: 60
       - step: run
         service: peeker
         daemon: true
@@ -447,6 +451,7 @@ mzconduct:
         MZ_PORT: 6875
         MYSQL_PORT: 3306
         KAFKA_PORT: *kafka
+        SR_PORT: *schema-registry
         CC_PORT: 9021
         MYSQL_EXPORTER_PORT: "9399:9399"
       steps:
