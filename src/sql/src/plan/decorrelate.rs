@@ -938,73 +938,85 @@ fn attempt_outer_join(
             );
 
             // We'll want to re-use the results of the join multiple times.
-            join.let_in(id_gen, |_id_gen, get_join| {
+            join.let_in(id_gen, |id_gen, get_join| {
                 let mut result = get_join.clone();
 
-                // The plan is now to determine the set of absent keys, right and left,
-                // to pair each up with the appropriate Null values, and then to join
-                // with the left and right (respectively) input relations to pick out
-                // those rows in each that matched nothing.
+                // A collection of keys present in both left and right collections.
+                let both_keys = get_join
+                    .clone()
+                    .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
+                    .distinct();
 
-                if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
-                    let left_present = get_join
-                        .clone()
-                        .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
-                        .distinct();
-                    let left_keys = get_left
-                        .clone()
-                        .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
-                        .distinct();
-                    let left_absent = left_present.negate().union(left_keys);
-                    let left_fill = left_absent.map(
-                        rt.column_types
-                            .into_iter()
-                            .map(|typ| expr::ScalarExpr::literal_null(typ))
-                            .collect(),
-                    );
+                // The plan is now to determine the left and right rows matched in the
+                // inner join, subtract them from left and right respectively, pad what
+                // remains with nulls, and fold them in to `result`.
 
-                    result = result.union(expr::RelationExpr::join(
-                        vec![get_left.clone(), left_fill],
-                        (0..oa)
-                            .chain(l_keys.clone())
-                            .enumerate()
-                            .map(|(i, c)| vec![(0, c), (1, i)])
-                            .collect::<Vec<_>>(),
-                    ))
-                }
-
-                if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
-                    let right_present = get_join
-                        .clone()
-                        .project((0..oa).chain(r_keys.clone()).collect::<Vec<_>>())
-                        .distinct();
-                    let right_keys = get_right
-                        .clone()
-                        .project(
+                both_keys.let_in(id_gen, |_id_gen, get_both| {
+                    if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
+                        // Rows in `left` that are matched in the inner equijoin.
+                        let left_present = expr::RelationExpr::join(
+                            vec![get_left.clone(), get_both.clone()],
                             (0..oa)
-                                .chain(r_keys.clone().into_iter().map(|r| r - la))
+                                .chain(l_keys.clone())
+                                .enumerate()
+                                .map(|(i, c)| vec![(0, c), (1, i)])
                                 .collect::<Vec<_>>(),
                         )
-                        .distinct();
-                    let right_absent = right_present.negate().union(right_keys);
-                    let right_fill = right_absent.map(
-                        lt.column_types
+                        .project((0..(oa + la)).collect());
+
+                        // Determine the types of nulls to use as filler.
+                        let right_fill = rt
+                            .column_types
                             .into_iter()
-                            .map(|typ| expr::ScalarExpr::literal_null(typ))
-                            .collect(),
-                    );
+                            .skip(oa)
+                            .map(expr::ScalarExpr::literal_null)
+                            .collect();
 
-                    result = result.union(expr::RelationExpr::join(
-                        vec![right_fill, get_right.clone()],
-                        (0..oa)
-                            .chain(r_keys.clone().into_iter().map(|r| r - la))
-                            .enumerate()
-                            .map(|(i, c)| vec![(0, i), (1, c)])
-                            .collect::<Vec<_>>(),
-                    ))
-                }
+                        // Add to `result` absent elements, filled with typed nulls.
+                        result = left_present
+                            .negate()
+                            .union(get_left.clone())
+                            .map(right_fill)
+                            .union(result);
+                    }
 
-                result
+                    if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
+                        // Rows in `right` that are matched in the inner equijoin.
+                        let right_present = expr::RelationExpr::join(
+                            vec![get_right.clone(), get_both],
+                            (0..oa)
+                                .chain(r_keys.clone())
+                                .enumerate()
+                                .map(|(i, c)| vec![(0, c), (1, i)])
+                                .collect::<Vec<_>>(),
+                        )
+                        .project((0..(oa + ra)).collect());
+
+                        // Determine the types of nulls to use as filler.
+                        let left_fill = lt
+                            .column_types
+                            .into_iter()
+                            .skip(oa)
+                            .map(expr::ScalarExpr::literal_null)
+                            .collect();
+
+                        // Add to `result` absent elemetns, prepended with typed nulls.
+                        result = right_present
+                            .negate()
+                            .union(get_right.clone())
+                            .map(left_fill)
+                            // Permute left fill before right values.
+                            .project(
+                                (0..oa)
+                                    .chain(oa + ra..oa + ra + la)
+                                    .chain(oa..oa + ra)
+                                    .collect(),
+                            )
+                            .union(result)
+                    }
+
+                    result
+                })
             })
         })
     });
