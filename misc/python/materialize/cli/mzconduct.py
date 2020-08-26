@@ -357,7 +357,7 @@ class Composition:
         for md in metadata:
             if md["Config"]["Labels"]["com.docker.compose.service"] == service:
                 for (name, port_entry) in md["NetworkSettings"]["Ports"].items():
-                    for p in port_entry:
+                    for p in port_entry or []:
                         ports.append(p["HostPort"])
         return ports
 
