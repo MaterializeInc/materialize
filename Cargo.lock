@@ -1785,7 +1785,6 @@ dependencies = [
  "krb5-src",
  "lazy_static",
  "log",
- "materialized-not-macos",
  "openssl",
  "openssl-sys",
  "ore",
@@ -1810,13 +1809,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
-]
-
-[[package]]
-name = "materialized-not-macos"
-version = "0.1.0"
-dependencies = [
- "prof",
 ]
 
 [[package]]
