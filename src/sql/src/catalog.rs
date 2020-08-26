@@ -99,14 +99,6 @@ pub trait Catalog: fmt::Debug {
     /// of the search schemas. The catalog implementation must choose one.
     fn resolve_item(&self, item_name: &PartialName) -> Result<FullName, CatalogError>;
 
-    /// Lists the schemas in the specified database.
-    ///
-    /// Panics if `database_spec` does not specify a valid database.
-    fn list_schemas<'a>(
-        &'a self,
-        database_spec: &DatabaseSpecifier,
-    ) -> Box<dyn Iterator<Item = &'a str> + 'a>;
-
     /// Lists the items in the specified schema in the specified database.
     ///
     /// Panics if `database_spec` and `schema_name` do not specify a valid
@@ -283,10 +275,6 @@ impl Catalog for DummyCatalog {
     }
 
     fn resolve_item(&self, _: &PartialName) -> Result<FullName, CatalogError> {
-        unimplemented!();
-    }
-
-    fn list_schemas<'a>(&'a self, _: &DatabaseSpecifier) -> Box<dyn Iterator<Item = &'a str> + 'a> {
         unimplemented!();
     }
 

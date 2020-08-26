@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::iter;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
@@ -97,9 +96,9 @@ impl ConnCatalog<'_> {
 }
 
 #[derive(Debug, Serialize)]
-struct Database {
-    id: i64,
-    schemas: BTreeMap<String, Schema>,
+pub struct Database {
+    pub id: i64,
+    pub schemas: BTreeMap<String, Schema>,
 }
 
 lazy_static! {
@@ -111,7 +110,7 @@ lazy_static! {
 
 #[derive(Debug, Serialize)]
 pub struct Schema {
-    id: i64,
+    pub id: i64,
     items: BTreeMap<String, GlobalId>,
 }
 
@@ -633,12 +632,12 @@ impl Catalog {
         &self.by_id[id]
     }
 
-    /// Returns a (name, id) pair for each database in the catalog.
-    pub fn databases(&self) -> Vec<(&str, i64)> {
-        self.by_name
-            .iter()
-            .map(|(name, db)| (name.as_str(), db.id))
-            .collect()
+    pub fn databases(&self) -> impl Iterator<Item = (&String, &Database)> {
+        self.by_name.iter()
+    }
+
+    pub fn ambient_schemas(&self) -> impl Iterator<Item = (&String, &Schema)> {
+        self.ambient_schemas.iter()
     }
 
     /// Creates a new schema in the `Catalog` for temporary items
@@ -1095,18 +1094,19 @@ impl Catalog {
                     schema_name,
                 } => {
                     info!("create schema {}.{}", database_name, schema_name);
-                    self.by_name
-                        .get_mut(&database_name)
-                        .unwrap()
-                        .schemas
-                        .insert(
-                            schema_name,
-                            Schema {
-                                id,
-                                items: BTreeMap::new(),
-                            },
-                        );
-                    OpStatus::CreatedSchema
+                    let db = self.by_name.get_mut(&database_name).unwrap();
+                    db.schemas.insert(
+                        schema_name.clone(),
+                        Schema {
+                            id,
+                            items: BTreeMap::new(),
+                        },
+                    );
+                    OpStatus::CreatedSchema {
+                        database_id: db.id,
+                        schema_id: id,
+                        schema_name,
+                    }
                 }
 
                 Action::CreateItem { id, name, item } => {
@@ -1123,12 +1123,15 @@ impl Catalog {
                     database_name,
                     schema_name,
                 } => {
-                    self.by_name
-                        .get_mut(&database_name)
-                        .unwrap()
-                        .schemas
-                        .remove(&schema_name);
-                    OpStatus::DroppedSchema
+                    let db = self.by_name.get_mut(&database_name).unwrap();
+                    match db.schemas.remove(&schema_name) {
+                        Some(schema) => OpStatus::DroppedSchema {
+                            database_id: db.id,
+                            schema_id: schema.id,
+                            schema_name,
+                        },
+                        None => OpStatus::NoOp,
+                    }
                 }
 
                 Action::DropItem(id) => {
@@ -1426,12 +1429,21 @@ pub enum Op {
 #[derive(Debug, Clone)]
 pub enum OpStatus {
     CreatedDatabase(String, i64),
-    CreatedSchema,
+    CreatedSchema {
+        database_id: i64,
+        schema_id: i64,
+        schema_name: String,
+    },
     CreatedItem(GlobalId),
     DroppedDatabase(String, Option<i64>),
-    DroppedSchema,
+    DroppedSchema {
+        database_id: i64,
+        schema_id: i64,
+        schema_name: String,
+    },
     DroppedItem(CatalogEntry),
     UpdatedItem,
+    NoOp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1517,25 +1529,6 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         Ok(self
             .catalog
             .resolve(self.database_spec(), self.search_path, name, self.conn_id)?)
-    }
-
-    fn list_schemas<'a>(
-        &'a self,
-        database_spec: &DatabaseSpecifier,
-    ) -> Box<dyn Iterator<Item = &'a str> + 'a> {
-        match database_spec {
-            DatabaseSpecifier::Ambient => Box::new(
-                self.catalog
-                    .ambient_schemas
-                    .keys()
-                    .map(|s| s.as_str())
-                    .chain(iter::once(MZ_TEMP_SCHEMA)),
-            ),
-            DatabaseSpecifier::Name(n) => {
-                let schemas = &self.catalog.by_name[n].schemas;
-                Box::new(schemas.keys().map(|s| s.as_str()))
-            }
-        }
     }
 
     fn list_items<'a>(

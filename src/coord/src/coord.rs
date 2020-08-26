@@ -58,7 +58,7 @@ use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_DATABASES, MZ_KAFKA_SINKS,
+    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_DATABASES, MZ_KAFKA_SINKS, MZ_SCHEMAS,
     MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
@@ -322,22 +322,81 @@ where
         }
 
         // Insert initial named objects into system tables.
-        // Databases:
-        let databases: Vec<(String, i64)> = coord
+        // Databases and named schemas.
+        let dbs: Vec<(String, i64, Vec<(String, i64)>)> = coord
             .catalog
             .databases()
-            .iter()
-            .map(|(name, db)| (name.to_string(), *db))
+            .map(|(name, database)| {
+                (
+                    name.to_string(),
+                    database.id,
+                    database
+                        .schemas
+                        .iter()
+                        .map(|(schema_name, schema)| (schema_name.to_string(), schema.id))
+                        .collect(),
+                )
+            })
             .collect();
-        for (name, db) in databases {
+        for (database_name, database_id, schemas) in dbs {
             coord.update_catalog_view(
                 MZ_DATABASES.id,
                 iter::once((
-                    Row::pack(&[Datum::String(&format!("{}", db)), Datum::String(&name)]),
+                    Row::pack(&[
+                        Datum::String(&database_id.to_string()),
+                        Datum::String(&database_name),
+                    ]),
                     1,
                 )),
             );
+            for (schema_name, schema_id) in schemas {
+                coord.update_catalog_view(
+                    MZ_SCHEMAS.id,
+                    iter::once((
+                        Row::pack(&[
+                            Datum::String(&schema_id.to_string()),
+                            Datum::String(&database_id.to_string()),
+                            Datum::String(&schema_name),
+                            Datum::String("USER"),
+                        ]),
+                        1,
+                    )),
+                )
+            }
         }
+        // Ambient schemas.
+        let ambient_schemas: Vec<(String, i64)> = coord
+            .catalog
+            .ambient_schemas()
+            .map(|(schema_name, schema)| (schema_name.to_string(), schema.id))
+            .collect();
+        for (schema_name, schema_id) in ambient_schemas {
+            coord.update_catalog_view(
+                MZ_SCHEMAS.id,
+                iter::once((
+                    Row::pack(&[
+                        Datum::String(&schema_id.to_string()),
+                        Datum::String("AMBIENT"),
+                        Datum::String(&schema_name),
+                        Datum::String("SYSTEM"),
+                    ]),
+                    1,
+                )),
+            )
+        }
+        // The ambient "mz_temp" schema has a single GlobalId: -1.
+        coord.update_catalog_view(
+            MZ_SCHEMAS.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String("-1"),
+                    Datum::String("AMBIENT"),
+                    Datum::String("mz_temp"),
+                    Datum::String("SYSTEM"),
+                ]),
+                1,
+            )),
+        );
         // Todo@jldlaughlin: insert rest of named objects!
 
         // Announce primary and foreign key relationships.
@@ -1953,11 +2012,28 @@ where
         for status in &statuses {
             match status {
                 catalog::OpStatus::CreatedDatabase(name, id) => {
-                    // Keep the `mz_catalog.mz_databases` system view current.
                     self.update_catalog_view(
                         MZ_DATABASES.id,
                         iter::once((
                             Row::pack(&[Datum::String(&id.to_string()), Datum::String(name)]),
+                            1,
+                        )),
+                    );
+                }
+                catalog::OpStatus::CreatedSchema {
+                    database_id,
+                    schema_id,
+                    schema_name,
+                } => {
+                    self.update_catalog_view(
+                        MZ_SCHEMAS.id,
+                        iter::once((
+                            Row::pack(&[
+                                Datum::String(&schema_id.to_string()),
+                                Datum::String(&database_id.to_string()),
+                                Datum::String(schema_name),
+                                Datum::String("USER"),
+                            ]),
                             1,
                         )),
                     );
@@ -1967,7 +2043,6 @@ where
                     self.report_catalog_update(*id, name, 1);
                 }
                 catalog::OpStatus::DroppedDatabase(name, database) => {
-                    // Keep the `mz_catalog.mz_databases` system view current.
                     if let Some(id) = database {
                         self.update_catalog_view(
                             MZ_DATABASES.id,
@@ -1977,6 +2052,24 @@ where
                             )),
                         );
                     }
+                }
+                catalog::OpStatus::DroppedSchema {
+                    database_id,
+                    schema_id,
+                    schema_name,
+                } => {
+                    self.update_catalog_view(
+                        MZ_SCHEMAS.id,
+                        iter::once((
+                            Row::pack(&[
+                                Datum::String(&schema_id.to_string()),
+                                Datum::String(&database_id.to_string()),
+                                Datum::String(schema_name),
+                                Datum::String("USER"),
+                            ]),
+                            -1,
+                        )),
+                    );
                 }
                 catalog::OpStatus::DroppedItem(entry) => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), -1);

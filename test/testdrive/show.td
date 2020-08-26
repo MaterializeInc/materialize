@@ -224,6 +224,7 @@ mz_kafka_sinks        SYSTEM
 mz_view_foreign_keys  SYSTEM
 mz_view_keys          SYSTEM
 mz_databases          SYSTEM
+mz_schemas            SYSTEM
 
 > SHOW FULL VIEWS FROM mz_catalog
 VIEWS                             TYPE   QUERYABLE MATERIALIZED

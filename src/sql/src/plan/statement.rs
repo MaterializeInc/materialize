@@ -38,12 +38,12 @@ use sql_parser::ast::{
     CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, CreateViewStatement, DropDatabaseStatement,
     DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
-    IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query, Select, SelectItem,
-    SelectStatement, SetExpr, SetVariableStatement, SetVariableValue, ShowColumnsStatement,
-    ShowCreateIndexStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
-    ShowCreateTableStatement, ShowCreateViewStatement, ShowDatabasesStatement,
-    ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
-    SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
+    IfExistsBehavior, InsertStatement, Join, JoinConstraint, JoinOperator, ObjectName, ObjectType,
+    Query, Select, SelectItem, SelectStatement, SetExpr, SetVariableStatement, SetVariableValue,
+    ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
+    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
+    ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter,
+    ShowVariableStatement, SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -510,31 +510,87 @@ fn handle_show_objects(
     };
 
     if let ObjectType::Schema = object_type {
-        let schemas = if let Some(from) = from {
-            let database_name = scx.resolve_database(from)?;
-            scx.catalog
-                .list_schemas(&DatabaseSpecifier::Name(database_name))
-        } else {
-            scx.catalog.list_schemas(&scx.resolve_default_database()?)
+        let mut selection = {
+            let database_name = if let Some(from) = from {
+                scx.resolve_database(from)?
+            } else {
+                scx.resolve_default_database()?.to_string()
+            };
+            let mut selection = Expr::BinaryOp {
+                left: Box::new(Expr::Identifier(vec![Ident::new("database")])),
+                op: BinaryOperator::Eq,
+                right: Box::new(Expr::Value(Value::String(database_name))),
+            };
+            if extended {
+                selection = Expr::BinaryOp {
+                    left: Box::new(selection),
+                    op: BinaryOperator::Or,
+                    right: Box::new(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![Ident::new("database_id")])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Value(Value::String("AMBIENT".to_owned()))),
+                    }),
+                }
+            }
+            selection
         };
-
-        let mut rows = vec![];
-        for name in schemas {
-            rows.push(make_row(name, "USER"));
-        }
-        if extended {
-            let ambient_schemas = scx.catalog.list_schemas(&DatabaseSpecifier::Ambient);
-            for name in ambient_schemas {
-                rows.push(make_row(name, "SYSTEM"));
+        if let Some(filter) = filter {
+            let filter = match filter {
+                ShowStatementFilter::Like(l) => Expr::BinaryOp {
+                    left: Box::new(Expr::Identifier(vec![Ident::new("schema")])),
+                    op: BinaryOperator::Like,
+                    right: Box::new(Expr::Value(Value::String(l))),
+                },
+                ShowStatementFilter::Where(w) => w,
+            };
+            selection = Expr::BinaryOp {
+                left: Box::new(selection),
+                op: BinaryOperator::And,
+                right: Box::new(filter),
             }
         }
-        // TODO(justin): it's unfortunate that we call make_show_objects_desc twice, I think we
-        // should be able to restructure this so that it only gets called once.
-        finish_show_where(
+
+        let mut select = Select::default()
+            .from(TableWithJoins {
+                relation: TableFactor::Table {
+                    name: ObjectName(vec![Ident::new("mz_schemas")]),
+                    alias: None,
+                },
+                joins: vec![Join {
+                    relation: TableFactor::Table {
+                        name: ObjectName(vec![Ident::new("mz_databases")]),
+                        alias: None,
+                    },
+                    join_operator: JoinOperator::LeftOuter(JoinConstraint::On(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![Ident::new("database_id")])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Identifier(vec![Ident::new("global_id")])),
+                    })),
+                }],
+            })
+            .selection(Some(selection))
+            .project(SelectItem::Expr {
+                expr: Expr::Identifier(vec![Ident::new("schema".to_owned())]),
+                alias: None,
+            });
+
+        if full {
+            select.projection.push(SelectItem::Expr {
+                expr: Expr::Identifier(vec![Ident::new("type".to_owned())]),
+                alias: None,
+            })
+        }
+
+        handle_select(
             scx,
-            filter,
-            rows,
-            &make_show_objects_desc(object_type, materialized, full),
+            SelectStatement {
+                query: Box::new(Query::select(select)),
+                as_of: None,
+            },
+            &Params {
+                datums: Row::pack(&[]),
+                types: vec![],
+            },
         )
     } else {
         let items = if let Some(from) = from {
