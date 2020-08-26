@@ -137,7 +137,7 @@ SHOW SCHEMAS LIKE 'private'
 ----
 
 query T
-SHOW SCHEMAS WHERE "SCHEMAS" = 'public'
+SHOW SCHEMAS WHERE schema = 'public'
 ----
 public
 
