@@ -1284,16 +1284,18 @@ def wait_for_pg(
             cur = conn.cursor()
             cur.execute(query)
             if expected == "any" and cur.rowcount == -1:
-                say("success")
+                ui.progress("success!", finish=True)
                 return
             result = list(cur.fetchall())
             if expected == "any" or result == expected:
                 if print_result:
                     say(f"query result: {result}")
+                else:
+                    ui.progress("success!", finish=True)
                 return
             else:
                 say(
-                    f"host={host} port={port} did not return any row matching {expected} got: {result}"
+                    f"host={host} port={port} did not return rows matching {expected} got: {result}"
                 )
         except Exception as e:
             ui.progress(" " + str(int(remaining)))
