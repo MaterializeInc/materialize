@@ -368,40 +368,35 @@ where
         let ambient_schemas: Vec<(String, i64)> = coord
             .catalog
             .ambient_schemas()
-            .iter()
-            .map(|(name, id)| (name.to_string(), *id))
+            .map(|(schema_name, schema)| (schema_name.to_string(), schema.id))
             .collect();
-        for (name, id) in ambient_schemas {
+        for (schema_name, id) in ambient_schemas {
             coord.update_catalog_view(
                 MZ_SCHEMAS.id,
                 iter::once((
                     Row::pack(&[
                         Datum::String(&format!("{}", id)),
                         Datum::String("AMBIENT"),
-                        Datum::String(&name),
+                        Datum::String(&schema_name),
                         Datum::String("SYSTEM"),
                     ]),
                     1,
                 )),
             )
         }
-        // Temporary schema.
-        let temporary_schemas: Vec<i64> =
-            coord.catalog.temporary_schemas().iter().copied().collect();
-        for id in temporary_schemas {
-            coord.update_catalog_view(
-                MZ_SCHEMAS.id,
-                iter::once((
-                    Row::pack(&[
-                        Datum::String(&format!("{}", id)),
-                        Datum::String("AMBIENT"),
-                        Datum::String("mz_temp"),
-                        Datum::String("SYSTEM"),
-                    ]),
-                    1,
-                )),
-            )
-        }
+        // The ambient "mz_temp" schema has a single GlobalId: -1.
+        coord.update_catalog_view(
+            MZ_SCHEMAS.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String("-1"),
+                    Datum::String("AMBIENT"),
+                    Datum::String("mz_temp"),
+                    Datum::String("SYSTEM"),
+                ]),
+                1,
+            )),
+        );
         // Todo@jldlaughlin: insert rest of named objects!
 
         // Announce primary and foreign key relationships.

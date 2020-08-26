@@ -636,18 +636,8 @@ impl Catalog {
         self.by_name.iter()
     }
 
-    pub fn temporary_schemas(&self) -> Vec<i64> {
-        self.temporary_schemas
-            .iter()
-            .map(|(_, temp_schema)| temp_schema.id)
-            .collect()
-    }
-
-    pub fn ambient_schemas(&self) -> Vec<(&str, i64)> {
-        self.ambient_schemas
-            .iter()
-            .map(|(name, schema)| (name.as_str(), schema.id))
-            .collect()
+    pub fn ambient_schemas(&self) -> impl Iterator<Item = (&String, &Schema)> {
+        self.ambient_schemas.iter()
     }
 
     /// Creates a new schema in the `Catalog` for temporary items
