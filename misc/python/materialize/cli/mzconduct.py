@@ -11,6 +11,7 @@
 
 import contextlib
 import itertools
+import json
 import os
 import random
 import re
@@ -341,18 +342,23 @@ class Composition:
     def find_host_ports(self, service: str) -> List[str]:
         """Find all ports open on the host for a given service
         """
-        ps = spawn.capture(["./mzcompose", "--mz-quiet", "ps"], unicode=True)
-        # technically 'docker-compose ps' has a `--filter` flag but...
-        # https://github.com/docker/compose/issues/5996
-        service_lines = [
-            l.strip() for l in ps.splitlines() if service in l and "Up" in l
-        ]
+        # Parsing the output of `docker-compose ps` directly is fraught, as the
+        # output depends on terminal width (!). Using the `-q` flag is safe,
+        # however, and we can pipe the container IDs into `docker inspect`,
+        # which supports machine-readable output.
+        containers = spawn.capture(
+            ["./mzcompose", "--mz-quiet", "ps", "-q"], unicode=True
+        ).splitlines()
+        metadata = spawn.capture(
+            ["docker", "inspect", "-f", "{{json .}}", *containers,]
+        )
+        metadata = [json.loads(line) for line in metadata.splitlines()]
         ports = []
-        for line in service_lines:
-            line_parts = line.split()
-            host_tcp_parts = [p for p in line_parts if "/tcp" in p and "->" in p]
-            these_ports = [p.split(":")[1].split("-")[0] for p in host_tcp_parts]
-            ports.extend(these_ports)
+        for md in metadata:
+            if md["Config"]["Labels"]["com.docker.compose.service"] == service:
+                for (name, port_entry) in md["NetworkSettings"]["Ports"].items():
+                    for p in port_entry:
+                        ports.append(p["HostPort"])
         return ports
 
     def get_container_id(self, service: str, running: bool = False) -> str:
