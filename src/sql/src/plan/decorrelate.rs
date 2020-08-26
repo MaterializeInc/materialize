@@ -915,7 +915,7 @@ fn attempt_outer_join(
                 }
                 if (oa <= *c1 && *c1 < oa + la) && (oa + la <= *c2 && *c2 < oa + la + ra) {
                     l_keys.push(*c1);
-                    r_keys.push(*c2);
+                    r_keys.push(*c2 - la);
                 }
             }
         }
