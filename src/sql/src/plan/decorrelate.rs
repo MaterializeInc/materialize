@@ -979,7 +979,7 @@ fn attempt_outer_join(
                             .column_types
                             .into_iter()
                             .skip(oa)
-                            .map(expr::ScalarExpr::literal_null)
+                            .map(|typ| expr::ScalarExpr::literal_null(typ.nullable(true)))
                             .collect();
 
                         // Add to `result` absent elements, filled with typed nulls.
@@ -1007,7 +1007,7 @@ fn attempt_outer_join(
                             .column_types
                             .into_iter()
                             .skip(oa)
-                            .map(expr::ScalarExpr::literal_null)
+                            .map(|typ| expr::ScalarExpr::literal_null(typ.nullable(true)))
                             .collect();
 
                         // Add to `result` absent elemetns, prepended with typed nulls.
