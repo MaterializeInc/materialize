@@ -631,7 +631,7 @@ class WaitForPgStep(WorkflowStep):
         timeout_secs: int = 30,
         query: str = "SELECT 1",
         user: str = "postgres",
-        expected: Union[Iterable[Any], Literal["any"]] = (1,),
+        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
         print_result: bool = False,
         service: str = "postgres",
     ) -> None:
@@ -681,7 +681,7 @@ class WaitForMzStep(WaitForPgStep):
         port: Optional[int] = None,
         timeout_secs: int = 10,
         query: str = "SELECT 1",
-        expected: Union[Iterable[Any], Literal["any"]] = (1,),
+        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
         print_result: bool = False,
         service: str = "materialized",
     ) -> None:
