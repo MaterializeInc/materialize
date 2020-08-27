@@ -1,0 +1,144 @@
+// Copyright Materialize, Inc. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file at the root of this repository.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+package io.materialize.tb;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.Properties;
+
+import io.debezium.embedded.Connect;
+import io.debezium.engine.DebeziumEngine;
+import io.debezium.engine.format.ChangeEventFormat;
+import io.debezium.engine.RecordChangeEvent;
+import net.sourceforge.argparse4j.ArgumentParsers;
+import net.sourceforge.argparse4j.inf.ArgumentParser;
+import net.sourceforge.argparse4j.inf.ArgumentParserException;
+import net.sourceforge.argparse4j.inf.Namespace;
+import org.apache.kafka.connect.source.SourceRecord;
+import org.apache.log4j.BasicConfigurator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import io.materialize.tb.ChangeWriter;
+import io.materialize.tb.ExplodingRunnable;
+
+/**
+* Command-line interface for the "tail-binlog" (TB) program.
+*/
+public class TB {
+    private static final Logger logger = LoggerFactory.getLogger(TB.class);
+
+    public static void main(String[] args) throws Exception {
+        // Configure logging.
+        BasicConfigurator.configure();
+
+        // Parse arguments.
+        ArgumentParser parser = ArgumentParsers.newFor("tb").build().defaultHelp(true)
+            .description("Streaming CDC out of database binlogs (currently supported: mysql and postgres");
+        parser.addArgument("-t", "--type").choices("mysql", "postgres").setDefault("postgres")
+            .help("Specify which database to binlog");
+        parser.addArgument("-p", "--port").help("Database port").setDefault("5432");
+        parser.addArgument("-H", "--hostname").help("Database hostname").setDefault("localhost");
+        parser.addArgument("-d", "--database").help("Database").setDefault("postgres");
+        parser.addArgument("-u", "--user").help("User").setDefault("postgres");
+        parser.addArgument("-P", "--password").help("Database password").setDefault("postgres");
+        parser.addArgument("--dir").help("Directory to output all serialized data to").setDefault(".");
+        parser.addArgument("-S", "--save-file").help("File to keep current replication status in").setDefault("tb");
+        parser.addArgument("--replication-slot")
+            .help("The postgres replication slot to use, must be distinct across multiple instances of tb")
+            .setDefault("tb");
+        parser.addArgument("--whitelist")
+            .help("A csv-separated list of tables to monitor, like so: " +
+                  "--whitelist schemaName1.databaseName1,schemaName2.databaseName2");
+        Namespace ns;
+        try {
+            ns = parser.parseArgs(args);
+        } catch (ArgumentParserException e) {
+            parser.handleError(e);
+            System.exit(1);
+            return;
+        }
+
+        // Build Debezium configuration.
+
+        Properties config = new Properties();
+        config.setProperty("database.hostname", ns.getString("hostname"));
+        config.setProperty("database.port", ns.getString("port"));
+        config.setProperty("database.user", ns.getString("user"));
+        config.setProperty("database.dbname", ns.getString("database"));
+        config.setProperty("database.password", ns.getString("password"));
+        config.setProperty("database.server.name", "tb");
+        config.setProperty("database.history", "io.debezium.relational.history.FileDatabaseHistory");
+        config.setProperty("database.history.file.filename", ns.getString("save_file") + ".history");
+        config.setProperty("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore");
+        config.setProperty("offset.storage.file.filename", ns.getString("save_file") + ".offsets");
+        config.setProperty("offset.flush.interval.ms", "100");
+        config.setProperty("plugin.name", "pgoutput");
+        config.setProperty("provide.transaction.metadata", "true");
+        config.setProperty("provide.transaction.metadata.file.filename", ns.getString("save_file") + ".trx");
+
+        // Need a distinct pg_replication_slots name, as "debezium" is already
+        // taken by the standard Materialize setup.
+        config.setProperty("slot.name", ns.getString("replication_slot"));
+
+        String whiteListField = ns.getString("whitelist");
+        if (whiteListField != null) {
+            config.setProperty("table.whitelist", whiteListField);
+        }
+
+        String type = ns.getString("type");
+        if (type.equals("mysql")) {
+            config.setProperty("connector.class", "io.debezium.connector.mysql.MySqlConnector");
+            config.setProperty("name", "mysql-connector");;
+        } else if (type.equals("postgres")) {
+            config.setProperty("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
+            config.setProperty("name", "postgres-connector");
+        } else {
+            // The value of `type` has been validated by the argument parser.
+            throw new RuntimeException("unreachable: invalid type");
+        }
+
+        Path dir = Paths.get(ns.getString("dir"));
+        run(config, dir);
+    }
+
+    private static void run(Properties config, Path dir) throws Exception {
+        Files.createDirectories(dir);
+        logger.info("Storing data files in {}", dir);
+
+        ChangeWriter cw = new ChangeWriter(dir);
+        DebeziumEngine<RecordChangeEvent<SourceRecord>> engine = DebeziumEngine
+            .create(ChangeEventFormat.of(Connect.class))
+            .using(config)
+            .notifying(cw)
+            .build();
+
+        ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
+
+        // Schedule background flush task. Exceptions in this task can indicate
+        // disk corruption, and so we use an ExplodingRunnable to crash the
+        // process loudly if one occurs! scheduleWithFixedDelay would otherwise
+        // silently suppress the exception.
+        executor.scheduleWithFixedDelay(
+            new ExplodingRunnable(() -> cw.flushAll()),
+            0, 1, TimeUnit.SECONDS
+        );
+
+        // Run Debezium. If the task ever returns, something has gone wrong,
+        // so exit the process with a failing exit code. Debezium should have
+        // already logged an error message.
+        executor.submit(engine).get();
+        System.exit(1);
+    }
+}

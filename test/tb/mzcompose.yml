@@ -70,3 +70,16 @@ mzconduct:
         expected:
           - [AAPL, 501]
           - [GOOG, 1608]
+      - step: stop-services
+        services: [tb]
+      - step: start-services
+        services: [tb]
+      - step: run-mysql
+        query: INSERT INTO tb_test.stonks VALUES ('MSFT', 221)
+      - step: wait-for-mz
+        timeout_secs: 10
+        query: SELECT * FROM stonks ORDER BY ticker
+        expected:
+          - [AAPL, 501]
+          - [GOOG, 1608]
+          - [MSFT, 221]
