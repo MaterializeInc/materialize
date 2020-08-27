@@ -22,7 +22,7 @@ This document details how to connect Materialize to a CSV-formatted Kafka topic.
 
 ```sql
 CREATE SOURCE csv_kafka (col_foo, col_bar, col_baz)
-KAFKA BROKER 'localhost:9092' TOPIC 'csv'
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'csv'
 FORMAT CSV WITH 3 COLUMNS;
 ```
 
