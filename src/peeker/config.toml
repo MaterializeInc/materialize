@@ -12,7 +12,7 @@
 # panics if the `ENV_VAR` is not present and no default value is provided.
 
 [[sources]]
-kafka_broker = "${KAFKA_HOST:-kafka}:${KAFKA_PORT:-9092}"
+kafka_broker = "${KAFKA_HOST:-kafka}:9092"
 schema_registry = "http://${SR_HOST:-schema-registry}:8081"
 topic_namespace = "debezium.tpcch."
 materialized = false
