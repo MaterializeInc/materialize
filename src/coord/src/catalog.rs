@@ -40,7 +40,6 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::config::Config;
-use crate::catalog::OpStatus::DroppedDatabase;
 
 const SYSTEM_CONN_ID: u32 = 0;
 
@@ -1116,7 +1115,7 @@ impl Catalog {
                 }
 
                 Action::DropDatabase { name } => match self.by_name.remove(&name).map(|db| db.id) {
-                    Some(id) => DroppedDatabase { name, id },
+                    Some(id) => OpStatus::DroppedDatabase { name, id },
                     None => OpStatus::NoOp,
                 },
 
