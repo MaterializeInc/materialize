@@ -1086,7 +1086,7 @@ impl Catalog {
                             schemas: BTreeMap::new(),
                         },
                     );
-                    OpStatus::CreatedDatabase(name, id)
+                    OpStatus::CreatedDatabase { name, id }
                 }
 
                 Action::CreateSchema {
@@ -1116,10 +1116,7 @@ impl Catalog {
                 }
 
                 Action::DropDatabase { name } => match self.by_name.remove(&name).map(|db| db.id) {
-                    Some(id) => DroppedDatabase {
-                        name,
-                        global_id: id,
-                    },
+                    Some(id) => DroppedDatabase { name, id },
                     None => OpStatus::NoOp,
                 },
 
@@ -1432,7 +1429,10 @@ pub enum Op {
 
 #[derive(Debug, Clone)]
 pub enum OpStatus {
-    CreatedDatabase(String, i64),
+    CreatedDatabase {
+        name: String,
+        id: i64,
+    },
     CreatedSchema {
         database_id: i64,
         schema_id: i64,
@@ -1441,7 +1441,7 @@ pub enum OpStatus {
     CreatedItem(GlobalId),
     DroppedDatabase {
         name: String,
-        global_id: i64,
+        id: i64,
     },
     DroppedSchema {
         database_id: i64,

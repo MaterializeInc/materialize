@@ -2011,7 +2011,7 @@ where
         let statuses = self.catalog.transact(ops)?;
         for status in &statuses {
             match status {
-                catalog::OpStatus::CreatedDatabase(name, id) => {
+                catalog::OpStatus::CreatedDatabase { name, id } => {
                     self.update_catalog_view(
                         MZ_DATABASES.id,
                         iter::once((
@@ -2042,14 +2042,11 @@ where
                     let name = self.catalog.humanize_id(expr::Id::Global(*id)).unwrap();
                     self.report_catalog_update(*id, name, 1);
                 }
-                catalog::OpStatus::DroppedDatabase { name, global_id } => {
+                catalog::OpStatus::DroppedDatabase { name, id } => {
                     self.update_catalog_view(
                         MZ_DATABASES.id,
                         iter::once((
-                            Row::pack(&[
-                                Datum::String(&global_id.to_string()),
-                                Datum::String(name),
-                            ]),
+                            Row::pack(&[Datum::String(&id.to_string()), Datum::String(name)]),
                             -1,
                         )),
                     );
