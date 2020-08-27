@@ -112,39 +112,33 @@ impl Source {
             // Keep only the minimum timestamp we received for every offset
             partition.pending.dedup_by_key(|x| x.offset);
 
-            let mut prev = partition.last_persisted_offset;
+            let mut most_recent_offset = partition.last_persisted_offset;
             let mut prefix_length = 0;
             let mut prefix_start_offset = None;
 
+            // Find the longest unbroken prefix where each subsequent record refers to the
+            // preceding one as its predecessor.
             for p in partition.pending.iter() {
                 if prefix_start_offset.is_none() {
                     prefix_start_offset = Some(p.offset);
                 }
 
-                match prev {
-                    None => {
-                        prefix_length += 1;
-                        prev = Some(p.offset);
-                    }
-                    Some(offset) => {
-                        if p.offset == offset + 1 {
-                            prefix_length += 1;
-                            prev = Some(p.offset);
-                        } else {
-                            break;
-                        }
-                    }
+                if p.predecessor == most_recent_offset {
+                    prefix_length += 1;
+                    most_recent_offset = Some(p.offset);
+                } else {
+                    break;
                 }
             }
 
-            let prefix_end_offset = prev.expect("known to exist");
-            trace!(
-                "partition {} found a prefix of {:?}",
-                partition_id,
-                prefix_length
-            );
-
             if prefix_length > 0 {
+                let prefix_end_offset = most_recent_offset.expect("known to exist");
+                trace!(
+                    "partition {} found a prefix of {:?}",
+                    partition_id,
+                    prefix_length
+                );
+
                 // We have a prefix. Lets write it to a file
                 let mut buf = Vec::new();
                 for record in partition.pending.drain(..prefix_length) {
