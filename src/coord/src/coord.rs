@@ -339,29 +339,15 @@ where
             })
             .collect();
         for (database_name, database_id, schemas) in dbs {
-            coord.update_catalog_view(
-                MZ_DATABASES.id,
-                iter::once((
-                    Row::pack(&[
-                        Datum::String(&database_id.to_string()),
-                        Datum::String(&database_name),
-                    ]),
-                    1,
-                )),
-            );
+            coord.update_mz_databases_catalog_view(database_id, &database_name, 1);
             for (schema_name, schema_id) in schemas {
-                coord.update_catalog_view(
-                    MZ_SCHEMAS.id,
-                    iter::once((
-                        Row::pack(&[
-                            Datum::String(&schema_id.to_string()),
-                            Datum::String(&database_id.to_string()),
-                            Datum::String(&schema_name),
-                            Datum::String("USER"),
-                        ]),
-                        1,
-                    )),
-                )
+                coord.update_mz_schemas_catalog_view(
+                    &database_id.to_string(),
+                    schema_id,
+                    &schema_name,
+                    "USER",
+                    1,
+                );
             }
         }
         // Ambient schemas.
@@ -371,32 +357,10 @@ where
             .map(|(schema_name, schema)| (schema_name.to_string(), schema.id))
             .collect();
         for (schema_name, schema_id) in ambient_schemas {
-            coord.update_catalog_view(
-                MZ_SCHEMAS.id,
-                iter::once((
-                    Row::pack(&[
-                        Datum::String(&schema_id.to_string()),
-                        Datum::String("AMBIENT"),
-                        Datum::String(&schema_name),
-                        Datum::String("SYSTEM"),
-                    ]),
-                    1,
-                )),
-            )
+            coord.update_mz_schemas_catalog_view("AMBIENT", schema_id, &schema_name, "SYSTEM", 1);
         }
         // The ambient "mz_temp" schema has a single GlobalId: -1.
-        coord.update_catalog_view(
-            MZ_SCHEMAS.id,
-            iter::once((
-                Row::pack(&[
-                    Datum::String("-1"),
-                    Datum::String("AMBIENT"),
-                    Datum::String("mz_temp"),
-                    Datum::String("SYSTEM"),
-                ]),
-                1,
-            )),
-        );
+        coord.update_mz_schemas_catalog_view("AMBIENT", -1, "mz_temp", "system", 1);
         // Todo@jldlaughlin: insert rest of named objects!
 
         // Announce primary and foreign key relationships.
@@ -974,6 +938,58 @@ where
                 updates,
             },
         );
+    }
+
+    /// Inserts a single row into the MZ_DATABASES catalog view, with diff `diff`.
+    ///
+    /// # Arguments
+    ///
+    /// * `global_id`:   Global id of the database.
+    /// * `name`:        Name of the database.
+    /// * `diff`:        The number of updates to perform. A positive number indicates an addition
+    ///                  of the row, a negative number indicates a subtraction.
+    fn update_mz_databases_catalog_view(&mut self, global_id: i64, name: &str, diff: isize) {
+        self.update_catalog_view(
+            MZ_DATABASES.id,
+            iter::once((
+                Row::pack(&[Datum::String(&global_id.to_string()), Datum::String(&name)]),
+                diff,
+            )),
+        )
+    }
+
+    /// Inserts a single row into the MZ_SCHEMAS catalog view, with diff `diff`.
+    ///
+    /// # Arguments
+    ///
+    /// * `database_id`: String representation of the database in which the schema is present.
+    ///                  Possible values are an actual database's global id, or "AMBIENT".
+    /// * `schema_id`:   Id of the schema.
+    /// * `schema_name`: Name of the schema.
+    /// * `typ`:         There are two types of schemas: "SYSTEM" and "USER". This classification
+    ///                  impacts which schemas can be updated or deleted.
+    /// * `diff`:        The number of updates to perform. A positive number indicates an addition
+    ///                  of the row, a negative number indicates a subtraction.
+    fn update_mz_schemas_catalog_view(
+        &mut self,
+        database_id: &str,
+        schema_id: i64,
+        schema_name: &str,
+        typ: &str,
+        diff: isize,
+    ) {
+        self.update_catalog_view(
+            MZ_SCHEMAS.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String(&schema_id.to_string()),
+                    Datum::String(database_id),
+                    Datum::String(schema_name),
+                    Datum::String(typ),
+                ]),
+                diff,
+            )),
+        )
     }
 
     fn sequence_plan(
@@ -2011,64 +2027,40 @@ where
         let statuses = self.catalog.transact(ops)?;
         for status in &statuses {
             match status {
-                catalog::OpStatus::CreatedDatabase(name, id) => {
-                    self.update_catalog_view(
-                        MZ_DATABASES.id,
-                        iter::once((
-                            Row::pack(&[Datum::String(&id.to_string()), Datum::String(name)]),
-                            1,
-                        )),
-                    );
+                catalog::OpStatus::CreatedDatabase { name, id } => {
+                    self.update_mz_databases_catalog_view(*id, name, 1);
                 }
                 catalog::OpStatus::CreatedSchema {
                     database_id,
                     schema_id,
                     schema_name,
                 } => {
-                    self.update_catalog_view(
-                        MZ_SCHEMAS.id,
-                        iter::once((
-                            Row::pack(&[
-                                Datum::String(&schema_id.to_string()),
-                                Datum::String(&database_id.to_string()),
-                                Datum::String(schema_name),
-                                Datum::String("USER"),
-                            ]),
-                            1,
-                        )),
+                    self.update_mz_schemas_catalog_view(
+                        &database_id.to_string(),
+                        *schema_id,
+                        schema_name,
+                        "USER",
+                        1,
                     );
                 }
                 catalog::OpStatus::CreatedItem(id) => {
                     let name = self.catalog.humanize_id(expr::Id::Global(*id)).unwrap();
                     self.report_catalog_update(*id, name, 1);
                 }
-                catalog::OpStatus::DroppedDatabase(name, database) => {
-                    if let Some(id) = database {
-                        self.update_catalog_view(
-                            MZ_DATABASES.id,
-                            iter::once((
-                                Row::pack(&[Datum::String(&id.to_string()), Datum::String(name)]),
-                                -1,
-                            )),
-                        );
-                    }
+                catalog::OpStatus::DroppedDatabase { name, id } => {
+                    self.update_mz_databases_catalog_view(*id, name, -1);
                 }
                 catalog::OpStatus::DroppedSchema {
                     database_id,
                     schema_id,
                     schema_name,
                 } => {
-                    self.update_catalog_view(
-                        MZ_SCHEMAS.id,
-                        iter::once((
-                            Row::pack(&[
-                                Datum::String(&schema_id.to_string()),
-                                Datum::String(&database_id.to_string()),
-                                Datum::String(schema_name),
-                                Datum::String("USER"),
-                            ]),
-                            -1,
-                        )),
+                    self.update_mz_schemas_catalog_view(
+                        &database_id.to_string(),
+                        *schema_id,
+                        schema_name,
+                        "USER",
+                        -1,
                     );
                 }
                 catalog::OpStatus::DroppedItem(entry) => {
