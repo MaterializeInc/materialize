@@ -46,6 +46,11 @@ the Business Source License, use of this software will be governed
       <version>0.8.1</version>
     </dependency>
     <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-log4j12</artifactId>
+      <version>1.7.28</version>
+    </dependency>
+    <dependency>
       <groupId>io.debezium</groupId>
       <artifactId>debezium-api</artifactId>
       <version>1.2.0.Final</version>
@@ -78,7 +83,7 @@ the Business Source License, use of this software will be governed
   </dependencies>
 
   <build>
-    <sourceDirectory>.</sourceDirectory>
+    <sourceDirectory>src</sourceDirectory>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -94,7 +99,7 @@ the Business Source License, use of this software will be governed
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                  <mainClass>io.materialize.Binlogger</mainClass>
+                  <mainClass>io.materialize.tb.TB</mainClass>
                 </transformer>
               </transformers>
             </configuration>
