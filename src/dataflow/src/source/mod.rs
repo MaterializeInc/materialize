@@ -329,6 +329,10 @@ pub trait SourceInfo<Out> {
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 pub struct SourceMessage<Out> {
+    /// Which offset is the predecessor of this one. We know this information at the consumer
+    /// level, but our downstream components do not necessarily, so we tag it here to allow them to
+    /// reconstruct the total order.
+    pub predecessor: Option<MzOffset>,
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
