@@ -40,6 +40,7 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::config::Config;
+use crate::catalog::OpStatus::DroppedDatabase;
 
 const SYSTEM_CONN_ID: u32 = 0;
 
@@ -1114,10 +1115,13 @@ impl Catalog {
                     OpStatus::CreatedItem(id)
                 }
 
-                Action::DropDatabase { name } => {
-                    let id = self.by_name.remove(&name).map(|db| db.id);
-                    OpStatus::DroppedDatabase(name, id)
-                }
+                Action::DropDatabase { name } => match self.by_name.remove(&name).map(|db| db.id) {
+                    Some(id) => DroppedDatabase {
+                        name,
+                        global_id: id,
+                    },
+                    None => OpStatus::NoOp,
+                },
 
                 Action::DropSchema {
                     database_name,
@@ -1435,7 +1439,10 @@ pub enum OpStatus {
         schema_name: String,
     },
     CreatedItem(GlobalId),
-    DroppedDatabase(String, Option<i64>),
+    DroppedDatabase {
+        name: String,
+        global_id: i64,
+    },
     DroppedSchema {
         database_id: i64,
         schema_id: i64,

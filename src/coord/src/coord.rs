@@ -2042,16 +2042,17 @@ where
                     let name = self.catalog.humanize_id(expr::Id::Global(*id)).unwrap();
                     self.report_catalog_update(*id, name, 1);
                 }
-                catalog::OpStatus::DroppedDatabase(name, database) => {
-                    if let Some(id) = database {
-                        self.update_catalog_view(
-                            MZ_DATABASES.id,
-                            iter::once((
-                                Row::pack(&[Datum::String(&id.to_string()), Datum::String(name)]),
-                                -1,
-                            )),
-                        );
-                    }
+                catalog::OpStatus::DroppedDatabase { name, global_id } => {
+                    self.update_catalog_view(
+                        MZ_DATABASES.id,
+                        iter::once((
+                            Row::pack(&[
+                                Datum::String(&global_id.to_string()),
+                                Datum::String(name),
+                            ]),
+                            -1,
+                        )),
+                    );
                 }
                 catalog::OpStatus::DroppedSchema {
                     database_id,
