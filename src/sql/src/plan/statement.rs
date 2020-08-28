@@ -444,19 +444,26 @@ fn finish_show_where(
     })
 }
 
+fn filter_expr(
+    show_statement_filter: Option<ShowStatementFilter>,
+    like_identifier: &str,
+) -> Option<Expr> {
+    match show_statement_filter {
+        Some(ShowStatementFilter::Like(l)) => Some(Expr::BinaryOp {
+            left: Box::new(Expr::Identifier(vec![Ident::new(like_identifier)])),
+            op: BinaryOperator::Like,
+            right: Box::new(Expr::Value(Value::String(l))),
+        }),
+        Some(ShowStatementFilter::Where(w)) => Some(w),
+        None => None,
+    }
+}
+
 fn handle_show_databases(
     scx: &StatementContext,
     ShowDatabasesStatement { filter }: ShowDatabasesStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let filter = match filter {
-        Some(ShowStatementFilter::Like(s)) => Some(Expr::BinaryOp {
-            left: Box::new(Expr::Identifier(vec![Ident::new("database")])),
-            op: BinaryOperator::Like,
-            right: Box::new(Expr::Value(Value::String(s))),
-        }),
-        Some(ShowStatementFilter::Where(selection)) => Some(selection),
-        None => None,
-    };
+    let filter = filter_expr(filter, "database");
     let select = Select::default()
         .from(TableWithJoins {
             relation: TableFactor::Table {
@@ -535,19 +542,11 @@ fn handle_show_objects(
             }
             selection
         };
-        if let Some(filter) = filter {
-            let filter = match filter {
-                ShowStatementFilter::Like(l) => Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(vec![Ident::new("schema")])),
-                    op: BinaryOperator::Like,
-                    right: Box::new(Expr::Value(Value::String(l))),
-                },
-                ShowStatementFilter::Where(w) => w,
-            };
+        if let Some(show_statement_filter) = filter_expr(filter, "schema") {
             selection = Expr::BinaryOp {
                 left: Box::new(selection),
                 op: BinaryOperator::And,
-                right: Box::new(filter),
+                right: Box::new(show_statement_filter),
             }
         }
 
@@ -735,19 +734,11 @@ fn handle_show_columns(
             scx.resolve_item(table_name)?.to_string(),
         ))),
     };
-    if let Some(filter) = filter {
-        let filter = match filter {
-            ShowStatementFilter::Like(l) => Expr::BinaryOp {
-                left: Box::new(Expr::Identifier(vec![Ident::new("field")])),
-                op: BinaryOperator::Like,
-                right: Box::new(Expr::Value(Value::String(l))),
-            },
-            ShowStatementFilter::Where(w) => w,
-        };
+    if let Some(show_statement_filter) = filter_expr(filter, "field") {
         selection = Expr::BinaryOp {
             left: Box::new(selection),
             op: BinaryOperator::And,
-            right: Box::new(filter),
+            right: Box::new(show_statement_filter),
         }
     }
 
