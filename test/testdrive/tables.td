@@ -199,6 +199,11 @@ cannot insert into view 'materialize.public.view'
 ! INSERT INTO mz_kafka_sinks VALUES ('bad', 'bad')
 cannot insert into system table 'mz_catalog.mz_kafka_sinks'
 
+> CREATE TABLE j (time TIMESTAMP NOT NULL);
+
+# Verify that INSERT value is desugared.
+> INSERT INTO j VALUES ((TIMESTAMP '2020-08-28 15:08:00'));
+
 # Test that a fairly large INSERT completes.
 > CREATE TABLE large (a int)
 > INSERT INTO large VALUES

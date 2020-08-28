@@ -53,6 +53,7 @@ use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
+use crate::plan::transform_ast::transform_query;
 use crate::plan::{
     query, scalar_type_from_sql, Index, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table,
     View,
@@ -1911,7 +1912,7 @@ fn handle_insert(
     }
 
     match source {
-        InsertSource::Query(query) => {
+        InsertSource::Query(mut query) => {
             let table = scx.catalog.get_item(&scx.resolve_item(table_name)?);
             if table.id().is_system() {
                 bail!("cannot insert into system table '{}'", table.name());
@@ -1923,6 +1924,7 @@ fn handle_insert(
                     table.name()
                 );
             }
+            transform_query(&mut query)?;
             if let SetExpr::Values(values) = &query.body {
                 let column_info: Vec<(Option<&ColumnName>, &ColumnType)> =
                     table.desc()?.iter().collect();
