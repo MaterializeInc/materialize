@@ -356,3 +356,12 @@ plurals  USER  false
 SOURCES
 ----
 names
+
+> CREATE TABLE t (b date, a text)
+
+# Assert columns are shown in creation order.
+> SHOW COLUMNS IN t
+Field    Nullable   Type
+------------------------
+b        YES        date
+a        YES        text

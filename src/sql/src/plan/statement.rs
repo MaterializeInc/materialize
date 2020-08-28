@@ -39,8 +39,8 @@ use sql_parser::ast::{
     CreateSourceStatement, CreateTableStatement, CreateViewStatement, DropDatabaseStatement,
     DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
     IfExistsBehavior, InsertStatement, Join, JoinConstraint, JoinOperator, ObjectName, ObjectType,
-    Query, Select, SelectItem, SelectStatement, SetExpr, SetVariableStatement, SetVariableValue,
-    ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
+    OrderByExpr, Query, Select, SelectItem, SelectStatement, SetExpr, SetVariableStatement,
+    SetVariableValue, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
     ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
     ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter,
     ShowVariableStatement, SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
@@ -772,11 +772,16 @@ fn handle_show_columns(
             expr: Expr::Identifier(vec![Ident::new("type".to_owned())]),
             alias: None,
         });
+    let mut query = Query::select(select);
+    query.order_by = vec![OrderByExpr {
+        expr: Expr::Identifier(vec![Ident::new("field_number".to_owned())]),
+        asc: Some(true),
+    }];
 
     handle_select(
         scx,
         SelectStatement {
-            query: Box::new(Query::select(select)),
+            query: Box::new(query),
             as_of: None,
         },
         &Params {
