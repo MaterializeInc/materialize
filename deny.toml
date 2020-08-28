@@ -7,9 +7,8 @@ skip = [
     { name = "miow", version = "0.2.1" },
     { name = "winapi", version = "0.2.8" },
 
-    # Waiting on chrono, hyper, reqwest, and rusqlite to migrate to time v0.2.
-    # time v0.2 is a total rewrite of time v0.1, so this doesn't seem likely
-    # to happen any time soon.
+    # Waiting on chrono to migrate to time v0.2, and hyper v0.13.8, which will
+    # drop hyper's dependency on time altogether.
     { name = "time", version = "0.1.42" },
 ]
 
