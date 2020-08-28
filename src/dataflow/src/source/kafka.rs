@@ -79,7 +79,7 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
         connector: ExternalSourceConnector,
         _: &mut ConsistencyInfo,
         _: DataEncoding,
-    ) -> Result<KafkaSourceInfo, failure::Error> {
+    ) -> Result<KafkaSourceInfo, anyhow::Error> {
         match connector {
             ExternalSourceConnector::Kafka(kc) => Ok(KafkaSourceInfo::new(
                 source_name,

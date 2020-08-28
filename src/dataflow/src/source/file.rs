@@ -76,7 +76,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         encoding: DataEncoding,
-    ) -> Result<FileSourceInfo<Value>, failure::Error> {
+    ) -> Result<FileSourceInfo<Value>, anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::AvroOcf(oc) => {
                 let reader_schema = match &encoding {
@@ -132,7 +132,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         _: DataEncoding,
-    ) -> Result<FileSourceInfo<Vec<u8>>, failure::Error> {
+    ) -> Result<FileSourceInfo<Vec<u8>>, anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {
                 let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
