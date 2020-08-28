@@ -253,6 +253,18 @@ lazy_static! {
         id: GlobalId::System(2013),
         index_id: GlobalId::System(2014),
     };
+    pub static ref MZ_COLUMNS: BuiltinTable = BuiltinTable {
+        name: "mz_columns",
+        desc: RelationDesc::empty()
+            .with_column("qualified_name", ScalarType::String.nullable(false))
+            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("field_number", ScalarType::Int64.nullable(false))
+            .with_column("field", ScalarType::String.nullable(false))
+            .with_column("nullable", ScalarType::Bool.nullable(false))
+            .with_column("type", ScalarType::String.nullable(false)),
+        id: GlobalId::System(2015),
+        index_id: GlobalId::System(2016),
+    };
 }
 
 pub const MZ_ADDRESSES_WITH_UNIT_LENGTHS: BuiltinView = BuiltinView {
@@ -452,6 +464,7 @@ lazy_static! {
             Builtin::Table(&MZ_AVRO_OCF_SINKS),
             Builtin::Table(&MZ_DATABASES),
             Builtin::Table(&MZ_SCHEMAS),
+            Builtin::Table(&MZ_COLUMNS),
             Builtin::View(&MZ_ADDRESSES_WITH_UNIT_LENGTHS),
             Builtin::View(&MZ_DATAFLOW_NAMES),
             Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),

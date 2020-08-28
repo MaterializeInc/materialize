@@ -113,7 +113,7 @@ SHOW COLUMNS FROM v LIKE 'b'
 b  NO  int4
 
 query TTT
-SHOW COLUMNS FROM v WHERE "Nullable" = 'NO'
+SHOW COLUMNS FROM v WHERE Nullable = 'NO'
 ----
 a  NO  int4
 b  NO  int4

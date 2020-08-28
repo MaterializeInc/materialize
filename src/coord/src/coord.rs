@@ -58,8 +58,8 @@ use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_DATABASES, MZ_KAFKA_SINKS, MZ_SCHEMAS,
-    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_KAFKA_SINKS,
+    MZ_SCHEMAS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
 use crate::persistence::{PersistenceConfig, Persister};
@@ -316,9 +316,13 @@ where
             }
         }
 
-        for (id, name, _item) in catalog_entries {
+        for (id, name, item) in catalog_entries {
             // Mirror each recovered catalog entry.
             coord.report_catalog_update(id, name.to_string(), 1);
+
+            if let Ok(desc) = item.desc(&name) {
+                coord.update_mz_columns_catalog_view(desc, &name.to_string(), id, 1);
+            }
         }
 
         // Insert initial named objects into system tables.
@@ -990,6 +994,45 @@ where
                 diff,
             )),
         )
+    }
+
+    /// Inserts a single row into the MZ_COLUMNS catalog view, with diff `diff`.
+    /// The MZ_COLUMNS catalog view contains a row for each column in every Table, Source, and View.
+    ///
+    /// # Arguments
+    ///
+    /// * `desc`:        RelationDesc of the Table, Source, or View.
+    /// * `full_name`:   Full, qualified name of the Table, Source, or View (e.g., "materialize.public.table").
+    /// * `global_id`:   GlobalId of the Table, Source, or View.
+    /// * `diff`:        The number of updates to perform. A positive number indicates an addition
+    ///                  of the row, a negative number indicates a subtraction.
+    fn update_mz_columns_catalog_view(
+        &mut self,
+        desc: &RelationDesc,
+        full_name: &str,
+        global_id: GlobalId,
+        diff: isize,
+    ) {
+        for (i, (column_name, column_type)) in desc.iter().enumerate() {
+            self.update_catalog_view(
+                MZ_COLUMNS.id,
+                iter::once((
+                    Row::pack(&[
+                        Datum::String(&full_name),
+                        Datum::String(&global_id.to_string()),
+                        Datum::Int64(i as i64),
+                        Datum::String(
+                            &column_name
+                                .map(|n| n.to_string())
+                                .unwrap_or_else(|| "?column?".to_owned()),
+                        ),
+                        Datum::from(column_type.nullable),
+                        Datum::String(pgrepr::Type::from(&column_type.scalar_type).name()),
+                    ]),
+                    diff,
+                )),
+            )
+        }
     }
 
     fn sequence_plan(
@@ -2043,9 +2086,16 @@ where
                         1,
                     );
                 }
-                catalog::OpStatus::CreatedItem(id) => {
-                    let name = self.catalog.humanize_id(expr::Id::Global(*id)).unwrap();
-                    self.report_catalog_update(*id, name, 1);
+                catalog::OpStatus::CreatedItem { id, name, item } => {
+                    self.report_catalog_update(
+                        *id,
+                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
+                        1,
+                    );
+
+                    if let Ok(desc) = item.desc(&name) {
+                        self.update_mz_columns_catalog_view(desc, &name.to_string(), *id, 1);
+                    }
                 }
                 catalog::OpStatus::DroppedDatabase { name, id } => {
                     self.update_mz_databases_catalog_view(*id, name, -1);
@@ -2107,6 +2157,14 @@ where
                             // dataflow was never created, so nothing to drop.
                         }
                         CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
+                    }
+                    if let Ok(desc) = entry.desc() {
+                        self.update_mz_columns_catalog_view(
+                            desc,
+                            &entry.name().to_string(),
+                            entry.id(),
+                            -1,
+                        );
                     }
                 }
                 _ => (),

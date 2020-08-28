@@ -217,6 +217,7 @@ mz_view_foreign_keys
 mz_view_keys
 mz_databases
 mz_schemas
+mz_columns
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

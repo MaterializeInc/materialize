@@ -191,6 +191,16 @@ impl CatalogItem {
         }
     }
 
+    pub fn desc(&self, name: &FullName) -> Result<&RelationDesc, SqlCatalogError> {
+        match &self {
+            CatalogItem::Table(tbl) => Ok(&tbl.desc),
+            CatalogItem::Source(src) => Ok(&src.desc),
+            CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(name.to_string())),
+            CatalogItem::View(view) => Ok(&view.desc),
+            CatalogItem::Index(_) => Err(SqlCatalogError::InvalidIndexDependency(name.to_string())),
+        }
+    }
+
     /// Collects the identifiers of the dataflows that this item depends
     /// upon.
     pub fn uses(&self) -> Vec<GlobalId> {
@@ -284,17 +294,7 @@ impl CatalogItem {
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
     pub fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
-        match &self.item {
-            CatalogItem::Table(tbl) => Ok(&tbl.desc),
-            CatalogItem::Source(src) => Ok(&src.desc),
-            CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(
-                self.name.to_string(),
-            )),
-            CatalogItem::View(view) => Ok(&view.desc),
-            CatalogItem::Index(_) => Err(SqlCatalogError::InvalidIndexDependency(
-                self.name.to_string(),
-            )),
-        }
+        self.item.desc(&self.name)
     }
 
     /// Reports whether this catalog entry is a table.
@@ -1110,8 +1110,8 @@ impl Catalog {
                 }
 
                 Action::CreateItem { id, name, item } => {
-                    self.insert_item(id, name, item);
-                    OpStatus::CreatedItem(id)
+                    self.insert_item(id, name.clone(), item.clone());
+                    OpStatus::CreatedItem { id, name, item }
                 }
 
                 Action::DropDatabase { name } => match self.by_name.remove(&name).map(|db| db.id) {
@@ -1437,7 +1437,11 @@ pub enum OpStatus {
         schema_id: i64,
         schema_name: String,
     },
-    CreatedItem(GlobalId),
+    CreatedItem {
+        id: GlobalId,
+        name: FullName,
+        item: CatalogItem,
+    },
     DroppedDatabase {
         name: String,
         id: i64,
