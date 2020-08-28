@@ -191,13 +191,13 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self) -> Option<&RelationDesc> {
-        match self {
-            CatalogItem::Table(t) => Some(&t.desc),
-            CatalogItem::Source(s) => Some(&s.desc),
-            CatalogItem::View(v) => Some(&v.desc),
-            CatalogItem::Sink(_) => None,
-            CatalogItem::Index(_) => None,
+    pub fn desc(&self, name: &FullName) -> Result<&RelationDesc, SqlCatalogError> {
+        match &self {
+            CatalogItem::Table(tbl) => Ok(&tbl.desc),
+            CatalogItem::Source(src) => Ok(&src.desc),
+            CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(name.to_string())),
+            CatalogItem::View(view) => Ok(&view.desc),
+            CatalogItem::Index(_) => Err(SqlCatalogError::InvalidIndexDependency(name.to_string())),
         }
     }
 
@@ -294,17 +294,7 @@ impl CatalogItem {
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
     pub fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
-        match &self.item {
-            CatalogItem::Table(tbl) => Ok(&tbl.desc),
-            CatalogItem::Source(src) => Ok(&src.desc),
-            CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(
-                self.name.to_string(),
-            )),
-            CatalogItem::View(view) => Ok(&view.desc),
-            CatalogItem::Index(_) => Err(SqlCatalogError::InvalidIndexDependency(
-                self.name.to_string(),
-            )),
-        }
+        self.item.desc(&self.name)
     }
 
     /// Reports whether this catalog entry is a table.

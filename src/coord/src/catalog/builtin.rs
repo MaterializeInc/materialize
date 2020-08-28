@@ -258,9 +258,9 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("qualified_name", ScalarType::String.nullable(false))
             .with_column("global_id", ScalarType::String.nullable(false))
-            .with_column("field_number", ScalarType::String.nullable(false))
+            .with_column("field_number", ScalarType::Int64.nullable(false))
             .with_column("field", ScalarType::String.nullable(false))
-            .with_column("nullable", ScalarType::String.nullable(false))
+            .with_column("nullable", ScalarType::Bool.nullable(false))
             .with_column("type", ScalarType::String.nullable(false)),
         id: GlobalId::System(2015),
         index_id: GlobalId::System(2016),

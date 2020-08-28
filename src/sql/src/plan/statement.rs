@@ -71,7 +71,7 @@ lazy_static! {
         .with_column("Seq_in_index", ScalarType::Int64.nullable(false));
     static ref SHOW_COLUMNS_DESC: RelationDesc = RelationDesc::empty()
         .with_column("Field", ScalarType::String.nullable(false))
-        .with_column("Nullable", ScalarType::String.nullable(false))
+        .with_column("Nullable", ScalarType::Bool.nullable(false))
         .with_column("Type", ScalarType::String.nullable(false));
 }
 

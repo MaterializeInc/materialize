@@ -320,18 +320,8 @@ where
             // Mirror each recovered catalog entry.
             coord.report_catalog_update(id, name.to_string(), 1);
 
-            match item {
-                item @ CatalogItem::Source(_)
-                | item @ CatalogItem::Table(_)
-                | item @ CatalogItem::View(_) => {
-                    coord.update_mz_columns_catalog_view(
-                        item.desc().unwrap(),
-                        &name.to_string(),
-                        id,
-                        1,
-                    );
-                }
-                _ => (),
+            if let Ok(desc) = item.desc(&name) {
+                coord.update_mz_columns_catalog_view(desc, &name.to_string(), id, 1);
             }
         }
 
@@ -1030,13 +1020,13 @@ where
                     Row::pack(&[
                         Datum::String(&full_name),
                         Datum::String(&global_id.to_string()),
-                        Datum::String(&i.to_string()),
+                        Datum::Int64(i as i64),
                         Datum::String(
                             &column_name
                                 .map(|n| n.to_string())
-                                .unwrap_or_else(|| "?".to_owned()),
+                                .unwrap_or_else(|| "missing column".to_owned()),
                         ),
-                        Datum::String(if column_type.nullable { "YES" } else { "NO" }),
+                        Datum::from(column_type.nullable),
                         Datum::String(pgrepr::Type::from(&column_type.scalar_type).name()),
                     ]),
                     diff,
@@ -2103,18 +2093,8 @@ where
                         1,
                     );
 
-                    match item {
-                        item @ CatalogItem::Source(_)
-                        | item @ CatalogItem::Table(_)
-                        | item @ CatalogItem::View(_) => {
-                            self.update_mz_columns_catalog_view(
-                                item.desc().unwrap(),
-                                &name.to_string(),
-                                *id,
-                                1,
-                            );
-                        }
-                        _ => (),
+                    if let Ok(desc) = item.desc(&name) {
+                        self.update_mz_columns_catalog_view(desc, &name.to_string(), *id, 1);
                     }
                 }
                 catalog::OpStatus::DroppedDatabase { name, id } => {
@@ -2136,23 +2116,10 @@ where
                 catalog::OpStatus::DroppedItem(entry) => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
                     match entry.item() {
-                        item @ CatalogItem::Table(_) | item @ CatalogItem::Source(_) => {
+                        CatalogItem::Table(_) | CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
-                            self.update_mz_columns_catalog_view(
-                                item.desc().unwrap(),
-                                &entry.name().to_string(),
-                                entry.id(),
-                                -1,
-                            );
                         }
-                        CatalogItem::View(catalog::View { desc, .. }) => {
-                            self.update_mz_columns_catalog_view(
-                                desc,
-                                &entry.name().to_string(),
-                                entry.id(),
-                                -1,
-                            );
-                        }
+                        CatalogItem::View(_) => (),
                         CatalogItem::Sink(catalog::Sink {
                             connector: SinkConnectorState::Ready(connector),
                             ..
@@ -2190,6 +2157,14 @@ where
                             // dataflow was never created, so nothing to drop.
                         }
                         CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
+                    }
+                    if let Ok(desc) = entry.desc() {
+                        self.update_mz_columns_catalog_view(
+                            desc,
+                            &entry.name().to_string(),
+                            entry.id(),
+                            -1,
+                        );
                     }
                 }
                 _ => (),
