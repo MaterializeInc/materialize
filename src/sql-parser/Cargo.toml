@@ -14,7 +14,7 @@ repr = { path = "../repr" }
 stacker = "0.1.11"
 
 [dev-dependencies]
-datadriven = "0.1.0"
+datadriven = "0.2.0"
 matches = "0.1"
 
 [build-dependencies]
