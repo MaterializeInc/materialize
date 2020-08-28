@@ -12,6 +12,7 @@ use std::convert::TryInto;
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::anyhow;
 use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
 use futures::executor::block_on;
 use lazy_static::lazy_static;
@@ -86,7 +87,7 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         _encoding: DataEncoding,
-    ) -> Result<Self, failure::Error> {
+    ) -> Result<Self, anyhow::Error> {
         let kc = match connector {
             ExternalSourceConnector::Kinesis(kc) => kc,
             _ => unreachable!(),
@@ -106,7 +107,7 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
                 stream_name,
                 processed_message_count: 0,
             }),
-            Err(e) => Err(failure::err_msg(e.to_string())),
+            Err(e) => Err(anyhow!("{}", e)),
         }
     }
 }
@@ -287,8 +288,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                             // - Unknown (raw HTTP provided)
                             // - Blocking
                             error!("{}", e);
-                            return Err(anyhow::Error::msg(e.to_string()));
-                            //                            return Err(failure::err_msg(e.to_string()));
+                            return Err(anyhow!("{}", e));
                         }
                     };
 

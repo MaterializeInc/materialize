@@ -215,7 +215,7 @@ pub trait SourceConstructor<Out> {
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         encoding: DataEncoding,
-    ) -> Result<Self, failure::Error>
+    ) -> Result<Self, anyhow::Error>
     where
         Self: Sized + SourceInfo<Out>;
 }
@@ -788,7 +788,7 @@ where
 
         // Create source information (this function is specific to a specific
         // source
-        let mut source_info: Result<S, failure::Error> = SourceConstructor::<Out>::new(
+        let mut source_info: Result<S, anyhow::Error> = SourceConstructor::<Out>::new(
             name.clone(),
             id,
             active,
