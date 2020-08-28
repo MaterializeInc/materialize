@@ -727,24 +727,62 @@ fn handle_show_columns(
         unsupported!("SHOW FULL COLUMNS");
     }
 
-    let arena = RowArena::new();
-    let table_name = scx.resolve_item(table_name)?;
-    let rows: Vec<_> = scx
-        .catalog
-        .get_item(&table_name)
-        .desc()?
-        .iter()
-        .map(|(name, typ)| {
-            let name = name.map(|n| n.to_string());
-            vec![
-                Datum::String(name.map(|n| arena.push_string(n)).unwrap_or("?")),
-                Datum::String(if typ.nullable { "YES" } else { "NO" }),
-                Datum::String(pgrepr::Type::from(&typ.scalar_type).name()),
-            ]
-        })
-        .collect();
+    let mut selection = Expr::BinaryOp {
+        left: Box::new(Expr::Identifier(vec![Ident::new("qualified_name")])),
+        op: BinaryOperator::Eq,
+        right: Box::new(Expr::Value(Value::String(
+            scx.resolve_item(table_name)?.to_string(),
+        ))),
+    };
+    if let Some(filter) = filter {
+        let filter = match filter {
+            ShowStatementFilter::Like(l) => Expr::BinaryOp {
+                left: Box::new(Expr::Identifier(vec![Ident::new("field")])),
+                op: BinaryOperator::Like,
+                right: Box::new(Expr::Value(Value::String(l))),
+            },
+            ShowStatementFilter::Where(w) => w,
+        };
+        selection = Expr::BinaryOp {
+            left: Box::new(selection),
+            op: BinaryOperator::And,
+            right: Box::new(filter),
+        }
+    }
 
-    finish_show_where(scx, filter, rows, &SHOW_COLUMNS_DESC)
+    let select = Select::default()
+        .from(TableWithJoins {
+            relation: TableFactor::Table {
+                name: ObjectName(vec![Ident::new("mz_columns")]),
+                alias: None,
+            },
+            joins: vec![],
+        })
+        .selection(Some(selection))
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("field".to_owned())]),
+            alias: None,
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("nullable".to_owned())]),
+            alias: None,
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("type".to_owned())]),
+            alias: None,
+        });
+
+    handle_select(
+        scx,
+        SelectStatement {
+            query: Box::new(Query::select(select)),
+            as_of: None,
+        },
+        &Params {
+            datums: Row::pack(&[]),
+            types: vec![],
+        },
+    )
 }
 
 fn handle_show_create_view(
