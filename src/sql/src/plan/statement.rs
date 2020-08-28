@@ -36,14 +36,15 @@ use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarT
 use sql_parser::ast::{
     AlterObjectRenameStatement, AvroSchema, BinaryOperator, ColumnOption, Connector,
     CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateViewStatement, DropDatabaseStatement,
-    DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
-    IfExistsBehavior, InsertStatement, Join, JoinConstraint, JoinOperator, ObjectName, ObjectType,
-    Query, Select, SelectItem, SelectStatement, SetExpr, SetVariableStatement, SetVariableValue,
-    ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
-    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
-    ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter,
-    ShowVariableStatement, SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
+    CreateSourceStatement, CreateTableStatement, CreateViewStatement, DataType,
+    DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
+    Format, Ident, IfExistsBehavior, InsertStatement, Join, JoinConstraint, JoinOperator,
+    ObjectName, ObjectType, Query, Select, SelectItem, SelectStatement, SetExpr,
+    SetVariableStatement, SetVariableValue, ShowColumnsStatement, ShowCreateIndexStatement,
+    ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
+    ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
+    ShowStatementFilter, ShowVariableStatement, SqlOption, Statement, TableFactor, TableWithJoins,
+    TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -71,7 +72,7 @@ lazy_static! {
         .with_column("Seq_in_index", ScalarType::Int64.nullable(false));
     static ref SHOW_COLUMNS_DESC: RelationDesc = RelationDesc::empty()
         .with_column("Field", ScalarType::String.nullable(false))
-        .with_column("Nullable", ScalarType::Bool.nullable(false))
+        .with_column("Nullable", ScalarType::String.nullable(false))
         .with_column("Type", ScalarType::String.nullable(false));
 }
 
@@ -764,7 +765,10 @@ fn handle_show_columns(
             alias: None,
         })
         .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("nullable".to_owned())]),
+            expr: Expr::Cast {
+                expr: Box::new(Expr::Identifier(vec![Ident::new("nullable".to_owned())])),
+                data_type: DataType::Text,
+            },
             alias: None,
         })
         .project(SelectItem::Expr {
