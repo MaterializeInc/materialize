@@ -2045,14 +2045,14 @@ impl PartialEq<CatalogItemType> for ObjectType {
 }
 
 fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
-    match object_type {
-        ObjectType::Schema => "SCHEMAS",
-        ObjectType::Index => "INDEXES",
-        ObjectType::Table => "TABLES",
-        ObjectType::View => "VIEWS",
-        ObjectType::Source => "SOURCES",
-        ObjectType::Sink => "SINKS",
-    }
+	match object_type {
+		ObjectType::Schema => "SCHEMAS",
+		ObjectType::Index => "INDEXES",
+		ObjectType::Table => "TABLES",
+		ObjectType::View => "VIEWS",
+		ObjectType::Source => "SOURCES",
+		ObjectType::Sink => "SINKS",
+	}
 }
 
 /// Immutable state that applies to the planning of an entire `Statement`.
