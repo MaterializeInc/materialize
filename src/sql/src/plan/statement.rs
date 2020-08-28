@@ -36,15 +36,14 @@ use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarT
 use sql_parser::ast::{
     AlterObjectRenameStatement, AvroSchema, BinaryOperator, ColumnOption, Connector,
     CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateViewStatement, DataType,
-    DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
-    Format, Ident, IfExistsBehavior, InsertStatement, Join, JoinConstraint, JoinOperator,
-    ObjectName, ObjectType, Query, Select, SelectItem, SelectStatement, SetExpr,
-    SetVariableStatement, SetVariableValue, ShowColumnsStatement, ShowCreateIndexStatement,
-    ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
-    ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
-    ShowStatementFilter, ShowVariableStatement, SqlOption, Statement, TableFactor, TableWithJoins,
-    TailStatement, Value,
+    CreateSourceStatement, CreateTableStatement, CreateViewStatement, DropDatabaseStatement,
+    DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
+    IfExistsBehavior, InsertStatement, Join, JoinConstraint, JoinOperator, ObjectName, ObjectType,
+    Query, Select, SelectItem, SelectStatement, SetExpr, SetVariableStatement, SetVariableValue,
+    ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
+    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
+    ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter,
+    ShowVariableStatement, SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -765,9 +764,15 @@ fn handle_show_columns(
             alias: None,
         })
         .project(SelectItem::Expr {
-            expr: Expr::Cast {
-                expr: Box::new(Expr::Identifier(vec![Ident::new("nullable".to_owned())])),
-                data_type: DataType::Text,
+            expr: Expr::Case {
+                operand: None,
+                conditions: vec![Expr::BinaryOp {
+                    left: Box::new(Expr::Identifier(vec![Ident::new("nullable".to_owned())])),
+                    op: BinaryOperator::Eq,
+                    right: Box::new(Expr::Value(Value::Boolean(true))),
+                }],
+                results: vec![Expr::Value(Value::String("YES".to_owned()))],
+                else_result: Some(Box::new(Expr::Value(Value::String("NO".to_owned())))),
             },
             alias: None,
         })

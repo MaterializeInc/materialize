@@ -1024,7 +1024,7 @@ where
                         Datum::String(
                             &column_name
                                 .map(|n| n.to_string())
-                                .unwrap_or_else(|| "missing column".to_owned()),
+                                .unwrap_or_else(|| "?column?".to_owned()),
                         ),
                         Datum::from(column_type.nullable),
                         Datum::String(pgrepr::Type::from(&column_type.scalar_type).name()),
