@@ -609,6 +609,26 @@ class StartServicesStep(WorkflowStep):
             raise Failed(f"ERROR: services didn't come up cleanly: {services}")
 
 
+@Steps.register("stop-services")
+class StopServicesStep(WorkflowStep):
+    """
+    Params:
+      services: List of service names
+    """
+
+    def __init__(self, *, services: Optional[List[str]] = None) -> None:
+        self._services = services if services is not None else []
+        if not isinstance(self._services, list):
+            raise BadSpec(f"services should be a list, got: {self._services}")
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        try:
+            mzcompose_stop(self._services)
+        except subprocess.CalledProcessError:
+            services = ", ".join(self._services)
+            raise Failed(f"ERROR: services didn't come up cleanly: {services}")
+
+
 @Steps.register("wait-for-postgres")
 class WaitForPgStep(WorkflowStep):
     """
