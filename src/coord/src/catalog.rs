@@ -191,6 +191,16 @@ impl CatalogItem {
         }
     }
 
+    pub fn desc(&self) -> Option<&RelationDesc> {
+        match self {
+            CatalogItem::Table(t) => Some(&t.desc),
+            CatalogItem::Source(s) => Some(&s.desc),
+            CatalogItem::View(v) => Some(&v.desc),
+            CatalogItem::Sink(_) => None,
+            CatalogItem::Index(_) => None,
+        }
+    }
+
     /// Collects the identifiers of the dataflows that this item depends
     /// upon.
     pub fn uses(&self) -> Vec<GlobalId> {
@@ -1110,8 +1120,8 @@ impl Catalog {
                 }
 
                 Action::CreateItem { id, name, item } => {
-                    self.insert_item(id, name, item);
-                    OpStatus::CreatedItem(id)
+                    self.insert_item(id, name.clone(), item.clone());
+                    OpStatus::CreatedItem { id, name, item }
                 }
 
                 Action::DropDatabase { name } => match self.by_name.remove(&name).map(|db| db.id) {
@@ -1437,7 +1447,11 @@ pub enum OpStatus {
         schema_id: i64,
         schema_name: String,
     },
-    CreatedItem(GlobalId),
+    CreatedItem {
+        id: GlobalId,
+        name: FullName,
+        item: CatalogItem,
+    },
     DroppedDatabase {
         name: String,
         id: i64,
