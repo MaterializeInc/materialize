@@ -21,7 +21,7 @@ postgres-types = "0.1.1"
 protobuf = "2.17"
 rand = "0.7.3"
 rand_distr = "0.2.2"
-structopt = "0.3.16"
+structopt = "0.3.17"
 test-util = { path = "../../test/test-util" }
 tokio = { version = "0.2.22", features = ["full"] }
 tokio-postgres = "0.5.5"
