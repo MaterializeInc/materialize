@@ -7,10 +7,8 @@ menu:
 ---
 
 {{% create-source/intro %}}
-This document details how to connect Materialize to JSON-formatted Kinesis
-streams.
-
-{{< kinesis-alpha >}}
+This document details how to connect Materialize to JSON-formatted Kafka
+topics.
 
 {{% /create-source/intro %}}
 
