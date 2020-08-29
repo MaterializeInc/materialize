@@ -7,33 +7,40 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set consistency={
-     "name": "materialize.byo.consistency",
-     "type": "record",
-     "fields": [
-         {
-           "name": "source",
-           "type": "string"
-         },
-         {
-           "name": "partition_count",
-           "type": "int"
-         },
-         {
-           "name": "partition_id",
-           "type": ["int","string"]
-         },
-         {
-            "name": "timestamp",
-            "type": "long"
-         },
-         {
-           "name": "offset",
-           "type": "long"
-         }
-     ]
+$ set trxschemakey={
+      "name": "io.debezium.connector.common.TransactionMetadataKey",
+      "type": "record",
+      "fields": [
+          {
+              "name": "id",
+              "type": "string"
+          }
+      ]
   }
 
+$ set trxschema={
+    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
+    "fields":[
+    {"name":"status","type":"string"},
+    {"name":"id","type": "string"},
+    {"name": "event_count",
+    "type": ["null", "long"],
+    "default": null
+    },
+    {"name":"data_collections","type":["null",{"type":"array",
+    "items": {"type":"record",
+    "name":"ConnectDefault",
+    "namespace":"io.confluent.connect.Avro",
+    "fields": [ {
+    "name": "data_collection",
+    "type": "string"
+    },
+    {
+    "name": "event_count",
+    "type": "long" }]}}],
+    "default": null}],
+    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
+    }
 
 $ set names-schema={
     "type": "record",
@@ -61,18 +68,21 @@ $ kafka-create-topic topic=data-consistency
 
 $ kafka-create-topic topic=names
 
-$ kafka-ingest format=avro topic=data-consistency schema=${consistency}
-{"source": "names", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 3}
-
-
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=1
 {"before": null, "after": {"num": 1, "name": "one"}}
 {"before": {"num": 1, "name": "one"}, "after": {"num": 2, "name": "two"}}
 {"before": {"num": 2, "name": "two"}, "after": {"num": 3, "name": "three"}}
 
+$ kafka-ingest format=avro topic=data-consistency timestamp=1 schema=${trxschemakey}
+{"id": "1"}
+
+$ kafka-ingest format=avro topic=data-consistency timestamp=1 schema=${trxschema}
+{"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
+{"status":"END","id":"1","event_count":3,"data_collections":[{"event_count": 3, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+
 > CREATE MATERIALIZED SOURCE names
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-names-${testdrive.seed}'
-  with (consistency='data-consistency')
+  with (consistency='testdrive-data-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${names-schema}'
   ENVELOPE DEBEZIUM
 
