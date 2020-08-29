@@ -724,7 +724,7 @@ where
                 // the case of a constant collection, this compaction is actively
                 // harmful. We should reconsider compaction policy with an eye
                 // towards minimizing unexpected screw-ups.
-                if let Some(compaction_latency_ms) = index_state.compaction_latency_ms {
+                if let Some(compaction_window_ms) = index_state.compaction_window_ms {
                     // Decline to compact complete collections. This would have the
                     // effect of making the collection unusable. Instead, we would
                     // prefer to compact collections only when we believe it would
@@ -734,9 +734,9 @@ where
                         let mut compaction_frontier = Antichain::new();
                         for time in index_state.upper.frontier().iter() {
                             compaction_frontier.insert(
-                                compaction_latency_ms
-                                    * (time.saturating_sub(compaction_latency_ms)
-                                        / compaction_latency_ms),
+                                compaction_window_ms
+                                    * (time.saturating_sub(compaction_window_ms)
+                                        / compaction_window_ms),
                             );
                         }
                         if index_state.since != compaction_frontier {
