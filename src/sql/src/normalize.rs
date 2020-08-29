@@ -55,7 +55,7 @@ pub fn object_name(mut name: ObjectName) -> Result<PartialName, PlanError> {
     Ok(out)
 }
 
-pub fn with_options(options: &[SqlOption]) -> HashMap<String, Value> {
+pub fn options(options: &[SqlOption]) -> HashMap<String, Value> {
     options
         .iter()
         .map(|o| (ident(o.name.clone()), o.value.clone()))

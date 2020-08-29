@@ -898,7 +898,7 @@ fn kafka_sink_builder(
 
     let broker_addrs = broker.parse()?;
 
-    let mut with_options = normalize::with_options(&with_options);
+    let mut with_options = normalize::options(&with_options);
     let include_consistency = match with_options.remove("consistency") {
         Some(Value::Boolean(b)) => b,
         None => false,
@@ -1276,11 +1276,11 @@ fn handle_create_source(
                     } => {
                         let url: Url = url.parse()?;
                         let kafka_options =
-                            kafka_util::extract_config(&normalize::with_options(with_options))?;
+                            kafka_util::extract_config(&normalize::options(with_options))?;
                         let ccsr_config = kafka_util::generate_ccsr_client_config(
                             url,
                             &kafka_options,
-                            &normalize::with_options(ccsr_options),
+                            &normalize::options(ccsr_options),
                         )?;
 
                         if let Some(seed) = seed {
@@ -1351,7 +1351,7 @@ fn handle_create_source(
         })
     };
 
-    let mut with_options = normalize::with_options(with_options);
+    let mut with_options = normalize::options(with_options);
 
     let mut consistency = Consistency::RealTime;
     let mut ts_frequency = Duration::from_secs(1);
