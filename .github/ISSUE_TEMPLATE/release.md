@@ -14,15 +14,21 @@ about: >
 ## Announce the imminent release internally
 
 - [x] Create this release issue.
-- [ ] Check for open issues with the [`M-milestone-blocker`][blocker-search]
-  label, include them in a list here, or state that there are none:
-  > unknown
+- [ ] Check for open blocking issues:
+  - [ ] For any release, check if there are any open [`M-release-blocker`][rel-blockers]
+    issues or PRs
+  - [ ] If this is a major or minor release (any X.Y release) check if there are open
+    issue or PRs with the [`M-milestone-blocker`][blocker-search] label, include them in
+    a list here, or state that there are none:
+
+  > unknown number of milestone blockers or release blockers
 - [ ] Link to this issue in the #release Slack channel.
 
-  If there are open milestone blockers, clarify if they should block this release until
-  they're merged.
+  If there are open blockers, clarify if they should block this release until they're
+  merged when you link to this issue.
 
-[blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aissue+is%3Aopen+label%3AM-milestone-blocker
+[rel-blockers]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-release-blocker
+[blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-milestone-blocker
 
 ## Release candidate
 
