@@ -462,6 +462,14 @@ COPY --from=0 ...
   command][dockerfile-from], except that the image named must be a valid mzbuild
   image in the repository, not a vanilla Docker image.
 
+### Environment Variables
+
+The following environment variables are supported by all commands:
+
+* `BUILD_MODE` can be set to `release` (the default) or `debug`. If Cargo
+  needs to build a Rust binary, `--release` will only be passed if set to
+  `release`.
+
 ## Motivation
 
 ### Why a new build system?

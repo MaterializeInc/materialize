@@ -177,15 +177,20 @@ class CargoBuild(CargoPreImage):
         self.bin = config.pop("bin", None)
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
+        self.mode = os.environ.get("BUILD_MODE", "release").lower()
+        if self.mode not in ["debug", "release"]:
+            raise ValueError("unknown mode")
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
     def build(self) -> None:
-        cargo_build = [self.rd.xcargo(), "build", "--release", "--bin", self.bin]
+        cargo_build = [self.rd.xcargo(), "build", "--bin", self.bin]
+        if self.mode == "release":
+            cargo_build.append("--release")
         spawn.runv(
             cargo_build, cwd=self.rd.root,
         )
-        shutil.copy(self.rd.xcargo_target_dir() / "release" / self.bin, self.path)
+        shutil.copy(self.rd.xcargo_target_dir() / self.mode / self.bin, self.path)
         if self.strip:
             # NOTE(benesch): the debug information is large enough that it slows
             # down CI, since we're packaging these binaries up into Docker
