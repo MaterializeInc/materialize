@@ -986,7 +986,7 @@ where
             MZ_SCHEMAS.id,
             iter::once((
                 Row::pack(&[
-                    Datum::String(&schema_id.to_string()),
+                    Datum::Int64(schema_id),
                     Datum::String(database_id),
                     Datum::String(schema_name),
                     Datum::String(typ),
