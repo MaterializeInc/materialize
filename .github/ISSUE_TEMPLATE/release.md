@@ -71,9 +71,18 @@ in the infrastructure repository. All of these tests can be run in parallel.
 [load-instr]: https://github.com/MaterializeInc/infra/tree/main/cloud#starting-a-load-test
 
 - [ ] Kick off a [full SQL logic test run](https://buildkite.com/materialize/sql-logic-tests)
-  and verify that it passes.
+  by clicking the 'New Build' button. For the values requested, use the following:
 
-- [ ] Start the load tests according to the instructions above.
+    - Message: Leave blank
+    - Commit - Use the default `HEAD`
+    - Branch - Enter the release candidate tag (i.e. `v0.4.2-rc1`)
+
+  You can continue on to the next step, but remember to verify that this test passes.
+
+- [ ] Start the load tests according to the instructions above, using your release tag as the
+  `git-ref` value for the release benchmarks. You can use [This commit][] as an example to follow.
+
+[This commit]: https://github.com/MaterializeInc/infra/commit/fd7f594d6f9fb2fda3a604f21b730f8d401fe81c
 
 - [ ] Find the load tests in grafana.mz, and link to them in #release,
   validating that data is showing up:
