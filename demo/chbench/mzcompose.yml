@@ -517,7 +517,7 @@ mzconduct:
         service: chbench
         command: >-
           gen
-          --warehouses=${NUM_WAREHOUSES:-1}
+          --warehouses=${num_warehouses:-1}
           --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
 
     bring-up-postgres-kafka:
@@ -563,7 +563,7 @@ mzconduct:
         service: chbench
         command: >-
           gen
-          --warehouses=${NUM_WAREHOUSES:-1}
+          --warehouses=${num_warehouses:-1}
           --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
 
     heavy-load:
