@@ -20,13 +20,13 @@ services:
         wait-for-it --timeout=30 materialized:6875 &&
         testdrive
         --kafka-addr=kafka:9092
-        --aws-region=us-east-2
+        --aws-region=${AWS_REGION-us-east-2}
         --schema-registry-url=http://schema-registry:8081
         --materialized-url=postgres://ignored@materialized:6875
         --validate-catalog=/share/mzdata/catalog
         $$*
       - bash
-    command: test/testdrive/*.td
+    command: test/testdrive/${TD_TEST:-*.td}
     environment:
     - TMPDIR=/share/tmp
     volumes:
@@ -39,6 +39,8 @@ services:
   materialized:
     mzbuild: materialized
     command: --experimental --logging-granularity=10ms --data-directory=/share/mzdata -w1
+    environment:
+    - MZ_DEV=1
     volumes:
     - mzdata:/share/mzdata
     - tmp:/share/tmp
