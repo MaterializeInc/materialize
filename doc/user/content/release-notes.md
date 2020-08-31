@@ -65,7 +65,7 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.4.2"></span>
 ## v0.4.2 (Unreleased)
 
-- Output SHOW COLUMNS in the same order as the source {{% gh 4084 %}}.
+- Output [SHOW COLUMNS](/docs/sql/show-columns/) in the same order as the source {{% gh 4084 %}}.
 
 - Allow enable/disable of memory profiling without restart {{% gh 4005 %}}.
 
