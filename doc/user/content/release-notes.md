@@ -65,19 +65,19 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.4.2"></span>
 ## v0.4.2 (Unreleased)
 
-- Output SHOW COLUMNS in [same order as source](https://github.com/MaterializeInc/materialize/issues/4084)
+- Output SHOW COLUMNS in the same order as the source {{% gh 4084 %}}.
 
-- Allow enable/disable of memory profiling [without restart](https://github.com/MaterializeInc/materialize/issues/4005)
+- Allow enable/disable of memory profiling without restart {{% gh 4005 %}}.
 
-- Reduce memory usage of [outer equijoins](https://github.com/MaterializeInc/materialize/pull/4047)
+- Reduce memory usage of outer equijoins {{% gh 4047 %}}.
 
-- [Fix panic on INSERT INTO with JSONB](https://github.com/MaterializeInc/materialize/issues/4097)
+- Fix panic on [INSERT INTO with JSONB](/docs/sql/insert/) {{% gh 4097 %}}.
 
-- Fix support for [large VALUES queries](https://github.com/MaterializeInc/materialize/issues/3995)
+- Fix support for large VALUES queries {{% gh 3995 %}}.
 
-- Change `min` / `max` on append-only sources to [consume a fixed amount of memory](https://github.com/MaterializeInc/materialize/pull/3994)
+- Change `min` / `max` on append-only sources to consume a fixed amount of memory {{% gh 3994 %}}.
 
-- [Add `mz_records_per_dataflow_global` metric to Prometheus](https://github.com/MaterializeInc/materialize/pull/4036)
+- Add `mz_records_per_dataflow_global` metric to [Prometheus](/docs/ops/monitoring/) {{% gh 4036 %}}.
 
 <span id="v0.4.1"></span>
 ## v0.4.1
