@@ -19,6 +19,9 @@ about: >
   > unknown
 - [ ] Link to this issue in the #release Slack channel.
 
+  If there are open milestone blockers, clarify if they should block this release until
+  they're merged.
+
 [blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aissue+is%3Aopen+label%3AM-milestone-blocker
 
 ## Release candidate
@@ -28,6 +31,8 @@ production readiness.
 
 ### Create the release candidate
 
+- [ ] Choose the commit for the release. Unless there are open release blockers above,
+  this should just be the head commit of the main branch. Checkout that commit.
 - [ ] Choose the name for the release candidate following the format
   `v<VERSION>-rc<N>`, where _N_ starts at 1. For example, the first RC for
   v0.2.3 would be called v0.2.3-rc1. Use that to run the `bin/mkrelease`
@@ -35,7 +40,7 @@ production readiness.
 
   ```shell
   tag=v<VERSION>-rc<N>
-  bin/mkrelease $tag
+  bin/mkrelease -b rel-$tag $tag
   git push origin $tag
   ```
 
