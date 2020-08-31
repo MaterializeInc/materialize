@@ -61,6 +61,23 @@ Wrap your release notes at the 80 character mark.
   [`WITH` option](https://materialize.io/docs/sql/create-source/avro-kafka/#with-options)
   from sources. Materialize now automatically selects the optimal batch size.
   **Backwards-incompatible change.**
+  
+<span id="v0.4.2"></span>
+## v0.4.2 (Unreleased)
+
+- Output SHOW COLUMNS in [same order as source](https://github.com/MaterializeInc/materialize/issues/4084)
+
+- Allow enable/disable of memory profiling [without restart](https://github.com/MaterializeInc/materialize/issues/4005)
+
+- Reduce memory usage of [outer equijoins](https://github.com/MaterializeInc/materialize/pull/4047)
+
+- [Fix panic on INSERT INTO with JSONB](https://github.com/MaterializeInc/materialize/issues/4097)
+
+- Fix support for [large VALUES queries](https://github.com/MaterializeInc/materialize/issues/3995)
+
+- Change `min` / `max` on append-only sources to [consume a fixed amount of memory](https://github.com/MaterializeInc/materialize/pull/3994)
+
+- [Add `mz_records_per_dataflow_global` metric to Prometheus](https://github.com/MaterializeInc/materialize/pull/4036)
 
 <span id="v0.4.1"></span>
 ## v0.4.1
