@@ -246,7 +246,7 @@ lazy_static! {
     pub static ref MZ_SCHEMAS: BuiltinTable = BuiltinTable {
         name: "mz_schemas",
         desc: RelationDesc::empty()
-            .with_column("schema_id", ScalarType::String.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("database_id", ScalarType::String.nullable(false))
             .with_column("schema", ScalarType::String.nullable(false))
             .with_column("type", ScalarType::String.nullable(false)),
