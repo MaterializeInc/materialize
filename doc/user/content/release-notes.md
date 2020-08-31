@@ -62,6 +62,25 @@ Wrap your release notes at the 80 character mark.
   from sources. Materialize now automatically selects the optimal batch size.
   **Backwards-incompatible change.**
 
+<span id="v0.4.2"></span>
+## v0.4.2 (Unreleased)
+
+- Output [SHOW COLUMNS](/sql/show-columns/) in the same order as the source {{% gh 4084 %}}.
+
+- Improved memory utilization:
+
+  - Allow enable/disable of memory profiling without restart {{% gh 4005 %}}.
+
+  - Reduce memory usage of outer equijoins {{% gh 4047 %}}.
+
+  - Change `min` / `max` on append-only sources to consume a fixed amount of memory {{% gh 3994 %}}.
+
+- Fix panic on [INSERT INTO with JSONB](/sql/insert/) {{% gh 4097 %}}.
+
+- Fix support for large `VALUES` queries {{% gh 3995 %}}.
+
+- Add `mz_records_per_dataflow_global` metric to [Prometheus](/ops/monitoring/) {{% gh 4036 %}}.
+
 <span id="v0.4.1"></span>
 ## v0.4.1
 
