@@ -571,7 +571,7 @@ fn handle_show_objects(
             .selection(Some(selection))
             .project(SelectItem::Expr {
                 expr: Expr::Identifier(vec![Ident::new("name".to_owned())]),
-                alias: None,
+                alias: Some(Ident::new("schema")),
             });
 
         if full {
