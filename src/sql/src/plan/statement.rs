@@ -542,7 +542,7 @@ fn handle_show_objects(
             }
             selection
         };
-        if let Some(show_statement_filter) = filter_expr(filter, "schema") {
+        if let Some(show_statement_filter) = filter_expr(filter, "name") {
             selection = Expr::BinaryOp {
                 left: Box::new(selection),
                 op: BinaryOperator::And,
@@ -570,7 +570,7 @@ fn handle_show_objects(
             })
             .selection(Some(selection))
             .project(SelectItem::Expr {
-                expr: Expr::Identifier(vec![Ident::new("schema".to_owned())]),
+                expr: Expr::Identifier(vec![Ident::new("name".to_owned())]),
                 alias: None,
             });
 
