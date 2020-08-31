@@ -248,7 +248,7 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("database_id", ScalarType::String.nullable(false))
-            .with_column("schema", ScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
             .with_column("type", ScalarType::String.nullable(false)),
         id: GlobalId::System(2013),
         index_id: GlobalId::System(2014),
