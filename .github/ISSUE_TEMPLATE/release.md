@@ -63,8 +63,14 @@ production readiness.
 
   - [ ] Open a PR with this change, and land it.
 
+### Review Release Notes
+
+Release notes should be updated by engineers as they merge PRs. The release notes
+team is responsible for reviewing release notes and the release announcement before
+a release is published.
+
 - [ ] Comment on this issue and ping the @MaterializeInc/release-notes team to
-  review the [release notes][] and, if applicable, the release announcement. All
+  remind them to review the [release notes][] and the release announcement. All
   members of the team should leave a comment stating that the release looks
   good.
 
