@@ -52,34 +52,42 @@ Wrap your release notes at the 80 character mark.
 - Support [`CREATE TABLE`](/sql/create-table), [`DROP TABLE`](/sql/drop-table),
   [`INSERT`](/sql/insert) and [`SHOW CREATE TABLE`](/sql/show-create-table).
 
-- Restore support for specifying multiple Kafka broker addresses in
-  [Kafka sources](/sql/create-source/avro-kafka/) {{% gh 3986 %}}.
-
-  This fixes a regression introduced in v0.4.1.
-
-- Remove the `max_timestamp_batch_size`
-  [`WITH` option](https://materialize.io/docs/sql/create-source/avro-kafka/#with-options)
-  from sources. Materialize now automatically selects the optimal batch size.
-  **Backwards-incompatible change.**
-
 <span id="v0.4.2"></span>
 ## v0.4.2 (Unreleased)
 
-- Output [SHOW COLUMNS](/sql/show-columns/) in the same order as the source {{% gh 4084 %}}.
+- Remove the `max_timestamp_batch_size` [`WITH`
+  option](/sql/create-source/avro-kafka/#with-options) from sources. Materialize
+  now automatically selects the optimal batch size. **Backwards-incompatible
+  change.**
 
-- Improved memory utilization:
+- Restore support for specifying multiple Kafka broker addresses in [Kafka
+  sources](/sql/create-source/avro-kafka/) {{% gh 3986 %}}.
 
-  - Allow enable/disable of memory profiling without restart {{% gh 4005 %}}.
+  This fixes a regression introduced in v0.4.1.
 
-  - Reduce memory usage of outer equijoins {{% gh 4047 %}}.
+- Sort the output of [`SHOW COLUMNS`](/sql/show-columns/) by the order in which
+  the columns are defined in the targeted source, table, or view. Prior versions
+  did not guarantee any particular ordering.
 
-  - Change `min` / `max` on append-only sources to consume a fixed amount of memory {{% gh 3994 %}}.
+- Improve memory utilization:
 
-- Fix panic on [INSERT INTO with JSONB](/sql/insert/) {{% gh 4097 %}}.
+  - Reduce memory usage of [outer joins](/sql/join#join-type) when the join key
+    consists only of simple column equalities {{% gh 4047 %}}.
 
-- Fix support for large `VALUES` queries {{% gh 3995 %}}.
+  - Consume only a constant amount of memory when computing a
+    [`min` or `max` aggregation](/sql/functions/#aggregate-func)
+    on an [append-only source](/sql/create-source/avro-kafka/#append-only-envelope)
+    {{% gh 3994 %}}.
 
-- Add `mz_records_per_dataflow_global` metric to [Prometheus](/ops/monitoring/) {{% gh 4036 %}}.
+- Always permit memory profiling via the `/prof` web UI, even if the
+  `MALLOC_CONF` environment variable is not configured to enable profiling
+  {% gh 4005 %}.
+
+- Handle large `VALUES` expressions. Previously, `VALUES` expressions with more
+  than several hundred entries would cause a stack overflow {{% gh 3995 %}}.
+
+- Add the `mz_records_per_dataflow_global` [metric](/ops/monitoring) to expose
+  the number of active records in each dataflow {{% gh 4036 %}}.
 
 <span id="v0.4.1"></span>
 ## v0.4.1
