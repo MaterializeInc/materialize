@@ -4,7 +4,7 @@ This page assumes that you have already read and understood [the basics of
 testing with Materialize][testing guide] and [SQLite sqllogictest
 documentation][upstream docs].
 
-[testing guide]: /doc/developer/testing.md
+[testing guide]: /doc/developer/guide-testing.md
 [upstream docs]: https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
 ## Usage guide
