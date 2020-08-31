@@ -18,6 +18,9 @@
 //! Builtin's names, columns, and types are part of the stable API of
 //! Materialize. Be careful to maintain backwards compatibility when changing
 //! definitions of existing builtins!
+//!
+//! More information about builtin system tables and types can be found in
+//! https://materialize.io/docs/sql/system-tables/.
 
 use std::collections::BTreeMap;
 
