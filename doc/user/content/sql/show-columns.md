@@ -38,6 +38,12 @@ Field | Meaning
 **Nullable** | Does the column accept `null` values?
 **Type** | The column's [type](../types)
 
+
+{{< version-changed v0.4.2 >}}
+Rows are sorted by the order in which the fields are defined in the targeted
+source, view, or table. Prior versions did not guarantee any particular ordering.
+{{< /version-changed >}}
+
 ## Examples
 
 ```sql
