@@ -67,11 +67,13 @@ Wrap your release notes at the 80 character mark.
 
 - Output [SHOW COLUMNS](/sql/show-columns/) in the same order as the source {{% gh 4084 %}}.
 
-- Allow enable/disable of memory profiling without restart {{% gh 4005 %}}.
+- Improved memory utilization:
 
-- Reduce memory usage of outer equijoins {{% gh 4047 %}}.
+  - Allow enable/disable of memory profiling without restart {{% gh 4005 %}}.
 
-- Change `min` / `max` on append-only sources to consume a fixed amount of memory {{% gh 3994 %}}.
+  - Reduce memory usage of outer equijoins {{% gh 4047 %}}.
+
+  - Change `min` / `max` on append-only sources to consume a fixed amount of memory {{% gh 3994 %}}.
 
 - Fix panic on [INSERT INTO with JSONB](/sql/insert/) {{% gh 4097 %}}.
 
