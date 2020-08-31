@@ -1760,7 +1760,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 
 [[package]]
 name = "materialized"
-version = "0.4.2-rc1"
+version = "0.4.3-dev"
 dependencies = [
  "anyhow",
  "askama",
