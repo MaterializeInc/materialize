@@ -284,12 +284,24 @@ where
                 // We could move the datum to the `diff` component, wrapped
                 // in a min/max monoid wrapper. This would permit in-place
                 // compaction, and a substantially smaller memory footprint.
+                // The records in the stream are pairs `(key, row)` where
+                // `row` contains a single value that can be minimized or
+                // maximized over.
 
                 use differential_dataflow::operators::reduce::Count;
                 use timely::dataflow::operators::map::Map;
 
                 // We need two different code paths for min and max, as the
-                // monoid wrapper type encodes the logic.
+                // monoid wrapper type encodes the logic. In each case, we
+                // wrap the value with the monoid wrapper, which will allow
+                // in-place accumulation using either "min" or "max".
+                // The `count` operator promotes the accumulated value back
+                // to data, and we pass along the reduced form to the final
+                // operator.
+                // TODO(frank): the `count` operator very nearly produces
+                // the arrangement we want as output, minus some formatting
+                // with prefixed keys and such. But we could fuse them and
+                // save an operator.
                 if is_min(&func) {
                     partial = partial
                         .inner
@@ -603,6 +615,7 @@ fn is_min_or_max(func: &AggregateFunc) -> bool {
     is_min(func) || is_max(func)
 }
 
+/// Is the aggregate function a "min" variant.
 fn is_min(func: &AggregateFunc) -> bool {
     match func {
         AggregateFunc::MinInt32
@@ -619,6 +632,7 @@ fn is_min(func: &AggregateFunc) -> bool {
     }
 }
 
+/// Is the aggregate function is a "max" variant.
 fn is_max(func: &AggregateFunc) -> bool {
     match func {
         AggregateFunc::MaxInt32
@@ -640,6 +654,7 @@ pub mod monoids {
     use repr::{Datum, Row};
     use serde::{Deserialize, Serialize};
 
+    /// A monoid containing a single-datum row, that is updated by SQL's `min`.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub struct MinMonoid {
         pub value: Row,
@@ -672,6 +687,7 @@ pub mod monoids {
         }
     }
 
+    /// A monoid containing a single-datum row, that is updated by SQL's `max`.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub struct MaxMonoid {
         pub value: Row,
