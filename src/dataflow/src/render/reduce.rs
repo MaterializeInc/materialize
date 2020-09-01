@@ -280,13 +280,33 @@ where
         // update costs on relatively small updates.
         if hierarchical {
             if monotonic && is_min_or_max(&func) {
-                use differential_dataflow::operators::iterate::Variable;
-                let delay = std::time::Duration::from_nanos(10_000_000_000);
-                let retractions = Variable::new(&mut partial.scope(), delay.as_millis() as u64);
-                let thinned = partial.concat(&retractions.negate());
-                let result = build_hierarchical(thinned, &func);
-                retractions.set(&partial.concat(&result.negate()));
-                partial = result
+                // At this point, we assert that inputs are never retracted.
+                // We could move the datum to the `diff` component, wrapped
+                // in a min/max monoid wrapper. This would permit in-place
+                // compaction, and a substantially smaller memory footprint.
+
+                use timely::dataflow::operators::map::Map;
+                use differential_dataflow::operators::reduce::Count;
+
+                // We need two different code paths for min and max, as the
+                // monoid wrapper type encodes the logic.
+                if is_min(&func) {
+                    partial =
+                    partial
+                        .inner
+                        .map(|((key, value), time, _)| (key, time, monoids::MinMonoid { value }))
+                        .as_collection()
+                        .count()
+                        .map(|(key, min)|  (key, min.value));
+                } else if is_max(&func) {
+                    partial =
+                    partial
+                        .inner
+                        .map(|((key, value), time, _)| (key, time, monoids::MaxMonoid { value }))
+                        .as_collection()
+                        .count()
+                        .map(|(key, min)|  (key, min.value));
+                }
             } else {
                 partial = build_hierarchical(partial, &func)
             }
@@ -582,18 +602,12 @@ fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
 
 /// True if the function is min or max.
 fn is_min_or_max(func: &AggregateFunc) -> bool {
+    is_min(func) || is_max(func)
+}
+
+fn is_min(func: &AggregateFunc) -> bool {
     match func {
-        AggregateFunc::MaxInt32
-        | AggregateFunc::MaxInt64
-        | AggregateFunc::MaxFloat32
-        | AggregateFunc::MaxFloat64
-        | AggregateFunc::MaxDecimal
-        | AggregateFunc::MaxBool
-        | AggregateFunc::MaxString
-        | AggregateFunc::MaxDate
-        | AggregateFunc::MaxTimestamp
-        | AggregateFunc::MaxTimestampTz
-        | AggregateFunc::MinInt32
+        AggregateFunc::MinInt32
         | AggregateFunc::MinInt64
         | AggregateFunc::MinFloat32
         | AggregateFunc::MinFloat64
@@ -604,5 +618,85 @@ fn is_min_or_max(func: &AggregateFunc) -> bool {
         | AggregateFunc::MinTimestamp
         | AggregateFunc::MinTimestampTz => true,
         _ => false,
+    }
+}
+
+fn is_max(func: &AggregateFunc) -> bool {
+    match func {
+        AggregateFunc::MaxInt32
+        | AggregateFunc::MaxInt64
+        | AggregateFunc::MaxFloat32
+        | AggregateFunc::MaxFloat64
+        | AggregateFunc::MaxDecimal
+        | AggregateFunc::MaxBool
+        | AggregateFunc::MaxString
+        | AggregateFunc::MaxDate
+        | AggregateFunc::MaxTimestamp
+        | AggregateFunc::MaxTimestampTz => true,
+        _ => false,
+    }
+
+}
+
+/// Monoids for in-place compaction of monotonic streams.
+pub mod monoids {
+    use serde::{Deserialize, Serialize};
+    use repr::{Datum, Row};
+
+    #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    pub struct MinMonoid {
+        pub value: Row,
+    }
+
+    use std::ops::AddAssign;
+    use differential_dataflow::difference::Semigroup;
+
+    impl<'a> AddAssign<&'a Self> for MinMonoid {
+        fn add_assign(&mut self, rhs: &'a Self) {
+            let swap = {
+                let lhs_val = self.value.unpack_first();
+                let rhs_val = rhs.value.unpack_first();
+                // Datum::Null is the identity, not a small element.
+                match (lhs_val, rhs_val) {
+                    (_, Datum::Null) => false,
+                    (Datum::Null, _) => true,
+                    (lhs, rhs) => rhs < lhs,
+                }
+            };
+            if swap {
+                self.value.clone_from(&rhs.value);
+            }
+        }
+    }
+
+    impl Semigroup for MinMonoid {
+        fn is_zero(&self) -> bool { false }
+    }
+
+    #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    pub struct MaxMonoid {
+        pub value: Row,
+    }
+
+    impl<'a> AddAssign<&'a Self> for MaxMonoid {
+        fn add_assign(&mut self, rhs: &'a Self) {
+            let swap = {
+                let lhs_val = self.value.unpack_first();
+                let rhs_val = rhs.value.unpack_first();
+                // Datum::Null is the identity, not a large element.
+                match (lhs_val, rhs_val) {
+                    (_, Datum::Null) => false,
+                    (Datum::Null, _) => true,
+                    (lhs, rhs) => rhs > lhs,
+                }
+            };
+            if swap {
+                self.value.clone_from(&rhs.value);
+            }
+        }
+    }
+
+    impl Semigroup for MaxMonoid {
+        fn is_zero(&self) -> bool { false }
     }
 }
