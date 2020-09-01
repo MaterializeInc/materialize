@@ -57,6 +57,24 @@ impl Var for ServerVar<&'static [&'static str]> {
     }
 }
 
+impl Var for ServerVar<&'static bool> {
+    fn name(&self) -> &'static str {
+        &self.name
+    }
+
+    fn value(&self) -> String {
+        match self.value {
+            true => "on",
+            false => "off",
+        }
+        .to_string()
+    }
+
+    fn description(&self) -> &'static str {
+        self.description
+    }
+}
+
 /// A `ServerVar` is the default value for a configuration parameter.
 #[derive(Debug)]
 pub struct ServerVar<V> {
