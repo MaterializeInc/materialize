@@ -14,15 +14,21 @@ about: >
 ## Announce the imminent release internally
 
 - [x] Create this release issue.
-- [ ] Check for open issues with the [`M-milestone-blocker`][blocker-search]
-  label, include them in a list here, or state that there are none:
-  > unknown
+- [ ] Check for open blocking issues:
+  - [ ] For any release, check if there are any open [`M-release-blocker`][rel-blockers]
+    issues or PRs
+  - [ ] If this is a major or minor release (any X.Y release) check if there are open
+    issue or PRs with the [`M-milestone-blocker`][blocker-search] label, include them in
+    a list here, or state that there are none:
+
+  > unknown number of milestone blockers or release blockers
 - [ ] Link to this issue in the #release Slack channel.
 
-  If there are open milestone blockers, clarify if they should block this release until
-  they're merged.
+  If there are open blockers, clarify if they should block this release until they're
+  merged when you link to this issue.
 
-[blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aissue+is%3Aopen+label%3AM-milestone-blocker
+[rel-blockers]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-release-blocker
+[blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-milestone-blocker
 
 ## Release candidate
 
@@ -57,8 +63,14 @@ production readiness.
 
   - [ ] Open a PR with this change, and land it.
 
-- [ ] Create an issue and assign it to the @MaterializeInc/release-notes team to
-  review the [release notes] and, if applicable, the release announcement. All
+### Review Release Notes
+
+Release notes should be updated by engineers as they merge PRs. The release notes
+team is responsible for reviewing release notes and the release announcement before
+a release is published.
+
+- [ ] Comment on this issue and ping the @MaterializeInc/release-notes team to
+  remind them to review the [release notes][] and the release announcement. All
   members of the team should leave a comment stating that the release looks
   good.
 
@@ -156,7 +168,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   - [ ] Add the version to the website's list of versions in [`doc/user/config.toml`].
 
-  - [ ] Ensure that the issue for checking the release notes has been closed.
+  - [ ] Ensure that all members of the release-notes team have signed-off on this issue.
 
   - [ ] Ensure that the announcement blog post has been published and
     announced, if applicable, by pinging the product team in #release.
