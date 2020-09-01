@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -140,6 +140,7 @@ where
     // Channel to communicate source status updates and shutdown notifications to the persister
     // thread.
     persistence_tx: Option<PersistenceSender>,
+    persistence_path: Option<PathBuf>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -209,18 +210,22 @@ where
             );
         }
 
-        let (persister, persistence_tx) = if let Some(persistence_config) = config.persistence {
+        let (persister, persistence_tx, persistence_path) = if let Some(persistence_config) =
+            config.persistence
+        {
             let (persistence_tx, persistence_rx) = config.switchboard.mpsc();
             broadcast(
                 &mut broadcast_tx,
                 SequencedCommand::EnablePersistence(persistence_tx.clone()),
             );
+            let path = persistence_config.path.clone();
             (
                 Some(Persister::new(persistence_rx, persistence_config)),
                 Some(block_on(persistence_tx.connect()).expect("failed to connect persistence tx")),
+                Some(path),
             )
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         let mut coord = Self {
@@ -242,6 +247,7 @@ where
             feedback_rx: Some(rx),
             persister,
             persistence_tx,
+            persistence_path,
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,
@@ -263,21 +269,7 @@ where
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    // See if we have any previously persisted data that we need to reread.
-                    // Only do this if persistence is enabled for Materialize.
-                    if let Some(persister) = &coord.persister {
-                        let connector = crate::persistence::augment_connector(
-                            source.connector.clone(),
-                            persister.config.path.clone(),
-                            *id,
-                        )?;
-
-                        // If we got back a new connector, we need to take some
-                        // additional action.
-                        if let Some(connector) = connector {
-                            coord.enable_source_connector_persistence(*id, connector);
-                        }
-                    }
+                    coord.maybe_begin_persistence(*id, &source.connector);
                 }
                 CatalogItem::Sink(sink) => {
                     let builder = match &sink.connector {
@@ -1340,7 +1332,7 @@ where
                     self.ship_dataflow(self.build_index_dataflow(index_id));
                 }
 
-                self.enable_source_connector_persistence(source_id, source.connector);
+                self.maybe_begin_persistence(source_id, &source.connector);
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
@@ -2242,7 +2234,34 @@ where
                     dataflow.add_source_import(*id, SourceConnector::Local, table.desc.clone());
                 }
                 CatalogItem::Source(source) => {
-                    dataflow.add_source_import(*id, source.connector.clone(), source.desc.clone());
+                    // If Materialize has persistence enabled, check to see if the source has any
+                    // already persisted data that can be reused, and if so, augment the source
+                    // connector to use that data before importing it into the dataflow.
+                    let connector = if let Some(path) = &self.persistence_path {
+                        match crate::persistence::augment_connector(
+                            source.connector.clone(),
+                            path.clone(),
+                            *id,
+                        ) {
+                            Ok(Some(connector)) => Some(connector),
+                            Ok(None) => None,
+                            Err(e) => {
+                                log::error!("encountered error while trying to reuse persisted data for source {}: {}", id.to_string(), e);
+                                log::trace!(
+                                    "continuing without persisted data for source {}",
+                                    id.to_string()
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Default back to the regular connector if we didn't get a augmented one.
+                    let connector = connector.unwrap_or_else(|| source.connector.clone());
+
+                    dataflow.add_source_import(*id, connector, source.desc.clone());
                 }
                 CatalogItem::View(view) => {
                     self.import_view_into_dataflow(id, &view.optimized_expr, dataflow);
@@ -2427,18 +2446,16 @@ where
         );
     }
 
-    // Handle metadata surrounding marking a source as persisted.
-    fn enable_source_connector_persistence(
-        &mut self,
-        id: GlobalId,
-        source_connector: SourceConnector,
-    ) {
-        if let SourceConnector::External { connector, .. } = &source_connector {
+    // Tell the persister to start persisting data for `id` if that source
+    // has persistence enabled and Materialize has persistence enabled.
+    // This function is a no-op if the persister has already started persisting
+    // this source.
+    fn maybe_begin_persistence(&mut self, id: GlobalId, source_connector: &SourceConnector) {
+        if let SourceConnector::External { connector, .. } = source_connector {
             if connector.persistence_enabled() {
                 if let Some(persistence_tx) = &mut self.persistence_tx {
                     block_on(persistence_tx.send(PersistenceMessage::AddSource(id)))
                         .expect("failed to send CREATE SOURCE notification to persistence thread");
-                    self.catalog.set_source_connector(id, source_connector);
                 } else {
                     log::error!(
                         "trying to create a persistent source ({}) but persistence is disabled.",
