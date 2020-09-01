@@ -421,7 +421,7 @@ mzconduct:
     cloud-benchmark-mz:
       env:
         MZ_SQL_EXPORTER_PORT: "9400:9399"
-        MZ_THREADS: ${MZ_THREADS}
+        MZ_THREADS: ${MZ_THREADS:-1}
       steps:
       - step: start-services
         services: [materialized]
