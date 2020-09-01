@@ -16,7 +16,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": 1,
-  "iteration": 1598326056988,
+  "iteration": 1598992520939,
   "links": [],
   "panels": [
     {
@@ -324,7 +324,7 @@
       "type": "stat"
     },
     {
-      "content": "Timely Workers: $timely_workers<br/>\nBuilt At: $built_at<br/>\nBuild Version: $build_version<br/>\nBuild sha: $build_sha<br/>",
+      "content": "Timely Workers: $timely_workers<br/>\nBuilt At: $built_at<br/>\nBuild Version: $build_version<br/>\nBuild sha: <code>$build_sha</code><br/>",
       "datasource": null,
       "description": "",
       "fieldConfig": {
@@ -1302,7 +1302,7 @@
               "refId": "A"
             },
             {
-              "expr": "topk(50, clamp_min(\nmz_partition_offset_max \n  - mz_partition_offset_ingested, \n  0))",
+              "expr": "topk(50, clamp_min(\nmz_kafka_partition_offset_max \n  - mz_partition_offset_ingested, \n  0))",
               "hide": false,
               "interval": "",
               "legendFormat": "{{topic}}/{{partition_id}} source={{source_id}}",
@@ -2984,10 +2984,10 @@
         "current": {},
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_timely_worker_threads, count)",
-        "hide": 2,
-        "includeAll": false,
+        "hide": 0,
+        "includeAll": true,
         "label": "Timely Workers",
-        "multi": false,
+        "multi": true,
         "name": "timely_workers",
         "options": [],
         "query": "label_values(mz_server_metadata_timely_worker_threads, count)",
