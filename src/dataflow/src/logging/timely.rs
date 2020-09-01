@@ -89,11 +89,7 @@ pub fn construct<A: Allocate>(
                                 operates_data.insert((event.id, worker), event.clone());
 
                                 operates_session.give((
-                                    row_packer.pack(&[
-                                        Datum::Int64(event.id as i64),
-                                        Datum::Int64(worker as i64),
-                                        Datum::String(&event.name),
-                                    ]),
+                                    ((event.id, worker), event.name),
                                     time_ms,
                                     1,
                                 ));
@@ -153,11 +149,7 @@ pub fn construct<A: Allocate>(
                                 // operator announcement.
                                 if let Some(event) = operates_data.remove(&(event.id, worker)) {
                                     operates_session.give((
-                                        row_packer.pack(&[
-                                            Datum::Int64(event.id as i64),
-                                            Datum::Int64(worker as i64),
-                                            Datum::String(&event.name),
-                                        ]),
+                                        ((event.id, worker), event.name),
                                         time_ms,
                                         -1,
                                     ));
@@ -289,39 +281,86 @@ pub fn construct<A: Allocate>(
                 },
             );
 
+        let operates = operates.as_collection();
+
         // Accumulate the durations of each operator.
-        let elapsed = duration
+        let mut elapsed = duration
             .map(|(op, t, d)| (op, t, d as isize))
             .as_collection()
-            .count_total()
-            .map({
-                let mut row_packer = repr::RowPacker::new();
-                move |((id, worker), cnt)| {
-                    row_packer.pack(&[
-                        Datum::Int64(id as i64),
-                        Datum::Int64(worker as i64),
-                        Datum::Int64(cnt as i64),
-                    ])
-                }
-            });
+            .count_total();
 
-        let histogram = duration
+        use differential_dataflow::operators::iterate::Variable;
+        use differential_dataflow::operators::join::Join;
+
+        // Remove elapsed data for records we no longer care about.
+        let delay = std::time::Duration::from_nanos(10_000_000_000);
+        // `elapsed_retractions` represents the records in `elapsed` that we no longer care about
+        // because the corresponding operators have been deleted
+        let elapsed_retractions = Variable::new(&mut elapsed.scope(), delay.as_millis() as u64);
+        let elapsed_thinned = elapsed.concat(&elapsed_retractions.negate());
+
+        // Compute the set of elapsed records we still care about
+        let elapsed_result =
+            operates.join_map(&elapsed_thinned, move |key, _val1, val2| (*key, *val2));
+
+        // Finally set `retractions` to be everything not part of the output.
+        elapsed_retractions.set(&elapsed.concat(&elapsed_result.negate()));
+        elapsed = elapsed_result;
+
+        let elapsed = elapsed.map({
+            let mut row_packer = repr::RowPacker::new();
+            move |((id, worker), cnt)| {
+                row_packer.pack(&[
+                    Datum::Int64(id as i64),
+                    Datum::Int64(worker as i64),
+                    Datum::Int64(cnt as i64),
+                ])
+            }
+        });
+
+        let mut histogram = duration
             .map(|(op, t, d)| ((op, d.next_power_of_two()), t, 1i64))
             .as_collection()
             .count_total()
-            .map({
-                let mut row_packer = repr::RowPacker::new();
-                move |(((id, worker), pow), cnt)| {
-                    row_packer.pack(&[
-                        Datum::Int64(id as i64),
-                        Datum::Int64(worker as i64),
-                        Datum::Int64(pow as i64),
-                        Datum::Int64(cnt as i64),
-                    ])
-                }
-            });
+            .map(|((key, pow), count)| ((key), (pow, count)));
 
-        let operates = operates.as_collection();
+        // Remove histogram data for records we no longer care about.
+        // `histogram_retractions` represents the records in `histogram` that we no longer care about
+        // because the corresponding operators have been deleted
+        let histogram_retractions = Variable::new(&mut histogram.scope(), delay.as_millis() as u64);
+        let histogram_thinned = histogram.concat(&histogram_retractions.negate());
+
+        // Compute the set of histogram records we still care about
+        let histogram_result =
+            operates.join_map(&histogram_thinned, move |key, _val1, val2| (*key, *val2));
+
+        // Finally set `histogram_retractions` to be everything not part of the output.
+        histogram_retractions.set(&histogram.concat(&histogram_result.negate()));
+        histogram = histogram_result;
+
+        let histogram = histogram.map({
+            let mut row_packer = repr::RowPacker::new();
+            move |((id, worker), (pow, cnt))| {
+                row_packer.pack(&[
+                    Datum::Int64(id as i64),
+                    Datum::Int64(worker as i64),
+                    Datum::Int64(pow as i64),
+                    Datum::Int64(cnt as i64),
+                ])
+            }
+        });
+
+        let operates = operates.map({
+            let mut row_packer = repr::RowPacker::new();
+            move |((id, worker), name)| {
+                row_packer.pack(&[
+                    Datum::Int64(id as i64),
+                    Datum::Int64(worker as i64),
+                    Datum::String(&name),
+                ])
+            }
+        });
+
         let channels = channels.as_collection();
         let addresses = addresses.as_collection();
 
