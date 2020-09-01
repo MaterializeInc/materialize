@@ -103,7 +103,7 @@ the port that Materialize listens on from the default `6875`.
 ### Compaction window
 
 The `--logical-compaction-window` option specifies how much historical detail
-Materialize is required to maintain in
+Materialize maintains in
 [arrangements](/overview/api-components#indexes). Note that compaction happens
 lazily, so Materialize may retain more historical detail than requested, but it
 will never retain less.
