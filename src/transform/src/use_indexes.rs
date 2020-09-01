@@ -124,7 +124,10 @@ impl FilterEqualLiteral {
                         let spanning_key_set = key_set
                             .iter()
                             .filter_map(|ks| {
-                                if ks.iter().all(|k| expr_to_equivalent_literal.contains_key(k)) {
+                                if ks
+                                    .iter()
+                                    .all(|k| expr_to_equivalent_literal.contains_key(k))
+                                {
                                     Some(ks.clone())
                                 } else {
                                     None
@@ -135,7 +138,8 @@ impl FilterEqualLiteral {
                             let mut equivalences = Vec::new();
                             for spanning_keys in spanning_key_set.iter() {
                                 for key in spanning_keys {
-                                    let equivalent_literal = expr_to_equivalent_literal.remove(&key);
+                                    let equivalent_literal =
+                                        expr_to_equivalent_literal.remove(&key);
                                     if equivalent_literal.is_some() {
                                         equivalences
                                             .push(vec![key.clone(), equivalent_literal.unwrap()])

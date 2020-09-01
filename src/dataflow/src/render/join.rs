@@ -9,7 +9,6 @@
 
 use std::iter;
 
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::operators::join::{Join, JoinCore};
@@ -19,7 +18,6 @@ use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
-use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
 use expr::{RelationExpr, ScalarExpr};
@@ -28,11 +26,9 @@ use repr::{Datum, RelationType, Row, RowArena};
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
 
-impl<G, T> Context<G, RelationExpr, Row, T>
+impl<G> Context<G, RelationExpr, Row, repr::Timestamp>
 where
-    G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G: Scope<Timestamp = repr::Timestamp>,
 {
     pub fn render_join(
         &mut self,
@@ -487,7 +483,7 @@ where
                 };
 
                 // 1c. Render the constant collection
-                self.render_constant(&constant_row_expr, scope, worker_index);
+                self.ensure_rendered(&constant_row_expr, scope, worker_index);
                 let (constant_collection, errs) = self.collection(&constant_row_expr).unwrap();
 
                 // 1d. Assemble parts of the Join `RelationExpr` together.

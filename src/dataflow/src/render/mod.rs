@@ -112,6 +112,7 @@ use differential_dataflow::operators::consolidate::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
 use timely::communication::Allocate;
+use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
@@ -139,10 +140,8 @@ use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
 use crate::source::{SourceConfig, SourceToken};
 
 mod arrange_by;
-mod constant;
 mod context;
 mod delta_join;
-mod filter;
 mod join;
 mod reduce;
 mod threshold;
@@ -746,8 +745,22 @@ where
             // a collection or an arrangement. In either case, we associate the result with
             // the `relation_expr` argument in the context.
             match relation_expr {
-                RelationExpr::Constant { .. } => {
-                    self.render_constant(relation_expr, scope, worker_index);
+                RelationExpr::Constant { rows, .. } => {
+                    let rows = if worker_index == 0 {
+                        rows.clone()
+                    } else {
+                        vec![]
+                    };
+
+                    let collection = rows
+                        .to_stream(scope)
+                        .map(|(x, diff)| (x, timely::progress::Timestamp::minimum(), diff))
+                        .as_collection();
+
+                    let err_collection = Collection::empty(scope);
+
+                    self.collections
+                        .insert(relation_expr.clone(), (collection, err_collection));
                 }
 
                 // A get should have been loaded into the context, and it is surprising to
@@ -910,7 +923,22 @@ where
                         };
                         (ok_collection, err_collection.map(Into::into))
                     } else {
-                        self.render_filter(input, predicates.clone(), scope, worker_index)
+                        self.ensure_rendered(input, scope, worker_index);
+                        let temp_storage = RowArena::new();
+                        let predicates = predicates.clone();
+                        let (ok_collection, err_collection) = self.collection(input).unwrap();
+                        let (ok_collection, new_err_collection) =
+                            ok_collection.filter_fallible(move |input_row| {
+                                let datums = input_row.unpack();
+                                for p in &predicates {
+                                    if p.eval(&datums, &temp_storage)? != Datum::True {
+                                        return Ok(false);
+                                    }
+                                }
+                                Ok::<_, DataflowError>(true)
+                            });
+                        let err_collection = err_collection.concat(&new_err_collection);
+                        (ok_collection, err_collection)
                     };
                     self.collections.insert(relation_expr.clone(), collections);
                 }
