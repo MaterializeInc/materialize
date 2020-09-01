@@ -285,27 +285,25 @@ where
                 // in a min/max monoid wrapper. This would permit in-place
                 // compaction, and a substantially smaller memory footprint.
 
-                use timely::dataflow::operators::map::Map;
                 use differential_dataflow::operators::reduce::Count;
+                use timely::dataflow::operators::map::Map;
 
                 // We need two different code paths for min and max, as the
                 // monoid wrapper type encodes the logic.
                 if is_min(&func) {
-                    partial =
-                    partial
+                    partial = partial
                         .inner
                         .map(|((key, value), time, _)| (key, time, monoids::MinMonoid { value }))
                         .as_collection()
                         .count()
-                        .map(|(key, min)|  (key, min.value));
+                        .map(|(key, min)| (key, min.value));
                 } else if is_max(&func) {
-                    partial =
-                    partial
+                    partial = partial
                         .inner
                         .map(|((key, value), time, _)| (key, time, monoids::MaxMonoid { value }))
                         .as_collection()
                         .count()
-                        .map(|(key, min)|  (key, min.value));
+                        .map(|(key, min)| (key, min.value));
                 }
             } else {
                 partial = build_hierarchical(partial, &func)
@@ -635,21 +633,20 @@ fn is_max(func: &AggregateFunc) -> bool {
         | AggregateFunc::MaxTimestampTz => true,
         _ => false,
     }
-
 }
 
 /// Monoids for in-place compaction of monotonic streams.
 pub mod monoids {
-    use serde::{Deserialize, Serialize};
     use repr::{Datum, Row};
+    use serde::{Deserialize, Serialize};
 
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub struct MinMonoid {
         pub value: Row,
     }
 
-    use std::ops::AddAssign;
     use differential_dataflow::difference::Semigroup;
+    use std::ops::AddAssign;
 
     impl<'a> AddAssign<&'a Self> for MinMonoid {
         fn add_assign(&mut self, rhs: &'a Self) {
@@ -670,7 +667,9 @@ pub mod monoids {
     }
 
     impl Semigroup for MinMonoid {
-        fn is_zero(&self) -> bool { false }
+        fn is_zero(&self) -> bool {
+            false
+        }
     }
 
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
@@ -697,6 +696,8 @@ pub mod monoids {
     }
 
     impl Semigroup for MaxMonoid {
-        fn is_zero(&self) -> bool { false }
+        fn is_zero(&self) -> bool {
+            false
+        }
     }
 }
