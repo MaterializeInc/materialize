@@ -177,12 +177,21 @@ where
         .collect::<Result<Vec<_>, String>>()?;
     let mut expected = expected.iter();
     let mut actual = actual.iter();
-    for (i, (e, a)) in (&mut expected).zip(&mut actual).enumerate() {
-        if e != a {
-            return Err(format!(
-                "record {} did not match\nexpected:\n{:#?}\n\nactual:\n{:#?}",
-                i, e, a
-            ));
+    let mut index = 0..;
+    loop {
+        let i = index.next().expect("known to exist");
+        match (expected.next(), actual.next()) {
+            (Some(e), Some(a)) => {
+                if e != a {
+                    return Err(format!(
+                        "record {} did not match\nexpected:\n{:#?}\n\nactual:\n{:#?}",
+                        i, e, a
+                    ));
+                }
+            }
+            (Some(e), None) => return Err(format!("missing record {}: {:#?}", i, e)),
+            (None, Some(a)) => return Err(format!("extra record {}: {:#?}", i, a)),
+            (None, None) => break,
         }
     }
     let expected: Vec<_> = expected.map(|e| format!("{:#?}", e)).collect();

@@ -80,6 +80,8 @@ pub enum ExecuteResponse {
     AbortedTransaction,
     // The requested object was altered.
     AlteredObject(ObjectType),
+    // The index was altered.
+    AlteredIndexLogicalCompaction,
     /// The active transaction was committed.
     CommittedTransaction,
     /// The requested database was created.
