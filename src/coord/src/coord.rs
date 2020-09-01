@@ -932,14 +932,7 @@ where
         );
     }
 
-    /// Inserts a single row into the MZ_DATABASES catalog view, with diff `diff`.
-    ///
-    /// # Arguments
-    ///
-    /// * `global_id`:   Global id of the database.
-    /// * `name`:        Name of the database.
-    /// * `diff`:        The number of updates to perform. A positive number indicates an addition
-    ///                  of the row, a negative number indicates a subtraction.
+    /// Inserts or removes a row from [`builtin::MZ_DATABASES`] based on the supplied `diff`.
     fn update_mz_databases_catalog_view(&mut self, global_id: i64, name: &str, diff: isize) {
         self.update_catalog_view(
             MZ_DATABASES.id,
@@ -950,18 +943,7 @@ where
         )
     }
 
-    /// Inserts a single row into the MZ_SCHEMAS catalog view, with diff `diff`.
-    ///
-    /// # Arguments
-    ///
-    /// * `database_id`: String representation of the database in which the schema is present.
-    ///                  Possible values are an actual database's global id, or "AMBIENT".
-    /// * `schema_id`:   Id of the schema.
-    /// * `schema_name`: Name of the schema.
-    /// * `typ`:         There are two types of schemas: "SYSTEM" and "USER". This classification
-    ///                  impacts which schemas can be updated or deleted.
-    /// * `diff`:        The number of updates to perform. A positive number indicates an addition
-    ///                  of the row, a negative number indicates a subtraction.
+    /// Inserts or removes a row from [`builtin::MZ_SCHEMAS`] based on the supplied `diff`.
     fn update_mz_schemas_catalog_view(
         &mut self,
         database_id: &str,
@@ -984,16 +966,7 @@ where
         )
     }
 
-    /// Inserts a single row into the MZ_COLUMNS catalog view, with diff `diff`.
-    /// The MZ_COLUMNS catalog view contains a row for each column in every Table, Source, and View.
-    ///
-    /// # Arguments
-    ///
-    /// * `desc`:        RelationDesc of the Table, Source, or View.
-    /// * `full_name`:   Full, qualified name of the Table, Source, or View (e.g., "materialize.public.table").
-    /// * `global_id`:   GlobalId of the Table, Source, or View.
-    /// * `diff`:        The number of updates to perform. A positive number indicates an addition
-    ///                  of the row, a negative number indicates a subtraction.
+    /// Inserts or removes a row from [`builtin::MZ_COLUMNS`] based on the supplied `diff`.
     fn update_mz_columns_catalog_view(
         &mut self,
         desc: &RelationDesc,
