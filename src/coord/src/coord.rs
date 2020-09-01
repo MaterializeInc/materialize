@@ -44,6 +44,7 @@ use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
     ScalarExpr, SourceInstanceId,
 };
+use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker};
 use sql::ast::display::AstDisplay;
@@ -58,10 +59,10 @@ use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_KAFKA_SINKS,
-    MZ_SCHEMAS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
+    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
+use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState};
 use crate::persistence::{PersistenceConfig, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
@@ -322,6 +323,17 @@ where
 
             if let Ok(desc) = item.desc(&name) {
                 coord.update_mz_columns_catalog_view(desc, &name.to_string(), id, 1);
+            }
+            if let CatalogItem::Index(index) = item {
+                let nullable: Vec<bool> = index
+                    .keys
+                    .iter()
+                    .map(|key| {
+                        key.typ(coord.catalog.get_by_id(&index.on).desc().unwrap().typ())
+                            .nullable
+                    })
+                    .collect();
+                coord.update_mz_indexes_catalog_view(&name.to_string(), id, &index, nullable, 1);
             }
         }
 
@@ -1032,6 +1044,48 @@ where
                     diff,
                 )),
             )
+        }
+    }
+
+    fn update_mz_indexes_catalog_view(
+        &mut self,
+        key_name: &str,
+        global_id: GlobalId,
+        index: &Index,
+        nullable: Vec<bool>,
+        diff: isize,
+    ) {
+        let key_sqls = match sql::parse::parse(index.create_sql.to_owned())
+            .expect("create_sql cannot be invalid")
+            .into_element()
+        {
+            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts.unwrap(),
+            _ => unreachable!(),
+        };
+        for (i, key) in index.keys.iter().enumerate() {
+            let nullable = *nullable.get(i).unwrap();
+            let seq_in_index = (i + 1) as i64;
+            let row = match key {
+                ScalarExpr::Column(col) => Row::pack(&[
+                    Datum::String(&global_id.to_string()),
+                    Datum::String(key_name),
+                    Datum::String(&index.on.to_string()),
+                    Datum::Int64(*col as i64),
+                    Datum::Null,
+                    Datum::from(nullable),
+                    Datum::Int64(seq_in_index),
+                ]),
+                _ => Row::pack(&[
+                    Datum::String(&global_id.to_string()),
+                    Datum::String(key_name),
+                    Datum::String(&index.on.to_string()),
+                    Datum::Null,
+                    Datum::String(&key_sqls.get(i).unwrap().to_string()),
+                    Datum::from(nullable),
+                    Datum::Int64(seq_in_index),
+                ]),
+            };
+            self.update_catalog_view(MZ_INDEXES.id, iter::once((row, diff)))
         }
     }
 
@@ -2096,6 +2150,23 @@ where
                     if let Ok(desc) = item.desc(&name) {
                         self.update_mz_columns_catalog_view(desc, &name.to_string(), *id, 1);
                     }
+                    if let CatalogItem::Index(index) = item.clone() {
+                        let nullable: Vec<bool> = index
+                            .keys
+                            .iter()
+                            .map(|key| {
+                                key.typ(self.catalog.get_by_id(&index.on).desc().unwrap().typ())
+                                    .nullable
+                            })
+                            .collect();
+                        self.update_mz_indexes_catalog_view(
+                            &name.to_string(),
+                            *id,
+                            &index,
+                            nullable,
+                            1,
+                        );
+                    }
                 }
                 catalog::OpStatus::DroppedDatabase { name, id } => {
                     self.update_mz_databases_catalog_view(*id, name, -1);
@@ -2112,6 +2183,16 @@ where
                         "USER",
                         -1,
                     );
+                }
+                catalog::OpStatus::DroppedIndex {
+                    id,
+                    name,
+                    index,
+                    nullable,
+                } => {
+                    indexes_to_drop.push(*id);
+
+                    self.update_mz_indexes_catalog_view(name, *id, index, nullable.to_owned(), -1);
                 }
                 catalog::OpStatus::DroppedItem(entry) => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
@@ -2156,7 +2237,9 @@ where
                             // If the sink connector state is pending, the sink
                             // dataflow was never created, so nothing to drop.
                         }
-                        CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
+                        CatalogItem::Index(_) => {
+                            unreachable!("dropped indexes should be handled by DroppedIndex");
+                        }
                     }
                     if let Ok(desc) = entry.desc() {
                         self.update_mz_columns_catalog_view(
