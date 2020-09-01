@@ -456,7 +456,7 @@ mzconduct:
         service: chbench
         command: >-
           gen
-          --warehouses=1
+          --warehouses=${NUM_WAREHOUSES:-1}
           --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
       - step: print-env
       - step: wait-for-tcp
