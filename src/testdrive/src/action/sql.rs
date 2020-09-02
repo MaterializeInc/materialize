@@ -375,6 +375,7 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
                     .map(|x| x.to_string()),
                 Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
                 Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
+                Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
                 _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
             }
             .unwrap_or_else(|| "<null>".into()),

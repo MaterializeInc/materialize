@@ -10,6 +10,7 @@ byteorder = "1.3"
 bytes = "0.5"
 chrono = "0.4"
 lazy_static = "1.4.0"
-postgres-types = { version = "0.1.1", features = ["with-chrono-0_4"] }
+postgres-types = { version = "0.1.1", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 ore = { path = "../ore" }
 repr = { path = "../repr" }
+uuid = "0.8"

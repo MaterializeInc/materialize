@@ -33,6 +33,7 @@ use std::rc::Rc;
 use anyhow::{anyhow, bail};
 use chrono::Utc;
 use tokio_postgres::types::FromSql;
+use uuid::Uuid;
 
 use pgrepr::Jsonb;
 use repr::adt::decimal::Significand;
@@ -443,6 +444,10 @@ fn push_column(
             } else {
                 row.push(Datum::Null)
             }
+        }
+        DataType::Uuid => {
+            let u = get_column_inner::<Uuid>(postgres_row, i, nullable)?.unwrap();
+            row.push(Datum::UUID(u));
         }
         _ => bail!(
             "Postgres to materialize conversion not yet supported for {:?}",

@@ -25,6 +25,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 serde_regex = "1.1.0"
 smallvec = { version = "1.4.2", features = ["serde"] }
+uuid = "0.8"
 
 [dev-dependencies]
 criterion = "0.3"

@@ -29,6 +29,7 @@ use std::fmt;
 use chrono::offset::TimeZone;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use ore::fmt::FormatBuffer;
 
@@ -438,6 +439,20 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{:#}", jsonb)
+}
+
+pub fn parse_uuid(s: &str) -> Result<Uuid, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::new("uuid", s).with_details(e))
+}
+
+pub fn format_uuid<F>(buf: &mut F, uuid: Uuid) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", uuid);
+    Nestable::Yes
 }
 
 fn format_nanos_to_micros<F>(buf: &mut F, nanos: u32)

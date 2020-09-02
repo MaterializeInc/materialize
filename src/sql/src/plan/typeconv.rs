@@ -330,6 +330,7 @@ lazy_static! {
             (String, Explicit(Interval)) => CastStringToInterval,
             (String, Explicit(Bytes)) => CastStringToBytes,
             (String, Explicit(Jsonb)) => CastStringToJsonb,
+            (String, Explicit(UUID)) => CastStringToUuid,
             (String, JsonbAny) => CastJsonbOrNullToJsonb,
 
             // RECORD
@@ -347,7 +348,10 @@ lazy_static! {
             (Jsonb, Explicit(Float64)) => CastJsonbToFloat64,
             (Jsonb, Explicit(Decimal(0, 0))) => CastOp::F(from_jsonb_f64_cast),
             (Jsonb, Explicit(String)) => CastJsonbToString,
-            (Jsonb, JsonbAny) => CastJsonbOrNullToJsonb
+            (Jsonb, JsonbAny) => CastJsonbOrNullToJsonb,
+
+            // UUID
+            (UUID, Explicit(String)) => CastUuidToString
         }
     };
 }
