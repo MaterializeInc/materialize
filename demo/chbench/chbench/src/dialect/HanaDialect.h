@@ -427,7 +427,7 @@ class HanaDialect : public Dialect {
         // TPC-H-Query 8
         "select\n"
         "	extract(year from o_entry_d) as l_year,\n"
-        "	sum(case when n2.n_name = 'GERMANY' then ol_amount else 0 end) / sum(ol_amount) as mkt_share\n"
+        "	sum(case when n2.n_name = 'GERMANY' then ol_amount else 0 end) / CASE WHEN sum(ol_amount) = 0 THEN 1 ELSE sum(ol_amount) END as mkt_share\n"
         "from\n"
         "	TPCCH.item, TPCCH.supplier, TPCCH.stock, TPCCH.orderline, TPCCH.\"ORDER\", TPCCH.customer, TPCCH.nation n1, TPCCH.nation n2, TPCCH.region\n"
         "where\n"

@@ -439,7 +439,7 @@ class PostgresDialect : public Dialect {
         // TPC-H-Query 8
         "select\n"
         "	extract(year from o_entry_d) as l_year,\n"
-        "	sum(case when n2.n_name = 'GERMANY' then ol_amount else 0 end) / sum(ol_amount) as mkt_share\n"
+        "	sum(case when n2.n_name = 'GERMANY' then ol_amount else 0 end) / CASE WHEN sum(ol_amount) = 0 THEN 1 ELSE sum(ol_amount) END as mkt_share\n"
         "from\n"
         "	tpcch.item, tpcch.supplier, tpcch.stock, tpcch.orderline, tpcch.order, tpcch.customer, tpcch.nation n1, tpcch.nation n2, tpcch.region\n"
         "where\n"
