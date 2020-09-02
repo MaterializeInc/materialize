@@ -18,8 +18,8 @@ use timely::dataflow::operators::map::Map;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use dataflow_types::{DataEncoding, DataflowError, LinearOperator, Timestamp};
-use repr::{Datum, RelationType, Row, RowArena};
+use dataflow_types::{DataEncoding, DataflowError, LinearOperator};
+use repr::{Datum, RelationType, Row, RowArena, Timestamp};
 
 use crate::decode::decode_upsert;
 use crate::operator::StreamExt;

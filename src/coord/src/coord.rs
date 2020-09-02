@@ -38,14 +38,14 @@ use dataflow::{PersistenceMessage, SequencedCommand, WorkerFeedback, WorkerFeedb
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, SinkConnector,
-    SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
+    SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
     ScalarExpr, SourceInstanceId,
 };
 use ore::thread::JoinHandleExt;
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker};
+use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,

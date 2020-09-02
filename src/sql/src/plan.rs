@@ -32,8 +32,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
-use dataflow_types::{SinkConnectorBuilder, SourceConnector, Timestamp};
-use repr::{ColumnName, RelationDesc, Row, ScalarType};
+use dataflow_types::{SinkConnectorBuilder, SourceConnector};
+use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use crate::catalog::Catalog;

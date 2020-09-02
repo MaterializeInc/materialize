@@ -19,8 +19,7 @@ use timely::logging::WorkerIdentifier;
 
 use super::{DifferentialLog, LogVariant};
 use crate::arrangement::KeysValsHandle;
-use dataflow_types::Timestamp;
-use repr::{Datum, RowPacker};
+use repr::{Datum, RowPacker, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(

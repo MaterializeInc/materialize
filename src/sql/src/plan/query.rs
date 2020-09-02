@@ -35,9 +35,10 @@ use sql_parser::ast::{
 };
 
 use ::expr::{Id, RowSetFinishing};
-use dataflow_types::Timestamp;
 use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{strconv, ColumnName, Datum, RelationDesc, RelationType, RowArena, ScalarType};
+use repr::{
+    strconv, ColumnName, Datum, RelationDesc, RelationType, RowArena, ScalarType, Timestamp,
+};
 
 use crate::names::PartialName;
 use crate::normalize;

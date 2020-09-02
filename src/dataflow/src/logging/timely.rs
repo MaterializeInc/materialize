@@ -25,8 +25,7 @@ use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::Timestamp;
-use repr::Datum;
+use repr::{Datum, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(

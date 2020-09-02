@@ -309,7 +309,7 @@ where
         next_vals: Vec<usize>,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
-        J: JoinCore<G, Row, Row, expr::Diff>,
+        J: JoinCore<G, Row, Row, repr::Diff>,
     {
         // Pre-test for the arrangement existence, so that we can populate it if the
         // collection is present but the arrangement is not.
@@ -353,12 +353,12 @@ where
         next_vals: Vec<usize>,
     ) -> Collection<G, Row>
     where
-        J: JoinCore<G, Row, Row, expr::Diff>,
-        Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = expr::Diff>
+        J: JoinCore<G, Row, Row, repr::Diff>,
+        Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = repr::Diff>
             + Clone
             + 'static,
-        Tr2::Batch: BatchReader<Row, Tr2::Val, G::Timestamp, expr::Diff> + 'static,
-        Tr2::Cursor: Cursor<Row, Tr2::Val, G::Timestamp, expr::Diff> + 'static,
+        Tr2::Batch: BatchReader<Row, Tr2::Val, G::Timestamp, repr::Diff> + 'static,
+        Tr2::Cursor: Cursor<Row, Tr2::Val, G::Timestamp, repr::Diff> + 'static,
     {
         let mut row_packer = repr::RowPacker::new();
         prev_keyed.join_core(&next_input, move |_keys, old, new| {

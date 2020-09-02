@@ -41,11 +41,11 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, DataflowError, MzOffset, PeekResponse, Timestamp, TimestampSourceUpdate, Update,
+    DataflowDesc, DataflowError, MzOffset, PeekResponse, TimestampSourceUpdate, Update,
 };
-use expr::{Diff, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
+use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
-use repr::{Datum, Row, RowArena};
+use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;

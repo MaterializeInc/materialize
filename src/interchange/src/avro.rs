@@ -162,7 +162,7 @@ impl AvroDecode for AvroDbzSnapshotDecoder {
         _idx: usize,
         _n_variants: usize,
         _null_variant: Option<usize>,
-        deserializer: &'a mut D,
+        deserializer: D,
         reader: &'a mut R,
     ) -> Result<Self::Out> {
         deserializer.deserialize(reader, self)
@@ -291,7 +291,7 @@ impl<'a> AvroDecode for OptionalRowDecoder<'a> {
         idx: usize,
         _n_variants: usize,
         null_variant: Option<usize>,
-        deserializer: &'b mut D,
+        deserializer: D,
         reader: &'b mut R,
     ) -> Result<Self::Out> {
         if Some(idx) == null_variant {
@@ -433,7 +433,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         idx: usize,
         n_variants: usize,
         null_variant: Option<usize>,
-        deserializer: &'b mut D,
+        deserializer: D,
         reader: &'b mut R,
     ) -> Result<Self::Out> {
         if null_variant == Some(idx) {
@@ -441,6 +441,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
                 self.packer.push(Datum::Null)
             }
         } else {
+            let mut deserializer = Some(deserializer);
             for i in 0..n_variants {
                 let dec = AvroFlatDecoder {
                     packer: self.packer,
@@ -449,7 +450,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
                 };
                 if null_variant != Some(i) {
                     if i == idx {
-                        deserializer.deserialize(reader, dec)?;
+                        deserializer.take().unwrap().deserialize(reader, dec)?;
                     } else {
                         self.packer.push(Datum::Null)
                     }
@@ -1352,7 +1353,7 @@ impl Decoder {
                 buf: &mut self.buf1,
                 file_buf: &mut self.buf2,
             };
-            let mut dsr: GeneralDeserializer = GeneralDeserializer {
+            let dsr = GeneralDeserializer {
                 schema: resolved_schema.top_node(),
             };
             // Unwrap is OK: we assert in Decoder::new that this is non-none when envelope == dbz.
@@ -1392,7 +1393,7 @@ impl Decoder {
                 buf: &mut self.buf1,
                 is_top: true,
             };
-            let mut dsr: GeneralDeserializer = GeneralDeserializer {
+            let dsr = GeneralDeserializer {
                 schema: resolved_schema.top_node(),
             };
             dsr.deserialize(&mut bytes, dec)?;
@@ -1590,32 +1591,7 @@ impl fmt::Debug for Encoder {
 
 impl Encoder {
     pub fn new(desc: RelationDesc, include_transaction: bool) -> Self {
-        // Invent names for columns that don't have a name.
-        let mut columns: Vec<_> = desc
-            .into_iter()
-            .enumerate()
-            .map(|(i, (name, ty))| match name {
-                None => (ColumnName::from(format!("column{}", i + 1)), ty),
-                Some(name) => (name, ty),
-            })
-            .collect();
-
-        // Deduplicate names.
-        let mut seen = HashSet::new();
-        for (name, _ty) in &mut columns {
-            let stem_len = name.as_str().len();
-            let mut i = 1;
-            while seen.contains(name) {
-                name.as_mut_str().truncate(stem_len);
-                if name.as_str().ends_with(|c: char| c.is_ascii_digit()) {
-                    name.as_mut_str().push('_');
-                }
-                name.as_mut_str().push_str(&i.to_string());
-                i += 1;
-            }
-            seen.insert(name);
-        }
-
+        let columns = column_names_and_types(desc);
         let writer_schema = build_schema(&columns, include_transaction);
         Encoder {
             columns,
@@ -1739,6 +1715,36 @@ impl Encoder {
     {
         encode_datums_as_avro(row, &self.columns)
     }
+}
+
+/// Extracts deduplicated column names and types from a relation description.
+pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType)> {
+    // Invent names for columns that don't have a name.
+    let mut columns: Vec<_> = desc
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, ty))| match name {
+            None => (ColumnName::from(format!("column{}", i + 1)), ty),
+            Some(name) => (name, ty),
+        })
+        .collect();
+
+    // Deduplicate names.
+    let mut seen = HashSet::new();
+    for (name, _ty) in &mut columns {
+        let stem_len = name.as_str().len();
+        let mut i = 1;
+        while seen.contains(name) {
+            name.as_mut_str().truncate(stem_len);
+            if name.as_str().ends_with(|c: char| c.is_ascii_digit()) {
+                name.as_mut_str().push('_');
+            }
+            name.as_mut_str().push_str(&i.to_string());
+            i += 1;
+        }
+        seen.insert(name);
+    }
+    columns
 }
 
 /// Encodes a sequence of `Datum` as Avro, using supplied column names and types.
@@ -1872,6 +1878,511 @@ impl SchemaCache {
                     Ok(v.insert(Some(resolved)).as_ref())
                 }
             }
+        }
+    }
+}
+
+/// Logic for the Avro representation of the CDCv2 protocol.
+pub mod cdc_v2 {
+
+    use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
+    use serde_json::json;
+
+    use super::AvroFlatDecoder;
+    use anyhow::bail;
+    use avro::schema::Schema;
+    use avro::types::Value;
+    use avro::{
+        ArrayAsVecDecoder, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, I64Decoder,
+        TrivialDecoder,
+    };
+    use differential_dataflow::capture::{Message, Progress};
+    use std::{cell::RefCell, convert::TryInto, rc::Rc};
+
+    /// Collected state to encode update batches and progress statements.
+    #[derive(Debug)]
+    pub struct Encoder {
+        columns: Vec<(ColumnName, ColumnType)>,
+        schema: Schema,
+    }
+
+    impl Encoder {
+        /// Creates a new CDCv2 encoder from a relation description.
+        pub fn new(desc: RelationDesc) -> Self {
+            let columns = super::column_names_and_types(desc);
+            let row_schema = build_row_schema_json(&columns, "data");
+            let schema = build_schema(row_schema);
+            Self { columns, schema }
+        }
+
+        /// Encodes a batch of updates as an Avro value.
+        pub fn encode_updates(&self, updates: &[(Row, i64, i64)]) -> Value {
+            let mut enc_updates = Vec::new();
+            for (data, time, diff) in updates {
+                let enc_data = super::encode_datums_as_avro(data, &self.columns);
+                let enc_time = Value::Long(time.clone());
+                let enc_diff = Value::Long(diff.clone());
+                let mut enc_update = Vec::new();
+                enc_update.push(("data".to_string(), enc_data));
+                enc_update.push(("time".to_string(), enc_time));
+                enc_update.push(("diff".to_string(), enc_diff));
+                enc_updates.push(Value::Record(enc_update));
+            }
+            Value::Union {
+                index: 0,
+                inner: Box::new(Value::Array(enc_updates)),
+                n_variants: 2,
+                null_variant: None,
+            }
+        }
+
+        /// Encodes the contents of a progress statement as an Avro value.
+        pub fn encode_progress(
+            &self,
+            lower: &[i64],
+            upper: &[i64],
+            counts: &[(i64, i64)],
+        ) -> Value {
+            let enc_lower = Value::Array(lower.iter().cloned().map(Value::Long).collect());
+            let enc_upper = Value::Array(upper.iter().cloned().map(Value::Long).collect());
+            let enc_counts = Value::Array(
+                counts
+                    .iter()
+                    .map(|(time, count)| {
+                        Value::Record(vec![
+                            ("time".to_string(), Value::Long(time.clone())),
+                            ("count".to_string(), Value::Long(count.clone())),
+                        ])
+                    })
+                    .collect(),
+            );
+            let enc_progress = Value::Record(vec![
+                ("lower".to_string(), enc_lower),
+                ("upper".to_string(), enc_upper),
+                ("counts".to_string(), enc_counts),
+            ]);
+
+            Value::Union {
+                index: 1,
+                inner: Box::new(enc_progress),
+                n_variants: 2,
+                null_variant: None,
+            }
+        }
+    }
+
+    struct UpdateDecoder {
+        packer: Rc<RefCell<RowPacker>>,
+        buf: Rc<RefCell<Vec<u8>>>,
+        data: Option<Row>,
+        timestamp: Option<Timestamp>,
+        diff: Option<Diff>,
+    }
+    impl UpdateDecoder {
+        pub fn new(packer: Rc<RefCell<RowPacker>>, buf: Rc<RefCell<Vec<u8>>>) -> Self {
+            Self {
+                packer,
+                buf,
+                data: None,
+                timestamp: None,
+                diff: None,
+            }
+        }
+    }
+    impl AvroDecode for UpdateDecoder {
+        type Out = (Row, Timestamp, Diff);
+
+        fn record<R: AvroRead, A: AvroRecordAccess<R>>(
+            mut self,
+            a: &mut A,
+        ) -> anyhow::Result<Self::Out> {
+            while let Some((name, _idx, field)) = a.next_field()? {
+                match name {
+                    "time" => {
+                        if self.timestamp.is_some() {
+                            bail!("Timestamp field found twice!");
+                        }
+                        let t = field.decode_field(I64Decoder)?.try_into()?;
+                        self.timestamp = Some(t);
+                    }
+                    "diff" => {
+                        if self.diff.is_some() {
+                            bail!("Diff field found twice!");
+                        }
+                        let r = field.decode_field(I64Decoder)?.try_into()?;
+                        self.diff = Some(r);
+                    }
+                    "data" => {
+                        if self.data.is_some() {
+                            bail!("Data field found twice!");
+                        }
+                        let d = AvroFlatDecoder {
+                            packer: &mut *self.packer.borrow_mut(),
+                            buf: &mut *self.buf.borrow_mut(),
+                            is_top: true,
+                        };
+                        field.decode_field(d)?;
+                        self.data = Some(self.packer.borrow_mut().finish_and_reuse());
+                    }
+                    _ => {
+                        field.decode_field(TrivialDecoder)?;
+                    }
+                }
+            }
+            let t = if let Some(t) = self.timestamp.take() {
+                t
+            } else {
+                bail!("No timestamp found");
+            };
+            let r = if let Some(r) = self.diff.take() {
+                r
+            } else {
+                bail!("No diff found");
+            };
+            let data = if let Some(data) = self.data.take() {
+                data
+            } else {
+                bail!("No data found");
+            };
+            Ok((data, t, r))
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct CountDecoder {
+        time: Option<Timestamp>,
+        count: Option<usize>,
+    }
+
+    impl CountDecoder {
+        fn new() -> Self {
+            Self {
+                time: None,
+                count: None,
+            }
+        }
+    }
+    impl AvroDecode for CountDecoder {
+        type Out = (Timestamp, usize);
+
+        fn record<R: AvroRead, A: AvroRecordAccess<R>>(
+            mut self,
+            a: &mut A,
+        ) -> Result<Self::Out, anyhow::Error> {
+            while let Some((name, _idx, field)) = a.next_field()? {
+                match name {
+                    "time" => {
+                        if self.time.is_some() {
+                            bail!("Time field found twice!");
+                        }
+                        let time = field.decode_field(I64Decoder)?.try_into()?;
+                        self.time = Some(time);
+                    }
+                    "count" => {
+                        if self.count.is_some() {
+                            bail!("Count field found twice!");
+                        }
+                        let count = field.decode_field(I64Decoder)?.try_into()?;
+                        self.count = Some(count);
+                    }
+                    _ => {
+                        field.decode_field(TrivialDecoder)?;
+                    }
+                }
+            }
+            let time = if let Some(time) = self.time.take() {
+                time
+            } else {
+                bail!("Field not present: `time`");
+            };
+            let count = if let Some(count) = self.count.take() {
+                count
+            } else {
+                bail!("Field not present: `count`");
+            };
+            Ok((time, count))
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct ProgressDecoder {
+        lower: Option<Vec<Timestamp>>,
+        upper: Option<Vec<Timestamp>>,
+        counts: Option<Vec<(Timestamp, usize)>>,
+    }
+
+    impl AvroDecode for ProgressDecoder {
+        type Out = Progress<Timestamp>;
+
+        fn record<R: AvroRead, A: AvroRecordAccess<R>>(
+            mut self,
+            a: &mut A,
+        ) -> Result<Self::Out, anyhow::Error> {
+            while let Some((name, _idx, field)) = a.next_field()? {
+                match name {
+                    "lower" => {
+                        if self.lower.is_some() {
+                            bail!("Lower field found twice!");
+                        }
+                        let lower = field.decode_field(ArrayAsVecDecoder::new(
+                            || I64Decoder,
+                            |x| Ok(x.try_into()?),
+                        ))?;
+                        self.lower = Some(lower);
+                    }
+                    "upper" => {
+                        if self.upper.is_some() {
+                            bail!("Upper field found twice!");
+                        }
+                        let upper = field.decode_field(ArrayAsVecDecoder::new(
+                            || I64Decoder,
+                            |x| Ok(x.try_into()?),
+                        ))?;
+                        self.upper = Some(upper);
+                    }
+                    "counts" => {
+                        if self.counts.is_some() {
+                            bail!("Counts field found twice!");
+                        }
+                        let counts =
+                            field.decode_field(ArrayAsVecDecoder::new(CountDecoder::new, Ok))?;
+                        self.counts = Some(counts);
+                    }
+                    _ => {
+                        field.decode_field(TrivialDecoder)?;
+                    }
+                }
+            }
+            let lower = if let Some(lower) = self.lower.take() {
+                lower
+            } else {
+                bail!("No lower found");
+            };
+            let upper = if let Some(upper) = self.upper.take() {
+                upper
+            } else {
+                bail!("No upper found");
+            };
+            let counts = if let Some(counts) = self.counts.take() {
+                counts
+            } else {
+                bail!("No counts found");
+            };
+            Ok(Progress {
+                lower,
+                upper,
+                counts,
+            })
+        }
+    }
+
+    impl AvroDecode for Decoder {
+        type Out = Message<Row, Timestamp, Diff>;
+        fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
+            self,
+            idx: usize,
+            _n_variants: usize,
+            _null_variant: Option<usize>,
+            deserializer: D,
+            r: &'a mut R,
+        ) -> Result<Self::Out, anyhow::Error> {
+            match idx {
+                0 => {
+                    let packer = Rc::new(RefCell::new(RowPacker::new()));
+                    let buf = Rc::new(RefCell::new(vec![]));
+                    let d = ArrayAsVecDecoder::new(
+                        || UpdateDecoder::new(packer.clone(), buf.clone()),
+                        Ok,
+                    );
+                    let updates = deserializer.deserialize(r, d)?;
+                    Ok(Message::Updates(updates))
+                }
+                1 => {
+                    let progress = deserializer.deserialize(r, ProgressDecoder::default())?;
+                    Ok(Message::Progress(progress))
+                }
+
+                _ => bail!("Unrecognized union branch!"),
+            }
+        }
+    }
+
+    /// Collected state to decode update batches and progress statements.
+    #[derive(Debug)]
+    pub struct Decoder;
+
+    /// Builds the JSON for the row schema, which can be independenly useful.
+    pub fn build_row_schema_json(
+        columns: &[(ColumnName, ColumnType)],
+        name: &str,
+    ) -> serde_json::value::Value {
+        let mut fields = Vec::new();
+        for (name, typ) in columns.iter() {
+            let mut field_type = match &typ.scalar_type {
+                ScalarType::Bool => json!("boolean"),
+                ScalarType::Int32 => json!("int"),
+                ScalarType::Int64 => json!("long"),
+                ScalarType::Float32 => json!("float"),
+                ScalarType::Float64 => json!("double"),
+                ScalarType::Decimal(p, s) => json!({
+                    "type": "bytes",
+                    "logicalType": "decimal",
+                    "precision": p,
+                    "scale": s,
+                }),
+                ScalarType::Date => json!({
+                    "type": "int",
+                    "logicalType": "date",
+                }),
+                ScalarType::Time => json!({
+                    "type": "long",
+                    "logicalType": "time-micros",
+                }),
+                ScalarType::Timestamp | ScalarType::TimestampTz => json!({
+                    "type": "long",
+                    "logicalType": "timestamp-micros"
+                }),
+                ScalarType::Interval => json!({
+                    "type": "fixed",
+                    "size": 12,
+                    "logicalType": "duration"
+                }),
+                ScalarType::Bytes => json!("bytes"),
+                ScalarType::String => json!("string"),
+                ScalarType::Jsonb => json!({
+                    "type": "string",
+                }),
+                ScalarType::List(_t) => unimplemented!("list types"),
+                ScalarType::Record { .. } => unimplemented!("record types"),
+            };
+            if typ.nullable {
+                field_type = json!(["null", field_type]);
+            }
+            fields.push(json!({
+                "name": name,
+                "type": field_type,
+            }));
+        }
+        json!({
+            "type": "record",
+            "fields": fields,
+            "name": name
+        })
+    }
+
+    /// Construct the schema for the CDC V2 protocol.
+    pub fn build_schema(row_schema: serde_json::Value) -> Schema {
+        let updates_schema = json!({
+            "type": "array",
+            "items": {
+                "name" : "update",
+                "type" : "record",
+                "fields" : [
+                    {
+                        "name": "data",
+                        "type": row_schema,
+                    },
+                    {
+                        "name" : "time",
+                        "type" : "long",
+                    },
+                    {
+                        "name" : "diff",
+                        "type" : "long",
+                    },
+                ],
+            },
+        });
+
+        let progress_schema = json!({
+            "name" : "progress",
+            "type" : "record",
+            "fields" : [
+                {
+                    "name": "lower",
+                    "type": {
+                        "type": "array",
+                        "items": "long"
+                    }
+                },
+                {
+                    "name": "upper",
+                    "type": {
+                        "type": "array",
+                        "items": "long"
+                    }
+                },
+                {
+                    "name": "counts",
+                    "type": {
+                        "type": "array",
+                        "items": {
+                            "type": "record",
+                            "name": "counts",
+                            "fields": [
+                                {
+                                    "name": "time",
+                                    "type": "long",
+                                },
+                                {
+                                    "name": "count",
+                                    "type": "long",
+                                },
+                            ],
+                        }
+                    }
+                },
+            ],
+        });
+        let message_schema = json!([updates_schema, progress_schema,]);
+
+        Schema::parse(&message_schema).expect("schema constrution failed")
+    }
+
+    #[cfg(test)]
+    mod tests {
+
+        use super::*;
+        use avro::AvroDeserializer;
+        use avro::GeneralDeserializer;
+
+        #[test]
+        fn test_roundtrip() {
+            let desc = RelationDesc::empty()
+                .with_column("id", ScalarType::Int64.nullable(false))
+                .with_column("price", ScalarType::Float64.nullable(true));
+
+            let encoder = Encoder::new(desc.clone());
+            let row_schema =
+                build_row_schema_json(&crate::avro::column_names_and_types(desc), "data");
+            let schema = build_schema(row_schema);
+
+            let values = vec![
+                encoder.encode_updates(&[]),
+                encoder.encode_progress(&[0], &[3], &[]),
+                encoder.encode_progress(&[3], &[], &[]),
+            ];
+            use avro::encode::encode_to_vec;;
+            let mut values: Vec<_> = values
+                .into_iter()
+                .map(|v| encode_to_vec(&v, &schema))
+                .collect();
+
+            let g = GeneralDeserializer {
+                schema: schema.top_node(),
+            };
+            assert!(matches!(
+                g.deserialize(&mut &values.remove(0)[..], Decoder).unwrap(),
+                Message::Updates(_)
+            ),);
+            assert!(matches!(
+                g.deserialize(&mut &values.remove(0)[..], Decoder).unwrap(),
+                Message::Progress(_)
+            ),);
+            assert!(matches!(
+                g.deserialize(&mut &values.remove(0)[..], Decoder).unwrap(),
+                Message::Progress(_)
+            ),);
         }
     }
 }
