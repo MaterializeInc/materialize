@@ -288,6 +288,7 @@ where
                 // `row` contains a single value that can be minimized or
                 // maximized over.
 
+                use differential_dataflow::operators::consolidate::Consolidate;
                 use differential_dataflow::operators::reduce::Count;
                 use timely::dataflow::operators::map::Map;
 
@@ -304,15 +305,23 @@ where
                 // save an operator.
                 if is_min(&func) {
                     partial = partial
+                        .consolidate()
                         .inner
-                        .map(|((key, value), time, _)| (key, time, monoids::MinMonoid { value }))
+                        .map(|((key, value), time, diff)| {
+                            assert!(diff > 0);
+                            (key, time, monoids::MinMonoid { value })
+                        })
                         .as_collection()
                         .count()
                         .map(|(key, min)| (key, min.value));
                 } else if is_max(&func) {
                     partial = partial
+                        .consolidate()
                         .inner
-                        .map(|((key, value), time, _)| (key, time, monoids::MaxMonoid { value }))
+                        .map(|((key, value), time, diff)| {
+                            assert!(diff > 0);
+                            (key, time, monoids::MaxMonoid { value })
+                        })
                         .as_collection()
                         .count()
                         .map(|(key, max)| (key, max.value));
@@ -651,6 +660,17 @@ fn is_max(func: &AggregateFunc) -> bool {
 
 /// Monoids for in-place compaction of monotonic streams.
 pub mod monoids {
+
+    // We can improve the performance of some aggregations through the use of algebra.
+    // In particular, we can move some of the aggregations in to the `diff` field of
+    // updates, by changing `diff` from integers to a different algebraic structure.
+    //
+    // The one we use is called a "semigroup", and it means that the structure has a
+    // symmetric addition operator. The trait we use also allows the semigroup elements
+    // to present as "zero", meaning they always act as the identity under +, but we
+    // will not have such elements in this case (they would correspond to positive and
+    // negative infinity, which we do not represent).
+
     use repr::{Datum, Row};
     use serde::{Deserialize, Serialize};
 
