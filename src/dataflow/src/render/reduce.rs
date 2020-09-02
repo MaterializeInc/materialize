@@ -315,7 +315,7 @@ where
                         .map(|((key, value), time, _)| (key, time, monoids::MaxMonoid { value }))
                         .as_collection()
                         .count()
-                        .map(|(key, min)| (key, min.value));
+                        .map(|(key, max)| (key, max.value));
                 }
             } else {
                 partial = build_hierarchical(partial, &func)
