@@ -258,7 +258,6 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
                 Ok(Ok(record)) => {
                     self.current_file_offset.offset += 1;
                     let message = SourceMessage {
-                        predecessor: None,
                         partition: PartitionId::File,
                         offset: self.current_file_offset.into(),
                         key: None,

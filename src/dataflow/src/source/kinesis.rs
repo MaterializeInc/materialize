@@ -296,7 +296,6 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                         let data = record.data.as_ref().to_vec();
                         self.processed_message_count += 1;
                         let source_message = SourceMessage {
-                            predecessor: None,
                             partition: PartitionId::Kinesis(shard_id.clone()),
                             offset: MzOffset {
                                 //TODO: should MzOffset be modified to be a string?

@@ -66,9 +66,6 @@ pub struct KafkaSourceInfo {
     worker_id: i32,
     /// Worker Count
     worker_count: i32,
-    /// Keep track of the offset of the last record we saw, so that we can tag the next incoming
-    /// record with its predecessor.
-    prev_offset: Option<MzOffset>,
 }
 
 impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
@@ -331,14 +328,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             self.get_worker_partition_count()
         );
 
-        Ok(if let Some(mut message) = next_message {
-            message.predecessor = self.prev_offset;
-            self.prev_offset = Some(message.offset);
-
-            Some(message)
-        } else {
-            None
-        })
+        Ok(next_message)
     }
 
     fn buffer_message(&mut self, message: SourceMessage<Vec<u8>>) {
@@ -389,6 +379,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         persistence_tx: &mut Option<PersistenceSender>,
         message: &SourceMessage<Vec<u8>>,
         timestamp: Timestamp,
+        predecessor: Option<MzOffset>,
     ) {
         // Send this record to be persisted
         if let Some(persistence_tx) = persistence_tx {
@@ -406,7 +397,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 source_id: self.source_global_id,
                 partition_id,
                 record: Record {
-                    predecessor: message.predecessor.map(|p| p.offset),
+                    predecessor: predecessor.map(|p| p.offset),
                     offset: message.offset.offset,
                     timestamp,
                     key,
@@ -458,7 +449,6 @@ impl KafkaSourceInfo {
             consumer: Arc::new(consumer),
             worker_id: worker_id.try_into().unwrap(),
             worker_count: worker_count.try_into().unwrap(),
-            prev_offset: None,
         }
     }
 
@@ -637,7 +627,6 @@ impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<Vec<u8>> {
             offset: msg.offset(),
         };
         Self {
-            predecessor: None,
             payload: msg.payload().map(|p| p.to_vec()),
             partition: PartitionId::Kafka(msg.partition()),
             offset: kafka_offset.into(),
