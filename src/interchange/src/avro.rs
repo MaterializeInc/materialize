@@ -1890,9 +1890,9 @@ pub mod cdc_v2 {
 
     use super::AvroFlatDecoder;
     use anyhow::bail;
-    use avro::schema::Schema;
-    use avro::types::Value;
-    use avro::{
+    use mz_avro::schema::Schema;
+    use mz_avro::types::Value;
+    use mz_avro::{
         ArrayAsVecDecoder, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, I64Decoder,
         TrivialDecoder,
     };
@@ -2343,8 +2343,8 @@ pub mod cdc_v2 {
     mod tests {
 
         use super::*;
-        use avro::AvroDeserializer;
-        use avro::GeneralDeserializer;
+        use mz_avro::AvroDeserializer;
+        use mz_avro::GeneralDeserializer;
 
         #[test]
         fn test_roundtrip() {
@@ -2362,7 +2362,7 @@ pub mod cdc_v2 {
                 encoder.encode_progress(&[0], &[3], &[]),
                 encoder.encode_progress(&[3], &[], &[]),
             ];
-            use avro::encode::encode_to_vec;;
+            use mz_avro::encode::encode_to_vec;;
             let mut values: Vec<_> = values
                 .into_iter()
                 .map(|v| encode_to_vec(&v, &schema))
