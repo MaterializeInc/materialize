@@ -280,13 +280,52 @@ where
         // update costs on relatively small updates.
         if hierarchical {
             if monotonic && is_min_or_max(&func) {
-                use differential_dataflow::operators::iterate::Variable;
-                let delay = std::time::Duration::from_nanos(10_000_000_000);
-                let retractions = Variable::new(&mut partial.scope(), delay.as_millis() as u64);
-                let thinned = partial.concat(&retractions.negate());
-                let result = build_hierarchical(thinned, &func);
-                retractions.set(&partial.concat(&result.negate()));
-                partial = result
+                // At this point, we assert that inputs are never retracted.
+                // We could move the datum to the `diff` component, wrapped
+                // in a min/max monoid wrapper. This would permit in-place
+                // compaction, and a substantially smaller memory footprint.
+                // The records in the stream are pairs `(key, row)` where
+                // `row` contains a single value that can be minimized or
+                // maximized over.
+
+                use differential_dataflow::operators::consolidate::Consolidate;
+                use differential_dataflow::operators::reduce::Count;
+                use timely::dataflow::operators::map::Map;
+
+                // We need two different code paths for min and max, as the
+                // monoid wrapper type encodes the logic. In each case, we
+                // wrap the value with the monoid wrapper, which will allow
+                // in-place accumulation using either "min" or "max".
+                // The `count` operator promotes the accumulated value back
+                // to data, and we pass along the reduced form to the final
+                // operator.
+                // TODO(frank): the `count` operator very nearly produces
+                // the arrangement we want as output, minus some formatting
+                // with prefixed keys and such. But we could fuse them and
+                // save an operator.
+                if is_min(&func) {
+                    partial = partial
+                        .consolidate()
+                        .inner
+                        .map(|((key, value), time, diff)| {
+                            assert!(diff > 0);
+                            (key, time, monoids::MinMonoid { value })
+                        })
+                        .as_collection()
+                        .count()
+                        .map(|(key, min)| (key, min.value));
+                } else if is_max(&func) {
+                    partial = partial
+                        .consolidate()
+                        .inner
+                        .map(|((key, value), time, diff)| {
+                            assert!(diff > 0);
+                            (key, time, monoids::MaxMonoid { value })
+                        })
+                        .as_collection()
+                        .count()
+                        .map(|(key, max)| (key, max.value));
+                }
             } else {
                 partial = build_hierarchical(partial, &func)
             }
@@ -582,18 +621,13 @@ fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
 
 /// True if the function is min or max.
 fn is_min_or_max(func: &AggregateFunc) -> bool {
+    is_min(func) || is_max(func)
+}
+
+/// Is the aggregate function a "min" variant.
+fn is_min(func: &AggregateFunc) -> bool {
     match func {
-        AggregateFunc::MaxInt32
-        | AggregateFunc::MaxInt64
-        | AggregateFunc::MaxFloat32
-        | AggregateFunc::MaxFloat64
-        | AggregateFunc::MaxDecimal
-        | AggregateFunc::MaxBool
-        | AggregateFunc::MaxString
-        | AggregateFunc::MaxDate
-        | AggregateFunc::MaxTimestamp
-        | AggregateFunc::MaxTimestampTz
-        | AggregateFunc::MinInt32
+        AggregateFunc::MinInt32
         | AggregateFunc::MinInt64
         | AggregateFunc::MinFloat32
         | AggregateFunc::MinFloat64
@@ -604,5 +638,102 @@ fn is_min_or_max(func: &AggregateFunc) -> bool {
         | AggregateFunc::MinTimestamp
         | AggregateFunc::MinTimestampTz => true,
         _ => false,
+    }
+}
+
+/// Is the aggregate function is a "max" variant.
+fn is_max(func: &AggregateFunc) -> bool {
+    match func {
+        AggregateFunc::MaxInt32
+        | AggregateFunc::MaxInt64
+        | AggregateFunc::MaxFloat32
+        | AggregateFunc::MaxFloat64
+        | AggregateFunc::MaxDecimal
+        | AggregateFunc::MaxBool
+        | AggregateFunc::MaxString
+        | AggregateFunc::MaxDate
+        | AggregateFunc::MaxTimestamp
+        | AggregateFunc::MaxTimestampTz => true,
+        _ => false,
+    }
+}
+
+/// Monoids for in-place compaction of monotonic streams.
+pub mod monoids {
+
+    // We can improve the performance of some aggregations through the use of algebra.
+    // In particular, we can move some of the aggregations in to the `diff` field of
+    // updates, by changing `diff` from integers to a different algebraic structure.
+    //
+    // The one we use is called a "semigroup", and it means that the structure has a
+    // symmetric addition operator. The trait we use also allows the semigroup elements
+    // to present as "zero", meaning they always act as the identity under +, but we
+    // will not have such elements in this case (they would correspond to positive and
+    // negative infinity, which we do not represent).
+
+    use repr::{Datum, Row};
+    use serde::{Deserialize, Serialize};
+
+    /// A monoid containing a single-datum row, that is updated by SQL's `min`.
+    #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    pub struct MinMonoid {
+        pub value: Row,
+    }
+
+    use differential_dataflow::difference::Semigroup;
+    use std::ops::AddAssign;
+
+    impl<'a> AddAssign<&'a Self> for MinMonoid {
+        fn add_assign(&mut self, rhs: &'a Self) {
+            let swap = {
+                let lhs_val = self.value.unpack_first();
+                let rhs_val = rhs.value.unpack_first();
+                // Datum::Null is the identity, not a small element.
+                match (lhs_val, rhs_val) {
+                    (_, Datum::Null) => false,
+                    (Datum::Null, _) => true,
+                    (lhs, rhs) => rhs < lhs,
+                }
+            };
+            if swap {
+                self.value.clone_from(&rhs.value);
+            }
+        }
+    }
+
+    impl Semigroup for MinMonoid {
+        fn is_zero(&self) -> bool {
+            false
+        }
+    }
+
+    /// A monoid containing a single-datum row, that is updated by SQL's `max`.
+    #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    pub struct MaxMonoid {
+        pub value: Row,
+    }
+
+    impl<'a> AddAssign<&'a Self> for MaxMonoid {
+        fn add_assign(&mut self, rhs: &'a Self) {
+            let swap = {
+                let lhs_val = self.value.unpack_first();
+                let rhs_val = rhs.value.unpack_first();
+                // Datum::Null is the identity, not a large element.
+                match (lhs_val, rhs_val) {
+                    (_, Datum::Null) => false,
+                    (Datum::Null, _) => true,
+                    (lhs, rhs) => rhs > lhs,
+                }
+            };
+            if swap {
+                self.value.clone_from(&rhs.value);
+            }
+        }
+    }
+
+    impl Semigroup for MaxMonoid {
+        fn is_zero(&self) -> bool {
+            false
+        }
     }
 }
