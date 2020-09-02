@@ -304,12 +304,8 @@ pub fn construct<A: Allocate>(
         let delay = std::time::Duration::from_nanos(10_000_000_000);
 
         // Only keep metrics and histograms for the dataflow operators that currently exist.
-        elapsed = thin_collection(elapsed, delay, |c| {
-            c.semijoin(&operates.map(|(k, _)| k ))
-        });
-        histogram = thin_collection(histogram, delay, |c| {
-            c.semijoin(&operates.map(|(k, _)| k ))
-        });
+        elapsed = thin_collection(elapsed, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
+        histogram = thin_collection(histogram, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
 
         let elapsed = elapsed.map({
             let mut row_packer = repr::RowPacker::new();
