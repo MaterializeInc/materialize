@@ -3,7 +3,7 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 //
-// A:As of the Change Date specified in that file, in accordance with
+// As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
@@ -2082,7 +2082,7 @@ pub mod cdc_v2 {
                         if self.count.is_some() {
                             bail!("Count field found twice!");
                         }
-                        let count = field.decode_field(I64Decoder)?.try_into()?; // XXX Fixme
+                        let count = field.decode_field(I64Decoder)?.try_into()?;
                         self.count = Some(count);
                     }
                     _ => {
