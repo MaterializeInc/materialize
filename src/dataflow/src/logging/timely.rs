@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::operators::count::CountTotal;
-use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::operators::join::Join;
 use differential_dataflow::{Collection, Data};
 use timely::communication::Allocate;
@@ -305,10 +305,10 @@ pub fn construct<A: Allocate>(
 
         // Only keep metrics and histograms for the dataflow operators that currently exist.
         elapsed = thin_collection(elapsed, delay, |c| {
-            operates.join_map(&c, move |key, _val1, val2| (*key, *val2))
+            c.semijoin(&operates.map(|(k, _)| k ))
         });
         histogram = thin_collection(histogram, delay, |c| {
-            operates.join_map(&c, move |key, _val1, val2| (*key, *val2))
+            c.semijoin(&operates.map(|(k, _)| k ))
         });
 
         let elapsed = elapsed.map({
@@ -424,7 +424,7 @@ where
     F: FnMut(Collection<G, D, R>) -> Collection<G, D, R>,
 {
     // `retractions` represents the records in `c` that we no longer care about
-    let retractions = Variable::new(&mut c.scope(), delay.as_millis() as Timestamp);
+    let retractions = SemigroupVariable::new(&mut c.scope(), delay.as_millis() as Timestamp);
     // subtract out the retractions from `c`
     let thinned = c.concat(&retractions.negate());
     // Compute the collection we still care about
