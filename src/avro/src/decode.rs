@@ -21,6 +21,11 @@ use crate::{
     TrivialDecoder, ValueDecoder,
 };
 
+pub trait AvroDecodeable: Sized {
+    type Decoder: AvroDecode<Out = Self>;
+
+    fn new_decoder() -> Self::Decoder;
+}
 #[inline]
 fn decode_long_nonneg<R: Read>(reader: &mut R) -> Result<u64, Error> {
     let u = match zag_i64(reader)? {
@@ -551,12 +556,18 @@ pub trait AvroDecode: Sized {
     ) -> Result<Self::Out, Error> {
         bail!("Unexpected fixed");
     }
+    fn map_decoder<T, F: FnMut(Self::Out) -> Result<T, Error>>(
+        self,
+        f: F,
+    ) -> public_decoders::MappingDecoder<T, Self::Out, Self, F> {
+        public_decoders::MappingDecoder::new(self, f)
+    }
 }
 
 pub mod public_decoders {
     use anyhow::{bail, Error};
 
-    use super::AvroMapAccess;
+    use super::{AvroDecodeable, AvroMapAccess};
     use crate::types::{DecimalValue, Scalar, Value};
     use crate::{
         AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, ValueOrReader,
@@ -569,63 +580,192 @@ pub mod public_decoders {
             impl AvroDecode for $name {
                 type Out = $out;
                 fn scalar(self, scalar: Scalar) -> Result<$out, Error> {
+                    use std::convert::TryInto;
                     let out = match scalar {
                         $(
-                            Scalar::$scalar_branch(inner) => {inner as $out}
+                            Scalar::$scalar_branch(inner) => {inner.try_into()?}
                         ),*
                             other => bail!("Unexpected scalar: {:#?}", other)
                     };
                     Ok(out)
                 }
             }
+
+            impl AvroDecodeable for $out {
+                type Decoder = $name;
+                fn new_decoder() -> $name {
+                    $name
+                }
+            }
         }
     }
 
     define_simple_decoder!(I32Decoder, i32, Int;Long);
-    define_simple_decoder!(I64Decoder, i64, Long);
+    define_simple_decoder!(I64Decoder, i64, Int;Long);
+    define_simple_decoder!(U64Decoder, u64, Int;Long);
+    define_simple_decoder!(UsizeDecoder, usize, Int;Long);
 
-    pub struct ArrayAsVecDecoder<
+    pub struct MappingDecoder<
         T,
         InnerOut,
         Inner: AvroDecode<Out = InnerOut>,
-        Ctor: FnMut() -> Inner,
         Conv: FnMut(InnerOut) -> Result<T, Error>,
     > {
-        ctor: Ctor,
+        inner: Inner,
         conv: Conv,
-        buf: Vec<T>,
     }
 
     impl<
             T,
             InnerOut,
             Inner: AvroDecode<Out = InnerOut>,
-            Ctor: FnMut() -> Inner,
             Conv: FnMut(InnerOut) -> Result<T, Error>,
-        > ArrayAsVecDecoder<T, InnerOut, Inner, Ctor, Conv>
+        > MappingDecoder<T, InnerOut, Inner, Conv>
     {
-        pub fn new(ctor: Ctor, conv: Conv) -> Self {
-            Self {
-                ctor,
-                conv,
-                buf: vec![],
-            }
+        pub fn new(inner: Inner, conv: Conv) -> Self {
+            Self { inner, conv }
         }
     }
+
     impl<
             T,
             InnerOut,
             Inner: AvroDecode<Out = InnerOut>,
-            Ctor: FnMut() -> Inner,
             Conv: FnMut(InnerOut) -> Result<T, Error>,
-        > AvroDecode for ArrayAsVecDecoder<T, InnerOut, Inner, Ctor, Conv>
+        > AvroDecode for MappingDecoder<T, InnerOut, Inner, Conv>
     {
-        type Out = Vec<T>;
+        type Out = T;
+
+        fn record<R: AvroRead, A: AvroRecordAccess<R>>(
+            mut self,
+            a: &mut A,
+        ) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.record(a)?)?)
+        }
+
+        fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
+            mut self,
+            idx: usize,
+            n_variants: usize,
+            null_variant: Option<usize>,
+            deserializer: D,
+            reader: &'a mut R,
+        ) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.union_branch(
+                idx,
+                n_variants,
+                null_variant,
+                deserializer,
+                reader,
+            )?)?)
+        }
+
+        fn array<A: AvroArrayAccess>(mut self, a: &mut A) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.array(a)?)?)
+        }
+
+        fn map<M: AvroMapAccess>(mut self, m: &mut M) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.map(m)?)?)
+        }
+
+        fn enum_variant(mut self, symbol: &str, idx: usize) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.enum_variant(symbol, idx)?)?)
+        }
+
+        fn scalar(mut self, scalar: Scalar) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.scalar(scalar)?)?)
+        }
+
+        fn decimal<'a, R: AvroRead>(
+            mut self,
+            precision: usize,
+            scale: usize,
+            r: ValueOrReader<'a, &'a [u8], R>,
+        ) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.decimal(precision, scale, r)?)?)
+        }
+
+        fn bytes<'a, R: AvroRead>(
+            mut self,
+            r: ValueOrReader<'a, &'a [u8], R>,
+        ) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.bytes(r)?)?)
+        }
+
+        fn string<'a, R: AvroRead>(
+            mut self,
+            r: ValueOrReader<'a, &'a str, R>,
+        ) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.string(r)?)?)
+        }
+
+        fn json<'a, R: AvroRead>(
+            mut self,
+            r: ValueOrReader<'a, &'a serde_json::Value, R>,
+        ) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.json(r)?)?)
+        }
+
+        fn fixed<'a, R: AvroRead>(
+            mut self,
+            r: ValueOrReader<'a, &'a [u8], R>,
+        ) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.fixed(r)?)?)
+        }
+    }
+    pub struct ArrayAsVecDecoder<
+        InnerOut,
+        Inner: AvroDecode<Out = InnerOut>,
+        Ctor: FnMut() -> Inner,
+    > {
+        ctor: Ctor,
+        buf: Vec<InnerOut>,
+    }
+
+    impl<InnerOut, Inner: AvroDecode<Out = InnerOut>, Ctor: FnMut() -> Inner>
+        ArrayAsVecDecoder<InnerOut, Inner, Ctor>
+    {
+        pub fn new(ctor: Ctor) -> Self {
+            Self { ctor, buf: vec![] }
+        }
+    }
+    impl<InnerOut, Inner: AvroDecode<Out = InnerOut>, Ctor: FnMut() -> Inner> AvroDecode
+        for ArrayAsVecDecoder<InnerOut, Inner, Ctor>
+    {
+        type Out = Vec<InnerOut>;
         fn array<A: AvroArrayAccess>(mut self, a: &mut A) -> Result<Self::Out, Error> {
             while let Some(next) = a.decode_next((self.ctor)())? {
-                self.buf.push((self.conv)(next)?);
+                self.buf.push(next);
             }
             Ok(self.buf)
+        }
+    }
+
+    pub struct DefaultArrayAsVecDecoder<T> {
+        buf: Vec<T>,
+    }
+    impl<T> Default for DefaultArrayAsVecDecoder<T> {
+        fn default() -> Self {
+            Self { buf: vec![] }
+        }
+    }
+    impl<T: AvroDecodeable> AvroDecode for DefaultArrayAsVecDecoder<T> {
+        type Out = Vec<T>;
+        fn array<A: AvroArrayAccess>(mut self, a: &mut A) -> Result<Self::Out, Error> {
+            while let Some(next) = {
+                let inner = T::new_decoder();
+                a.decode_next(inner)?
+            } {
+                self.buf.push(next);
+            }
+            Ok(self.buf)
+        }
+    }
+    impl<T: AvroDecodeable> AvroDecodeable for Vec<T> {
+        type Decoder = DefaultArrayAsVecDecoder<T>;
+
+        fn new_decoder() -> Self::Decoder {
+            DefaultArrayAsVecDecoder::<T>::default()
         }
     }
 
