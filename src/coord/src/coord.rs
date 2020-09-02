@@ -309,7 +309,7 @@ where
             coord.report_catalog_update(id, name.to_string(), 1);
 
             if let Ok(desc) = item.desc(&name) {
-                coord.update_mz_columns_catalog_view(desc, &name.to_string(), id, 1);
+                coord.update_mz_columns_catalog_view(desc, id, 1);
             }
         }
 
@@ -956,8 +956,8 @@ where
             MZ_SCHEMAS.id,
             iter::once((
                 Row::pack(&[
-                    Datum::Int64(schema_id),
                     Datum::String(database_id),
+                    Datum::Int64(schema_id),
                     Datum::String(schema_name),
                     Datum::String(typ),
                 ]),
@@ -970,7 +970,6 @@ where
     fn update_mz_columns_catalog_view(
         &mut self,
         desc: &RelationDesc,
-        full_name: &str,
         global_id: GlobalId,
         diff: isize,
     ) {
@@ -979,7 +978,6 @@ where
                 MZ_COLUMNS.id,
                 iter::once((
                     Row::pack(&[
-                        Datum::String(&full_name),
                         Datum::String(&global_id.to_string()),
                         Datum::Int64(i as i64),
                         Datum::String(
@@ -2090,7 +2088,7 @@ where
                     );
 
                     if let Ok(desc) = item.desc(&name) {
-                        self.update_mz_columns_catalog_view(desc, &name.to_string(), *id, 1);
+                        self.update_mz_columns_catalog_view(desc, *id, 1);
                     }
                 }
                 catalog::OpStatus::DroppedDatabase { name, id } => {
@@ -2155,12 +2153,7 @@ where
                         CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
                     }
                     if let Ok(desc) = entry.desc() {
-                        self.update_mz_columns_catalog_view(
-                            desc,
-                            &entry.name().to_string(),
-                            entry.id(),
-                            -1,
-                        );
+                        self.update_mz_columns_catalog_view(desc, entry.id(), -1);
                     }
                 }
                 _ => (),

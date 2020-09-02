@@ -800,7 +800,10 @@ fn handle_show_columns(
     }
 
     let mut selection = Expr::BinaryOp {
-        left: Box::new(Expr::Identifier(vec![Ident::new("qualified_name")])),
+        left: Box::new(Expr::Identifier(vec![
+            Ident::new("mz_catalog_names"),
+            Ident::new("name"),
+        ])),
         op: BinaryOperator::Eq,
         right: Box::new(Expr::Value(Value::String(
             scx.resolve_item(table_name)?.to_string(),
@@ -820,7 +823,23 @@ fn handle_show_columns(
                 name: ObjectName(vec![Ident::new("mz_columns")]),
                 alias: None,
             },
-            joins: vec![],
+            joins: vec![Join {
+                relation: TableFactor::Table {
+                    name: ObjectName(vec![Ident::new("mz_catalog_names")]),
+                    alias: None,
+                },
+                join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
+                    left: Box::new(Expr::Identifier(vec![
+                        Ident::new("mz_columns"),
+                        Ident::new("global_id"),
+                    ])),
+                    op: BinaryOperator::Eq,
+                    right: Box::new(Expr::Identifier(vec![
+                        Ident::new("mz_catalog_names"),
+                        Ident::new("global_id"),
+                    ])),
+                })),
+            }],
         })
         .selection(Some(selection))
         .project(SelectItem::Expr {
