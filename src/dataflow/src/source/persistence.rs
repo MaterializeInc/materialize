@@ -35,12 +35,12 @@ pub type PersistenceSender = Pin<Box<dyn Sink<PersistenceMessage, Error = comm::
 /// the persister thread, and read back in and sent to the ingest pipeline later.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Record {
-    /// The offset of the record that comes before this one in the topic.
-    pub predecessor: Option<i64>,
     /// Offset of record in a partition.
     pub offset: i64,
     /// Timestamp of record.
     pub timestamp: Timestamp,
+    /// The offset of the record that comes before this one in the topic.
+    pub predecessor: Option<i64>,
     /// Record key.
     pub key: Vec<u8>,
     /// Record value.

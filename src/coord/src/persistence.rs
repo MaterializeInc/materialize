@@ -106,42 +106,18 @@ impl Source {
                 continue;
             }
 
-            // Sort the data we have received by offset, timestamp
-            partition.pending.sort();
+            let prefix = extract_prefix(partition.last_persisted_offset, &mut partition.pending);
 
-            // Keep only the minimum timestamp we received for every offset
-            partition.pending.dedup_by_key(|x| x.offset);
+            let len = prefix.len();
 
-            let mut most_recent_offset = partition.last_persisted_offset;
-            let mut prefix_length = 0;
-            let mut prefix_start_offset = None;
-
-            // Find the longest unbroken prefix where each subsequent record refers to the
-            // preceding one as its predecessor.
-            for p in partition.pending.iter() {
-                if prefix_start_offset.is_none() {
-                    prefix_start_offset = Some(p.offset);
-                }
-
-                if p.predecessor == most_recent_offset {
-                    prefix_length += 1;
-                    most_recent_offset = Some(p.offset);
-                } else {
-                    break;
-                }
-            }
-
-            if prefix_length > 0 {
-                let prefix_end_offset = most_recent_offset.expect("known to exist");
-                trace!(
-                    "partition {} found a prefix of {:?}",
-                    partition_id,
-                    prefix_length
-                );
+            if len > 0 {
+                let prefix_start_offset = prefix[0].offset;
+                let prefix_end_offset = prefix.last().unwrap().offset;
+                trace!("partition {} found a prefix of {:?}", partition_id, len);
 
                 // We have a prefix. Lets write it to a file
                 let mut buf = Vec::new();
-                for record in partition.pending.drain(..prefix_length) {
+                for record in prefix {
                     record.write_record(&mut buf)?;
                 }
 
@@ -151,7 +127,7 @@ impl Source {
                 let file_name = RecordFileMetadata::generate_file_name(
                     self.id,
                     *partition_id,
-                    prefix_start_offset.unwrap(),
+                    prefix_start_offset,
                     prefix_end_offset,
                 );
 
@@ -164,7 +140,7 @@ impl Source {
                 std::fs::write(&tmp_path, buf)?;
                 std::fs::rename(tmp_path, path)?;
                 partition.last_persisted_offset = Some(prefix_end_offset);
-                persisted_records += prefix_length;
+                persisted_records += len;
             }
         }
 
@@ -437,4 +413,104 @@ fn augment_connector_inner(
     }
 
     Ok(())
+}
+
+// Given the input records, extract a prefix of records that are "dense," meaning they contain all
+// the data for that range.
+fn extract_prefix(starting_offset: Option<i64>, records: &mut Vec<Record>) -> Vec<Record> {
+    records.sort_by(|a, b| (a.offset, a.predecessor.map(|p| -p)).cmp(&(b.offset, b.predecessor)));
+
+    // Keep only the minimum predecessor we received for every offset
+    records.dedup_by_key(|x| x.offset);
+    if let Some(offset) = starting_offset {
+        records.retain(|x| x.offset > offset);
+    }
+
+    let mut watermark = starting_offset;
+    let mut prefix_length = 0;
+
+    // Find the longest unbroken prefix where each subsequent record refers to the
+    // preceding one as its predecessor.
+    for p in records.iter() {
+        // Note: None < Some(x) for all x.
+        if p.predecessor <= watermark {
+            prefix_length += 1;
+            watermark = Some(p.offset);
+        }
+    }
+
+    records.drain(..prefix_length).collect()
+}
+
+#[test]
+fn test_extract_prefix() {
+    use repr::Timestamp;
+
+    fn record(offset: i64, predecessor: Option<i64>) -> Record {
+        Record {
+            offset,
+            predecessor,
+            timestamp: Timestamp::default(),
+            key: Vec::new(),
+            value: Vec::new(),
+        }
+    }
+
+    for ((starting_offset, records), (expected_prefix, expected_remaining)) in vec![
+        ((None, vec![]), (vec![], vec![])),
+        // Basic case, just a single record.
+        ((None, vec![(1, None)]), (vec![(1, None)], vec![])),
+        // Two records, both in the prefix.
+        (
+            (None, vec![(1, None), (2, Some(1))]),
+            (vec![(1, None), (2, Some(1))], vec![]),
+        ),
+        // Three records with a gap.
+        (
+            (None, vec![(1, None), (2, Some(1)), (4, Some(2))]),
+            (vec![(1, None), (2, Some(1)), (4, Some(2))], vec![]),
+        ),
+        // Two records, but one supercedes the other.
+        (
+            (None, vec![(2, None), (2, Some(1))]),
+            (vec![(2, None)], vec![]),
+        ),
+        // Three records, one is not in the prefix.
+        (
+            (None, vec![(1, None), (2, Some(1)), (4, Some(3))]),
+            (vec![(1, None), (2, Some(1))], vec![(4, Some(3))]),
+        ),
+        // Four records, one gets superceded.
+        (
+            (
+                None,
+                vec![(1, None), (2, Some(1)), (4, Some(3)), (4, Some(2))],
+            ),
+            (vec![(1, None), (2, Some(1)), (4, Some(2))], vec![]),
+        ),
+        // Throw away a record whose data has already been accounted for.
+        ((Some(2), vec![(1, None)]), (vec![], vec![])),
+    ]
+    .drain(..)
+    {
+        // TODO(justin): we could shuffle the input here, but non deterministic tests kind of suck,
+        // maybe some number of seeded shuffles?
+        let mut recs = records.iter().cloned().map(|(o, p)| record(o, p)).collect();
+        let prefix = extract_prefix(starting_offset, &mut recs);
+        assert_eq!(
+            (prefix, recs),
+            (
+                expected_prefix
+                    .iter()
+                    .cloned()
+                    .map(|(o, p)| record(o, p))
+                    .collect(),
+                expected_remaining
+                    .iter()
+                    .cloned()
+                    .map(|(o, p)| record(o, p))
+                    .collect()
+            )
+        );
+    }
 }

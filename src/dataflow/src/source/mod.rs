@@ -311,6 +311,7 @@ pub trait SourceInfo<Out> {
         _persistence_tx: &mut Option<PersistenceSender>,
         _message: &SourceMessage<Out>,
         _timestamp: Timestamp,
+        _offset: Option<MzOffset>,
     ) {
         // Default implementation is to do nothing
     }
@@ -328,10 +329,6 @@ pub trait SourceInfo<Out> {
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 pub struct SourceMessage<Out> {
-    /// Which offset is the predecessor of this one. We know this information at the consumer
-    /// level, but our downstream components do not necessarily, so we tag it here to allow them to
-    /// reconstruct the total order.
-    pub predecessor: Option<MzOffset>,
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
@@ -804,6 +801,7 @@ where
         );
 
         let mut read_persisted_files = false;
+        let mut predecessor = None;
 
         move |cap, output| {
             // First check that the source was successfully created
@@ -844,6 +842,8 @@ where
                         Ok(Some(message)) => {
                             let partition = message.partition.clone();
                             let offset = message.offset;
+                            let msg_predecessor = predecessor;
+                            predecessor = Some(offset);
 
                             // Update ingestion metrics. Guaranteed to exist as the appropriate
                             // entry gets created in SourceConstructor or when a new partition
@@ -877,7 +877,12 @@ where
                                     return SourceStatus::Alive;
                                 }
                                 Some(ts) => {
-                                    source_info.persist_message(&mut persistence_tx, &message, ts);
+                                    source_info.persist_message(
+                                        &mut persistence_tx,
+                                        &message,
+                                        ts,
+                                        msg_predecessor,
+                                    );
                                     // Note: empty and null payload/keys are currently
                                     // treated as the same thing.
                                     let key = message.key.unwrap_or_default();
