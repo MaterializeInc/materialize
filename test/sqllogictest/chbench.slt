@@ -657,7 +657,7 @@ ORDER BY l_year
 | | demand = (#0, #4, #38, #44, #75, #79)
 | Filter !(isnull(#0)), "^.*b$" ~(#4), (#79 = "EUROPE"), (#0 < 1000), (datetots(#44) <= 2012-01-02 00:00:00), (datetots(#44) >= 2007-01-02 00:00:00)
 | Reduce group=(date_part_year_tstz(datetotstz(#44))) sum(if (#75 = "GERMANY") then {#38} else {0dec}) sum(#38)
-| Map (((#1 * 10000000dec) / #2) * 10dec)
+| Map (((#1 * 10000000dec) / if (#2 = 0dec) then {100dec} else {#2}) * 10dec)
 | Project (#0, #3)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
