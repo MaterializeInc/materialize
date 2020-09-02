@@ -222,7 +222,7 @@ name = "q08"
 query = """
 SELECT
     extract(year FROM o_entry_d) AS l_year,
-    sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / sum(ol_amount) AS mkt_share
+    sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / CASE WHEN sum(ol_amount) = 0 THEN 1 ELSE sum(ol_amount) END AS mkt_share
 FROM item, supplier, stock, orderline, "order", customer, nation n1, nation n2, region
 WHERE i_id = s_i_id
   AND ol_i_id = s_i_id
