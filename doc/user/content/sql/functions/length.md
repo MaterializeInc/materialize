@@ -6,8 +6,8 @@ menu:
     parent: 'sql-functions'
 ---
 
-`LENGTH` returns the graphemes (which is roughly equivalent to printed
-characters) in an encoded string.
+`LENGTH` returns the [code points](https://en.wikipedia.org/wiki/Code_point) in
+an encoded string.
 
 ## Signatures
 
