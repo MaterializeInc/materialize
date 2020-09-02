@@ -6,11 +6,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use avro::types::Value as AvroValue;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::{Duration, NaiveDate};
 use criterion::{black_box, Criterion, Throughput};
 use futures::executor::block_on;
+use mz_avro::types::Value as AvroValue;
 
 use interchange::avro::{parse_schema, DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
 use std::ops::Add;
@@ -386,7 +386,7 @@ pub fn bench_avro(c: &mut Criterion) {
     let mut buf = Vec::new();
     buf.write_u8(0).unwrap();
     buf.write_i32::<NetworkEndian>(0).unwrap();
-    buf.extend(avro::to_avro_datum(&schema, record).unwrap());
+    buf.extend(mz_avro::to_avro_datum(&schema, record).unwrap());
     let len = buf.len() as u64;
 
     let mut decoder = Decoder::new(

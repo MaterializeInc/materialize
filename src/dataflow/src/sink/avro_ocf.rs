@@ -34,7 +34,7 @@ pub fn avro_ocf<G>(
 
     let res = OpenOptions::new().append(true).open(&connector.path);
     let mut avro_writer = match res {
-        Ok(f) => Some(avro::Writer::new(schema.clone(), f)),
+        Ok(f) => Some(mz_avro::Writer::new(schema.clone(), f)),
         Err(e) => {
             error!("creating avro ocf file writer for sink failed: {}", e);
             None

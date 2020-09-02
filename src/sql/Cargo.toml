@@ -7,7 +7,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.32"
-avro = { path = "../avro", package = "mz-avro", features = ["snappy"] }
 aws-arn = "0.1.1"
 ccsr = { path = "../ccsr" }
 chrono = "0.4"
@@ -18,6 +17,7 @@ interchange = { path = "../interchange" }
 itertools = "0.9"
 lazy_static = "1.4.0"
 log = "0.4.11"
+mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
 parse_duration = "2.1.0"
 pgrepr = { path = "../pgrepr" }

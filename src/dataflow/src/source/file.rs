@@ -18,8 +18,8 @@ use log::error;
 use notify::{RecursiveMode, Watcher};
 use timely::scheduling::{Activator, SyncActivator};
 
-use avro::types::Value;
-use avro::{AvroRead, Schema, Skip};
+use mz_avro::types::Value;
+use mz_avro::{AvroRead, Schema, Skip};
 use dataflow_types::{
     AvroOcfEncoding, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
 };
@@ -89,7 +89,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
                     ),
                 };
                 let reader_schema = Schema::parse_str(reader_schema).unwrap();
-                let ctor = { move |file| avro::Reader::with_schema(&reader_schema, file) };
+                let ctor = { move |file| mz_avro::Reader::with_schema(&reader_schema, file) };
                 let tail = if oc.tail {
                     FileReadStyle::TailFollowFd
                 } else {
