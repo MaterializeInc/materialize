@@ -227,8 +227,8 @@ materialize.public.v5   materialize.public.v5_primary_idx   substr      <null>  
 > SHOW INDEX IN multicol
 Source_or_view               Key_name               Column_name  Expression   Null    Seq_in_index
 -----------------------------------------------------------------------------------------------------
+materialize.public.multicol  materialize.public.i6  ?column?     <null>       false   1
 materialize.public.multicol  materialize.public.i6  a            <null>       false   2
-materialize.public.multicol  materialize.public.i6  @2           <null>       false   1
 materialize.public.multicol  materialize.public.i6  d            <null>       false   3
 
 # Test cascade deletes all indexes associated with cascaded views

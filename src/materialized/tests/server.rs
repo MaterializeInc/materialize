@@ -57,10 +57,10 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 .map(|row| (row.get("Column_name"), row.get("Seq_in_index")))
                 .collect::<Vec<(String, i64)>>(),
             &[
-                ("@1".into(), 1),
-                ("@2".into(), 2),
-                ("@4".into(), 4),
+                ("?column?".into(), 1),
+                ("data".into(), 2),
                 ("c".into(), 3),
+                ("data".into(), 4),
             ],
         );
         assert_eq!(

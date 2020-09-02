@@ -759,43 +759,22 @@ fn handle_show_indexes(
             expr: Expr::Identifier(vec![Ident::new("seq_in_index".to_owned())]),
             alias: None,
         });
-
-    // Join {
-    //     relation: TableFactor::Table {
-    //         name: ObjectName(vec![Ident::new("mz_columns")]),
-    //         alias: None,
-    //     },
-    //     join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
-    //         left: Box::new(Expr::BinaryOp {
-    //             left: Box::new(Expr::Identifier(vec![
-    //                 Ident::new("mz_indexes"),
-    //                 Ident::new("on_global_id"),
-    //             ])),
-    //             op: BinaryOperator::Eq,
-    //             right: Box::new(Expr::Identifier(vec![
-    //                 Ident::new("mz_columns"),
-    //                 Ident::new("global_id"),
-    //             ])),
-    //         }),
-    //         op: BinaryOperator::And,
-    //         right: Box::new(Expr::BinaryOp {
-    //             left: Box::new(Expr::Identifier(vec![
-    //                 Ident::new("mz_indexes"),
-    //                 Ident::new("field_number"),
-    //             ])),
-    //             op: BinaryOperator::Eq,
-    //             right: Box::new(Expr::Identifier(vec![
-    //                 Ident::new("mz_columns"),
-    //                 Ident::new("field_number"),
-    //             ])),
-    //         }),
-    //     })),
-    // },
+    let mut query = Query::select(select);
+    query.order_by = vec![
+        OrderByExpr {
+            expr: Expr::Identifier(vec![Ident::new("key_name".to_owned())]),
+            asc: Some(true),
+        },
+        OrderByExpr {
+            expr: Expr::Identifier(vec![Ident::new("seq_in_index".to_owned())]),
+            asc: Some(true),
+        },
+    ];
 
     handle_select(
         scx,
         SelectStatement {
-            query: Box::new(Query::select(select)),
+            query: Box::new(query),
             as_of: None,
         },
         &Params {
