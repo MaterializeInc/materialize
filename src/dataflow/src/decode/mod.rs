@@ -117,8 +117,6 @@ pub type PushSession<'a, R> =
 
 #[async_trait(?Send)]
 pub trait DecoderState {
-    /// Reset number of success and failures with decoding
-    fn reset_event_count(&mut self);
     async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String>;
     /// give a session a key-value pair
     async fn give_key_value<'a>(
@@ -137,8 +135,9 @@ pub trait DecoderState {
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     );
-    /// Register number of success and failures with decoding
-    fn log_error_count(&self);
+    /// Register number of success and failures with decoding,
+    /// and reset count of pending events if necessary
+    fn log_error_count(&mut self);
 }
 
 fn pack_with_line_no(datum: Datum, line_no: Option<i64>) -> Row {
@@ -172,8 +171,6 @@ impl<F> DecoderState for OffsetDecoderState<F>
 where
     F: Fn(&[u8]) -> Datum + Send,
 {
-    fn reset_event_count(&mut self) {}
-
     async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
         Ok(self.row_packer.pack(&[(self.datum_func)(bytes)]))
     }
@@ -209,8 +206,7 @@ where
         ));
     }
 
-    /// Register number of success and failures with decoding
-    fn log_error_count(&self) {}
+    fn log_error_count(&mut self) {}
 }
 
 /// Inner method for decoding an upsert source
@@ -379,7 +375,6 @@ where
 {
     stream.unary(contract, &op_name, move |_, _| {
         move |input, output| {
-            value_decoder_state.reset_event_count();
             input.for_each(|cap, data| {
                 let mut session = output.session(&cap);
                 for SourceOutput {
