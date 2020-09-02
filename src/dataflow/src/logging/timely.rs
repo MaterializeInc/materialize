@@ -12,9 +12,14 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use differential_dataflow::difference::Abelian;
 use differential_dataflow::operators::count::CountTotal;
+use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::operators::join::Join;
+use differential_dataflow::{Collection, Data};
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
+use timely::dataflow::Scope;
 use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
 use super::{LogVariant, TimelyLog};
@@ -289,23 +294,22 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count_total();
 
-        use differential_dataflow::operators::iterate::Variable;
-        use differential_dataflow::operators::join::Join;
+        // Accumulate histograms of execution times for each operator.
+        let mut histogram = duration
+            .map(|(op, t, d)| ((op, d.next_power_of_two()), t, 1i64))
+            .as_collection()
+            .count_total()
+            .map(|((key, pow), count)| ((key), (pow, count)));
 
-        // Remove elapsed data for records we no longer care about.
         let delay = std::time::Duration::from_nanos(10_000_000_000);
-        // `elapsed_retractions` represents the records in `elapsed` that we no longer care about
-        // because the corresponding operators have been deleted
-        let elapsed_retractions = Variable::new(&mut elapsed.scope(), delay.as_millis() as u64);
-        let elapsed_thinned = elapsed.concat(&elapsed_retractions.negate());
 
-        // Compute the set of elapsed records we still care about
-        let elapsed_result =
-            operates.join_map(&elapsed_thinned, move |key, _val1, val2| (*key, *val2));
-
-        // Finally set `retractions` to be everything not part of the output.
-        elapsed_retractions.set(&elapsed.concat(&elapsed_result.negate()));
-        elapsed = elapsed_result;
+        // Only keep metrics and histograms for the dataflow operators that currently exist.
+        elapsed = thin_collection(elapsed, delay, |c| {
+            operates.join_map(&c, move |key, _val1, val2| (*key, *val2))
+        });
+        histogram = thin_collection(histogram, delay, |c| {
+            operates.join_map(&c, move |key, _val1, val2| (*key, *val2))
+        });
 
         let elapsed = elapsed.map({
             let mut row_packer = repr::RowPacker::new();
@@ -317,26 +321,6 @@ pub fn construct<A: Allocate>(
                 ])
             }
         });
-
-        let mut histogram = duration
-            .map(|(op, t, d)| ((op, d.next_power_of_two()), t, 1i64))
-            .as_collection()
-            .count_total()
-            .map(|((key, pow), count)| ((key), (pow, count)));
-
-        // Remove histogram data for records we no longer care about.
-        // `histogram_retractions` represents the records in `histogram` that we no longer care about
-        // because the corresponding operators have been deleted
-        let histogram_retractions = Variable::new(&mut histogram.scope(), delay.as_millis() as u64);
-        let histogram_thinned = histogram.concat(&histogram_retractions.negate());
-
-        // Compute the set of histogram records we still care about
-        let histogram_result =
-            operates.join_map(&histogram_thinned, move |key, _val1, val2| (*key, *val2));
-
-        // Finally set `histogram_retractions` to be everything not part of the output.
-        histogram_retractions.set(&histogram.concat(&histogram_result.negate()));
-        histogram = histogram_result;
 
         let histogram = histogram.map({
             let mut row_packer = repr::RowPacker::new();
@@ -425,4 +409,27 @@ pub fn construct<A: Allocate>(
     });
 
     traces
+}
+
+/// Discard all of the records in `c` that `logic` doesn't care about (return).
+fn thin_collection<G, D, R, F>(
+    c: Collection<G, D, R>,
+    delay: std::time::Duration,
+    mut logic: F,
+) -> Collection<G, D, R>
+where
+    G: Scope<Timestamp = Timestamp>,
+    D: Data,
+    R: Abelian,
+    F: FnMut(Collection<G, D, R>) -> Collection<G, D, R>,
+{
+    // `retractions` represents the records in `c` that we no longer care about
+    let retractions = Variable::new(&mut c.scope(), delay.as_millis() as Timestamp);
+    // subtract out the retractions from `c`
+    let thinned = c.concat(&retractions.negate());
+    // Compute the collection we still care about
+    let result = logic(thinned);
+    // Finally set `retractions` to be everything not part of the output.
+    retractions.set(&c.concat(&result.negate()));
+    result
 }
