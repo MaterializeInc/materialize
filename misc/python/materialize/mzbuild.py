@@ -277,6 +277,10 @@ class CargoTest(CargoPreImage):
             if message.get("profile", {}).get("test", False):
                 crate_name = message["package_id"].split()[0]
                 target_kind = "".join(message["target"]["kind"])
+                # TODO - ask Nikhil if this is long-term correct,
+                # but it unblocks us for now.
+                if target_kind == "proc-macro":
+                    continue
                 slug = crate_name + "." + target_kind
                 if target_kind != "lib":
                     slug += "." + message["target"]["name"]

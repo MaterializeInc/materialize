@@ -321,8 +321,8 @@ pub mod types;
 pub use crate::codec::Codec;
 pub use crate::decode::public_decoders::*;
 pub use crate::decode::{
-    give_value, AvroArrayAccess, AvroDecode, AvroDeserializer, AvroFieldAccess, AvroRead,
-    AvroRecordAccess, GeneralDeserializer, Skip, ValueOrReader,
+    give_value, AvroArrayAccess, AvroDecode, AvroDecodeable, AvroDeserializer, AvroFieldAccess,
+    AvroRead, AvroRecordAccess, GeneralDeserializer, Skip, ValueOrReader,
 };
 pub use crate::encode::encode as encode_unchecked;
 pub use crate::reader::{from_avro_datum, Reader};

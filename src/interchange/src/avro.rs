@@ -1894,12 +1894,13 @@ pub mod cdc_v2 {
 
     use super::AvroFlatDecoder;
     use anyhow::bail;
+    use avro_derive::AvroDecodeable;
     use differential_dataflow::capture::{Message, Progress};
     use mz_avro::schema::Schema;
     use mz_avro::types::Value;
     use mz_avro::{
-        ArrayAsVecDecoder, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, I64Decoder,
-        TrivialDecoder,
+        ArrayAsVecDecoder, AvroDecode, AvroDecodeable, AvroDeserializer, AvroRead,
+        AvroRecordAccess, I64Decoder, TrivialDecoder,
     };
     use std::{cell::RefCell, convert::TryInto, rc::Rc};
 
@@ -2052,132 +2053,21 @@ pub mod cdc_v2 {
         }
     }
 
-    #[derive(Debug)]
-    pub struct CountDecoder {
-        time: Option<Timestamp>,
-        count: Option<usize>,
+    #[derive(AvroDecodeable)]
+    struct Count {
+        time: Timestamp,
+        count: usize,
     }
 
-    impl CountDecoder {
-        fn new() -> Self {
-            Self {
-                time: None,
-                count: None,
-            }
-        }
+    fn make_counts_decoder() -> impl AvroDecode<Out = Vec<(Timestamp, usize)>> {
+        ArrayAsVecDecoder::new(|| Count::new_decoder().map_decoder(|ct| Ok((ct.time, ct.count))))
     }
-    impl AvroDecode for CountDecoder {
-        type Out = (Timestamp, usize);
-
-        fn record<R: AvroRead, A: AvroRecordAccess<R>>(
-            mut self,
-            a: &mut A,
-        ) -> Result<Self::Out, anyhow::Error> {
-            while let Some((name, _idx, field)) = a.next_field()? {
-                match name {
-                    "time" => {
-                        if self.time.is_some() {
-                            bail!("Time field found twice!");
-                        }
-                        let time = field.decode_field(I64Decoder)?.try_into()?;
-                        self.time = Some(time);
-                    }
-                    "count" => {
-                        if self.count.is_some() {
-                            bail!("Count field found twice!");
-                        }
-                        let count = field.decode_field(I64Decoder)?.try_into()?;
-                        self.count = Some(count);
-                    }
-                    _ => {
-                        field.decode_field(TrivialDecoder)?;
-                    }
-                }
-            }
-            let time = if let Some(time) = self.time.take() {
-                time
-            } else {
-                bail!("Field not present: `time`");
-            };
-            let count = if let Some(count) = self.count.take() {
-                count
-            } else {
-                bail!("Field not present: `count`");
-            };
-            Ok((time, count))
-        }
-    }
-
-    #[derive(Debug, Default)]
-    pub struct ProgressDecoder {
-        lower: Option<Vec<Timestamp>>,
-        upper: Option<Vec<Timestamp>>,
-        counts: Option<Vec<(Timestamp, usize)>>,
-    }
-
-    impl AvroDecode for ProgressDecoder {
-        type Out = Progress<Timestamp>;
-
-        fn record<R: AvroRead, A: AvroRecordAccess<R>>(
-            mut self,
-            a: &mut A,
-        ) -> Result<Self::Out, anyhow::Error> {
-            while let Some((name, _idx, field)) = a.next_field()? {
-                match name {
-                    "lower" => {
-                        if self.lower.is_some() {
-                            bail!("Lower field found twice!");
-                        }
-                        let lower = field.decode_field(ArrayAsVecDecoder::new(
-                            || I64Decoder,
-                            |x| Ok(x.try_into()?),
-                        ))?;
-                        self.lower = Some(lower);
-                    }
-                    "upper" => {
-                        if self.upper.is_some() {
-                            bail!("Upper field found twice!");
-                        }
-                        let upper = field.decode_field(ArrayAsVecDecoder::new(
-                            || I64Decoder,
-                            |x| Ok(x.try_into()?),
-                        ))?;
-                        self.upper = Some(upper);
-                    }
-                    "counts" => {
-                        if self.counts.is_some() {
-                            bail!("Counts field found twice!");
-                        }
-                        let counts =
-                            field.decode_field(ArrayAsVecDecoder::new(CountDecoder::new, Ok))?;
-                        self.counts = Some(counts);
-                    }
-                    _ => {
-                        field.decode_field(TrivialDecoder)?;
-                    }
-                }
-            }
-            let lower = if let Some(lower) = self.lower.take() {
-                lower
-            } else {
-                bail!("No lower found");
-            };
-            let upper = if let Some(upper) = self.upper.take() {
-                upper
-            } else {
-                bail!("No upper found");
-            };
-            let counts = if let Some(counts) = self.counts.take() {
-                counts
-            } else {
-                bail!("No counts found");
-            };
-            Ok(Progress {
-                lower,
-                upper,
-                counts,
-            })
-        }
+    #[derive(AvroDecodeable)]
+    struct MyProgress {
+        lower: Vec<Timestamp>,
+        upper: Vec<Timestamp>,
+        #[decoder_factory(make_counts_decoder)]
+        counts: Vec<(Timestamp, usize)>,
     }
 
     impl AvroDecode for Decoder {
@@ -2194,15 +2084,18 @@ pub mod cdc_v2 {
                 0 => {
                     let packer = Rc::new(RefCell::new(RowPacker::new()));
                     let buf = Rc::new(RefCell::new(vec![]));
-                    let d = ArrayAsVecDecoder::new(
-                        || UpdateDecoder::new(packer.clone(), buf.clone()),
-                        Ok,
-                    );
+                    let d =
+                        ArrayAsVecDecoder::new(|| UpdateDecoder::new(packer.clone(), buf.clone()));
                     let updates = deserializer.deserialize(r, d)?;
                     Ok(Message::Updates(updates))
                 }
                 1 => {
-                    let progress = deserializer.deserialize(r, ProgressDecoder::default())?;
+                    let progress = deserializer.deserialize(r, MyProgress::new_decoder())?;
+                    let progress = Progress {
+                        lower: progress.lower,
+                        upper: progress.upper,
+                        counts: progress.counts,
+                    };
                     Ok(Message::Progress(progress))
                 }
 
