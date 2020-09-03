@@ -279,7 +279,7 @@ class CargoTest(CargoPreImage):
                 target_kind = "".join(message["target"]["kind"])
                 # TODO - ask Nikhil if this is long-term correct,
                 # but it unblocks us for now.
-                if target_kind == "proc_macro":
+                if target_kind == "proc-macro":
                     continue
                 slug = crate_name + "." + target_kind
                 if target_kind != "lib":
