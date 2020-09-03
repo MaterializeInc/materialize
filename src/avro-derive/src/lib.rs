@@ -11,7 +11,7 @@
 ///
 /// Example:
 ///
-/// ```
+/// ```ignore
 /// fn make_complicated_decoder() -> impl AvroDecode<Out = SomeComplicatedType> {
 ///     unimplemented!()
 /// }
