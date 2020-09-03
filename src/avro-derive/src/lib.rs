@@ -2,6 +2,36 @@
 //
 // Use of this software is governed by the Apache License, Version 2.0
 
+///
+/// Derive decoders for Rust structs from Avro values.
+/// Currently, only the simplest possible case is supported:
+/// decoding an Avro record into a struct, each of whose fields
+/// is named the same as the corresponding Avro record field
+/// and which is in turn decodeable without external state.
+///
+/// Example:
+///
+/// ```
+/// fn make_complicated_decoder() -> impl AvroDecode<Out = SomeComplicatedType> {
+///     unimplemented!()
+/// }
+/// #[derive(AvroDecodeable)]
+/// struct MyType {
+///     x: i32,
+///     y: u64,
+///     #[decoder_factory(make_complicated_decoder)]
+///     z: SomeComplicatedType
+/// }
+/// ```
+///
+/// This will create an Avro decoder that expects a record with fields "x", "y", and "z"
+/// (and possibly others), where "x" and "y" are of Avro type Int or Long and their
+/// values fit in an `i32` or `u64` respectively,
+/// and where "z" can be decoded by the decoder returned from `make_complicated_decoder`.
+///
+/// This crate currently works by generating a struct named (following the example above)
+/// MyType_DECODER which is used internally by the `AvroDecodeable` implementation.
+/// It also requires that the `mz-avro` crate be linked under its default name.
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse_macro_input;
@@ -27,6 +57,9 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
         .fields
         .iter()
         .map(|f| {
+            // The type of the field,
+            // which must itself be AvroDecodeable so that we can recursively
+            // decode it.
             let ty = &f.ty;
             let id = f.ident.as_ref().unwrap();
             let id_str = id.to_string();
@@ -77,7 +110,7 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
         .collect();
     let decoder_name = format_ident!("{}_DECODER", name);
     let out = quote! {
-        #[derive(Default)]
+        #[derive(Debug, Default)]
         #[allow(non_camel_case_types)]
         struct #decoder_name {
             #(#fields),*
