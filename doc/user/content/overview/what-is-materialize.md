@@ -29,7 +29,7 @@ In contrast to the traditional approach, Materialize let teams continually updat
 
 ## Understanding the jargon
 
-"A streaming SQL materialized view engine" is difficult to wade through, so let's take examine the terms piece-by-piece.
+"A streaming SQL materialized view engine" is difficult to wade through, so let's take the terms piece-by-piece.
 
 ### SQL & Views
 
