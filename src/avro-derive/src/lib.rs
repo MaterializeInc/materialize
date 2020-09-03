@@ -45,6 +45,9 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
         .fields
         .iter()
         .map(|f| {
+            // The type of the field,
+            // which must itself be AvroDecodeable so that we can recursively
+            // decode it.
             let ty = &f.ty;
             let id = f.ident.as_ref().unwrap();
             quote! {
