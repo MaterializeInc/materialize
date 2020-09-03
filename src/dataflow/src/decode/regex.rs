@@ -8,12 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use crate::source::SourceOutput;
-use dataflow_types::Timestamp;
-use expr::Diff;
 
 use log::warn;
 use regex::Regex;
-use repr::{Datum, Row};
+use repr::{Datum, Diff, Row, Timestamp};
 use std::cmp::max;
 use std::iter;
 use std::str;

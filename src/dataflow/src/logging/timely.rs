@@ -12,16 +12,20 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use differential_dataflow::difference::Abelian;
 use differential_dataflow::operators::count::CountTotal;
+use differential_dataflow::operators::iterate::SemigroupVariable;
+use differential_dataflow::operators::join::Join;
+use differential_dataflow::{Collection, Data};
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
+use timely::dataflow::Scope;
 use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::Timestamp;
-use repr::Datum;
+use repr::{Datum, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
@@ -89,11 +93,7 @@ pub fn construct<A: Allocate>(
                                 operates_data.insert((event.id, worker), event.clone());
 
                                 operates_session.give((
-                                    row_packer.pack(&[
-                                        Datum::Int64(event.id as i64),
-                                        Datum::Int64(worker as i64),
-                                        Datum::String(&event.name),
-                                    ]),
+                                    ((event.id, worker), event.name),
                                     time_ms,
                                     1,
                                 ));
@@ -153,11 +153,7 @@ pub fn construct<A: Allocate>(
                                 // operator announcement.
                                 if let Some(event) = operates_data.remove(&(event.id, worker)) {
                                     operates_session.give((
-                                        row_packer.pack(&[
-                                            Datum::Int64(event.id as i64),
-                                            Datum::Int64(worker as i64),
-                                            Datum::String(&event.name),
-                                        ]),
+                                        ((event.id, worker), event.name),
                                         time_ms,
                                         -1,
                                     ));
@@ -289,39 +285,61 @@ pub fn construct<A: Allocate>(
                 },
             );
 
+        let operates = operates.as_collection();
+
         // Accumulate the durations of each operator.
-        let elapsed = duration
+        let mut elapsed = duration
             .map(|(op, t, d)| (op, t, d as isize))
             .as_collection()
-            .count_total()
-            .map({
-                let mut row_packer = repr::RowPacker::new();
-                move |((id, worker), cnt)| {
-                    row_packer.pack(&[
-                        Datum::Int64(id as i64),
-                        Datum::Int64(worker as i64),
-                        Datum::Int64(cnt as i64),
-                    ])
-                }
-            });
+            .count_total();
 
-        let histogram = duration
+        // Accumulate histograms of execution times for each operator.
+        let mut histogram = duration
             .map(|(op, t, d)| ((op, d.next_power_of_two()), t, 1i64))
             .as_collection()
             .count_total()
-            .map({
-                let mut row_packer = repr::RowPacker::new();
-                move |(((id, worker), pow), cnt)| {
-                    row_packer.pack(&[
-                        Datum::Int64(id as i64),
-                        Datum::Int64(worker as i64),
-                        Datum::Int64(pow as i64),
-                        Datum::Int64(cnt as i64),
-                    ])
-                }
-            });
+            .map(|((key, pow), count)| ((key), (pow, count)));
 
-        let operates = operates.as_collection();
+        let delay = std::time::Duration::from_nanos(10_000_000_000);
+
+        // Only keep metrics and histograms for the dataflow operators that currently exist.
+        elapsed = thin_collection(elapsed, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
+        histogram = thin_collection(histogram, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
+
+        let elapsed = elapsed.map({
+            let mut row_packer = repr::RowPacker::new();
+            move |((id, worker), cnt)| {
+                row_packer.pack(&[
+                    Datum::Int64(id as i64),
+                    Datum::Int64(worker as i64),
+                    Datum::Int64(cnt as i64),
+                ])
+            }
+        });
+
+        let histogram = histogram.map({
+            let mut row_packer = repr::RowPacker::new();
+            move |((id, worker), (pow, cnt))| {
+                row_packer.pack(&[
+                    Datum::Int64(id as i64),
+                    Datum::Int64(worker as i64),
+                    Datum::Int64(pow as i64),
+                    Datum::Int64(cnt as i64),
+                ])
+            }
+        });
+
+        let operates = operates.map({
+            let mut row_packer = repr::RowPacker::new();
+            move |((id, worker), name)| {
+                row_packer.pack(&[
+                    Datum::Int64(id as i64),
+                    Datum::Int64(worker as i64),
+                    Datum::String(&name),
+                ])
+            }
+        });
+
         let channels = channels.as_collection();
         let addresses = addresses.as_collection();
 
@@ -386,4 +404,27 @@ pub fn construct<A: Allocate>(
     });
 
     traces
+}
+
+/// Discard all of the records in `c` that `logic` doesn't care about (return).
+fn thin_collection<G, D, R, F>(
+    c: Collection<G, D, R>,
+    delay: std::time::Duration,
+    mut logic: F,
+) -> Collection<G, D, R>
+where
+    G: Scope<Timestamp = Timestamp>,
+    D: Data,
+    R: Abelian,
+    F: FnMut(Collection<G, D, R>) -> Collection<G, D, R>,
+{
+    // `retractions` represents the records in `c` that we no longer care about
+    let retractions = SemigroupVariable::new(&mut c.scope(), delay.as_millis() as Timestamp);
+    // subtract out the retractions from `c`
+    let thinned = c.concat(&retractions.negate());
+    // Compute the collection we still care about
+    let result = logic(thinned);
+    // Finally set `retractions` to be everything not part of the output.
+    retractions.set(&c.concat(&result.negate()));
+    result
 }

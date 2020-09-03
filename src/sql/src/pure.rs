@@ -38,7 +38,7 @@ pub async fn purify(mut stmt: Statement) -> Result<Statement, anyhow::Error> {
         ..
     }) = &mut stmt
     {
-        let with_options_map = normalize::with_options(with_options);
+        let with_options_map = normalize::options(with_options);
         let mut config_options = HashMap::new();
 
         let mut file = None;
@@ -105,7 +105,7 @@ async fn purify_format(
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
                         url,
                         &connector_options,
-                        &normalize::with_options(ccsr_options),
+                        &normalize::options(ccsr_options),
                     )?;
 
                     let Schema {

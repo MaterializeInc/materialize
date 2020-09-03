@@ -13,9 +13,9 @@ use differential_dataflow::lattice::Lattice;
 use dogsdogsdogs::altneu::AltNeu;
 use timely::dataflow::Scope;
 
-use dataflow_types::{DataflowError, Timestamp};
+use dataflow_types::DataflowError;
 use expr::{RelationExpr, ScalarExpr};
-use repr::{Datum, Row, RowArena};
+use repr::{Datum, Row, RowArena, Timestamp};
 
 use super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;

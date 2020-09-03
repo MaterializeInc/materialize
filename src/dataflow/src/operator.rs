@@ -10,7 +10,6 @@
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use expr::Diff;
 use std::ops::Mul;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
@@ -22,6 +21,8 @@ use timely::dataflow::operators::generic::{
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
+
+use repr::Diff;
 
 /// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<G, D1>

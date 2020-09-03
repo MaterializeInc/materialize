@@ -58,6 +58,12 @@ const EXTRA_FLOAT_DIGITS: ServerVar<&i32> = ServerVar {
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
 };
 
+const INTEGER_DATETIMES: ServerVar<&bool> = ServerVar {
+    name: unicase::Ascii::new("integer_datetimes"),
+    value: &true,
+    description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
+};
+
 const SEARCH_PATH: ServerVar<&[&str]> = ServerVar {
     name: unicase::Ascii::new("search_path"),
     value: &["mz_catalog", "pg_catalog", "public", "mz_temp"],
@@ -104,6 +110,7 @@ pub struct Session {
     database: SessionVar<str>,
     date_style: ServerVar<&'static str>,
     extra_float_digits: SessionVar<i32>,
+    integer_datetimes: ServerVar<&'static bool>,
     search_path: ServerVar<&'static [&'static str]>,
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
@@ -131,6 +138,7 @@ impl Session {
             database: SessionVar::new(&DATABASE),
             date_style: DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
+            integer_datetimes: INTEGER_DATETIMES,
             search_path: SEARCH_PATH,
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
@@ -152,6 +160,7 @@ impl Session {
             database: SessionVar::new(&DATABASE),
             date_style: DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
+            integer_datetimes: INTEGER_DATETIMES,
             search_path: SEARCH_PATH,
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
@@ -178,6 +187,7 @@ impl Session {
             &self.database,
             &self.date_style,
             &self.extra_float_digits,
+            &self.integer_datetimes,
             &self.search_path,
             &self.server_version,
             &self.sql_safe_updates,
@@ -195,6 +205,7 @@ impl Session {
             &self.client_encoding,
             &self.date_style,
             &self.server_version,
+            &self.integer_datetimes,
         ]
     }
 
@@ -219,6 +230,8 @@ impl Session {
             Ok(&self.date_style)
         } else if name == EXTRA_FLOAT_DIGITS.name {
             Ok(&self.extra_float_digits)
+        } else if name == INTEGER_DATETIMES.name {
+            Ok(&self.integer_datetimes)
         } else if name == SEARCH_PATH.name {
             Ok(&self.search_path)
         } else if name == SERVER_VERSION.name {
@@ -252,6 +265,8 @@ impl Session {
             bail!("parameter {} is read only", DATE_STYLE.name);
         } else if name == EXTRA_FLOAT_DIGITS.name {
             self.extra_float_digits.set(value)
+        } else if name == INTEGER_DATETIMES.name {
+            bail!("parameter {} is read only", INTEGER_DATETIMES.name);
         } else if name == SEARCH_PATH.name {
             bail!("parameter {} is read only", SEARCH_PATH.name);
         } else if name == SERVER_VERSION.name {
@@ -298,6 +313,11 @@ impl Session {
     /// Returns the value of the `extra_float_digits` configuration parameter.
     pub fn extra_float_digits(&self) -> i32 {
         *self.extra_float_digits.value()
+    }
+
+    /// Returns the value of the `integer_datetimes` configuration parameter.
+    pub fn integer_datetimes(&self) -> bool {
+        *self.integer_datetimes.value
     }
 
     /// Returns the value of the `search_path` configuration parameter.

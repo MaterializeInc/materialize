@@ -421,6 +421,7 @@ mzconduct:
     cloud-benchmark-mz:
       env:
         MZ_SQL_EXPORTER_PORT: "9400:9399"
+        MZ_THREADS: ${MZ_THREADS:-1}
       steps:
       - step: start-services
         services: [materialized]
@@ -429,6 +430,7 @@ mzconduct:
         port: 6875
       - step: start-services
         services: [prometheus_sql_exporter_mz]
+      - step: print-env
 
     # Brings up all non-materialized components for isolated load-tests, i.e.
     # multi-node where Materialized and all other components are run
@@ -441,6 +443,7 @@ mzconduct:
         SR_HOST: ${INFRA_HOST:-schema-registry}
         PEEKER_PORT: "16875:16875"
         MYSQL_EXPORTER_PORT: "9399:9399"
+        NUM_WAREHOUSES: ${NUM_WAREHOUSES:-1}
       steps:
       - step: workflow
         workflow: bring-up-mysql-kafka
@@ -453,8 +456,9 @@ mzconduct:
         service: chbench
         command: >-
           gen
-          --warehouses=1
+          --warehouses=${NUM_WAREHOUSES:-1}
           --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
+      - step: print-env
       - step: wait-for-tcp
         host: ${MZ_HOST:-materialized}
         port: 6875

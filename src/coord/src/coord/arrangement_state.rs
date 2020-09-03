@@ -108,25 +108,24 @@ pub struct Frontiers<T: Timestamp> {
     ///
     /// This timestamp drives the advancement of the since frontier as a
     /// function of the upper frontier, trailing it by exactly this much.
-    pub compaction_latency_ms: Option<T>,
+    pub compaction_window_ms: Option<T>,
 }
 
 impl<T: Timestamp> Frontiers<T> {
     /// Creates an empty index state from a number of workers.
-    pub fn new(workers: usize, compaction_latency_ms: Option<T>) -> Self {
+    pub fn new(workers: usize, compaction_window_ms: Option<T>) -> Self {
         let mut upper = MutableAntichain::new();
         upper.update_iter(Some((T::minimum(), workers as i64)));
         Self {
             upper,
             since: Antichain::from_elem(T::minimum()),
-            compaction_latency_ms,
+            compaction_window_ms,
         }
     }
 
     /// Sets the latency behind the collection frontier at which compaction occurs.
-    #[allow(dead_code)]
-    pub fn set_compaction_latency(&mut self, latency_ms: Option<T>) {
-        self.compaction_latency_ms = latency_ms;
+    pub fn set_compaction_window_ms(&mut self, window_ms: Option<T>) {
+        self.compaction_window_ms = window_ms;
     }
 
     /// Advances `since` to the least upper bound of itself and `frontier`.

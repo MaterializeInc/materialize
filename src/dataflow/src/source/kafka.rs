@@ -25,12 +25,12 @@ use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionLi
 use timely::scheduling::activate::{Activator, SyncActivator};
 
 use dataflow_types::{
-    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
-    MzOffset, Timestamp,
+    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
 };
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{error, info, log_enabled, warn};
+use repr::Timestamp;
 
 use crate::server::{
     PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,

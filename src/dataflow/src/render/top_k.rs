@@ -12,15 +12,15 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
-use expr::{Diff, RelationExpr};
-use repr::Row;
+use expr::RelationExpr;
+use repr::{Diff, Row};
 
 use crate::render::context::Context;
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G, RelationExpr, Row, dataflow_types::Timestamp>
+impl<G> Context<G, RelationExpr, Row, repr::Timestamp>
 where
-    G: Scope<Timestamp = dataflow_types::Timestamp>,
+    G: Scope<Timestamp = repr::Timestamp>,
 {
     pub fn render_topk(&mut self, relation_expr: &RelationExpr) {
         if let RelationExpr::TopK {

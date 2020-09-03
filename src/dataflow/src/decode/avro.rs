@@ -10,10 +10,8 @@
 use log::error;
 
 use async_trait::async_trait;
-use dataflow_types::Timestamp;
-use expr::Diff;
 use interchange::avro::{DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
-use repr::Row;
+use repr::{Diff, Row, Timestamp};
 
 use super::{DecoderState, PushSession};
 use crate::metrics::EVENTS_COUNTER;
@@ -53,12 +51,6 @@ impl AvroDecoderState {
 
 #[async_trait(?Send)]
 impl DecoderState for AvroDecoderState {
-    /// Reset number of success and failures with decoding
-    fn reset_event_count(&mut self) {
-        self.events_success = 0;
-        self.events_error = 0;
-    }
-
     async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
         match self.decoder.decode(bytes, None).await {
             Ok(diff_pair) => {
@@ -131,13 +123,16 @@ impl DecoderState for AvroDecoderState {
         }
     }
 
-    /// Register number of success and failures with decoding
-    fn log_error_count(&self) {
+    /// Register number of success and failures with decoding,
+    /// and reset count of pending events
+    fn log_error_count(&mut self) {
         if self.events_success > 0 {
             EVENTS_COUNTER.avro.success.inc_by(self.events_success);
+            self.events_success = 0;
         }
         if self.events_error > 0 {
             EVENTS_COUNTER.avro.error.inc_by(self.events_error);
+            self.events_error = 0;
         }
     }
 }

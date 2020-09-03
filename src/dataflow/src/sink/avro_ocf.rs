@@ -15,10 +15,10 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 
-use dataflow_types::{AvroOcfSinkConnector, Timestamp};
-use expr::{Diff, GlobalId};
+use dataflow_types::AvroOcfSinkConnector;
+use expr::GlobalId;
 use interchange::avro::{DiffPair, Encoder};
-use repr::{RelationDesc, Row};
+use repr::{Diff, RelationDesc, Row, Timestamp};
 
 pub fn avro_ocf<G>(
     stream: &Stream<G, (Row, Timestamp, Diff)>,

@@ -18,6 +18,9 @@
 //! Builtin's names, columns, and types are part of the stable API of
 //! Materialize. Be careful to maintain backwards compatibility when changing
 //! definitions of existing builtins!
+//!
+//! More information about builtin system tables and types can be found in
+//! https://materialize.io/docs/sql/system-tables/.
 
 use std::collections::BTreeMap;
 
@@ -246,8 +249,8 @@ lazy_static! {
     pub static ref MZ_SCHEMAS: BuiltinTable = BuiltinTable {
         name: "mz_schemas",
         desc: RelationDesc::empty()
-            .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("database_id", ScalarType::String.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("schema", ScalarType::String.nullable(false))
             .with_column("type", ScalarType::String.nullable(false)),
         id: GlobalId::System(2013),
@@ -256,7 +259,6 @@ lazy_static! {
     pub static ref MZ_COLUMNS: BuiltinTable = BuiltinTable {
         name: "mz_columns",
         desc: RelationDesc::empty()
-            .with_column("qualified_name", ScalarType::String.nullable(false))
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("field_number", ScalarType::Int64.nullable(false))
             .with_column("field", ScalarType::String.nullable(false))

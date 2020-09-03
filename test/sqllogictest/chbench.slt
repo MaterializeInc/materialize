@@ -592,7 +592,7 @@ query T multiline
 EXPLAIN PLAN FOR
 SELECT
     EXTRACT(year FROM o_entry_d) AS l_year,
-    sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / sum(ol_amount) AS mkt_share
+    sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / CASE WHEN sum(ol_amount) = 0 THEN 1 ELSE sum(ol_amount) END AS mkt_share
 FROM item, supplier, stock, orderline, "order", customer, nation n1, nation n2, region
 WHERE i_id = s_i_id
 AND ol_i_id = s_i_id
@@ -657,7 +657,7 @@ ORDER BY l_year
 | | demand = (#0, #4, #38, #44, #75, #79)
 | Filter !(isnull(#0)), "^.*b$" ~(#4), (#79 = "EUROPE"), (#0 < 1000), (datetots(#44) <= 2012-01-02 00:00:00), (datetots(#44) >= 2007-01-02 00:00:00)
 | Reduce group=(date_part_year_tstz(datetotstz(#44))) sum(if (#75 = "GERMANY") then {#38} else {0dec}) sum(#38)
-| Map (((#1 * 10000000dec) / #2) * 10dec)
+| Map (((#1 * 10000000dec) / if (#2 = 0dec) then {100dec} else {#2}) * 10dec)
 | Project (#0, #3)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)

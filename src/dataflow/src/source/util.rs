@@ -20,7 +20,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
 use crate::server::TimestampMetadataUpdates;
-use dataflow_types::Timestamp;
+use repr::Timestamp;
 
 use super::{SourceStatus, SourceToken};
 

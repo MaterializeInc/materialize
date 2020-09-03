@@ -30,10 +30,7 @@ use expr::{GlobalId, OptimizedRelationExpr, PartitionId, RelationExpr, ScalarExp
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use kafka_util::KafkaAddrs;
-use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType};
-
-/// System-wide timestamp type.
-pub type Timestamp = u64;
+use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType, Timestamp};
 
 /// The response from a `Peek`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

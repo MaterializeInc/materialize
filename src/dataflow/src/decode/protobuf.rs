@@ -10,10 +10,8 @@
 use async_trait::async_trait;
 use log::error;
 
-use dataflow_types::Timestamp;
-use expr::Diff;
 use interchange::protobuf::{self, Decoder};
-use repr::Row;
+use repr::{Diff, Row, Timestamp};
 
 use super::{DecoderState, PushSession};
 use crate::metrics::EVENTS_COUNTER;
@@ -38,12 +36,6 @@ impl ProtobufDecoderState {
 
 #[async_trait(?Send)]
 impl DecoderState for ProtobufDecoderState {
-    /// Reset number of success and failures with decoding
-    fn reset_event_count(&mut self) {
-        self.events_success = 0;
-        self.events_error = 0;
-    }
-
     async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
         match self.decoder.decode(bytes) {
             Ok(row) => {
@@ -108,13 +100,16 @@ impl DecoderState for ProtobufDecoderState {
         }
     }
 
-    /// Register number of success and failures with decoding
-    fn log_error_count(&self) {
+    /// Register number of success and failures with decoding,
+    /// and reset count of pending events
+    fn log_error_count(&mut self) {
         if self.events_success > 0 {
             EVENTS_COUNTER.protobuf.success.inc_by(self.events_success);
+            self.events_success = 0;
         }
         if self.events_error > 0 {
             EVENTS_COUNTER.protobuf.error.inc_by(self.events_error);
+            self.events_error = 0;
         }
     }
 }

@@ -111,10 +111,10 @@
     description: Number of bits in `b`
 
   - signature: 'char_length(s: str) -> int'
-    description: Number of graphemes in `s`
+    description: Number of code points in `s`
 
   - signature: 'length(s: str) -> int'
-    description: Number of graphemes in `s`
+    description: Number of code points in `s`
     url: length
 
   - signature: 'length(b: bytea) -> int'
@@ -122,7 +122,7 @@
     url: length
 
   - signature: 'length(s: bytea, encoding_name: str) -> int'
-    description: Number of graphemes in `s` after encoding
+    description: Number of code points in `s` after encoding
     url: length
 
   - signature: 'ltrim(s: str) -> str'

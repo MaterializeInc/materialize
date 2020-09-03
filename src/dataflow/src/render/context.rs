@@ -78,7 +78,7 @@ where
     /// without affecting the results. We *should* apply it, to sources and
     /// imported traces, both because it improves performance, and because
     /// potentially incorrect results are visible in sinks.
-    pub as_of_frontier: Antichain<dataflow_types::Timestamp>,
+    pub as_of_frontier: Antichain<repr::Timestamp>,
     /// The source tokens for all sources that have been built in this context.
     pub source_tokens: HashMap<GlobalId, Rc<Option<SourceToken>>>,
     /// The index tokens for all indexes that have been built in this context.
