@@ -12,7 +12,6 @@ harness = false
 
 [dependencies]
 anyhow = "1.0.32"
-avro = { path = "../avro", package = "mz-avro", features = ["snappy"] }
 byteorder = "1.3"
 ccsr = { path = "../ccsr" }
 chrono = "0.4"
@@ -22,6 +21,7 @@ lazy_static = "1.4.0"
 log = "0.4.11"
 num-traits = "0.2.12" # don't want to upgrade to autocfg 1.0 until more things use it
 itertools = "0.9.0"
+mz-avro = { path = "../avro", features = ["snappy"] }
 ordered-float = { version = "2.0.0", features = ["serde"] }
 ore = { path = "../ore" }
 protobuf = "2.17"

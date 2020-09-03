@@ -9,7 +9,7 @@
 
 //! Types related to the creation of dataflow sources.
 
-use avro::types::Value;
+use mz_avro::types::Value;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;

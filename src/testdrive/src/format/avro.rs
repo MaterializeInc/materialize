@@ -25,10 +25,10 @@ use serde_json::Value as JsonValue;
 // Re-export components from the various other Avro libraries, so that other
 // testdrive modules can import just this one.
 
-pub use avro::schema::{Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
-pub use avro::types::{DecimalValue, ToAvro, Value};
-pub use avro::{from_avro_datum, to_avro_datum, Codec, Reader, Writer};
 pub use interchange::avro::parse_schema;
+pub use mz_avro::schema::{Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
+pub use mz_avro::types::{DecimalValue, ToAvro, Value};
+pub use mz_avro::{from_avro_datum, to_avro_datum, Codec, Reader, Writer};
 
 // This function is derived from code in the avro_rs project. Update the license
 // header on this file accordingly if you move it to a new home.
@@ -122,7 +122,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
             }
         }
         (JsonValue::Object(items), SchemaPiece::Record { .. }) => {
-            let mut builder = avro::types::Record::new(schema)
+            let mut builder = mz_avro::types::Record::new(schema)
                 .expect("`Record::new` should never fail if schema piece is a record!");
             for (key, val) in items {
                 let field = builder

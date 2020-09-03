@@ -165,7 +165,7 @@ impl Action for VerifyAction {
 
         println!("Verifying results in file {}", path.display());
 
-        // Get the rows from this file. There is no async `avro::Reader`, so
+        // Get the rows from this file. There is no async `mz_avro::Reader`, so
         // we drop into synchronous code here.
         tokio::task::block_in_place(|| {
             let file = File::open(&path)

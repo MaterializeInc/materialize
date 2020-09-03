@@ -24,11 +24,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
 
-use avro::schema::{
+use mz_avro::schema::{
     resolve_schemas, RecordField, Schema, SchemaFingerprint, SchemaNode, SchemaPiece,
     SchemaPieceOrNamed,
 };
-use avro::{
+use mz_avro::{
     give_value,
     types::{DecimalValue, Scalar, Value},
     AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, GeneralDeserializer,
@@ -466,22 +466,26 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
-    fn scalar(self, scalar: avro::types::Scalar) -> Result<Self::Out> {
+    fn scalar(self, scalar: mz_avro::types::Scalar) -> Result<Self::Out> {
         match scalar {
-            avro::types::Scalar::Null => self.packer.push(Datum::Null),
-            avro::types::Scalar::Boolean(val) => {
+            mz_avro::types::Scalar::Null => self.packer.push(Datum::Null),
+            mz_avro::types::Scalar::Boolean(val) => {
                 if val {
                     self.packer.push(Datum::True)
                 } else {
                     self.packer.push(Datum::False)
                 }
             }
-            avro::types::Scalar::Int(val) => self.packer.push(Datum::Int32(val)),
-            avro::types::Scalar::Long(val) => self.packer.push(Datum::Int64(val)),
-            avro::types::Scalar::Float(val) => self.packer.push(Datum::Float32(OrderedFloat(val))),
-            avro::types::Scalar::Double(val) => self.packer.push(Datum::Float64(OrderedFloat(val))),
-            avro::types::Scalar::Date(val) => self.packer.push(Datum::Date(val)),
-            avro::types::Scalar::Timestamp(val) => self.packer.push(Datum::Timestamp(val)),
+            mz_avro::types::Scalar::Int(val) => self.packer.push(Datum::Int32(val)),
+            mz_avro::types::Scalar::Long(val) => self.packer.push(Datum::Int64(val)),
+            mz_avro::types::Scalar::Float(val) => {
+                self.packer.push(Datum::Float32(OrderedFloat(val)))
+            }
+            mz_avro::types::Scalar::Double(val) => {
+                self.packer.push(Datum::Float64(OrderedFloat(val)))
+            }
+            mz_avro::types::Scalar::Date(val) => self.packer.push(Datum::Date(val)),
+            mz_avro::types::Scalar::Timestamp(val) => self.packer.push(Datum::Timestamp(val)),
         }
         Ok(())
     }
@@ -1559,7 +1563,7 @@ pub fn encode_debezium_transaction_unchecked(
         ("event_count".into(), event_count),
     ]);
     debug_assert!(avro.validate(DEBEZIUM_TRANSACTION_SCHEMA.top_node()));
-    avro::encode_unchecked(&avro, &DEBEZIUM_TRANSACTION_SCHEMA, &mut buf);
+    mz_avro::encode_unchecked(&avro, &DEBEZIUM_TRANSACTION_SCHEMA, &mut buf);
     buf
 }
 
@@ -1626,7 +1630,7 @@ impl Encoder {
         encode_avro_header(&mut buf, schema_id);
         let avro = self.diff_pair_to_avro(diff_pair, transaction_id);
         debug_assert!(avro.validate(self.writer_schema.top_node()));
-        avro::encode_unchecked(&avro, &self.writer_schema, &mut buf);
+        mz_avro::encode_unchecked(&avro, &self.writer_schema, &mut buf);
         buf
     }
 
@@ -1642,7 +1646,7 @@ impl Encoder {
         encode_avro_header(&mut buf, schema_id);
         buf.write_i32::<NetworkEndian>(schema_id)
             .expect("writing to vec cannot fail");
-        avro::write_avro_datum(
+        mz_avro::write_avro_datum(
             &self.writer_schema,
             self.diff_pair_to_avro(diff_pair, transaction_id),
             &mut buf,
@@ -1757,7 +1761,7 @@ where
         .zip_eq(datums)
         .map(|((name, typ), datum)| {
             let name = name.as_str().to_owned();
-            use avro::types::ToAvro;
+            use mz_avro::types::ToAvro;
             (name, TypedDatum::new(datum, typ.clone()).avro())
         })
         .collect();
@@ -1778,7 +1782,7 @@ impl<'a> TypedDatum<'a> {
     }
 }
 
-impl<'a> avro::types::ToAvro for TypedDatum<'a> {
+impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
     fn avro(self) -> Value {
         let TypedDatum { datum, typ } = self;
         if typ.nullable && datum.is_null() {
@@ -1890,13 +1894,13 @@ pub mod cdc_v2 {
 
     use super::AvroFlatDecoder;
     use anyhow::bail;
-    use avro::schema::Schema;
-    use avro::types::Value;
-    use avro::{
+    use differential_dataflow::capture::{Message, Progress};
+    use mz_avro::schema::Schema;
+    use mz_avro::types::Value;
+    use mz_avro::{
         ArrayAsVecDecoder, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, I64Decoder,
         TrivialDecoder,
     };
-    use differential_dataflow::capture::{Message, Progress};
     use std::{cell::RefCell, convert::TryInto, rc::Rc};
 
     /// Collected state to encode update batches and progress statements.
@@ -2343,8 +2347,8 @@ pub mod cdc_v2 {
     mod tests {
 
         use super::*;
-        use avro::AvroDeserializer;
-        use avro::GeneralDeserializer;
+        use mz_avro::AvroDeserializer;
+        use mz_avro::GeneralDeserializer;
 
         #[test]
         fn test_roundtrip() {
@@ -2362,7 +2366,7 @@ pub mod cdc_v2 {
                 encoder.encode_progress(&[0], &[3], &[]),
                 encoder.encode_progress(&[3], &[], &[]),
             ];
-            use avro::encode::encode_to_vec;;
+            use mz_avro::encode::encode_to_vec;;
             let mut values: Vec<_> = values
                 .into_iter()
                 .map(|v| encode_to_vec(&v, &schema))
@@ -2395,7 +2399,7 @@ mod tests {
     use serde::Deserialize;
     use std::fs::File;
 
-    use avro::types::{DecimalValue, Value};
+    use mz_avro::types::{DecimalValue, Value};
     use repr::adt::decimal::Significand;
     use repr::{Datum, RelationDesc};
 
