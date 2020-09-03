@@ -21,10 +21,26 @@ use crate::{
     TrivialDecoder, ValueDecoder,
 };
 
+pub trait StatefulAvroDecodeable: Sized {
+    type Decoder: AvroDecode<Out = Self>;
+    type State;
+    fn new_decoder(state: Self::State) -> Self::Decoder;
+}
 pub trait AvroDecodeable: Sized {
     type Decoder: AvroDecode<Out = Self>;
 
     fn new_decoder() -> Self::Decoder;
+}
+impl<T> AvroDecodeable for T
+where
+    T: StatefulAvroDecodeable,
+    T::State: Default,
+{
+    type Decoder = <Self as StatefulAvroDecodeable>::Decoder;
+
+    fn new_decoder() -> Self::Decoder {
+        <Self as StatefulAvroDecodeable>::new_decoder(Default::default())
+    }
 }
 #[inline]
 fn decode_long_nonneg<R: Read>(reader: &mut R) -> Result<u64, Error> {
@@ -567,7 +583,7 @@ pub trait AvroDecode: Sized {
 pub mod public_decoders {
     use anyhow::{bail, Error};
 
-    use super::{AvroDecodeable, AvroMapAccess};
+    use super::{AvroDecodeable, AvroMapAccess, StatefulAvroDecodeable};
     use crate::types::{DecimalValue, Scalar, Value};
     use crate::{
         AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, ValueOrReader,
@@ -591,9 +607,10 @@ pub mod public_decoders {
                 }
             }
 
-            impl AvroDecodeable for $out {
+            impl StatefulAvroDecodeable for $out {
                 type Decoder = $name;
-                fn new_decoder() -> $name {
+                type State = ();
+                fn new_decoder(_state: ()) -> $name {
                     $name
                 }
             }
@@ -604,6 +621,7 @@ pub mod public_decoders {
     define_simple_decoder!(I64Decoder, i64, Int;Long);
     define_simple_decoder!(U64Decoder, u64, Int;Long);
     define_simple_decoder!(UsizeDecoder, usize, Int;Long);
+    define_simple_decoder!(IsizeDecoder, isize, Int;Long);
 
     pub struct MappingDecoder<
         T,
@@ -761,10 +779,11 @@ pub mod public_decoders {
             Ok(self.buf)
         }
     }
-    impl<T: AvroDecodeable> AvroDecodeable for Vec<T> {
+    impl<T: AvroDecodeable> StatefulAvroDecodeable for Vec<T> {
         type Decoder = DefaultArrayAsVecDecoder<T>;
+        type State = ();
 
-        fn new_decoder() -> Self::Decoder {
+        fn new_decoder(_state: Self::State) -> Self::Decoder {
             DefaultArrayAsVecDecoder::<T>::default()
         }
     }

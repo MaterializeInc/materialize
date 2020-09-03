@@ -37,10 +37,21 @@ use quote::{format_ident, quote};
 use syn::parse_macro_input;
 use syn::ItemStruct;
 
-#[proc_macro_derive(AvroDecodeable, attributes(decoder_factory))]
+#[proc_macro_derive(AvroDecodeable, attributes(decoder_factory, state_type, state_expr))]
 pub fn derive_decodeable(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemStruct);
+    let state_type = input
+        .attrs
+        .iter()
+        .find(|a| &a.path.get_ident().as_ref().unwrap().to_string() == "state_type")
+        .map(|a| a.tokens.clone())
+        .unwrap_or(quote! {()});
     let name = input.ident;
+    let base_fields: Vec<_> = input
+        .fields
+        .iter()
+        .map(|f| f.ident.as_ref().unwrap())
+        .collect();
     let fields: Vec<_> = input
         .fields
         .iter()
@@ -56,12 +67,25 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
         })
         .collect();
 
-    let decode_blocks: Vec<_> = input
+    let field_state_exprs: Vec<_> = input
         .fields
         .iter()
         .map(|f| {
+            f.attrs
+                .iter()
+                .find(|a| &a.path.get_ident().as_ref().unwrap().to_string() == "state_expr")
+                .map(|a| a.tokens.clone())
+                .unwrap_or(quote! {()})
+        })
+        .collect();
+
+    let decode_blocks: Vec<_> = input
+        .fields
+        .iter()
+        .zip(field_state_exprs.iter())
+        .map(|(f, state_expr)| {
             // The type of the field,
-            // which must itself be AvroDecodeable so that we can recursively
+            // which must itself be StatefulAvroDecodeable so that we can recursively
             // decode it.
             let ty = &f.ty;
             let id = f.ident.as_ref().unwrap();
@@ -77,7 +101,7 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
                     }
                 } else {
                     quote! {
-                        <#ty as ::mz_avro::AvroDecodeable>::new_decoder()
+                        <#ty as ::mz_avro::StatefulAvroDecodeable>::new_decoder(#state_expr)
                     }
                 };
             quote! {
@@ -113,9 +137,10 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
         .collect();
     let decoder_name = format_ident!("{}_DECODER", name);
     let out = quote! {
-        #[derive(Debug, Default)]
+        #[derive(Debug)]
         #[allow(non_camel_case_types)]
         struct #decoder_name {
+            _STATE: #state_type,
             #(#fields),*
         }
         impl ::mz_avro::AvroDecode for #decoder_name {
@@ -138,10 +163,14 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
                 })
             }
         }
-        impl ::mz_avro::AvroDecodeable for #name {
+        impl ::mz_avro::StatefulAvroDecodeable for #name {
             type Decoder = #decoder_name;
-            fn new_decoder() -> #decoder_name {
-                Default::default()
+            type State = #state_type;
+            fn new_decoder(state: #state_type) -> #decoder_name {
+                #decoder_name {
+                    _STATE: state,
+                    #(#base_fields: None),*
+                }
             }
         }
     };
