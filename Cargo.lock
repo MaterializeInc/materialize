@@ -1541,6 +1541,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "url",
+ "uuid",
 ]
 
 [[package]]

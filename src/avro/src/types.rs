@@ -139,6 +139,7 @@ pub enum Value {
     /// This is not part of the Avro spec, but is emitted by Debezium,
     /// and distinguished by setting the `"connect.name"` property to `"io.debezium.data.Json"`.
     Json(serde_json::Value),
+    UUID(String),
 }
 
 /// Any structure implementing the [ToAvro](trait.ToAvro.html) trait will be usable

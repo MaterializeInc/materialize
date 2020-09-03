@@ -1045,6 +1045,7 @@ pub fn give_value<D: AvroDecode>(d: D, v: &Value) -> Result<D::Out, Error> {
             d.record(&mut a)
         }
         Value::Json(val) => d.json::<&[u8]>(V(val)),
+        Value::UUID(val) => d.string::<&[u8]>(V(val)),
     }
 }
 

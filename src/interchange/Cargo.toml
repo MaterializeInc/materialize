@@ -34,6 +34,7 @@ serde_json = "1.0.57"
 smallvec = "1.4.2"
 sha2 = "0.9.1"
 url = "2.1.1"
+uuid = "0.8"
 base64 = "0.12.3"
 
 [dev-dependencies]

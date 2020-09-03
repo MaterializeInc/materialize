@@ -23,6 +23,7 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
+use uuid::Uuid;
 
 use mz_avro::schema::{
     resolve_schemas, RecordField, Schema, SchemaFingerprint, SchemaNode, SchemaPiece,
@@ -919,6 +920,7 @@ fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> Result<RowPacker> 
             }
         }
         Value::Json(j) => row = JsonbPacker::new(row).pack_serde_json(j)?,
+        Value::UUID(u) => row.push(Datum::UUID(Uuid::parse_str(&u)?)),
         other @ Value::Fixed(..)
         | other @ Value::Array(_)
         | other @ Value::Map(_)
@@ -1501,7 +1503,10 @@ fn build_schema(columns: &[(ColumnName, ColumnType)], include_transaction: bool)
                 "type": "string",
                 "connect.name": "io.debezium.data.Json",
             }),
-            ScalarType::UUID => unimplemented!("uuid type"),
+            ScalarType::UUID => json!({
+                "type": "string",
+                "logicalType": "uuid",
+            }),
             ScalarType::List(_t) => unimplemented!("list types"),
             ScalarType::Record { .. } => unimplemented!("record types"),
         };
@@ -1862,7 +1867,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
                 ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
-                ScalarType::UUID => unimplemented!("uuid type"),
+                ScalarType::UUID => Value::UUID(datum.unwrap_uuid().to_string()),
                 ScalarType::List(_t) => unimplemented!("list types"),
                 ScalarType::Record { .. } => unimplemented!("record types"),
             };
