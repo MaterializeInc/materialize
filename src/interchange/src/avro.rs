@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::Read;
-use std::iter;
+use std::{cell::RefCell, iter, rc::Rc};
 
 use anyhow::{anyhow, bail, Result};
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
@@ -32,7 +32,7 @@ use mz_avro::{
     give_value,
     types::{DecimalValue, Scalar, Value},
     AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, GeneralDeserializer,
-    TrivialDecoder, ValueDecoder, ValueOrReader,
+    StatefulAvroDecodeable, TrivialDecoder, ValueDecoder, ValueOrReader,
 };
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
@@ -364,6 +364,40 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
             }
         }
         Ok((DiffPair { before, after }, coords))
+    }
+}
+
+struct RowDecoder {
+    state: (Rc<RefCell<RowPacker>>, Rc<RefCell<Vec<u8>>>),
+}
+
+impl AvroDecode for RowDecoder {
+    type Out = RowWrapper;
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(self, a: &mut A) -> anyhow::Result<Self::Out> {
+        let mut packer_borrow = self.state.0.borrow_mut();
+        let mut buf_borrow = self.state.1.borrow_mut();
+        let inner = AvroFlatDecoder {
+            packer: &mut packer_borrow,
+            buf: &mut buf_borrow,
+            is_top: true,
+        };
+        inner.record(a)?;
+        let row = packer_borrow.finish_and_reuse();
+        Ok(RowWrapper(row))
+    }
+}
+
+// Get around orphan rule
+#[derive(Debug)]
+struct RowWrapper(Row);
+impl StatefulAvroDecodeable for RowWrapper {
+    type Decoder = RowDecoder;
+    // TODO - can we make this some sort of &'a mut (RowPacker, Vec<u8>) without
+    // running into lifetime crap?
+    type State = (Rc<RefCell<RowPacker>>, Rc<RefCell<Vec<u8>>>);
+
+    fn new_decoder(state: Self::State) -> Self::Decoder {
+        Self::Decoder { state }
     }
 }
 
@@ -1892,7 +1926,7 @@ pub mod cdc_v2 {
     use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
     use serde_json::json;
 
-    use super::AvroFlatDecoder;
+    use super::RowWrapper;
     use anyhow::bail;
     use avro_derive::AvroDecodeable;
     use differential_dataflow::capture::{Message, Progress};
@@ -1900,9 +1934,9 @@ pub mod cdc_v2 {
     use mz_avro::types::Value;
     use mz_avro::{
         ArrayAsVecDecoder, AvroDecode, AvroDecodeable, AvroDeserializer, AvroRead,
-        AvroRecordAccess, I64Decoder, TrivialDecoder,
+        StatefulAvroDecodeable,
     };
-    use std::{cell::RefCell, convert::TryInto, rc::Rc};
+    use std::{cell::RefCell, rc::Rc};
 
     /// Collected state to encode update batches and progress statements.
     #[derive(Debug)]
@@ -1976,83 +2010,14 @@ pub mod cdc_v2 {
         }
     }
 
-    struct UpdateDecoder {
-        packer: Rc<RefCell<RowPacker>>,
-        buf: Rc<RefCell<Vec<u8>>>,
-        data: Option<Row>,
-        timestamp: Option<Timestamp>,
-        diff: Option<Diff>,
+    #[derive(AvroDecodeable)]
+    #[state_type(Rc<RefCell<RowPacker>>, Rc<RefCell<Vec<u8>>>)]
+    struct MyUpdate {
+        #[state_expr(self._STATE.0.clone(), self._STATE.1.clone())]
+        data: RowWrapper,
+        timestamp: Timestamp,
+        diff: Diff,
     }
-    impl UpdateDecoder {
-        pub fn new(packer: Rc<RefCell<RowPacker>>, buf: Rc<RefCell<Vec<u8>>>) -> Self {
-            Self {
-                packer,
-                buf,
-                data: None,
-                timestamp: None,
-                diff: None,
-            }
-        }
-    }
-    impl AvroDecode for UpdateDecoder {
-        type Out = (Row, Timestamp, Diff);
-
-        fn record<R: AvroRead, A: AvroRecordAccess<R>>(
-            mut self,
-            a: &mut A,
-        ) -> anyhow::Result<Self::Out> {
-            while let Some((name, _idx, field)) = a.next_field()? {
-                match name {
-                    "time" => {
-                        if self.timestamp.is_some() {
-                            bail!("Timestamp field found twice!");
-                        }
-                        let t = field.decode_field(I64Decoder)?.try_into()?;
-                        self.timestamp = Some(t);
-                    }
-                    "diff" => {
-                        if self.diff.is_some() {
-                            bail!("Diff field found twice!");
-                        }
-                        let r = field.decode_field(I64Decoder)?.try_into()?;
-                        self.diff = Some(r);
-                    }
-                    "data" => {
-                        if self.data.is_some() {
-                            bail!("Data field found twice!");
-                        }
-                        let d = AvroFlatDecoder {
-                            packer: &mut *self.packer.borrow_mut(),
-                            buf: &mut *self.buf.borrow_mut(),
-                            is_top: true,
-                        };
-                        field.decode_field(d)?;
-                        self.data = Some(self.packer.borrow_mut().finish_and_reuse());
-                    }
-                    _ => {
-                        field.decode_field(TrivialDecoder)?;
-                    }
-                }
-            }
-            let t = if let Some(t) = self.timestamp.take() {
-                t
-            } else {
-                bail!("No timestamp found");
-            };
-            let r = if let Some(r) = self.diff.take() {
-                r
-            } else {
-                bail!("No diff found");
-            };
-            let data = if let Some(data) = self.data.take() {
-                data
-            } else {
-                bail!("No data found");
-            };
-            Ok((data, t, r))
-        }
-    }
-
     #[derive(AvroDecodeable)]
     struct Count {
         time: Timestamp,
@@ -2060,7 +2025,9 @@ pub mod cdc_v2 {
     }
 
     fn make_counts_decoder() -> impl AvroDecode<Out = Vec<(Timestamp, usize)>> {
-        ArrayAsVecDecoder::new(|| Count::new_decoder().map_decoder(|ct| Ok((ct.time, ct.count))))
+        ArrayAsVecDecoder::new(|| {
+            <Count as AvroDecodeable>::new_decoder().map_decoder(|ct| Ok((ct.time, ct.count)))
+        })
     }
     #[derive(AvroDecodeable)]
     struct MyProgress {
@@ -2084,13 +2051,19 @@ pub mod cdc_v2 {
                 0 => {
                     let packer = Rc::new(RefCell::new(RowPacker::new()));
                     let buf = Rc::new(RefCell::new(vec![]));
-                    let d =
-                        ArrayAsVecDecoder::new(|| UpdateDecoder::new(packer.clone(), buf.clone()));
+                    let d = ArrayAsVecDecoder::new(|| {
+                        <MyUpdate as StatefulAvroDecodeable>::new_decoder((
+                            packer.clone(),
+                            buf.clone(),
+                        ))
+                        .map_decoder(|update| Ok((update.data.0, update.timestamp, update.diff)))
+                    });
                     let updates = deserializer.deserialize(r, d)?;
                     Ok(Message::Updates(updates))
                 }
                 1 => {
-                    let progress = deserializer.deserialize(r, MyProgress::new_decoder())?;
+                    let progress = deserializer
+                        .deserialize(r, <MyProgress as AvroDecodeable>::new_decoder())?;
                     let progress = Progress {
                         lower: progress.lower,
                         upper: progress.upper,
