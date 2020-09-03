@@ -21,13 +21,26 @@ use std::collections::HashMap;
 use crate::TransformArgs;
 use expr::{BinaryFunc, GlobalId, Id, RelationExpr, ScalarExpr};
 
-/// Replaces filters of the form ScalarExpr::Column(i) == ScalarExpr::Literal, where i is a column for
-/// which an index exists, with a
-/// Join{
-///   equivalences: [(0, i), (1,0)],
-///   ArrangeBy{input, keys: [ScalarExpr::Column(i)]},
-///   <constant>
-/// }
+/// Suppose you have
+/// %0 =
+/// | Get <some input>
+/// | Filter (<Literal> = <Column>)
+/// and an index on <some input>(<Column>).
+///
+/// Then this transform will turn the above plan into
+/// %0 =
+/// | Get <some input>
+/// | ArrangeBy (<Column>)
+///
+/// %1 =
+/// | Join %0 (<Column> <Literal>)
+/// | | implementation = Unimplemented
+/// | | demand = None
+/// | Filter (<Literal> = <Column>)
+///
+/// Note that it is the responsibility of ColumnKnowledge (PredicateKnowledge
+/// in the future) to clean up the Filter after the Join. It is the responsibility
+/// of JoinImplementation to determine an implementation for the Join.
 #[derive(Debug)]
 pub struct FilterEqualLiteral;
 
@@ -48,14 +61,7 @@ impl crate::Transform for FilterEqualLiteral {
 }
 
 impl FilterEqualLiteral {
-    /// Replaces filters of the form ScalarExpr::Column(i) == ScalarExpr::Literal, where i is a column for
-    /// which an index exists, with a
-    /// Join{
-    ///   equivalences: [(0, i), (1,0)],
-    ///   ArrangeBy{input, keys: [ScalarExpr::Column(i)]},
-    ///   <constant>
-    /// }
-    pub fn transform(
+    fn transform(
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
@@ -76,6 +82,13 @@ impl FilterEqualLiteral {
             } = &mut **input
             {
                 if indexes.contains_key(id) {
+                    // A map from column to the literal it is supposed to be
+                    // equivalent to. It is possible that there is a badly written
+                    // query where there are 2 filters `<column>=x` and `<column>=y`
+                    // If x == y, then the two filters are the same, and it is
+                    // ok to store just one copy in the matter.
+                    // If x != y, because it doesn't matter what this transform
+                    // does because `relation` will just become an empty Constant.
                     let mut expr_to_equivalent_literal: HashMap<ScalarExpr, ScalarExpr> =
                         HashMap::new();
                     // gather predicates of the form CallBinary{Binaryfunc::Eq,
@@ -96,7 +109,7 @@ impl FilterEqualLiteral {
                                 }
                                 (ScalarExpr::Column(_), ScalarExpr::Literal(_, _)) => {
                                     expr_to_equivalent_literal
-                                        .insert((**expr2).clone(), (**expr1).clone());
+                                        .insert((**expr1).clone(), (**expr2).clone());
                                 }
                                 _ => {}
                             }
