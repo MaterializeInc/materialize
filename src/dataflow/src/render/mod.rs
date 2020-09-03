@@ -119,10 +119,10 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 
-use mz_avro::types::Value;
-use mz_avro::Schema;
 use dataflow_types::*;
 use expr::{GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
+use mz_avro::types::Value;
+use mz_avro::Schema;
 use ore::cast::CastFrom;
 use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;

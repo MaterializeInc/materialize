@@ -22,12 +22,12 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::bail;
-use mz_avro::schema::Schema;
-use mz_avro::types::Value;
 use futures::executor::block_on;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
+use mz_avro::schema::Schema;
+use mz_avro::types::Value;
 use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;

@@ -478,8 +478,12 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             }
             mz_avro::types::Scalar::Int(val) => self.packer.push(Datum::Int32(val)),
             mz_avro::types::Scalar::Long(val) => self.packer.push(Datum::Int64(val)),
-            mz_avro::types::Scalar::Float(val) => self.packer.push(Datum::Float32(OrderedFloat(val))),
-            mz_avro::types::Scalar::Double(val) => self.packer.push(Datum::Float64(OrderedFloat(val))),
+            mz_avro::types::Scalar::Float(val) => {
+                self.packer.push(Datum::Float32(OrderedFloat(val)))
+            }
+            mz_avro::types::Scalar::Double(val) => {
+                self.packer.push(Datum::Float64(OrderedFloat(val)))
+            }
             mz_avro::types::Scalar::Date(val) => self.packer.push(Datum::Date(val)),
             mz_avro::types::Scalar::Timestamp(val) => self.packer.push(Datum::Timestamp(val)),
         }
@@ -1890,13 +1894,13 @@ pub mod cdc_v2 {
 
     use super::AvroFlatDecoder;
     use anyhow::bail;
+    use differential_dataflow::capture::{Message, Progress};
     use mz_avro::schema::Schema;
     use mz_avro::types::Value;
     use mz_avro::{
         ArrayAsVecDecoder, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, I64Decoder,
         TrivialDecoder,
     };
-    use differential_dataflow::capture::{Message, Progress};
     use std::{cell::RefCell, convert::TryInto, rc::Rc};
 
     /// Collected state to encode update batches and progress statements.

@@ -18,12 +18,12 @@ use log::error;
 use notify::{RecursiveMode, Watcher};
 use timely::scheduling::{Activator, SyncActivator};
 
-use mz_avro::types::Value;
-use mz_avro::{AvroRead, Schema, Skip};
 use dataflow_types::{
     AvroOcfEncoding, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
 };
 use expr::{PartitionId, SourceInstanceId};
+use mz_avro::types::Value;
+use mz_avro::{AvroRead, Schema, Skip};
 
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
