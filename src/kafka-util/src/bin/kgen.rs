@@ -118,6 +118,7 @@ impl<'a> RandomAvroGenerator<'a> {
                 Value::String(val)
             }
             SchemaPiece::Json => unreachable!(),
+            SchemaPiece::Uuid => unreachable!(),
             SchemaPiece::Array(inner) => {
                 let len = self.array_lens.get_mut(&p).unwrap()();
                 let next = node.step(&**inner);
@@ -320,6 +321,7 @@ impl<'a> RandomAvroGenerator<'a> {
                 self.strings.insert(p, Box::new(dist));
             }
             SchemaPiece::Json => unimplemented!(),
+            SchemaPiece::Uuid => unimplemented!(),
             SchemaPiece::Array(inner) => {
                 let fn_ = field_name.unwrap();
                 let len_dist_json = annotations.get(&format!("{}.len", fn_)).unwrap();

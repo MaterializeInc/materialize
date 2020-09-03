@@ -185,6 +185,8 @@ pub enum SchemaPiece {
     String,
     /// A `string` Avro schema that is tagged as representing JSON data
     Json,
+    /// A `string` Avro schema with a logical type of `uuid`.
+    Uuid,
     /// A `array` Avro schema. Avro arrays are required to have the same type for each element.
     /// This variant holds the `Schema` for the array element type.
     Array(Box<SchemaPieceOrNamed>),
@@ -410,6 +412,7 @@ impl<'a> From<&'a SchemaPiece> for SchemaKind {
             SchemaPiece::ResolveRecord { .. } => SchemaKind::Record,
             SchemaPiece::ResolveEnum { .. } => SchemaKind::Enum,
             SchemaPiece::Json => SchemaKind::String,
+            SchemaPiece::Uuid => SchemaKind::String,
         }
     }
 }
@@ -1146,6 +1149,11 @@ impl SchemaParser {
                 return SchemaPiece::Json;
             }
         }
+        if let Some(name) = complex.get("logicalType") {
+            if name == "uuid" {
+                return SchemaPiece::Uuid;
+            }
+        }
         debug!("parsing complex type as regular string: {:?}", complex);
         SchemaPiece::String
     }
@@ -1371,6 +1379,7 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
             },
             SchemaPiece::Bytes => SchemaPiece::Bytes,
             SchemaPiece::String => SchemaPiece::String,
+            SchemaPiece::Uuid => SchemaPiece::Uuid,
             SchemaPiece::Array(inner) => {
                 SchemaPiece::Array(Box::new(self.clone_piece_or_named(inner.as_ref().as_ref())))
             }
@@ -1734,6 +1743,12 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     map.serialize_entry("connect.name", "io.debezium.data.Json")?;
                     map.end()
                 }
+                SchemaPiece::Uuid => {
+                    let mut map = serializer.serialize_map(Some(4))?;
+                    map.serialize_entry("type", "string")?;
+                    map.serialize_entry("logicalType", "uuid")?;
+                    map.end()
+                }
                 SchemaPiece::Record { .. }
                 | SchemaPiece::Decimal {
                     fixed_size: Some(_),
@@ -1845,6 +1860,7 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     | SchemaPiece::Array(_)
                     | SchemaPiece::Map(_)
                     | SchemaPiece::Union(_)
+                    | SchemaPiece::Uuid
                     | SchemaPiece::Json => {
                         unreachable!("Unexpected anonymous schema piece in named schema position")
                     }

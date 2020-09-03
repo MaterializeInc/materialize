@@ -566,6 +566,9 @@ pub trait AvroDecode: Sized {
     ) -> Result<Self::Out, Error> {
         bail!("Unexpected json");
     }
+    fn uuid<'a, R: AvroRead>(self, _r: ValueOrReader<'a, &'a [u8], R>) -> Result<Self::Out, Error> {
+        bail!("Unexpected uuid");
+    }
     fn fixed<'a, R: AvroRead>(
         self,
         _r: ValueOrReader<'a, &'a [u8], R>,
@@ -724,6 +727,13 @@ pub mod public_decoders {
             Ok((self.conv)(self.inner.json(r)?)?)
         }
 
+        fn uuid<'a, R: AvroRead>(
+            mut self,
+            r: ValueOrReader<'a, &'a [u8], R>,
+        ) -> Result<Self::Out, Error> {
+            Ok((self.conv)(self.inner.uuid(r)?)?)
+        }
+
         fn fixed<'a, R: AvroRead>(
             mut self,
             r: ValueOrReader<'a, &'a [u8], R>,
@@ -843,6 +853,9 @@ pub mod public_decoders {
             self,
             r: ValueOrReader<'a, &'a serde_json::Value, R>,
         ) -> Result<(), Error> {
+            self.maybe_skip(r)
+        }
+        fn uuid<'a, R: AvroRead>(self, r: ValueOrReader<'a, &'a [u8], R>) -> Result<(), Error> {
             self.maybe_skip(r)
         }
         fn fixed<'a, R: AvroRead>(self, r: ValueOrReader<'a, &'a [u8], R>) -> Result<(), Error> {
@@ -968,6 +981,20 @@ pub mod public_decoders {
             };
             Ok(Value::Json(val))
         }
+        fn uuid<'a, R: AvroRead>(self, r: ValueOrReader<'a, &'a [u8], R>) -> Result<Value, Error> {
+            let buf = match r {
+                ValueOrReader::Value(val) => val.to_vec(),
+                ValueOrReader::Reader { len, r } => {
+                    let mut buf = vec![];
+                    buf.resize_with(len, Default::default);
+                    r.read_exact(&mut buf)?;
+                    buf
+                }
+            };
+            let s = std::str::from_utf8(&buf)?;
+            let val = uuid::Uuid::parse_str(s)?;
+            Ok(Value::Uuid(val))
+        }
         fn fixed<'a, R: AvroRead>(self, r: ValueOrReader<'a, &'a [u8], R>) -> Result<Value, Error> {
             let buf = match r {
                 ValueOrReader::Value(buf) => buf.to_vec(),
@@ -1045,6 +1072,7 @@ pub fn give_value<D: AvroDecode>(d: D, v: &Value) -> Result<D::Out, Error> {
             d.record(&mut a)
         }
         Value::Json(val) => d.json::<&[u8]>(V(val)),
+        Value::Uuid(val) => d.uuid::<&[u8]>(V(val.to_string().as_bytes())),
     }
 }
 
@@ -1132,6 +1160,10 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
             SchemaPiece::Json => {
                 let len = decode_len(r)?;
                 d.json(Reader { len, r })
+            }
+            SchemaPiece::Uuid => {
+                let len = decode_len(r)?;
+                d.uuid(Reader { len, r })
             }
             SchemaPiece::Array(inner) => {
                 // From the spec:

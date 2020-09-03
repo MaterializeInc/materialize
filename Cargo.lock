@@ -1541,6 +1541,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -2031,6 +2032,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "snap",
+ "uuid",
 ]
 
 [[package]]

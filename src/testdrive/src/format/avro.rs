@@ -114,6 +114,10 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
             let j = serde_json::from_str(s).map_err(|e| e.to_string())?;
             Ok(Value::Json(j))
         }
+        (JsonValue::String(s), SchemaPiece::Uuid) => {
+            let u = uuid::Uuid::parse_str(&s).map_err(|e| e.to_string())?;
+            Ok(Value::Uuid(u))
+        }
         (JsonValue::String(s), SchemaPiece::Enum { symbols, .. }) => {
             if symbols.contains(s) {
                 Ok(Value::String(s.clone()))

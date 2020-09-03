@@ -139,6 +139,8 @@ pub enum Value {
     /// This is not part of the Avro spec, but is emitted by Debezium,
     /// and distinguished by setting the `"connect.name"` property to `"io.debezium.data.Json"`.
     Json(serde_json::Value),
+    /// A `Uuid` coming from an avro Logical `uuid`.
+    Uuid(uuid::Uuid),
 }
 
 /// Any structure implementing the [ToAvro](trait.ToAvro.html) trait will be usable
@@ -402,6 +404,7 @@ impl Value {
                     )
             }
             (Value::Json(_), SchemaPiece::Json) => true,
+            (Value::Uuid(_), SchemaPiece::Uuid) => true,
             _ => false,
         }
     }
