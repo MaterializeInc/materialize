@@ -13,10 +13,10 @@ cluster. For more detail, see [SSL-encrypted Kafka details](#ssl-encrypted-kafka
 
 Field | Value | Description
 ------|-------|------------
-`ssl_ca_location` | `text` | The absolute path to your SSL certificate's CA certificate. Required for SSL client and server authentication.
 `ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication.
 `ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.
-`ssl_key_password` | `text` | Your SSL key's password.
+`ssl_key_password` | `text` | Your SSL key's password, if any.
+`ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, the system's default CA certificates will be used.
 
 #### Kerberos `WITH` options
 
