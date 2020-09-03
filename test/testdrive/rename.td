@@ -49,13 +49,73 @@ materialize.public.mz_view  materialize.public.mz_view_primary_idx  mz_obj_no   
     "materialize"."public"."mz_data"
     ';
 
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_data%';
+name
+-----
+materialize.public.mz_data
+materialize.public.mz_data_primary_idx
+
 > ALTER SOURCE mz_data RENAME TO renamed_mz_data;
+
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_data%';
+name
+-----
+materialize.public.mz_data_primary_idx
+
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_mz_data%';
+name
+-----
+materialize.public.renamed_mz_data
+
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view%';
+name
+-----
+materialize.public.mz_view
+materialize.public.mz_view_primary_idx
 
 > ALTER VIEW mz_view RENAME TO renamed_mz_view;
 
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view%';
+name
+-----
+materialize.public.mz_view_primary_idx
+
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_mz_view%';
+name
+-----
+materialize.public.renamed_mz_view
+
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view_primary_idx%';
+name
+-----
+materialize.public.mz_view_primary_idx
+
 > ALTER INDEX mz_view_primary_idx RENAME TO renamed_index;
 
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view_primary_idx%';
+name
+-----
+
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_index%';
+name
+-----
+materialize.public.renamed_index
+
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.sink1%';
+name
+-----
+materialize.public.sink1
+
 > ALTER SINK sink1 RENAME TO renamed_sink
+
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.sink1%';
+name
+-----
+
+> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_sink%';
+name
+-----
+materialize.public.renamed_sink
 
 # Source was successfully renamed
 > SHOW SOURCES;

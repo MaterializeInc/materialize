@@ -2091,6 +2091,17 @@ where
                         self.update_mz_columns_catalog_view(desc, *id, 1);
                     }
                 }
+                catalog::OpStatus::UpdatedItem { id, from_name } => {
+                    // Remove old name from mz_catalog_names.
+                    self.report_catalog_update(*id, from_name.to_string(), -1);
+
+                    // Add new name to mz_catalog_names.
+                    self.report_catalog_update(
+                        *id,
+                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
+                        1,
+                    );
+                }
                 catalog::OpStatus::DroppedDatabase { name, id } => {
                     self.update_mz_databases_catalog_view(*id, name, -1);
                 }

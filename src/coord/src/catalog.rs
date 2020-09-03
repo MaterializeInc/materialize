@@ -897,7 +897,8 @@ impl Catalog {
             DropItem(GlobalId),
             UpdateItem {
                 id: GlobalId,
-                name: FullName,
+                from_name: Option<FullName>,
+                to_name: FullName,
                 item: CatalogItem,
             },
         }
@@ -1047,14 +1048,16 @@ impl Catalog {
                         tx.update_item(id.clone(), &dependent_item.name.item, &serialized_item)?;
                         actions.push(Action::UpdateItem {
                             id: id.clone(),
-                            name: dependent_item.name.clone(),
+                            from_name: None,
+                            to_name: dependent_item.name.clone(),
                             item: updated_item,
                         });
                     }
                     tx.update_item(id.clone(), &to_full_name.item, &serialized_item)?;
                     actions.push(Action::UpdateItem {
                         id,
-                        name: to_full_name,
+                        from_name: Some(entry.name.clone()),
+                        to_name: to_full_name,
                         item,
                     });
                     actions
@@ -1163,7 +1166,12 @@ impl Catalog {
                     OpStatus::DroppedItem(metadata)
                 }
 
-                Action::UpdateItem { id, name, item } => {
+                Action::UpdateItem {
+                    id,
+                    from_name,
+                    to_name,
+                    item,
+                } => {
                     let mut entry = self.by_id.remove(&id).unwrap();
                     info!(
                         "update {} {} ({})",
@@ -1178,12 +1186,15 @@ impl Catalog {
                         .expect("catalog out of sync")
                         .items;
                     schema_items.remove(&entry.name.item);
-                    entry.name = name;
+                    entry.name = to_name;
                     entry.item = item;
                     schema_items.insert(entry.name.item.clone(), id);
                     self.by_id.insert(id, entry);
 
-                    OpStatus::UpdatedItem
+                    match from_name {
+                        Some(from_name) => OpStatus::UpdatedItem { id, from_name },
+                        None => OpStatus::NoOp, // If name didn't change, don't update system tables.
+                    }
                 }
             })
             .collect())
@@ -1443,7 +1454,10 @@ pub enum OpStatus {
         schema_name: String,
     },
     DroppedItem(CatalogEntry),
-    UpdatedItem,
+    UpdatedItem {
+        id: GlobalId,
+        from_name: FullName,
+    },
     NoOp,
 }
 
