@@ -37,6 +37,9 @@ production readiness.
 
 ### Create the release candidate
 
+⚠️ Make sure to run these commands on a direct clone of the MaterializeInc/Materialize repo.
+These commands will not run if you run them from your fork!
+
 - [ ] Choose the commit for the release. Unless there are open release blockers above,
   this should just be the head commit of the main branch. Checkout that commit.
 - [ ] Choose the name for the release candidate following the format
@@ -73,6 +76,9 @@ a release is published.
   remind them to review the [release notes][] and the release announcement. All
   members of the team should leave a comment stating that the release looks
   good.
+
+- [ ] For a major release (x.y.0), make sure that there is a blog post being prepared. For a
+  minor release (x.y.z) release, there is typically no need to prepare a blog post.
 
 ### Test the release candidate
 
@@ -131,6 +137,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
   git push origin $tag
   ```
 
+Go to [BuildKite > Tests](https://buildkite.com/materialize/tests) and verify that a job called
+`release` is running for the pushed tag. You will need to wait for this job to complete before
+you can verify the Debian package. You can, however, continue on to the next step and update
+Homebrew.
+
 ### Create Homebrew bottle and update tap
 
 - [ ] Follow the instructions in [MaterializeInc/homebrew-materialize's
@@ -168,6 +179,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
     * [Installation instructions](https://materialize.io/docs/install/)
     * [Documentation](https://materialize.io/docs/)
     ```
+  - Click `Publish Release`!
 
 ### Update the main branch for the next version
 
@@ -179,7 +191,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   - [ ] Ensure that all members of the release-notes team have signed-off on this issue.
 
-  - [ ] Ensure that the announcement blog post has been published and
+  - [ ] For a major release, ensure that the announcement blog post has been published and
     announced, if applicable, by pinging the product team in #release.
 
 ## Finish
