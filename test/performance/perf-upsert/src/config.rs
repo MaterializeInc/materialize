@@ -61,6 +61,10 @@ pub struct Args {
     /// Replication factor for the source topic. Has to be specified if --create-topic is true.
     #[structopt(long, requires("create-topic"))]
     replication_factor: Option<i32>,
+
+    /// Number of times we peek the source data
+    #[structopt(long, default_value = "100")]
+    pub num_peeks: usize,
 }
 
 impl Args {
@@ -96,6 +100,7 @@ impl Args {
             kafka_topic: self.kafka_topic.clone(),
             preserve_source: self.preserve_source,
             enable_persistence: self.enable_persistence,
+            num_peeks: self.num_peeks,
         }
     }
 
@@ -128,4 +133,5 @@ pub struct MzConfig {
     pub kafka_topic: String,
     pub preserve_source: bool,
     pub enable_persistence: bool,
+    pub num_peeks: usize,
 }
