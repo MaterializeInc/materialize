@@ -287,24 +287,29 @@ pub fn construct<A: Allocate>(
 
         let operates = operates.as_collection();
 
+        // Feedback delay for log flushing. This should be large enough that there is not a tight
+        // feedback loop that prevents high-throughput work, but not so large that we leave volumes
+        // of logging data around that we do not need. Effectively, a throughput v memory trade-off.
+        let delay = std::time::Duration::from_nanos(10_000_000_000);
+
         // Accumulate the durations of each operator.
+        // The first `map` exists so that we can semijoin effectively (it requires a key-val pair).
         let mut elapsed = duration
-            .map(|(op, t, d)| (op, t, d as isize))
-            .as_collection()
-            .count_total();
+            .map(|(op_worker, t, d)| ((op_worker, ()), t, d as isize))
+            .as_collection();
+        // Remove elapsed times for operators not present in `operates`.
+        elapsed = thin_collection(elapsed, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
+        let elapsed = elapsed.map(|(op, ())| op).count_total();
 
         // Accumulate histograms of execution times for each operator.
         let mut histogram = duration
-            .map(|(op, t, d)| ((op, d.next_power_of_two()), t, 1i64))
-            .as_collection()
+            .map(|(op_worker, t, d)| ((op_worker, d.next_power_of_two()), t, 1isize))
+            .as_collection();
+        // Remove histogram measurements for operators not present in `operates`.
+        histogram = thin_collection(histogram, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
+        let histogram = histogram
             .count_total()
             .map(|((key, pow), count)| ((key), (pow, count)));
-
-        let delay = std::time::Duration::from_nanos(10_000_000_000);
-
-        // Only keep metrics and histograms for the dataflow operators that currently exist.
-        elapsed = thin_collection(elapsed, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
-        histogram = thin_collection(histogram, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
 
         let elapsed = elapsed.map({
             let mut row_packer = repr::RowPacker::new();
