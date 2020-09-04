@@ -1501,6 +1501,7 @@ fn build_schema(columns: &[(ColumnName, ColumnType)], include_transaction: bool)
                 "type": "string",
                 "connect.name": "io.debezium.data.Json",
             }),
+            ScalarType::UUID => unimplemented!("uuid type"),
             ScalarType::List(_t) => unimplemented!("list types"),
             ScalarType::Record { .. } => unimplemented!("record types"),
         };
@@ -1861,6 +1862,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
                 ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
+                ScalarType::UUID => unimplemented!("uuid type"),
                 ScalarType::List(_t) => unimplemented!("list types"),
                 ScalarType::Record { .. } => unimplemented!("record types"),
             };

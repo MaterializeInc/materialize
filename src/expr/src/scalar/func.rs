@@ -370,6 +370,12 @@ fn cast_string_to_interval<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .err_into()
 }
 
+fn cast_string_to_uuid<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_uuid(a.unwrap_str())
+        .map(Datum::UUID)
+        .err_into()
+}
+
 fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(a.unwrap_date().and_hms(0, 0, 0))
 }
@@ -526,6 +532,12 @@ fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
         Datum::True | Datum::False => a,
         _ => Datum::Null,
     }
+}
+
+fn cast_uuid_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    let mut buf = String::new();
+    strconv::format_uuid(&mut buf, a.unwrap_uuid());
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -2311,6 +2323,7 @@ pub enum UnaryFunc {
     CastStringToTimestampTz,
     CastStringToInterval,
     CastStringToDecimal(u8),
+    CastStringToUuid,
     CastDateToTimestamp,
     CastDateToTimestampTz,
     CastDateToString,
@@ -2330,6 +2343,7 @@ pub enum UnaryFunc {
     CastJsonbOrNullToJsonb,
     CastJsonbToFloat64,
     CastJsonbToBool,
+    CastUuidToString,
     CastRecordToString { ty: ScalarType },
     CeilFloat32,
     CeilFloat64,
@@ -2427,6 +2441,7 @@ impl UnaryFunc {
             UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
             UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
             UnaryFunc::CastStringToInterval => cast_string_to_interval(a),
+            UnaryFunc::CastStringToUuid => cast_string_to_uuid(a),
             UnaryFunc::CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
             UnaryFunc::CastDateToTimestampTz => Ok(cast_date_to_timestamptz(a)),
             UnaryFunc::CastDateToString => Ok(cast_date_to_string(a, temp_storage)),
@@ -2449,6 +2464,7 @@ impl UnaryFunc {
             UnaryFunc::CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
             UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
             UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
+            UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
             UnaryFunc::CastRecordToString { ty } => Ok(cast_record_to_string(a, ty, temp_storage)),
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
@@ -2520,6 +2536,7 @@ impl UnaryFunc {
             CastStringToTimestamp => ScalarType::Timestamp.nullable(true),
             CastStringToTimestampTz => ScalarType::TimestampTz.nullable(true),
             CastStringToInterval | CastTimeToInterval => ScalarType::Interval.nullable(true),
+            CastStringToUuid => ScalarType::UUID.nullable(true),
 
             CastBoolToInt32 => ScalarType::Int32.nullable(in_nullable),
 
@@ -2583,6 +2600,8 @@ impl UnaryFunc {
             CastJsonbToString => ScalarType::String.nullable(true),
             CastJsonbToFloat64 => ScalarType::Float64.nullable(true),
             CastJsonbToBool => ScalarType::Bool.nullable(true),
+
+            CastUuidToString => ScalarType::String.nullable(true),
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),
@@ -2715,6 +2734,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToTimestamp => f.write_str("strtots"),
             UnaryFunc::CastStringToTimestampTz => f.write_str("strtotstz"),
             UnaryFunc::CastStringToInterval => f.write_str("strtoiv"),
+            UnaryFunc::CastStringToUuid => f.write_str("strtouuid"),
             UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
             UnaryFunc::CastDateToTimestampTz => f.write_str("datetotstz"),
             UnaryFunc::CastDateToString => f.write_str("datetostr"),
@@ -2734,6 +2754,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
             UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),
             UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
+            UnaryFunc::CastUuidToString => f.write_str("uuidtostr"),
             UnaryFunc::CastRecordToString { .. } => f.write_str("recordtostr"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
@@ -2927,6 +2948,7 @@ where
         Bytes => strconv::format_bytes(buf, d.unwrap_bytes()),
         String => strconv::format_string(buf, d.unwrap_str()),
         Jsonb => strconv::format_jsonb(buf, JsonbRef::from_datum(d)),
+        UUID => strconv::format_uuid(buf, d.unwrap_uuid()),
         Record { fields } => {
             let mut fields = fields.iter();
             strconv::format_record(buf, &d.unwrap_list(), |buf, d| {

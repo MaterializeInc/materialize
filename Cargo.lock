@@ -2463,6 +2463,7 @@ dependencies = [
  "ore",
  "postgres-types",
  "repr",
+ "uuid",
 ]
 
 [[package]]
@@ -2621,6 +2622,7 @@ dependencies = [
  "postgres-protocol",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -3039,6 +3041,7 @@ dependencies = [
  "serde_json",
  "serde_regex",
  "smallvec",
+ "uuid",
 ]
 
 [[package]]
@@ -3752,6 +3755,7 @@ dependencies = [
  "sql",
  "tokio",
  "tokio-postgres",
+ "uuid",
  "whoami",
 ]
 
@@ -3935,6 +3939,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "url",
+ "uuid",
 ]
 
 [[package]]
