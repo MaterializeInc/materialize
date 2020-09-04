@@ -293,8 +293,9 @@ pub fn construct<A: Allocate>(
         let delay = std::time::Duration::from_nanos(10_000_000_000);
 
         // Accumulate the durations of each operator.
+        // The first `map` exists so that we can semijoin effectively (it requires a key-val pair).
         let mut elapsed = duration
-            .map(|(op, t, d)| ((op, ()), t, d as isize))
+            .map(|(op_worker, t, d)| ((op_worker, ()), t, d as isize))
             .as_collection();
         // Remove elapsed times for operators not present in `operates`.
         elapsed = thin_collection(elapsed, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
@@ -302,7 +303,7 @@ pub fn construct<A: Allocate>(
 
         // Accumulate histograms of execution times for each operator.
         let mut histogram = duration
-            .map(|(op, t, d)| ((op, d.next_power_of_two()), t, 1isize))
+            .map(|(op_worker, t, d)| ((op_worker, d.next_power_of_two()), t, 1isize))
             .as_collection();
         // Remove histogram measurements for operators not present in `operates`.
         histogram = thin_collection(histogram, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
