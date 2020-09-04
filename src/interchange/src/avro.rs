@@ -2083,7 +2083,7 @@ pub mod cdc_v2 {
     #[derive(Debug)]
     pub struct Decoder;
 
-    /// Builds the JSON for the row schema, which can be independenly useful.
+    /// Builds the JSON for the row schema, which can be independently useful.
     pub fn build_row_schema_json(
         columns: &[(ColumnName, ColumnType)],
         name: &str,
@@ -2123,6 +2123,10 @@ pub mod cdc_v2 {
                 ScalarType::String => json!("string"),
                 ScalarType::Jsonb => json!({
                     "type": "string",
+                }),
+                ScalarType::UUID => json!({
+                    "type": "string",
+                    "logicalType": "uuid",
                 }),
                 ScalarType::List(_t) => unimplemented!("list types"),
                 ScalarType::Record { .. } => unimplemented!("record types"),
