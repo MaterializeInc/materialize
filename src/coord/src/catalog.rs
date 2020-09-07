@@ -1169,8 +1169,7 @@ impl Catalog {
                             })
                             .collect();
                         OpStatus::DroppedIndex {
-                            id: metadata.id,
-                            index: index.clone(),
+                            entry: metadata,
                             nullable,
                         }
                     } else {
@@ -1467,8 +1466,7 @@ pub enum OpStatus {
         schema_name: String,
     },
     DroppedIndex {
-        id: GlobalId,
-        index: Index,
+        entry: CatalogEntry,
         nullable: Vec<bool>,
     },
     DroppedItem(CatalogEntry),

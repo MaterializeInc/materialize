@@ -78,23 +78,27 @@ Source_or_view        Key_name                 Column_name Expression Null  Seq_
 materialize.public.v  materialize.public.idx1  b           NULL       false 1
 
 query TTTTTT colnames
-SHOW INDEXES FROM v WHERE "Column_name" = 'b'
+SHOW INDEXES FROM v WHERE Column_name = 'b'
 ----
 Source_or_view        Key_name                 Column_name Expression Null  Seq_in_index
 materialize.public.v  materialize.public.idx1  b           NULL       false 1
 
 query TTTTTT colnames
-SHOW INDEXES FROM v WHERE "Column_name" = 'c'
+SHOW INDEXES FROM v WHERE Column_name = 'c'
 ----
 Source_or_view        Key_name                 Column_name Expression Null  Seq_in_index
 
 # Reference a different column
 
 query TTTTTT colnames
-SHOW INDEXES FROM v WHERE "Key_name" = 'materialize.public.idx1'
+SHOW INDEXES FROM v WHERE Key_name = 'materialize.public.idx1'
 ----
 Source_or_view        Key_name                 Column_name Expression Null  Seq_in_index
 materialize.public.v  materialize.public.idx1  b           NULL       false 1
+
+SHOW INDEXES FROM v WHERE key_name LIKE '%v'
+----
+Source_or_view        Key_name                 Column_name Expression Null  Seq_in_index
 
 # TODO(justin): not handled in parser yet:
 #   SHOW INDEXES FROM v LIKE '%v'

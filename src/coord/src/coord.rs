@@ -2180,15 +2180,19 @@ where
                         -1,
                     );
                 }
-                catalog::OpStatus::DroppedIndex {
-                    id,
-                    index,
-                    nullable,
-                } => {
-                    indexes_to_drop.push(*id);
-
-                    self.update_mz_indexes_catalog_view(*id, index, nullable.to_owned(), -1);
-                }
+                catalog::OpStatus::DroppedIndex { entry, nullable } => match entry.item() {
+                    CatalogItem::Index(index) => {
+                        indexes_to_drop.push(entry.id());
+                        self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
+                        self.update_mz_indexes_catalog_view(
+                            entry.id(),
+                            index,
+                            nullable.to_owned(),
+                            -1,
+                        )
+                    }
+                    _ => unreachable!("DroppedIndex for non-index item"),
+                },
                 catalog::OpStatus::DroppedItem(entry) => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
                     match entry.item() {

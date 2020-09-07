@@ -782,7 +782,11 @@ fn handle_show_indexes(
                     // Join to get the name for 'Key_name'.
                     relation: TableFactor::Table {
                         name: ObjectName(vec![Ident::new("mz_catalog_names")]),
-                        alias: None,
+                        alias: Some(TableAlias {
+                            name: Ident::new("mz_catalog_names"),
+                            columns: vec![Ident::new("global_id"), Ident::new("key_name")],
+                            strict: false,
+                        }),
                     },
                     join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
                         left: Box::new(Expr::Identifier(vec![
@@ -800,7 +804,15 @@ fn handle_show_indexes(
                     // Join to get the name for 'Column_name'.
                     relation: TableFactor::Table {
                         name: ObjectName(vec![Ident::new("mz_columns")]),
-                        alias: None,
+                        alias: Some(TableAlias {
+                            name: Ident::new("mz_columns"),
+                            columns: vec![
+                                Ident::new("global_id"),
+                                Ident::new("field_number"),
+                                Ident::new("column_name"),
+                            ],
+                            strict: false,
+                        }),
                     },
                     join_operator: JoinOperator::LeftOuter(JoinConstraint::On(Expr::BinaryOp {
                         left: Box::new(Expr::BinaryOp {
@@ -839,11 +851,11 @@ fn handle_show_indexes(
             alias: None,
         })
         .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("mz_catalog_names"), Ident::new("name")]),
-            alias: Some(Ident::new("key_name")),
+            expr: Expr::Identifier(vec![Ident::new("key_name")]),
+            alias: None,
         })
         .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("field".to_owned())]),
+            expr: Expr::Identifier(vec![Ident::new("column_name".to_owned())]),
             alias: None,
         })
         .project(SelectItem::Expr {
