@@ -1170,7 +1170,6 @@ impl Catalog {
                             .collect();
                         OpStatus::DroppedIndex {
                             id: metadata.id,
-                            name: metadata.name.to_string(),
                             index: index.clone(),
                             nullable,
                         }
@@ -1469,7 +1468,6 @@ pub enum OpStatus {
     },
     DroppedIndex {
         id: GlobalId,
-        name: String,
         index: Index,
         nullable: Vec<bool>,
     },

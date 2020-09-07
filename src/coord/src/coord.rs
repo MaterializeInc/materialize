@@ -321,7 +321,7 @@ where
                             .nullable
                     })
                     .collect();
-                coord.update_mz_indexes_catalog_view(&name.to_string(), id, &index, nullable, 1);
+                coord.update_mz_indexes_catalog_view(id, &index, nullable, 1);
             }
         }
 
@@ -1008,7 +1008,6 @@ where
 
     fn update_mz_indexes_catalog_view(
         &mut self,
-        key_name: &str,
         global_id: GlobalId,
         index: &Index,
         nullable: Vec<bool>,
@@ -1027,7 +1026,6 @@ where
             let row = match key {
                 ScalarExpr::Column(col) => Row::pack(&[
                     Datum::String(&global_id.to_string()),
-                    Datum::String(key_name),
                     Datum::String(&index.on.to_string()),
                     Datum::Int64(*col as i64),
                     Datum::Null,
@@ -1036,7 +1034,6 @@ where
                 ]),
                 _ => Row::pack(&[
                     Datum::String(&global_id.to_string()),
-                    Datum::String(key_name),
                     Datum::String(&index.on.to_string()),
                     Datum::Null,
                     Datum::String(&key_sqls.get(i).unwrap().to_string()),
@@ -2153,13 +2150,7 @@ where
                                     .nullable
                             })
                             .collect();
-                        self.update_mz_indexes_catalog_view(
-                            &name.to_string(),
-                            *id,
-                            &index,
-                            nullable,
-                            1,
-                        );
+                        self.update_mz_indexes_catalog_view(*id, &index, nullable, 1);
                     }
                 }
                 catalog::OpStatus::UpdatedItem { id, from_name } => {
@@ -2191,13 +2182,12 @@ where
                 }
                 catalog::OpStatus::DroppedIndex {
                     id,
-                    name,
                     index,
                     nullable,
                 } => {
                     indexes_to_drop.push(*id);
 
-                    self.update_mz_indexes_catalog_view(name, *id, index, nullable.to_owned(), -1);
+                    self.update_mz_indexes_catalog_view(*id, index, nullable.to_owned(), -1);
                 }
                 catalog::OpStatus::DroppedItem(entry) => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), -1);

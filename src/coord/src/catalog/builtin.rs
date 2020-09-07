@@ -271,7 +271,6 @@ lazy_static! {
         name: "mz_indexes",
         desc: RelationDesc::empty()
             .with_column("global_id", ScalarType::String.nullable(false))
-            .with_column("key_name", ScalarType::String.nullable(false))
             .with_column("on_global_id", ScalarType::String.nullable(false))
             .with_column("field_number", ScalarType::Int64.nullable(true))
             .with_column("expression", ScalarType::String.nullable(true))

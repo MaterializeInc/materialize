@@ -44,7 +44,7 @@ use sql_parser::ast::{
     ShowCreateIndexStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
     ShowCreateTableStatement, ShowCreateViewStatement, ShowDatabasesStatement,
     ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
-    SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
+    SqlOption, Statement, TableAlias, TableFactor, TableWithJoins, TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -734,7 +734,10 @@ fn handle_show_indexes(
     }
 
     let mut selection = Expr::BinaryOp {
-        left: Box::new(Expr::Identifier(vec![Ident::new("name")])),
+        left: Box::new(Expr::Identifier(vec![
+            Ident::new("on_mz_catalog_names"),
+            Ident::new("name"),
+        ])),
         op: BinaryOperator::Eq,
         right: Box::new(Expr::Value(Value::String(from_name.to_string()))),
     };
@@ -754,6 +757,29 @@ fn handle_show_indexes(
             },
             joins: vec![
                 Join {
+                    // Join to get the name for 'Source_or_view'.
+                    relation: TableFactor::Table {
+                        name: ObjectName(vec![Ident::new("mz_catalog_names")]),
+                        alias: Some(TableAlias {
+                            name: Ident::new("on_mz_catalog_names"),
+                            columns: vec![Ident::new("global_id"), Ident::new("name")],
+                            strict: false,
+                        }),
+                    },
+                    join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![
+                            Ident::new("on_mz_catalog_names"),
+                            Ident::new("global_id"),
+                        ])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_indexes"),
+                            Ident::new("on_global_id"),
+                        ])),
+                    })),
+                },
+                Join {
+                    // Join to get the name for 'Key_name'.
                     relation: TableFactor::Table {
                         name: ObjectName(vec![Ident::new("mz_catalog_names")]),
                         alias: None,
@@ -766,11 +792,12 @@ fn handle_show_indexes(
                         op: BinaryOperator::Eq,
                         right: Box::new(Expr::Identifier(vec![
                             Ident::new("mz_indexes"),
-                            Ident::new("on_global_id"),
+                            Ident::new("global_id"),
                         ])),
                     })),
                 },
                 Join {
+                    // Join to get the name for 'Column_name'.
                     relation: TableFactor::Table {
                         name: ObjectName(vec![Ident::new("mz_columns")]),
                         alias: None,
@@ -805,12 +832,15 @@ fn handle_show_indexes(
         })
         .selection(Some(selection))
         .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("name".to_owned())]),
+            expr: Expr::Identifier(vec![
+                Ident::new("on_mz_catalog_names"),
+                Ident::new("name".to_owned()),
+            ]),
             alias: None,
         })
         .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("key_name".to_owned())]),
-            alias: None,
+            expr: Expr::Identifier(vec![Ident::new("mz_catalog_names"), Ident::new("name")]),
+            alias: Some(Ident::new("key_name")),
         })
         .project(SelectItem::Expr {
             expr: Expr::Identifier(vec![Ident::new("field".to_owned())]),
