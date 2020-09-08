@@ -873,6 +873,7 @@ fn handle_show_indexes(
             expr: Expr::Identifier(vec![Ident::new("seq_in_index".to_owned())]),
             alias: None,
         });
+
     let mut query = Query::select(select);
     query.order_by = vec![
         OrderByExpr {
@@ -885,17 +886,7 @@ fn handle_show_indexes(
         },
     ];
 
-    handle_select(
-        scx,
-        SelectStatement {
-            query: Box::new(query),
-            as_of: None,
-        },
-        &Params {
-            datums: Row::pack(&[]),
-            types: vec![],
-        },
-    )
+    handle_computed_select(scx, query)
 }
 
 /// Create an immediate result that describes all the columns for the given table
@@ -2192,6 +2183,20 @@ fn handle_select(
         finishing,
         materialize: true,
     })
+}
+
+fn handle_computed_select(scx: &StatementContext, query: Query) -> Result<Plan, anyhow::Error> {
+    handle_select(
+        scx,
+        SelectStatement {
+            query: Box::new(query),
+            as_of: None,
+        },
+        &Params {
+            datums: Row::pack(&[]),
+            types: vec![],
+        },
+    )
 }
 
 fn handle_explain(

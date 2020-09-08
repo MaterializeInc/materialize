@@ -18,7 +18,7 @@
 
 use std::cmp;
 use std::collections::{BTreeMap, HashMap};
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
@@ -313,15 +313,7 @@ where
                 coord.update_mz_columns_catalog_view(desc, id, 1);
             }
             if let CatalogItem::Index(index) = item {
-                let nullable: Vec<bool> = index
-                    .keys
-                    .iter()
-                    .map(|key| {
-                        key.typ(coord.catalog.get_by_id(&index.on).desc().unwrap().typ())
-                            .nullable
-                    })
-                    .collect();
-                coord.update_mz_indexes_catalog_view(id, &index, nullable, 1);
+                coord.update_mz_indexes_catalog_view(id, &index, 1);
             }
         }
 
@@ -1006,7 +998,26 @@ where
         }
     }
 
-    fn update_mz_indexes_catalog_view(
+    fn update_mz_indexes_catalog_view(&mut self, global_id: GlobalId, index: &Index, diff: isize) {
+        self.update_mz_indexes_catalog_view_inner(
+            global_id,
+            index,
+            index
+                .keys
+                .iter()
+                .map(|key| {
+                    key.typ(self.catalog.get_by_id(&index.on).desc().unwrap().typ())
+                        .nullable
+                })
+                .collect(),
+            diff,
+        )
+    }
+
+    // When updating the mz_indexes system table after dropping an index, it may no longer be possible
+    // to generate the 'nullable' information for that index. This function allows callers to bypass
+    // that computation and provide their own value, instead.
+    fn update_mz_indexes_catalog_view_inner(
         &mut self,
         global_id: GlobalId,
         index: &Index,
@@ -1021,27 +1032,35 @@ where
             _ => unreachable!(),
         };
         for (i, key) in index.keys.iter().enumerate() {
-            let nullable = *nullable.get(i).unwrap();
-            let seq_in_index = (i + 1) as i64;
-            let row = match key {
-                ScalarExpr::Column(col) => Row::pack(&[
-                    Datum::String(&global_id.to_string()),
-                    Datum::String(&index.on.to_string()),
-                    Datum::Int64(*col as i64),
+            let nullable = *nullable
+                .get(i)
+                .expect("missing nullability information for index key");
+            let seq_in_index = i64::try_from(i + 1).expect("invalid index sequence number");
+            let key_sql = key_sqls
+                .get(i)
+                .expect("missing sql information for index key")
+                .to_string();
+            let (field_number, expression) = match key {
+                ScalarExpr::Column(col) => (
+                    Datum::Int64(i64::try_from(*col).expect("invalid index column number")),
                     Datum::Null,
-                    Datum::from(nullable),
-                    Datum::Int64(seq_in_index),
-                ]),
-                _ => Row::pack(&[
-                    Datum::String(&global_id.to_string()),
-                    Datum::String(&index.on.to_string()),
-                    Datum::Null,
-                    Datum::String(&key_sqls.get(i).unwrap().to_string()),
-                    Datum::from(nullable),
-                    Datum::Int64(seq_in_index),
-                ]),
+                ),
+                _ => (Datum::Null, Datum::String(&key_sql)),
             };
-            self.update_catalog_view(MZ_INDEXES.id, iter::once((row, diff)))
+            self.update_catalog_view(
+                MZ_INDEXES.id,
+                iter::once((
+                    Row::pack(&[
+                        Datum::String(&global_id.to_string()),
+                        Datum::String(&index.on.to_string()),
+                        field_number,
+                        expression,
+                        Datum::from(nullable),
+                        Datum::Int64(seq_in_index),
+                    ]),
+                    diff,
+                )),
+            )
         }
     }
 
@@ -2142,15 +2161,7 @@ where
                         self.update_mz_columns_catalog_view(desc, *id, 1);
                     }
                     if let CatalogItem::Index(index) = item.clone() {
-                        let nullable: Vec<bool> = index
-                            .keys
-                            .iter()
-                            .map(|key| {
-                                key.typ(self.catalog.get_by_id(&index.on).desc().unwrap().typ())
-                                    .nullable
-                            })
-                            .collect();
-                        self.update_mz_indexes_catalog_view(*id, &index, nullable, 1);
+                        self.update_mz_indexes_catalog_view(*id, &index, 1);
                     }
                 }
                 catalog::OpStatus::UpdatedItem { id, from_name } => {
@@ -2184,7 +2195,7 @@ where
                     CatalogItem::Index(index) => {
                         indexes_to_drop.push(entry.id());
                         self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
-                        self.update_mz_indexes_catalog_view(
+                        self.update_mz_indexes_catalog_view_inner(
                             entry.id(),
                             index,
                             nullable.to_owned(),
