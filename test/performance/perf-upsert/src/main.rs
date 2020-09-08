@@ -43,17 +43,18 @@ async fn run() -> Result<()> {
     let mz_config = config.mz_config();
 
     log::info!(
-        "starting up message_count={} mzd={}:{} kafka={} preserve_source={} enable_persistence={}",
+        "starting up message_count={} mzd={}:{} kafka={} preserve_source={} enable_persistence={} num_peeks={}",
         config.message_count,
         config.materialized_host,
         config.materialized_port,
         config.kafka_url(),
         config.preserve_source,
         config.enable_persistence,
+        config.num_peeks,
     );
 
     let k = tokio::spawn(async move { create_kafka_messages(k_config).await });
-    let mz = tokio::spawn(async move { create_materialized_source(mz_config).await });
+    let mz = tokio::spawn(async move { create_and_query_source(mz_config).await });
     let (k_res, mz_res) = futures::join!(k, mz);
     k_res??;
     mz_res??;
@@ -151,10 +152,11 @@ async fn create_upsert_text_source(
     log::debug!("creating source=> {}", query);
 
     mz_client.execute(&*query, &[]).await?;
+
     Ok(())
 }
 
-async fn create_materialized_source(config: MzConfig) -> Result<()> {
+async fn create_and_query_source(config: MzConfig) -> Result<()> {
     let client = mz_client::client(&config.host, config.port).await?;
 
     if !config.preserve_source {
@@ -176,6 +178,18 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
             "source '{}' already exists, not recreating",
             config::KAFKA_SOURCE_NAME
         );
+    }
+
+    let peek = format!("SELECT count(*) from {}", config::KAFKA_SOURCE_NAME);
+    for i in 0..config.num_peeks {
+        if i % 1000 == 0 {
+            log::info!("running query {}", i);
+        }
+
+        if let Err(e) = client.execute(&*peek, &[]).await {
+            log::error!("failed to produce message: {}", e);
+            tokio::time::delay_for(Duration::from_millis(100)).await;
+        }
     }
     Ok(())
 }
