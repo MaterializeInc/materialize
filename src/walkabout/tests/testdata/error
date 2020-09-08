@@ -32,7 +32,7 @@ struct Foo {
     ty: Vec(A),
 }
 ----
-error: Container type has unexpected parenthesized type arguments: Vec ( A )
+error: Container type has unexpected parenthesized type arguments: Vec (A)
 
 visit
 struct Foo {
@@ -67,21 +67,21 @@ struct Foo {
     ty: (usize, usize)
 }
 ----
-error: Unable to analyze non-struct, non-enum type: ( usize , usize )
+error: Unable to analyze non-struct, non-enum type: (usize , usize)
 
 visit
 struct Foo {
     ty: &[usize],
 }
 ----
-error: Unable to analyze non-struct, non-enum type: & [ usize ]
+error: Unable to analyze non-struct, non-enum type: & [usize]
 
 visit
 struct Foo {
     ty: fn(),
 }
 ----
-error: Unable to analyze non-struct, non-enum type: fn ( )
+error: Unable to analyze non-struct, non-enum type: fn ()
 
 visit
 struct Foo<T> {
