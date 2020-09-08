@@ -998,6 +998,7 @@ where
         }
     }
 
+    /// Inserts or removes a row from [`builtin::MZ_INDEXES`] based on the supplied `diff`.
     fn update_mz_indexes_catalog_view(&mut self, global_id: GlobalId, index: &Index, diff: isize) {
         self.update_mz_indexes_catalog_view_inner(
             global_id,
