@@ -1,0 +1,46 @@
+# Test basic prepared statement parameters.
+send
+Parse {"query": "SELECT $1::text, 1 + $2::int4"}
+Bind {"values": ["blah", "4"]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["blah","5"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# Test portal max rows.
+send
+Query {"query": "BEGIN"}
+Parse {"query": "VALUES (1), (2)"}
+Bind
+Execute {"max_rows": 1}
+Execute {"max_rows": 1}
+Execute {"max_rows": 1}
+Execute {"max_rows": 1}
+Query {"query": "COMMIT"}
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+PortalSuspended
+DataRow {"fields":["2"]}
+PortalSuspended
+CommandComplete {"tag":"SELECT 0"}
+CommandComplete {"tag":"SELECT 0"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
