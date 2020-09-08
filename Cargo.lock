@@ -2467,6 +2467,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgtest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "datadriven",
+ "fallible-iterator",
+ "getopts",
+ "postgres",
+ "postgres-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pgwire"
 version = "0.1.0"
 dependencies = [

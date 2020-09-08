@@ -75,6 +75,7 @@ copyright_files=$(grep -vE \
     -e '^ci/www/public/_redirects$' \
     -e 'demo/chbench/chbench' \
     -e 'test/sqllogictest/postgres/testdata/.*\.data' \
+    -e 'test/pgtest/.*\.pt' \
     -e 'gen/.*\.rs' \
     <<< "$files"
 )
