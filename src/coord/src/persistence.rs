@@ -17,10 +17,11 @@ use futures::select;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
 
-use dataflow::source::persistence::{Record, RecordFileMetadata};
+use dataflow::source::persistence::RecordFileMetadata;
 use dataflow::PersistenceMessage;
 use dataflow_types::{ExternalSourceConnector, SourceConnector};
 use expr::GlobalId;
+use repr::PersistedRecord;
 
 // Interval at which Persister will try to flush out pending records
 static PERSISTENCE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
@@ -37,7 +38,7 @@ pub struct PersistenceConfig {
 #[derive(Debug)]
 struct Partition {
     last_persisted_offset: Option<i64>,
-    pending: Vec<Record>,
+    pending: Vec<PersistedRecord>,
 }
 
 #[derive(Debug)]
@@ -67,7 +68,11 @@ impl Source {
         }
     }
 
-    fn insert_record(&mut self, partition_id: i32, record: Record) -> Result<(), anyhow::Error> {
+    fn insert_record(
+        &mut self,
+        partition_id: i32,
+        record: PersistedRecord,
+    ) -> Result<(), anyhow::Error> {
         // Start tracking this partition id if we are not already
         self.partitions.entry(partition_id).or_insert(Partition {
             last_persisted_offset: None,
@@ -417,7 +422,10 @@ fn augment_connector_inner(
 
 // Given the input records, extract a prefix of records that are "dense," meaning they contain all
 // the data for that range.
-fn extract_prefix(starting_offset: Option<i64>, records: &mut Vec<Record>) -> Vec<Record> {
+fn extract_prefix(
+    starting_offset: Option<i64>,
+    records: &mut Vec<PersistedRecord>,
+) -> Vec<PersistedRecord> {
     records.sort_by(|a, b| (a.offset, a.predecessor.map(|p| -p)).cmp(&(b.offset, b.predecessor)));
 
     // Keep only the minimum predecessor we received for every offset
@@ -446,8 +454,8 @@ fn extract_prefix(starting_offset: Option<i64>, records: &mut Vec<Record>) -> Ve
 fn test_extract_prefix() {
     use repr::Timestamp;
 
-    fn record(offset: i64, predecessor: Option<i64>) -> Record {
-        Record {
+    fn record(offset: i64, predecessor: Option<i64>) -> PersistedRecord {
+        PersistedRecord {
             offset,
             predecessor,
             timestamp: Timestamp::default(),

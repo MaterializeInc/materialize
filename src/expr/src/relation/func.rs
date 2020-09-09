@@ -10,7 +10,9 @@
 #![allow(missing_docs)]
 
 use std::fmt;
+use std::fs;
 use std::iter;
+use std::path::PathBuf;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use ordered_float::OrderedFloat;
@@ -20,8 +22,12 @@ use serde::{Deserialize, Serialize};
 use ore::cast::CastFrom;
 use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
-use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, RowPacker, ScalarType};
+use repr::{
+    ColumnType, Datum, Diff, PersistedRecordIter, RelationType, Row, RowArena, RowPacker,
+    ScalarType,
+};
 
+use crate::id::GlobalId;
 use crate::scalar::func::jsonb_stringify;
 
 // TODO(jamii) be careful about overflow in sum/avg
@@ -685,6 +691,22 @@ pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
     vec![(repr::RowPacker::new().finish(), n)]
 }
 
+// TODO(justin): this should return an error.
+pub fn files_for_source(id: GlobalId) -> Vec<PathBuf> {
+    // TODO(justin): plumb through the configured persistence directory, for now this is only
+    // suitable for testing.
+    let persistence_dir = PathBuf::from("mzdata/persistence");
+    let source_path = persistence_dir.join(id.to_string());
+    match std::fs::read_dir(&source_path) {
+        Ok(entries) => entries.map(|e| e.unwrap().path()).collect(),
+        Err(_) => {
+            // TODO(justin): it would be better to have a real error here, but saying
+            // "there are no records" is also acceptable for now.
+            return vec![];
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum TableFunc {
     JsonbEach { stringify: bool },
@@ -696,6 +718,7 @@ pub enum TableFunc {
     GenerateSeriesInt64,
     // TODO(justin): should also possibly have GenerateSeriesTimestamp{,Tz}.
     Repeat,
+    ReadPersistedData { source: GlobalId },
 }
 
 impl TableFunc {
@@ -720,6 +743,26 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => generate_series_int32(datums[0], datums[1]),
             TableFunc::GenerateSeriesInt64 => generate_series_int64(datums[0], datums[1]),
             TableFunc::Repeat => repeat(datums[0]),
+            TableFunc::ReadPersistedData { source } => {
+                let mut row_packer = RowPacker::new();
+                files_for_source(*source)
+                    .iter()
+                    .flat_map(|e| {
+                        PersistedRecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
+                    })
+                    .map(|(e, r)| {
+                        (
+                            row_packer.pack(&[
+                                Datum::String(e.to_str().unwrap()),
+                                Datum::Int64(r.offset),
+                                Datum::Bytes(&r.key),
+                                Datum::Bytes(&r.value),
+                            ]),
+                            1,
+                        )
+                    })
+                    .collect::<Vec<(Row, Diff)>>()
+            }
         }
     }
 
@@ -750,6 +793,12 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => vec![ScalarType::Int32.nullable(false)],
             TableFunc::GenerateSeriesInt64 => vec![ScalarType::Int64.nullable(false)],
             TableFunc::Repeat => vec![],
+            TableFunc::ReadPersistedData { .. } => vec![
+                ScalarType::String.nullable(true),
+                ScalarType::Int64.nullable(false),
+                ScalarType::Bytes.nullable(false),
+                ScalarType::Bytes.nullable(false),
+            ],
         })
     }
 
@@ -763,6 +812,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => 1,
             TableFunc::GenerateSeriesInt64 => 1,
             TableFunc::Repeat => 0,
+            TableFunc::ReadPersistedData { .. } => 4,
         }
     }
 
@@ -775,7 +825,8 @@ impl TableFunc {
             | TableFunc::GenerateSeriesInt64
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
-            | TableFunc::Repeat => true,
+            | TableFunc::Repeat
+            | TableFunc::ReadPersistedData { .. } => true,
         }
     }
 }
@@ -791,6 +842,9 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
             TableFunc::Repeat => f.write_str("repeat"),
+            TableFunc::ReadPersistedData { source } => {
+                write!(f, "internal_read_persisted_data({})", source)
+            }
         }
     }
 }

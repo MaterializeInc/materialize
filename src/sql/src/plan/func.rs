@@ -18,9 +18,10 @@ use anyhow::bail;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 
+use crate::catalog::CatalogItemType;
 use ore::collections::CollectionExt;
 use repr::{ColumnName, Datum, ScalarType};
-use sql_parser::ast::{BinaryOperator, Expr, UnaryOperator};
+use sql_parser::ast::{BinaryOperator, Expr, Ident, ObjectName, UnaryOperator};
 
 use super::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
@@ -997,6 +998,27 @@ lazy_static! {
                         func: TableFunc::JsonbObjectKeys,
                         exprs: vec![jsonb],
                         column_names: vec![Some("jsonb_object_keys".into())],
+                    })
+                })
+            },
+            "internal_read_persisted_data" => Table {
+                params!(String) => unary_op(move |ecx, source| {
+                    let source = match source.into_literal_string(){
+                        Some(id) => id,
+                        None => bail!("source passed to internal_read_persisted_data must be literal string"),
+                    };
+                    let item = ecx.qcx.scx.resolve_item(ObjectName(vec![Ident::new(source.clone())]))?;
+                    let entry = ecx.qcx.scx.catalog.get_item(&item);
+                    match entry.item_type() {
+                        CatalogItemType::Source => {},
+                        _ =>  bail!("{} is a {}, but internal_read_persisted_data requires a source", source, entry.item_type()),
+                    }
+                    Ok(TableFuncPlan {
+                        func: TableFunc::ReadPersistedData {
+                            source: entry.id(),
+                        },
+                        exprs: vec![],
+                        column_names: vec!["filename", "offset", "key", "value"].iter().map(|c| Some(ColumnName::from(*c))).collect(),
                     })
                 })
             }
