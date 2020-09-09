@@ -2180,12 +2180,7 @@ where
                     CatalogItem::Index(index) => {
                         indexes_to_drop.push(entry.id());
                         self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
-                        self.report_index_update_inner(
-                            entry.id(),
-                            index,
-                            nullable.to_owned(),
-                            -1,
-                        )
+                        self.report_index_update_inner(entry.id(), index, nullable.to_owned(), -1)
                     }
                     _ => unreachable!("DroppedIndex for non-index item"),
                 },
