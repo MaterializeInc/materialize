@@ -589,124 +589,135 @@ fn handle_show_objects(
         }
     };
 
-    if let ObjectType::Schema = object_type {
-        let mut selection = {
-            let database_name = if let Some(from) = from {
-                scx.resolve_database(from)?
+    match object_type {
+        ObjectType::Schema => handle_show_schemas(scx, extended, full, from, filter),
+        _ => {
+            let items = if let Some(from) = from {
+                let (database_spec, schema_name) = scx.resolve_schema(from)?;
+                scx.catalog.list_items(&database_spec, &schema_name)
             } else {
-                scx.resolve_default_database()?.to_string()
+                scx.catalog
+                    .list_items(&scx.resolve_default_database()?, "public")
             };
-            let mut selection = Expr::BinaryOp {
-                left: Box::new(Expr::Identifier(vec![Ident::new("database")])),
-                op: BinaryOperator::Eq,
-                right: Box::new(Expr::Value(Value::String(database_name))),
-            };
-            if extended {
-                selection = Expr::BinaryOp {
-                    left: Box::new(selection),
-                    op: BinaryOperator::Or,
-                    right: Box::new(Expr::BinaryOp {
-                        left: Box::new(Expr::Identifier(vec![Ident::new("database_id")])),
-                        op: BinaryOperator::Eq,
-                        right: Box::new(Expr::Value(Value::String("AMBIENT".to_owned()))),
-                    }),
-                }
-            }
-            selection
+
+            let rows = items
+                .filter(|entry| object_type == entry.item_type())
+                .filter_map(|entry| {
+                    let name = &entry.name().item;
+                    let class = classify_id(entry.id());
+                    match object_type {
+                        ObjectType::View | ObjectType::Source => {
+                            let mut row = vec![Datum::from(arena.push_string(name.to_string()))];
+                            if full {
+                                row.push(Datum::from(arena.push_string(class.to_string())));
+                            }
+                            if full && object_type == ObjectType::View {
+                                row.push(Datum::from(scx.catalog.is_queryable(entry.id())));
+                            }
+                            if full && !materialized {
+                                row.push(Datum::from(scx.catalog.is_materialized(entry.id())));
+                            }
+                            if !materialized || scx.catalog.is_materialized(entry.id()) {
+                                Some(row)
+                            } else {
+                                None
+                            }
+                        }
+                        _ => Some(make_row(name, class)),
+                    }
+                });
+
+            finish_show_where(
+                scx,
+                filter,
+                rows.collect(),
+                &make_show_objects_desc(object_type, materialized, full),
+            )
+        }
+    }
+}
+
+fn handle_show_schemas(
+    scx: &StatementContext,
+    extended: bool,
+    full: bool,
+    from: Option<ObjectName>,
+    filter: Option<ShowStatementFilter>,
+) -> Result<Plan, anyhow::Error> {
+    let mut selection = {
+        let database_name = if let Some(from) = from {
+            scx.resolve_database(from)?
+        } else {
+            scx.resolve_default_database()?.to_string()
         };
-        if let Some(show_statement_filter) = filter_expr(filter, "schema") {
+        let mut selection = Expr::BinaryOp {
+            left: Box::new(Expr::Identifier(vec![Ident::new("database")])),
+            op: BinaryOperator::Eq,
+            right: Box::new(Expr::Value(Value::String(database_name))),
+        };
+        if extended {
             selection = Expr::BinaryOp {
                 left: Box::new(selection),
-                op: BinaryOperator::And,
-                right: Box::new(show_statement_filter),
+                op: BinaryOperator::Or,
+                right: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Identifier(vec![Ident::new("database_id")])),
+                    op: BinaryOperator::Eq,
+                    right: Box::new(Expr::Value(Value::Number("-1".to_owned()))), // AMBIENT_DATABASE_ID
+                }),
             }
         }
+        selection
+    };
+    if let Some(show_statement_filter) = filter_expr(filter, "schema") {
+        selection = Expr::BinaryOp {
+            left: Box::new(selection),
+            op: BinaryOperator::And,
+            right: Box::new(show_statement_filter),
+        }
+    }
 
-        let mut select = Select::default()
-            .from(TableWithJoins {
+    let mut select = Select::default()
+        .from(TableWithJoins {
+            relation: TableFactor::Table {
+                name: ObjectName(vec![Ident::new("mz_schemas")]),
+                alias: None,
+            },
+            joins: vec![Join {
                 relation: TableFactor::Table {
-                    name: ObjectName(vec![Ident::new("mz_schemas")]),
+                    name: ObjectName(vec![Ident::new("mz_databases")]),
                     alias: None,
                 },
-                joins: vec![Join {
-                    relation: TableFactor::Table {
-                        name: ObjectName(vec![Ident::new("mz_databases")]),
-                        alias: None,
-                    },
-                    join_operator: JoinOperator::LeftOuter(JoinConstraint::On(Expr::BinaryOp {
-                        left: Box::new(Expr::Identifier(vec![Ident::new("database_id")])),
-                        op: BinaryOperator::Eq,
-                        right: Box::new(Expr::Identifier(vec![Ident::new("global_id")])),
-                    })),
-                }],
-            })
-            .selection(Some(selection))
-            .project(SelectItem::Expr {
-                expr: Expr::Identifier(vec![Ident::new("schema".to_owned())]),
-                alias: None,
-            });
+                join_operator: JoinOperator::LeftOuter(JoinConstraint::On(Expr::BinaryOp {
+                    left: Box::new(Expr::Identifier(vec![Ident::new("database_id")])),
+                    op: BinaryOperator::Eq,
+                    right: Box::new(Expr::Identifier(vec![Ident::new("id")])),
+                })),
+            }],
+        })
+        .selection(Some(selection))
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("schema".to_owned())]),
+            alias: None,
+        });
 
-        if full {
-            select.projection.push(SelectItem::Expr {
-                expr: Expr::Identifier(vec![Ident::new("type".to_owned())]),
-                alias: None,
-            })
-        }
-
-        handle_select(
-            scx,
-            SelectStatement {
-                query: Box::new(Query::select(select)),
-                as_of: None,
-            },
-            &Params {
-                datums: Row::pack(&[]),
-                types: vec![],
-            },
-        )
-    } else {
-        let items = if let Some(from) = from {
-            let (database_spec, schema_name) = scx.resolve_schema(from)?;
-            scx.catalog.list_items(&database_spec, &schema_name)
-        } else {
-            scx.catalog
-                .list_items(&scx.resolve_default_database()?, "public")
-        };
-
-        let rows = items
-            .filter(|entry| object_type == entry.item_type())
-            .filter_map(|entry| {
-                let name = &entry.name().item;
-                let class = classify_id(entry.id());
-                match object_type {
-                    ObjectType::View | ObjectType::Source => {
-                        let mut row = vec![Datum::from(arena.push_string(name.to_string()))];
-                        if full {
-                            row.push(Datum::from(arena.push_string(class.to_string())));
-                        }
-                        if full && object_type == ObjectType::View {
-                            row.push(Datum::from(scx.catalog.is_queryable(entry.id())));
-                        }
-                        if full && !materialized {
-                            row.push(Datum::from(scx.catalog.is_materialized(entry.id())));
-                        }
-                        if !materialized || scx.catalog.is_materialized(entry.id()) {
-                            Some(row)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => Some(make_row(name, class)),
-                }
-            });
-
-        finish_show_where(
-            scx,
-            filter,
-            rows.collect(),
-            &make_show_objects_desc(object_type, materialized, full),
-        )
+    if full {
+        select.projection.push(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("type".to_owned())]),
+            alias: None,
+        })
     }
+
+    handle_select(
+        scx,
+        SelectStatement {
+            query: Box::new(Query::select(select)),
+            as_of: None,
+        },
+        &Params {
+            datums: Row::pack(&[]),
+            types: vec![],
+        },
+    )
 }
 
 fn handle_show_indexes(
