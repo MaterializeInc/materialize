@@ -175,6 +175,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
+name = "avro-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "aws-arn"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -786,7 +795,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#a245417fc24ee55bd640defdef3ea642fde8f34f"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#db74efb71a7644a9f0cddefc79657eba457bb16c"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -843,7 +852,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#a245417fc24ee55bd640defdef3ea642fde8f34f"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#db74efb71a7644a9f0cddefc79657eba457bb16c"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1507,6 +1516,7 @@ name = "interchange"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "avro-derive",
  "base64",
  "byteorder",
  "ccsr",
@@ -2005,6 +2015,7 @@ name = "mz-avro"
 version = "0.6.5"
 dependencies = [
  "anyhow",
+ "avro-derive",
  "byteorder",
  "chrono",
  "crc",
@@ -2452,6 +2463,7 @@ dependencies = [
  "ore",
  "postgres-types",
  "repr",
+ "uuid",
 ]
 
 [[package]]
@@ -2610,6 +2622,7 @@ dependencies = [
  "postgres-protocol",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -2718,9 +2731,9 @@ checksum = "369a6ed065f249a159e06c45752c780bda2fb53c995718f9e484d08daa9eb42e"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.18"
+version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "beae6331a816b1f65d04c45b078fd8e6c93e8071771f41b8163255bbd8d7c8fa"
+checksum = "175c513d55719db99da20232b06cda8bab6b83ec2d04e3283edf0213c37c1a29"
 dependencies = [
  "unicode-xid",
 ]
@@ -3028,6 +3041,7 @@ dependencies = [
  "serde_json",
  "serde_regex",
  "smallvec",
+ "uuid",
 ]
 
 [[package]]
@@ -3741,6 +3755,7 @@ dependencies = [
  "sql",
  "tokio",
  "tokio-postgres",
+ "uuid",
  "whoami",
 ]
 
@@ -3772,9 +3787,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "1.0.39"
+version = "1.0.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891d8d6567fe7c7f8835a3a98af4208f3846fba258c1bc3c31d6e506239f11f9"
+checksum = "963f7d3cc59b59b9325165add223142bbf1df27655d07789f109896d353d8350"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3924,6 +3939,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "url",
+ "uuid",
 ]
 
 [[package]]

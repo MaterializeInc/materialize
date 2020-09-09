@@ -16,6 +16,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use uuid::Uuid;
 
 use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
@@ -171,6 +172,7 @@ enum Tag {
     Interval,
     Bytes,
     String,
+    UUID,
     List,
     Dict,
     JsonNull,
@@ -290,6 +292,11 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let string = read_untagged_string(data, offset);
             Datum::String(string)
         }
+        Tag::UUID => {
+            let mut b: uuid::Bytes = [0; 16];
+            b.copy_from_slice(read_untagged_bytes(data, offset));
+            Datum::UUID(Uuid::from_bytes(b))
+        }
         Tag::List => {
             let bytes = read_untagged_bytes(data, offset);
             Datum::List(DatumList { data: bytes })
@@ -380,6 +387,10 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
             data.push(Tag::String as u8);
             push_untagged_string(data, string);
         }
+        Datum::UUID(u) => {
+            data.push(Tag::UUID as u8);
+            push_untagged_bytes(data, u.as_bytes());
+        }
         Datum::List(list) => {
             data.push(Tag::List as u8);
             push_untagged_bytes(data, &list.data);
@@ -413,6 +424,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Decimal(_) => 1 + size_of::<Significand>(),
         Datum::Bytes(bytes) => 1 + size_of::<usize>() + bytes.len(),
         Datum::String(string) => 1 + size_of::<usize>() + string.as_bytes().len(),
+        Datum::UUID(_) => 1 + size_of::<Uuid>(),
         Datum::List(list) => 1 + size_of::<usize>() + list.data.len(),
         Datum::Dict(dict) => 1 + size_of::<usize>() + dict.data.len(),
         Datum::JsonNull => 1,

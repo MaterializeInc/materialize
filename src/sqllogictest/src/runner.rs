@@ -378,9 +378,20 @@ impl State {
         let executor = runtime.handle().clone();
 
         let (cmd_tx, cmd_rx) = futures::channel::mpsc::unbounded();
+        let dataflow_workers = dataflow::serve(
+            vec![None],
+            NUM_TIMELY_WORKERS,
+            process_id,
+            switchboard.clone(),
+            runtime.handle().clone(),
+        )
+        .unwrap();
 
+        // Note that the coordinator must be initialized *after* launching the
+        // dataflow workers, as booting the coordinator can involve sending enough
+        // data to workers to fill up a `comm` channel buffer (#3280).
         let mut coord = coord::Coordinator::new(coord::Config {
-            switchboard: switchboard.clone(),
+            switchboard,
             num_timely_workers: NUM_TIMELY_WORKERS,
             symbiosis_url: Some("postgres://"),
             data_directory: None,
@@ -393,17 +404,7 @@ impl State {
             logical_compaction_window: None,
             experimental_mode: true,
         })?;
-
         let coord_thread = thread::spawn(move || coord.serve(cmd_rx)).join_on_drop();
-
-        let dataflow_workers = dataflow::serve(
-            vec![None],
-            NUM_TIMELY_WORKERS,
-            process_id,
-            switchboard,
-            runtime.handle().clone(),
-        )
-        .unwrap();
 
         Ok(State {
             cmd_tx,

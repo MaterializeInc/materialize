@@ -63,7 +63,7 @@ Wrap your release notes at the 80 character mark.
   **Backwards-incompatible change.**
 
 <span id="v0.4.2"></span>
-## v0.4.2 (Unreleased)
+## v0.4.2
 
 - Output [SHOW COLUMNS](/sql/show-columns/) in the same order as the source {{% gh 4084 %}}.
 

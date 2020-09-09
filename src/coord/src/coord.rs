@@ -65,7 +65,9 @@ use crate::catalog::builtin::{
     BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
     MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState};
+use crate::catalog::{
+    self, Catalog, CatalogItem, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
+};
 use crate::persistence::{PersistenceConfig, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
@@ -310,7 +312,7 @@ where
             coord.report_catalog_update(id, name.to_string(), 1);
 
             if let Ok(desc) = item.desc(&name) {
-                coord.update_mz_columns_catalog_view(desc, id, 1);
+                coord.report_column_updates(desc, id, 1);
             }
             if let CatalogItem::Index(index) = item {
                 coord.update_mz_indexes_catalog_view(id, &index, 1);
@@ -335,15 +337,9 @@ where
             })
             .collect();
         for (database_name, database_id, schemas) in dbs {
-            coord.update_mz_databases_catalog_view(database_id, &database_name, 1);
+            coord.report_database_update(database_id, &database_name, 1);
             for (schema_name, schema_id) in schemas {
-                coord.update_mz_schemas_catalog_view(
-                    &database_id.to_string(),
-                    schema_id,
-                    &schema_name,
-                    "USER",
-                    1,
-                );
+                coord.report_schema_update(database_id, schema_id, &schema_name, "USER", 1);
             }
         }
         // Ambient schemas.
@@ -353,11 +349,15 @@ where
             .map(|(schema_name, schema)| (schema_name.to_string(), schema.id))
             .collect();
         for (schema_name, schema_id) in ambient_schemas {
-            coord.update_mz_schemas_catalog_view("AMBIENT", schema_id, &schema_name, "SYSTEM", 1);
+            coord.report_schema_update(AMBIENT_DATABASE_ID, schema_id, &schema_name, "SYSTEM", 1);
         }
-        // The ambient "mz_temp" schema has a single GlobalId: -1.
-        coord.update_mz_schemas_catalog_view("AMBIENT", -1, "mz_temp", "system", 1);
-        // Todo@jldlaughlin: insert rest of named objects!
+        coord.report_schema_update(
+            AMBIENT_DATABASE_ID,
+            AMBIENT_SCHEMA_ID,
+            "mz_temp",
+            "system",
+            1,
+        );
 
         // Announce primary and foreign key relationships.
         if coord.logging_granularity.is_some() {
@@ -908,11 +908,6 @@ where
         self.ship_dataflow(self.build_sink_dataflow(name.to_string(), id, sink.from, connector))
     }
 
-    fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
-        let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
-        self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)));
-    }
-
     /// Insert a single row into a given catalog view.
     fn update_catalog_view<I>(&mut self, index_id: GlobalId, updates: I)
     where
@@ -936,21 +931,27 @@ where
         );
     }
 
+    /// Inserts or removes a row from [`builtin::MZ_CATALOG_NAMES`] based on the supplied `diff`.
+    fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
+        let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
+        self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)));
+    }
+
     /// Inserts or removes a row from [`builtin::MZ_DATABASES`] based on the supplied `diff`.
-    fn update_mz_databases_catalog_view(&mut self, global_id: i64, name: &str, diff: isize) {
+    fn report_database_update(&mut self, database_id: i64, name: &str, diff: isize) {
         self.update_catalog_view(
             MZ_DATABASES.id,
             iter::once((
-                Row::pack(&[Datum::String(&global_id.to_string()), Datum::String(&name)]),
+                Row::pack(&[Datum::Int64(database_id), Datum::String(&name)]),
                 diff,
             )),
         )
     }
 
     /// Inserts or removes a row from [`builtin::MZ_SCHEMAS`] based on the supplied `diff`.
-    fn update_mz_schemas_catalog_view(
+    fn report_schema_update(
         &mut self,
-        database_id: &str,
+        database_id: i64,
         schema_id: i64,
         schema_name: &str,
         typ: &str,
@@ -960,7 +961,7 @@ where
             MZ_SCHEMAS.id,
             iter::once((
                 Row::pack(&[
-                    Datum::String(database_id),
+                    Datum::Int64(database_id),
                     Datum::Int64(schema_id),
                     Datum::String(schema_name),
                     Datum::String(typ),
@@ -971,12 +972,7 @@ where
     }
 
     /// Inserts or removes a row from [`builtin::MZ_COLUMNS`] based on the supplied `diff`.
-    fn update_mz_columns_catalog_view(
-        &mut self,
-        desc: &RelationDesc,
-        global_id: GlobalId,
-        diff: isize,
-    ) {
+    fn report_column_updates(&mut self, desc: &RelationDesc, global_id: GlobalId, diff: isize) {
         for (i, (column_name, column_type)) in desc.iter().enumerate() {
             self.update_catalog_view(
                 MZ_COLUMNS.id,
@@ -2136,20 +2132,14 @@ where
         for status in &statuses {
             match status {
                 catalog::OpStatus::CreatedDatabase { name, id } => {
-                    self.update_mz_databases_catalog_view(*id, name, 1);
+                    self.report_database_update(*id, name, 1);
                 }
                 catalog::OpStatus::CreatedSchema {
                     database_id,
                     schema_id,
                     schema_name,
                 } => {
-                    self.update_mz_schemas_catalog_view(
-                        &database_id.to_string(),
-                        *schema_id,
-                        schema_name,
-                        "USER",
-                        1,
-                    );
+                    self.report_schema_update(*database_id, *schema_id, schema_name, "USER", 1);
                 }
                 catalog::OpStatus::CreatedItem { id, name, item } => {
                     self.report_catalog_update(
@@ -2159,7 +2149,7 @@ where
                     );
 
                     if let Ok(desc) = item.desc(&name) {
-                        self.update_mz_columns_catalog_view(desc, *id, 1);
+                        self.report_column_updates(desc, *id, 1);
                     }
                     if let CatalogItem::Index(index) = item.clone() {
                         self.update_mz_indexes_catalog_view(*id, &index, 1);
@@ -2177,20 +2167,14 @@ where
                     );
                 }
                 catalog::OpStatus::DroppedDatabase { name, id } => {
-                    self.update_mz_databases_catalog_view(*id, name, -1);
+                    self.report_database_update(*id, name, -1);
                 }
                 catalog::OpStatus::DroppedSchema {
                     database_id,
                     schema_id,
                     schema_name,
                 } => {
-                    self.update_mz_schemas_catalog_view(
-                        &database_id.to_string(),
-                        *schema_id,
-                        schema_name,
-                        "USER",
-                        -1,
-                    );
+                    self.report_schema_update(*database_id, *schema_id, schema_name, "USER", -1);
                 }
                 catalog::OpStatus::DroppedIndex { entry, nullable } => match entry.item() {
                     CatalogItem::Index(index) => {
@@ -2253,7 +2237,7 @@ where
                         }
                     }
                     if let Ok(desc) = entry.desc() {
-                        self.update_mz_columns_catalog_view(desc, entry.id(), -1);
+                        self.report_column_updates(desc, entry.id(), -1);
                     }
                 }
                 _ => (),

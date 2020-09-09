@@ -18,4 +18,5 @@ tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4", "with-serde
 repr = { path = "../repr" }
 serde_json = "1.0"
 sql = { path = "../sql" }
+uuid = "0.8"
 whoami = "0.9"

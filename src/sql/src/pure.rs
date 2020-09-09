@@ -55,7 +55,7 @@ pub async fn purify(mut stmt: Statement) -> Result<Statement, anyhow::Error> {
             Connector::AvroOcf { path, .. } => {
                 let path = path.clone();
                 let f = std::fs::File::open(path)?;
-                let r = avro::Reader::new(f)?;
+                let r = mz_avro::Reader::new(f)?;
                 if !with_options_map.contains_key("reader_schema") {
                     let schema = serde_json::to_string(r.writer_schema()).unwrap();
                     with_options.push(sql_parser::ast::SqlOption {

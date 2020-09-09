@@ -327,6 +327,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             self.get_partition_consumers_count(),
             self.get_worker_partition_count()
         );
+
         Ok(next_message)
     }
 
@@ -378,6 +379,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         persistence_tx: &mut Option<PersistenceSender>,
         message: &SourceMessage<Vec<u8>>,
         timestamp: Timestamp,
+        predecessor: Option<MzOffset>,
     ) {
         // Send this record to be persisted
         if let Some(persistence_tx) = persistence_tx {
@@ -395,6 +397,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 source_id: self.source_global_id,
                 partition_id,
                 record: Record {
+                    predecessor: predecessor.map(|p| p.offset),
                     offset: message.offset.offset,
                     timestamp,
                     key,

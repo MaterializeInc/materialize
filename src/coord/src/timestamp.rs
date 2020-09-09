@@ -22,12 +22,12 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::bail;
-use avro::schema::Schema;
-use avro::types::Value;
 use futures::executor::block_on;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
+use mz_avro::schema::Schema;
+use mz_avro::types::Value;
 use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
@@ -906,7 +906,7 @@ impl Timestamper {
                         };
                         // The first 5 bytes are reserved for the schema id/schema registry information
                         let mut bytes = &msg[5..];
-                        let res = avro::from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut bytes);
+                        let res = mz_avro::from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut bytes);
                         match res {
                             Err(_) => {
                                 // This was a key message, can safely ignore it
@@ -942,7 +942,7 @@ impl Timestamper {
                         };
                         // The first 5 bytes are reserved for the schema id/schema registry information
                         let mut bytes = &msg[5..];
-                        let res = avro::from_avro_datum(&BYO_CONSISTENCY_SCHEMA, &mut bytes);
+                        let res = mz_avro::from_avro_datum(&BYO_CONSISTENCY_SCHEMA, &mut bytes);
                         let (topic, partition_count, partition, timestamp, offset) = match res {
                             Ok(record) => {
                                 if let Value::Record(record) = record {
@@ -1197,8 +1197,8 @@ impl Timestamper {
         _id: SourceInstanceId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
-    ) -> Option<ByoFileConnector<avro::types::Value, anyhow::Error>> {
-        let ctor = move |file| avro::Reader::new(file);
+    ) -> Option<ByoFileConnector<mz_avro::types::Value, anyhow::Error>> {
+        let ctor = move |file| mz_avro::Reader::new(file);
         let tail = if fc.tail {
             FileReadStyle::TailFollowFd
         } else {

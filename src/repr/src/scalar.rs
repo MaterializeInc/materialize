@@ -14,6 +14,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
@@ -62,6 +63,8 @@ pub enum Datum<'a> {
     /// This variant is distinct from [`Datum::Null`] as a null datum is
     /// distinct from a non-null datum that contains the JSON value `null`.
     JsonNull,
+    /// A universally unique identifier.
+    UUID(Uuid),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -261,6 +264,18 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the uuid value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::UUID`].
+    pub fn unwrap_uuid(&self) -> Uuid {
+        match self {
+            Datum::UUID(u) => *u,
+            _ => panic!("Datum::unwrap_uuid called on {:?}", self),
+        }
+    }
+
     /// Unwraps the list value within this datum.
     ///
     /// # Panics
@@ -337,6 +352,8 @@ impl<'a> Datum<'a> {
                     (Datum::Bytes(_), _) => false,
                     (Datum::String(_), ScalarType::String) => true,
                     (Datum::String(_), _) => false,
+                    (Datum::UUID(_), ScalarType::UUID) => true,
+                    (Datum::UUID(_), _) => false,
                     (Datum::List(list), ScalarType::List(t)) => list
                         .iter()
                         .all(|e| e.is_null() || is_instance_of_scalar(e, t)),
@@ -533,6 +550,7 @@ impl fmt::Display for Datum<'_> {
                 }
                 f.write_str("\"")
             }
+            Datum::UUID(u) => write!(f, "{}", u),
             Datum::List(list) => {
                 f.write_str("[")?;
                 write_delimited(f, ", ", list, |f, e| write!(f, "{}", e))?;
@@ -601,6 +619,8 @@ pub enum ScalarType {
     ///   * [`Datum::List`]
     ///   * [`Datum::Dict`]
     Jsonb,
+    /// The type of [`Datum::UUID`].
+    UUID,
     /// The type of [`Datum::List`].
     ///
     /// Elements within the list are of the specified type. List elements may
@@ -699,6 +719,7 @@ impl PartialEq for ScalarType {
             | (Interval, Interval)
             | (Bytes, Bytes)
             | (String, String)
+            | (UUID, UUID)
             | (Jsonb, Jsonb) => true,
 
             (List(a), List(b)) => a.eq(b),
@@ -718,6 +739,7 @@ impl PartialEq for ScalarType {
             | (Bytes, _)
             | (String, _)
             | (Jsonb, _)
+            | (UUID, _)
             | (List(_), _)
             | (Record { .. }, _) => false,
         }
@@ -755,6 +777,7 @@ impl Hash for ScalarType {
                 state.write_u8(15);
                 fields.hash(state);
             }
+            UUID => state.write_u8(16),
         }
     }
 }
@@ -782,6 +805,7 @@ impl fmt::Display for ScalarType {
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
             Jsonb => f.write_str("jsonb"),
+            UUID => f.write_str("uuid"),
             List(t) => write!(f, "{} list", t),
             Record { fields } => {
                 f.write_str("record(")?;
