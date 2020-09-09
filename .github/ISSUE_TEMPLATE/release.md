@@ -137,10 +137,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
   git push origin $tag
   ```
 
-Go to [BuildKite > Tests](https://buildkite.com/materialize/tests) and verify that a job called
-`release` is running for the pushed tag. You will need to wait for this job to complete before
-you can verify the Debian package. You can, however, continue on to the next step and update
-Homebrew.
+Before you can verify the Debian package, you will need to wait for a successful [Deploy
+Pipeline](https://buildkite.com/materialize/deploy) run. The deploy pipeline is not triggered
+until after a successful [Tests Pipeline](https://buildkite.com/materialize/tests) run. This
+process will take about 15 minutes to complete. You can, however, continue on to the next step and
+update Homebrew.
 
 ### Create Homebrew bottle and update tap
 
