@@ -43,6 +43,8 @@ pub use crate::catalog::config::Config;
 
 const SYSTEM_CONN_ID: u32 = 0;
 
+pub const AMBIENT_DATABASE_ID: i64 = -1;
+pub const AMBIENT_SCHEMA_ID: i64 = -1;
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
 

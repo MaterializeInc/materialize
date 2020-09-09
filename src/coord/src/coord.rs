@@ -64,7 +64,9 @@ use crate::catalog::builtin::{
     BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_KAFKA_SINKS,
     MZ_SCHEMAS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
+use crate::catalog::{
+    self, Catalog, CatalogItem, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
+};
 use crate::persistence::{PersistenceConfig, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
@@ -334,7 +336,7 @@ where
             coord.update_mz_databases_catalog_view(database_id, &database_name, 1);
             for (schema_name, schema_id) in schemas {
                 coord.update_mz_schemas_catalog_view(
-                    &database_id.to_string(),
+                    database_id,
                     schema_id,
                     &schema_name,
                     "USER",
@@ -349,11 +351,21 @@ where
             .map(|(schema_name, schema)| (schema_name.to_string(), schema.id))
             .collect();
         for (schema_name, schema_id) in ambient_schemas {
-            coord.update_mz_schemas_catalog_view("AMBIENT", schema_id, &schema_name, "SYSTEM", 1);
+            coord.update_mz_schemas_catalog_view(
+                AMBIENT_DATABASE_ID,
+                schema_id,
+                &schema_name,
+                "SYSTEM",
+                1,
+            );
         }
-        // The ambient "mz_temp" schema has a single GlobalId: -1.
-        coord.update_mz_schemas_catalog_view("AMBIENT", -1, "mz_temp", "system", 1);
-        // Todo@jldlaughlin: insert rest of named objects!
+        coord.update_mz_schemas_catalog_view(
+            AMBIENT_DATABASE_ID,
+            AMBIENT_SCHEMA_ID,
+            "mz_temp",
+            "system",
+            1,
+        );
 
         // Announce primary and foreign key relationships.
         if coord.logging_granularity.is_some() {
@@ -933,11 +945,11 @@ where
     }
 
     /// Inserts or removes a row from [`builtin::MZ_DATABASES`] based on the supplied `diff`.
-    fn update_mz_databases_catalog_view(&mut self, global_id: i64, name: &str, diff: isize) {
+    fn update_mz_databases_catalog_view(&mut self, database_id: i64, name: &str, diff: isize) {
         self.update_catalog_view(
             MZ_DATABASES.id,
             iter::once((
-                Row::pack(&[Datum::String(&global_id.to_string()), Datum::String(&name)]),
+                Row::pack(&[Datum::Int64(database_id), Datum::String(&name)]),
                 diff,
             )),
         )
@@ -946,7 +958,7 @@ where
     /// Inserts or removes a row from [`builtin::MZ_SCHEMAS`] based on the supplied `diff`.
     fn update_mz_schemas_catalog_view(
         &mut self,
-        database_id: &str,
+        database_id: i64,
         schema_id: i64,
         schema_name: &str,
         typ: &str,
@@ -956,7 +968,7 @@ where
             MZ_SCHEMAS.id,
             iter::once((
                 Row::pack(&[
-                    Datum::String(database_id),
+                    Datum::Int64(database_id),
                     Datum::Int64(schema_id),
                     Datum::String(schema_name),
                     Datum::String(typ),
@@ -2073,7 +2085,7 @@ where
                     schema_name,
                 } => {
                     self.update_mz_schemas_catalog_view(
-                        &database_id.to_string(),
+                        *database_id,
                         *schema_id,
                         schema_name,
                         "USER",
@@ -2111,7 +2123,7 @@ where
                     schema_name,
                 } => {
                     self.update_mz_schemas_catalog_view(
-                        &database_id.to_string(),
+                        *database_id,
                         *schema_id,
                         schema_name,
                         "USER",
