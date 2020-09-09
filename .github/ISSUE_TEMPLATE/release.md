@@ -192,7 +192,7 @@ Homebrew.
   - [ ] Ensure that all members of the release-notes team have signed-off on this issue.
 
   - [ ] For a major release, ensure that the announcement blog post has been published and
-    announced, if applicable, by pinging the product team in #release.
+    announced by pinging the product team in #release.
 
 ## Finish
 
