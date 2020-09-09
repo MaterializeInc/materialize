@@ -56,6 +56,13 @@ from materialize import ui
 
 announce = ui.speaker("==>")
 
+# BUILD_MODE enables building Rust binaries without the --release flag.
+# TODO(mjibson): Make this not an environment variable, instead pass it around
+# like a regular argument to things that need it.
+BUILD_MODE = os.environ.get("BUILD_MODE", "release").lower()
+if BUILD_MODE not in ["debug", "release"]:
+    raise ValueError("unknown BUILD_MODE")
+
 
 class Fingerprint(bytes):
     """A SHA-1 hash of the inputs to an `Image`.
@@ -181,11 +188,13 @@ class CargoBuild(CargoPreImage):
             raise ValueError("mzbuild config is missing pre-build target")
 
     def build(self) -> None:
-        cargo_build = [self.rd.xcargo(), "build", "--release", "--bin", self.bin]
+        cargo_build = [self.rd.xcargo(), "build", "--bin", self.bin]
+        if BUILD_MODE == "release":
+            cargo_build.append("--release")
         spawn.runv(
             cargo_build, cwd=self.rd.root,
         )
-        shutil.copy(self.rd.xcargo_target_dir() / "release" / self.bin, self.path)
+        shutil.copy(self.rd.xcargo_target_dir() / BUILD_MODE / self.bin, self.path)
         if self.strip:
             # NOTE(benesch): the debug information is large enough that it slows
             # down CI, since we're packaging these binaries up into Docker
@@ -328,6 +337,7 @@ class Image:
             configuration file.
         pre_image: An optional action to perform before running `docker build`.
         build_args: An optional list of --build-arg to pass to the dockerfile
+        is_cargo: Whether the image uses Cargo to build itself.
     """
 
     _DOCKERFILE_MZFROM_RE = re.compile(rb"^MZFROM\s*(\S+)")
@@ -336,6 +346,7 @@ class Image:
         self.rd = rd
         self.path = path
         self.pre_image: Optional[PreImage] = None
+        self.is_cargo = False
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
             self.name: str = data.pop("name")
@@ -343,6 +354,7 @@ class Image:
             pre_image = data.pop("pre-image", None)
             if pre_image is not None:
                 typ = pre_image.pop("type", None)
+                self.is_cargo = typ.startswith("cargo")
                 if typ == "cargo-build":
                     self.pre_image = CargoBuild(self.rd, self.path, pre_image)
                 elif typ == "cargo-test":
@@ -558,6 +570,10 @@ class ResolvedImage:
             self_hash.update(b"\0")
 
         full_hash = hashlib.sha1()
+        # For images using Cargo, add the BUILD_MODE to the hash so
+        # debug and release binaries have different hashes.
+        if self.image.is_cargo:
+            full_hash.update(BUILD_MODE.encode())
         full_hash.update(self_hash.digest())
         for dep in sorted(self.dependencies.values(), key=lambda d: d.name):
             full_hash.update(dep.name.encode())

@@ -299,6 +299,36 @@ Testdrive is the preferred system test framework when testing:
 * interactions between objects in the catalog,
 * serialization of data types over the PostgreSQL wire protocol.
 
+#### Docker Compose
+
+Testdrive comes with a Docker Compose environment that can set all
+of this up for you, including re-building and running the testdrive
+and materialized binaries if you have changed them locally. From the
+`test/testdrive` directory:
+
+```
+./mzcompose down
+BUILD_MODE=debug AWS_REGION= ./mzcompose run testdrive
+```
+
+The `down` subcommand is needed to destroy any existing materialize
+containers with possibly old binaries. If this is not run, then even
+though a new materialize binary is built, it will not be used if there's
+an existing container.
+
+Supported environment variables (in addition to `BUILD_MODE` documented
+elsewhere):
+
+* `TD_TEST` (default `*.td`) is a glob of tests to run from the test/testdrive directory.
+```
+TD_TEST=joins.td BUILD_MODE=debug ./mzcompose run testdrive
+```
+* `AWS_REGION` (default `us-east-2`) is passed as the `--aws-region`
+  argument. Use an empty string for local testing.
+```
+AWS_REGION= BUILD_MODE=debug ./mzcompose run testdrive
+```
+
 ## Long-running tests
 
 These are still a work in progress. The beginning of the orchestration has

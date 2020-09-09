@@ -368,8 +368,10 @@ publish: true
      inputs to the build, plus the top-level `Cargo.toml`, `Cargo.lock`, and
      `.cargo/config` files.
 
-     Cargo is always invoked with the `--release` flag. The binary will be
-     stripped of debug information unless `strip: false` is requested.
+     Cargo is invoked with the `--release` flag if the `BUILD_MODE`
+     environment variable is `release` (the default; set to `debug`
+     for a non-release binary). The binary will be stripped of debug
+     information unless `strip: false` is requested.
 
      In rare cases, it may be necessary to extract files from the build
      directory of a dependency. The `extract` key specifies a mapping from a
@@ -461,6 +463,14 @@ COPY --from=0 ...
   specified mzbuild image. It is like the vanilla Dockerfile [FROM
   command][dockerfile-from], except that the image named must be a valid mzbuild
   image in the repository, not a vanilla Docker image.
+
+### Environment Variables
+
+The following environment variables are supported by all commands:
+
+* `BUILD_MODE` can be set to `release` (the default) or `debug`. If Cargo
+  needs to build a Rust binary, `--release` will only be passed if set to
+  `release`.
 
 ## Motivation
 
