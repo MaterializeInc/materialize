@@ -50,7 +50,7 @@ materialize
 
 # This SELECT should always return the same result as SHOW DATABASES.
 > SELECT * FROM mz_catalog.mz_databases
-global_id   database
+id          database
 -----------------------
 1           materialize
 
@@ -63,7 +63,7 @@ d
 materialize
 
 > SELECT * FROM mz_catalog.mz_databases
-global_id   database
+id          database
 -----------------------
 1           materialize
 2           d
@@ -182,7 +182,7 @@ d
 d2
 materialize
 > SELECT * FROM mz_catalog.mz_databases
-global_id   database
+id          database
 -----------------------
 1           materialize
 2           d
