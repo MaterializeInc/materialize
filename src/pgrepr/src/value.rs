@@ -67,7 +67,7 @@ pub enum Value {
     /// A variable-length string.
     Text(String),
     /// A universally unique identifier.
-    UUID(Uuid),
+    Uuid(Uuid),
 }
 
 impl Value {
@@ -97,7 +97,7 @@ impl Value {
             (_, ScalarType::Jsonb) => {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
             }
-            (Datum::UUID(u), ScalarType::UUID) => Some(Value::UUID(u)),
+            (Datum::Uuid(u), ScalarType::Uuid) => Some(Value::Uuid(u)),
             (Datum::List(list), ScalarType::List(elem_type)) => Some(Value::List(
                 list.iter()
                     .map(|elem| Value::from_datum(elem, elem_type))
@@ -144,7 +144,7 @@ impl Value {
                 buf.push_row(js.0.into_row()).unpack_first(),
                 ScalarType::Jsonb,
             ),
-            Value::UUID(u) => (Datum::UUID(u), ScalarType::UUID),
+            Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
             Value::List(elems) => {
                 let elem_pg_type = match typ {
                     Type::List(t) => &*t,
@@ -201,7 +201,7 @@ impl Value {
             Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
             Value::Text(s) => strconv::format_string(buf, s),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js.0.as_ref()),
-            Value::UUID(u) => strconv::format_uuid(buf, *u),
+            Value::Uuid(u) => strconv::format_uuid(buf, *u),
             Value::List(elems) => encode_list(buf, elems),
             Value::Record(elems) => encode_record(buf, elems),
         }
@@ -225,7 +225,7 @@ impl Value {
             Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
             Value::Jsonb(js) => js.to_sql(&PgType::JSONB, buf),
-            Value::UUID(u) => u.to_sql(&PgType::UUID, buf),
+            Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
             Value::List(_) => {
                 // for now just use text encoding
                 self.encode_text(buf);
@@ -304,7 +304,7 @@ impl Value {
             Type::Text => Value::Text(raw.to_owned()),
             Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
             Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
-            Type::UUID => Value::UUID(Uuid::parse_str(raw)?),
+            Type::Uuid => Value::Uuid(Uuid::parse_str(raw)?),
             Type::List(elem_type) => Value::List(decode_list(&elem_type, raw)?),
             Type::Record(_) => {
                 return Err(Box::new(DecodeError::new(
@@ -332,7 +332,7 @@ impl Value {
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
-            Type::UUID => Uuid::from_sql(ty.inner(), raw).map(Value::UUID),
+            Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
             Type::List(_) => {
                 // just using the text encoding for now
                 Value::decode_text(ty, raw)
@@ -412,7 +412,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
         Type::Time => ScalarType::Time,
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,
-        Type::UUID => ScalarType::UUID,
+        Type::Uuid => ScalarType::Uuid,
         Type::List(t) => {
             let (_, elem_type) = null_datum(t);
             ScalarType::List(Box::new(elem_type))

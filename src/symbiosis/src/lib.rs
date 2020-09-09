@@ -447,7 +447,7 @@ fn push_column(
         }
         DataType::Uuid => {
             let u = get_column_inner::<Uuid>(postgres_row, i, nullable)?.unwrap();
-            row.push(Datum::UUID(u));
+            row.push(Datum::Uuid(u));
         }
         _ => bail!(
             "Postgres to materialize conversion not yet supported for {:?}",
