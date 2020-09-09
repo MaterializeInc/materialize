@@ -49,8 +49,17 @@ fn main() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new().expect("creating tokio runtime failed");
     runtime.spawn(serve_metrics());
 
+    info!(
+        "Allowing chbench to warm up for {} seconds at {}",
+        config.warmup_secs,
+        Utc::now()
+    );
+    let warmup_dur = std::time::Duration::from_secs(config.warmup_secs.into());
+    std::thread::sleep(warmup_dur);
+    info!("Done warming up at {}", Utc::now());
+
     let init_result = initialize(&config);
-    // Start peek timing loop. This should never return.
+    // Start peek timing loop.
     if config.only_initialize {
         match init_result {
             Ok(()) => Ok(()),
@@ -62,16 +71,19 @@ fn main() -> Result<()> {
     } else {
         let _ = init_result;
         measure_peek_times(&config);
-        unreachable!()
+        Ok(())
     }
 }
 
 fn measure_peek_times(config: &Args) {
     let mut peek_threads = vec![];
-    for group in &config.config.groups {
+    let run_dur = chrono::Duration::seconds(config.run_secs as i64);
+    for (group_id, group) in config.config.groups.iter().enumerate() {
         peek_threads.extend(spawn_query_thread(
             config.materialized_url.clone(),
             group.clone(),
+            group_id,
+            run_dur.clone(),
         ));
     }
 
@@ -85,10 +97,15 @@ fn measure_peek_times(config: &Args) {
     }
 }
 
-fn spawn_query_thread(mz_url: String, query_group: QueryGroup) -> Vec<JoinHandle<()>> {
+fn spawn_query_thread(
+    mz_url: String,
+    query_group: QueryGroup,
+    group_id: usize,
+    run_dur: chrono::Duration,
+) -> Vec<JoinHandle<()>> {
     let qg = query_group;
     let mut qs = vec![];
-    for _ in 0..qg.thread_count {
+    for thread_id in 0..qg.thread_count {
         let group = qg.clone();
         let mz_url = mz_url.clone();
         qs.push(thread::spawn(move || {
@@ -110,7 +127,12 @@ fn spawn_query_thread(mz_url: String, query_group: QueryGroup) -> Vec<JoinHandle
             let mut counter = 0u64;
             let mut err_count = 0u64;
             let mut last_log = Instant::now();
-            loop {
+            let end_at = Utc::now() + run_dur;
+            info!(
+                "Will terminate thread {}.{} at {:?}",
+                group_id, thread_id, end_at
+            );
+            'main: loop {
                 for (select, q_name, hist, rows_counter) in &selects {
                     let timer = hist.start_timer();
                     let query_result = postgres_client.query(select, &[]);
@@ -140,6 +162,10 @@ fn spawn_query_thread(mz_url: String, query_group: QueryGroup) -> Vec<JoinHandle
                             );
                             last_log = now;
                         }
+                    }
+                    if Utc::now() >= end_at {
+                        info!("Terminating thread {}.{}", group_id, thread_id);
+                        break 'main;
                     }
                     if !last_was_failure {
                         backoff = get_baseline_backoff();
