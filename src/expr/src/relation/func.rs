@@ -10,6 +10,7 @@
 #![allow(missing_docs)]
 
 use std::fmt;
+use std::fs;
 use std::iter;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -22,6 +23,8 @@ use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, RowPacker, ScalarType};
 
+use crate::id::GlobalId;
+use crate::record_iter::RecordIter;
 use crate::scalar::func::jsonb_stringify;
 
 // TODO(jamii) be careful about overflow in sum/avg
@@ -696,6 +699,7 @@ pub enum TableFunc {
     GenerateSeriesInt64,
     // TODO(justin): should also possibly have GenerateSeriesTimestamp{,Tz}.
     Repeat,
+    ReadPersistedData { source: GlobalId },
 }
 
 impl TableFunc {
@@ -720,6 +724,26 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => generate_series_int32(datums[0], datums[1]),
             TableFunc::GenerateSeriesInt64 => generate_series_int64(datums[0], datums[1]),
             TableFunc::Repeat => repeat(datums[0]),
+            TableFunc::ReadPersistedData { source } => {
+                let mut row_packer = RowPacker::new();
+                RecordIter::files_for_source(*source)
+                    .iter()
+                    .flat_map(|e| {
+                        RecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
+                    })
+                    .map(|(e, r)| {
+                        (
+                            row_packer.pack(&[
+                                Datum::String(e.to_str().unwrap()),
+                                Datum::Int64(r.offset),
+                                Datum::Bytes(&r.key),
+                                Datum::Bytes(&r.value),
+                            ]),
+                            1,
+                        )
+                    })
+                    .collect::<Vec<(Row, Diff)>>()
+            }
         }
     }
 
@@ -750,6 +774,12 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => vec![ScalarType::Int32.nullable(false)],
             TableFunc::GenerateSeriesInt64 => vec![ScalarType::Int64.nullable(false)],
             TableFunc::Repeat => vec![],
+            TableFunc::ReadPersistedData { .. } => vec![
+                ScalarType::String.nullable(true),
+                ScalarType::Int64.nullable(false),
+                ScalarType::Bytes.nullable(false),
+                ScalarType::Bytes.nullable(false),
+            ],
         })
     }
 
@@ -763,6 +793,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => 1,
             TableFunc::GenerateSeriesInt64 => 1,
             TableFunc::Repeat => 0,
+            TableFunc::ReadPersistedData { .. } => 4,
         }
     }
 
@@ -775,7 +806,8 @@ impl TableFunc {
             | TableFunc::GenerateSeriesInt64
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
-            | TableFunc::Repeat => true,
+            | TableFunc::Repeat
+            | TableFunc::ReadPersistedData { .. } => true,
         }
     }
 }
@@ -791,6 +823,9 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
             TableFunc::Repeat => f.write_str("repeat"),
+            TableFunc::ReadPersistedData { source } => {
+                write!(f, "internal_read_persisted_data({})", source)
+            }
         }
     }
 }

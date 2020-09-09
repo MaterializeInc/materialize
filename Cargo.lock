@@ -1000,6 +1000,7 @@ version = "0.1.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "byteorder",
  "chrono",
  "csv",
  "encoding",

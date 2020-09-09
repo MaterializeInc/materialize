@@ -14,12 +14,14 @@
 use serde::{Deserialize, Serialize};
 
 mod id;
+mod record_iter;
 mod relation;
 mod scalar;
 
 pub mod explain;
 
 pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId, PartitionId, SourceInstanceId};
+pub use record_iter::{PersistedRecord, RecordIter};
 pub use relation::func::{AggregateFunc, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::{
