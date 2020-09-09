@@ -311,6 +311,7 @@ pub trait SourceInfo<Out> {
         _persistence_tx: &mut Option<PersistenceSender>,
         _message: &SourceMessage<Out>,
         _timestamp: Timestamp,
+        _offset: Option<MzOffset>,
     ) {
         // Default implementation is to do nothing
     }
@@ -800,6 +801,7 @@ where
         );
 
         let mut read_persisted_files = false;
+        let mut predecessor = None;
 
         move |cap, output| {
             // First check that the source was successfully created
@@ -840,6 +842,8 @@ where
                         Ok(Some(message)) => {
                             let partition = message.partition.clone();
                             let offset = message.offset;
+                            let msg_predecessor = predecessor;
+                            predecessor = Some(offset);
 
                             // Update ingestion metrics. Guaranteed to exist as the appropriate
                             // entry gets created in SourceConstructor or when a new partition
@@ -873,7 +877,12 @@ where
                                     return SourceStatus::Alive;
                                 }
                                 Some(ts) => {
-                                    source_info.persist_message(&mut persistence_tx, &message, ts);
+                                    source_info.persist_message(
+                                        &mut persistence_tx,
+                                        &message,
+                                        ts,
+                                        msg_predecessor,
+                                    );
                                     // Note: empty and null payload/keys are currently
                                     // treated as the same thing.
                                     let key = message.key.unwrap_or_default();

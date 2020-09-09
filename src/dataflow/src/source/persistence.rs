@@ -39,6 +39,8 @@ pub struct Record {
     pub offset: i64,
     /// Timestamp of record.
     pub timestamp: Timestamp,
+    /// The offset of the record that comes before this one in the topic.
+    pub predecessor: Option<i64>,
     /// Record key.
     pub key: Vec<u8>,
     /// Record value.
@@ -97,6 +99,7 @@ impl Record {
 
         Some((
             Record {
+                predecessor: None,
                 offset: source_offset,
                 timestamp,
                 key: key.into(),
