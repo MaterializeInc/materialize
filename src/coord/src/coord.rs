@@ -66,7 +66,7 @@ use crate::catalog::builtin::{
     MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{
-    self, Catalog, CatalogItem, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
+    self, Catalog, CatalogItem, Index, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
 };
 use crate::persistence::{PersistenceConfig, Persister};
 use crate::session::{PreparedStatement, Session};
@@ -315,7 +315,7 @@ where
                 coord.report_column_updates(desc, id, 1);
             }
             if let CatalogItem::Index(index) = item {
-                coord.update_mz_indexes_catalog_view(id, &index, 1);
+                coord.report_index_update(id, &index, 1);
             }
         }
 
@@ -995,8 +995,8 @@ where
     }
 
     /// Inserts or removes a row from [`builtin::MZ_INDEXES`] based on the supplied `diff`.
-    fn update_mz_indexes_catalog_view(&mut self, global_id: GlobalId, index: &Index, diff: isize) {
-        self.update_mz_indexes_catalog_view_inner(
+    fn report_index_update(&mut self, global_id: GlobalId, index: &Index, diff: isize) {
+        self.report_index_update_inner(
             global_id,
             index,
             index
@@ -1014,7 +1014,7 @@ where
     // When updating the mz_indexes system table after dropping an index, it may no longer be possible
     // to generate the 'nullable' information for that index. This function allows callers to bypass
     // that computation and provide their own value, instead.
-    fn update_mz_indexes_catalog_view_inner(
+    fn report_index_update_inner(
         &mut self,
         global_id: GlobalId,
         index: &Index,
@@ -2152,7 +2152,7 @@ where
                         self.report_column_updates(desc, *id, 1);
                     }
                     if let CatalogItem::Index(index) = item.clone() {
-                        self.update_mz_indexes_catalog_view(*id, &index, 1);
+                        self.report_index_update(*id, &index, 1);
                     }
                 }
                 catalog::OpStatus::UpdatedItem { id, from_name } => {
@@ -2180,7 +2180,7 @@ where
                     CatalogItem::Index(index) => {
                         indexes_to_drop.push(entry.id());
                         self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
-                        self.update_mz_indexes_catalog_view_inner(
+                        self.report_index_update_inner(
                             entry.id(),
                             index,
                             nullable.to_owned(),
