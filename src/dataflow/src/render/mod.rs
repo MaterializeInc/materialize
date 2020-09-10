@@ -317,7 +317,6 @@ where
                     worker_count: scope.peers(),
                     encoding: encoding.clone(),
                     persistence_tx,
-                    persisted_files: persisted_files(&connector),
                 };
 
                 let capability = if let Envelope::Upsert(key_encoding) = envelope {

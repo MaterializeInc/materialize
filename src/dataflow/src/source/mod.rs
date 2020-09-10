@@ -15,7 +15,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::Debug;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
@@ -88,8 +87,6 @@ pub struct SourceConfig<'a, G> {
     pub encoding: DataEncoding,
     /// Channel to send persistence information to persister thread
     pub persistence_tx: Option<PersistenceSender>,
-    /// Files to read on startup.
-    pub persisted_files: Vec<PathBuf>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -318,10 +315,8 @@ pub trait SourceInfo<Out> {
 
     /// Read back any files we previously persisted
     /// TODO(rkhaitan): clean this up to return a proper type and potentially a iterator.
-    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Out, Timestamp, i64)> {
-        if !files.is_empty() {
-            error!("unimplemented: this source does not support reading persisted files");
-        }
+    fn read_persisted_files(&self) -> Vec<(Vec<u8>, Out, Timestamp, i64)> {
+        error!("unimplemented: this source does not support reading persisted files");
         vec![]
     }
 }
@@ -760,7 +755,6 @@ where
         active,
         encoding,
         mut persistence_tx,
-        persisted_files,
         ..
     } = config;
 
@@ -815,7 +809,7 @@ where
 
             if active {
                 if !read_persisted_files {
-                    let msgs = source_info.read_persisted_files(&persisted_files);
+                    let msgs = source_info.read_persisted_files();
                     for m in msgs {
                         let ts_cap = cap.delayed(&m.2);
                         output
