@@ -53,6 +53,11 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 
 > CREATE MATERIALIZED VIEW data_view as SELECT * from data
 
+> SHOW COLUMNS FROM data_view
+Field  Nullable  Type
+---------------------
+u      NO        uuid
+
 > SELECT * FROM data_view
 "16fd95b0-65b7-4249-9b66-1547cd95923d"
 "b141698b-fb7f-492d-bc8a-0d159641c7a3"
@@ -62,3 +67,10 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 
 > SELECT '85907cb9-ac9b-4e35-84b8-60dc69368aca'::uuid::text
 "85907cb9-ac9b-4e35-84b8-60dc69368aca"
+
+> CREATE SINK uuid_sink_${testdrive.seed} FROM data_view
+  INTO AVRO OCF '${testdrive.temp-dir}/uuid-sink.ocf'
+
+$ avro-ocf-verify sink=materialize.public.uuid_sink_${testdrive.seed}
+{"before": null, "after": {"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}
+{"before": null, "after": {"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}}

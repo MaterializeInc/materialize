@@ -23,6 +23,7 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
+use uuid::Uuid;
 
 use mz_avro::schema::{
     resolve_schemas, RecordField, Schema, SchemaFingerprint, SchemaNode, SchemaPiece,
@@ -592,6 +593,20 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
+    fn uuid<'b, R: AvroRead>(self, r: ValueOrReader<'b, &'b [u8], R>) -> Result<Self::Out> {
+        let buf = match r {
+            ValueOrReader::Value(val) => val,
+            ValueOrReader::Reader { len, r } => {
+                self.buf.resize_with(len, Default::default);
+                r.read_exact(self.buf)?;
+                &self.buf
+            }
+        };
+        let s = std::str::from_utf8(&buf)?;
+        self.packer.push(Datum::Uuid(Uuid::parse_str(s)?));
+        Ok(())
+    }
+    #[inline]
     fn fixed<'b, R: AvroRead>(self, r: ValueOrReader<'b, &'b [u8], R>) -> Result<Self::Out> {
         self.bytes(r)
     }
@@ -816,6 +831,7 @@ fn validate_schema_2(
         SchemaPiece::String | SchemaPiece::Enum { .. } => ScalarType::String,
 
         SchemaPiece::Json => ScalarType::Jsonb,
+        SchemaPiece::Uuid => ScalarType::Uuid,
         SchemaPiece::Record { fields, .. } => {
             let mut columns = vec![];
             for f in fields {
@@ -919,6 +935,7 @@ fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> Result<RowPacker> 
             }
         }
         Value::Json(j) => row = JsonbPacker::new(row).pack_serde_json(j)?,
+        Value::Uuid(u) => row.push(Datum::Uuid(u)),
         other @ Value::Fixed(..)
         | other @ Value::Array(_)
         | other @ Value::Map(_)
@@ -1501,7 +1518,10 @@ fn build_schema(columns: &[(ColumnName, ColumnType)], include_transaction: bool)
                 "type": "string",
                 "connect.name": "io.debezium.data.Json",
             }),
-            ScalarType::Uuid => unimplemented!("uuid type"),
+            ScalarType::Uuid => json!({
+                "type": "string",
+                "logicalType": "uuid",
+            }),
             ScalarType::List(_t) => unimplemented!("list types"),
             ScalarType::Record { .. } => unimplemented!("record types"),
         };
@@ -1862,7 +1882,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
                 ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
-                ScalarType::Uuid => unimplemented!("uuid type"),
+                ScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
                 ScalarType::List(_t) => unimplemented!("list types"),
                 ScalarType::Record { .. } => unimplemented!("record types"),
             };
