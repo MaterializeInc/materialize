@@ -62,7 +62,7 @@ impl TypeCategory {
     fn from_type(typ: &ScalarType) -> Self {
         match typ {
             ScalarType::Bool => Self::Bool,
-            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::UUID | ScalarType::List(_) => {
+            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::Uuid | ScalarType::List(_) => {
                 Self::UserDefined
             }
             ScalarType::Date

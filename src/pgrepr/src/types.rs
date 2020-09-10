@@ -46,7 +46,7 @@ pub enum Type {
     /// A date and time, with a timezone.
     TimestampTz,
     /// A universally unique identifier.
-    UUID,
+    Uuid,
 }
 
 lazy_static! {
@@ -81,7 +81,7 @@ impl Type {
             postgres_types::Type::TIME => Some(Type::Time),
             postgres_types::Type::TIMESTAMP => Some(Type::Timestamp),
             postgres_types::Type::TIMESTAMPTZ => Some(Type::TimestampTz),
-            postgres_types::Type::UUID => Some(Type::UUID),
+            postgres_types::Type::UUID => Some(Type::Uuid),
             _ => None,
         }
     }
@@ -102,7 +102,7 @@ impl Type {
             Type::Time => &postgres_types::Type::TIME,
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
-            Type::UUID => &postgres_types::Type::UUID,
+            Type::Uuid => &postgres_types::Type::UUID,
             Type::List(_) => &LIST,
             Type::Record(_) => &postgres_types::Type::RECORD,
         }
@@ -138,7 +138,7 @@ impl Type {
             Type::Time => 4,
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
-            Type::UUID => 16,
+            Type::Uuid => 16,
             Type::List(_) => -1,
             Type::Record(_) => -1,
         }
@@ -162,7 +162,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Bytes => Type::Bytea,
             ScalarType::String => Type::Text,
             ScalarType::Jsonb => Type::Jsonb,
-            ScalarType::UUID => Type::UUID,
+            ScalarType::Uuid => Type::Uuid,
             ScalarType::List(t) => Type::List(Box::new(From::from(&**t))),
             ScalarType::Record { fields } => {
                 Type::Record(fields.iter().map(|(_name, ty)| Type::from(ty)).collect())

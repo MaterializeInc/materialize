@@ -372,7 +372,7 @@ fn cast_string_to_interval<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_string_to_uuid<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     strconv::parse_uuid(a.unwrap_str())
-        .map(Datum::UUID)
+        .map(Datum::Uuid)
         .err_into()
 }
 
@@ -2536,7 +2536,7 @@ impl UnaryFunc {
             CastStringToTimestamp => ScalarType::Timestamp.nullable(true),
             CastStringToTimestampTz => ScalarType::TimestampTz.nullable(true),
             CastStringToInterval | CastTimeToInterval => ScalarType::Interval.nullable(true),
-            CastStringToUuid => ScalarType::UUID.nullable(true),
+            CastStringToUuid => ScalarType::Uuid.nullable(true),
 
             CastBoolToInt32 => ScalarType::Int32.nullable(in_nullable),
 
@@ -2948,7 +2948,7 @@ where
         Bytes => strconv::format_bytes(buf, d.unwrap_bytes()),
         String => strconv::format_string(buf, d.unwrap_str()),
         Jsonb => strconv::format_jsonb(buf, JsonbRef::from_datum(d)),
-        UUID => strconv::format_uuid(buf, d.unwrap_uuid()),
+        Uuid => strconv::format_uuid(buf, d.unwrap_uuid()),
         Record { fields } => {
             let mut fields = fields.iter();
             strconv::format_record(buf, &d.unwrap_list(), |buf, d| {

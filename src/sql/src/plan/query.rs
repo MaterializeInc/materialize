@@ -2112,7 +2112,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
         DataType::Jsonb => ScalarType::Jsonb,
-        DataType::Uuid => ScalarType::UUID,
+        DataType::Uuid => ScalarType::Uuid,
         DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
         other @ DataType::Binary(..)
         | other @ DataType::Blob(_)
@@ -2139,7 +2139,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
         pgrepr::Type::Bytea => Ok(ScalarType::Bytes),
         pgrepr::Type::Text => Ok(ScalarType::String),
         pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
-        pgrepr::Type::UUID => Ok(ScalarType::UUID),
+        pgrepr::Type::Uuid => Ok(ScalarType::Uuid),
         pgrepr::Type::List(l) => Ok(ScalarType::List(Box::new(scalar_type_from_pg(l)?))),
         pgrepr::Type::Record(_) => {
             bail!("internal error: can't convert from pg record to materialize record")
