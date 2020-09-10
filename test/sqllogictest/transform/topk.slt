@@ -29,7 +29,9 @@ GROUP BY sumc, sumd
 | Get materialize.public.test1 (u1)
 | Map (#0 + #1), (#4 + #2), (#4 + #3)
 | TopK group=() order=(#3 asc) limit=4 offset=0
-| Reduce group=(#5, #6) sum(#3) count(#3)
+| Reduce group=(#5, #6)
+| | agg sum(#3)
+| | agg count(#3)
 | Map (i64tof64(#2) / i64tof64(if (#3 = 0) then {null} else {#3}))
 | Project (#4, #0, #1)
 
@@ -51,7 +53,9 @@ EXPLAIN PLAN FOR VIEW plan_test1
 ----
 %0 =
 | Get materialize.public.test1 (u1)
-| Reduce group=(((#0 + #1) + #2), ((#0 + #1) + #3)) sum(#3) count(#3)
+| Reduce group=(((#0 + #1) + #2), ((#0 + #1) + #3))
+| | agg sum(#3)
+| | agg count(#3)
 | Map (i64tof64(#2) / i64tof64(if (#3 = 0) then {null} else {#3}))
 | Project (#4, #0, #1)
 

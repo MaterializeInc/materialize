@@ -122,7 +122,8 @@ operator use the outputs of chains `%0`, `%1` and `%2` as its inputs.
 %3 =
 | Join %0 %1 %2 (= #8 #17) (= #0 #9)
 | Filter (#6 = "BUILDING"), (#12 < 1995-03-15), (#27 > 1995-03-15)
-| Reduce group=(#8, #12, #15) sum((#22 * (100dec - #23)))
+| Reduce group=(#8, #12, #15)
+| | agg sum((#22 * (100dec - #23)))
 | Project (#0, #3, #1, #2)
 ```
 
@@ -153,7 +154,10 @@ example is the choice of implementation in the `Join` operator.
 ```
 %3 =
 | Join %0 %1 %2 (= #8 #17) (= #0 #9)
-| | implementation = DeltaQuery %0 %1.(#1) %2.(#0) | %1 %0.(#0) %2.(#0) | %2 %1.(#0) %0.(#0)
+| | implementation = DeltaQuery
+| |   delta %0 %1.(#1) %2.(#0)
+| |   delta %1 %0.(#0) %2.(#0)
+| |   delta %2 %1.(#0) %0.(#0)
 | | demand = (#6, #8, #12, #15, #22, #23, #27)
 | Filter (#6 = "BUILDING"), (#12 < 1995-03-15), (#27 > 1995-03-15)
 | Reduce group=(#8, #12, #15) sum((#22 * (100dec - #23)))
@@ -212,7 +216,7 @@ Operator | Meaning | Example
 **FlatMapUnary** | Appends the result of some table function to each row in the input | `FlatMapUnary jsonb_foreach(#3)`
 **Filter** | Remove rows of the input for which some scalar predicates return false | `Filter (#20 < #21)`
 **Join** | Perform one of INNER / LEFT / RIGHT / FULL OUTER on the two inputs, using the given predicate | `InnerJoin %0 %1 on (#1 = #2)`
-**Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions and produce rows containing the group key and aggregate outputs. In the case where the group key is empty and the input is empty, returns a single row with the aggregate functions applied to empty rows. | `Reduce group=(#5) countall(null)`
+**Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions and produce rows containing the group key and aggregate outputs. In the case where the group key is empty and the input is empty, returns a single row with the aggregate functions applied to empty rows. | `Reduce group=(#5) agg countall(null)`
 **Distinct** | Remove duplicate copies of input rows | `Distinct`
 **TopK** | Groups the inputs rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group and returns the next `limit` rows | `TopK group=() order=(#1 asc, #0 desc) limit=5 offset=0`
 **Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input. | `Negate`
