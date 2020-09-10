@@ -23,6 +23,20 @@ $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
 > CREATE MATERIALIZED SOURCE mz_data
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
 
+> SELECT field_number FROM mz_indexes WHERE global_id LIKE '%u%'
+field_number
+--------------
+0
+1
+2
+
+> SELECT field_number, field FROM mz_columns where global_id LIKE '%u%';
+field_number     field
+----------------------
+0                a
+1                b
+2                mz_obj_no
+
 > SHOW INDEXES FROM mz_data
 Source_or_view                Key_name                              Column_name  Expression  Null   Seq_in_index
 ----------------------------------------------------------------------------------------------------------------
