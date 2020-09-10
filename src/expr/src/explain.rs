@@ -67,7 +67,7 @@ impl<'a> std::fmt::Display for Explanation<'a> {
             // explain output shows up in SLT where the linter will not allow trailing whitespace, so need to trim stuff
             writeln!(f, "| {}", node.pretty.trim())?;
             for annotation in &node.annotations {
-                writeln!(f, "| | {}", annotation.trim())?;
+                writeln!(f, "| | {}", annotation.trim_end())?;
             }
         }
 
@@ -248,10 +248,7 @@ impl RelationExpr {
                         )
                     )
                     .unwrap();
-                    annotations.push(format!(
-                        "implementation = {}",
-                        implementation.fmt_with(&input_chains)
-                    ));
+                    annotations.append(&mut implementation.fmt_with(&input_chains));
                     if let Some(demand) = demand {
                         annotations
                             .push(format!("demand = {}", Bracketed("(", ")", Indices(demand))));
@@ -272,11 +269,11 @@ impl RelationExpr {
                     } else {
                         write!(
                             pretty,
-                            "Reduce group={} {}",
+                            "Reduce group={}",
                             Bracketed("(", ")", Separated(", ", group_key.clone())),
-                            Separated(" ", aggregates.clone())
                         )
                         .unwrap();
+                        annotations.extend(aggregates.iter().map(|agg| format!("agg {}", agg)));
                     }
                 }
                 TopK {
@@ -414,10 +411,10 @@ impl std::fmt::Display for AggregateExpr {
 }
 
 impl JoinImplementation {
-    fn fmt_with(&self, input_chains: &[usize]) -> String {
+    fn fmt_with(&self, input_chains: &[usize]) -> Vec<String> {
         use JoinImplementation::*;
-        match self {
-            Differential((pos, first_arr), inputs) => format!(
+        let mut result = match self {
+            Differential((pos, first_arr), inputs) => vec![format!(
                 "Differential %{}{} {}",
                 input_chains[*pos],
                 if let Some(arr) = first_arr {
@@ -438,36 +435,34 @@ impl JoinImplementation {
                         })
                         .collect()
                 )
-            ),
-            DeltaQuery(inputss) => format!(
-                "DeltaQuery {}",
-                Separated(
-                    " | ",
-                    inputss
-                        .iter()
-                        .enumerate()
-                        .map(|(pos, inputs)| format!(
-                            "%{} {}",
-                            input_chains[pos],
-                            Separated(
-                                " ",
-                                inputs
-                                    .iter()
-                                    .map(|(pos, input)| {
-                                        format!(
-                                            "%{}.({})",
-                                            input_chains[*pos],
-                                            Separated(", ", input.clone())
-                                        )
-                                    })
-                                    .collect()
-                            )
-                        ))
-                        .collect()
-                )
-            ),
-            Unimplemented => "Unimplemented".to_owned(),
-        }
+            )],
+            DeltaQuery(inputss) => {
+                let mut result = vec!["DeltaQuery".to_owned()];
+                result.extend(inputss.iter().enumerate().map(|(pos, inputs)| {
+                    format!(
+                        "  delta %{} {}",
+                        input_chains[pos],
+                        Separated(
+                            " ",
+                            inputs
+                                .iter()
+                                .map(|(pos, input)| {
+                                    format!(
+                                        "%{}.({})",
+                                        input_chains[*pos],
+                                        Separated(", ", input.clone())
+                                    )
+                                })
+                                .collect()
+                        )
+                    )
+                }));
+                result
+            }
+            Unimplemented => vec!["Unimplemented".to_owned()],
+        };
+        result[0] = format!("implementation = {}", result[0]);
+        result
     }
 }
 

@@ -318,7 +318,9 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 
 %6 =
 | Join %4 %5 (= #0 #1)
-| | implementation = DeltaQuery %4 %5.(#0) | %5 %4.(#0)
+| | implementation = DeltaQuery
+| |   delta %4 %5.(#0)
+| |   delta %5 %4.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
@@ -482,7 +484,9 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 
 %3 =
 | Join %1 %2 (= #0 #1)
-| | implementation = DeltaQuery %1 %2.(#0) | %2 %1.(#0)
+| | implementation = DeltaQuery
+| |   delta %1 %2.(#0)
+| |   delta %2 %1.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
 
@@ -533,7 +537,9 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 
 %3 =
 | Join %1 %2 (= #0 #1)
-| | implementation = DeltaQuery %1 %2.(#0) | %2 %1.(#0)
+| | implementation = DeltaQuery
+| |   delta %1 %2.(#0)
+| |   delta %2 %1.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
 
