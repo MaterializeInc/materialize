@@ -816,116 +816,59 @@ where
             if !active {
                 return SourceStatus::Alive;
             }
-                if !read_persisted_files {
-                    let msgs = source_info.read_persisted_files(&persisted_files);
-                    for m in msgs {
-                        let ts_cap = cap.delayed(&m.2);
-                        output
-                            .session(&ts_cap)
-                            .give(Ok(SourceOutput::new(m.0, m.1, Some(m.3))));
-                    }
-                    read_persisted_files = true;
+            if !read_persisted_files {
+                let msgs = source_info.read_persisted_files(&persisted_files);
+                for m in msgs {
+                    let ts_cap = cap.delayed(&m.2);
+                    output
+                        .session(&ts_cap)
+                        .give(Ok(SourceOutput::new(m.0, m.1, Some(m.3))));
                 }
+                read_persisted_files = true;
+            }
 
-                // Bound execution of operator to prevent a single operator from hogging
-                // the CPU if there are many messages to process
-                let timer = Instant::now();
-                // Accumulate updates to BYTES_READ_COUNTER for Promethes metrics collection
-                let mut bytes_read = 0;
+            // Bound execution of operator to prevent a single operator from hogging
+            // the CPU if there are many messages to process
+            let timer = Instant::now();
+            // Accumulate updates to BYTES_READ_COUNTER for Promethes metrics collection
+            let mut bytes_read = 0;
 
-                // Record operator has been scheduled
-                consistency_info
-                    .source_metrics
-                    .operator_scheduled_counter
-                    .inc();
+            // Record operator has been scheduled
+            consistency_info
+                .source_metrics
+                .operator_scheduled_counter
+                .inc();
 
-                loop {
-                    match source_info.get_next_message(&mut consistency_info, &activator) {
-                        Ok(Some(message)) => {
-                            let partition = message.partition.clone();
-                            let offset = message.offset;
-                            let msg_predecessor = predecessor;
-                            predecessor = Some(offset);
+            loop {
+                match source_info.get_next_message(&mut consistency_info, &activator) {
+                    Ok(Some(message)) => {
+                        let partition = message.partition.clone();
+                        let offset = message.offset;
+                        let msg_predecessor = predecessor;
+                        predecessor = Some(offset);
 
-                            // Update ingestion metrics. Guaranteed to exist as the appropriate
-                            // entry gets created in SourceConstructor or when a new partition
-                            // is discovered
-                            consistency_info
-                                .partition_metrics
-                                .get_mut(&partition)
-                                .unwrap()
-                                .offset_received
-                                .set(offset.offset);
+                        // Update ingestion metrics. Guaranteed to exist as the appropriate
+                        // entry gets created in SourceConstructor or when a new partition
+                        // is discovered
+                        consistency_info
+                            .partition_metrics
+                            .get_mut(&partition)
+                            .unwrap()
+                            .offset_received
+                            .set(offset.offset);
 
-                            // Determine the timestamp to which we need to assign this message
-                            let ts = consistency_info.find_matching_timestamp(
-                                &id,
-                                &partition,
-                                offset,
-                                &timestamp_histories,
-                            );
-                            match ts {
-                                None => {
-                                    // We have not yet decided on a timestamp for this message,
-                                    // we need to buffer the message
-                                    source_info.buffer_message(message);
-                                    consistency_info.downgrade_capability(
-                                        &id,
-                                        cap,
-                                        source_info,
-                                        &timestamp_histories,
-                                    );
-                                    activator.activate();
-                                    return SourceStatus::Alive;
-                                }
-                                Some(ts) => {
-                                    source_info.persist_message(
-                                        &mut persistence_tx,
-                                        &message,
-                                        ts,
-                                        msg_predecessor,
-                                    );
-                                    // Note: empty and null payload/keys are currently
-                                    // treated as the same thing.
-                                    let key = message.key.unwrap_or_default();
-                                    let out = message.payload.unwrap_or_default();
-                                    // Entry for partition_metadata is guaranteed to exist as messages
-                                    // are only processed after we have updated the partition_metadata for a
-                                    // partition and created a partition queue for it.
-                                    consistency_info
-                                        .partition_metadata
-                                        .get_mut(&partition)
-                                        .unwrap()
-                                        .offset = offset;
-                                    bytes_read += key.len() as i64;
-                                    bytes_read += out.len().unwrap_or(0) as i64;
-                                    let ts_cap = cap.delayed(&ts);
-
-                                    output.session(&ts_cap).give(Ok(SourceOutput::new(
-                                        key,
-                                        out,
-                                        Some(offset.offset),
-                                    )));
-
-                                    // Update ingestion metrics
-                                    // Entry is guaranteed to exist as it gets created when we initialise the partition
-                                    let partition_metrics = consistency_info
-                                        .partition_metrics
-                                        .get_mut(&partition)
-                                        .unwrap();
-                                    partition_metrics.offset_ingested.set(offset.offset);
-                                    partition_metrics.messages_ingested.inc();
-                                }
-                            }
-
-                            //TODO(ncrooks): this behaviour should probably be made configurable
-                            if timer.elapsed().as_millis() > 10 {
-                                // We didn't drain the entire queue, so indicate that we
-                                // should run again.
-                                if bytes_read > 0 {
-                                    BYTES_READ_COUNTER.inc_by(bytes_read);
-                                }
-                                // Downgrade capability (if possible) before exiting
+                        // Determine the timestamp to which we need to assign this message
+                        let ts = consistency_info.find_matching_timestamp(
+                            &id,
+                            &partition,
+                            offset,
+                            &timestamp_histories,
+                        );
+                        match ts {
+                            None => {
+                                // We have not yet decided on a timestamp for this message,
+                                // we need to buffer the message
+                                source_info.buffer_message(message);
                                 consistency_info.downgrade_capability(
                                     &id,
                                     cap,
@@ -935,26 +878,83 @@ where
                                 activator.activate();
                                 return SourceStatus::Alive;
                             }
+                            Some(ts) => {
+                                source_info.persist_message(
+                                    &mut persistence_tx,
+                                    &message,
+                                    ts,
+                                    msg_predecessor,
+                                );
+                                // Note: empty and null payload/keys are currently
+                                // treated as the same thing.
+                                let key = message.key.unwrap_or_default();
+                                let out = message.payload.unwrap_or_default();
+                                // Entry for partition_metadata is guaranteed to exist as messages
+                                // are only processed after we have updated the partition_metadata for a
+                                // partition and created a partition queue for it.
+                                consistency_info
+                                    .partition_metadata
+                                    .get_mut(&partition)
+                                    .unwrap()
+                                    .offset = offset;
+                                bytes_read += key.len() as i64;
+                                bytes_read += out.len().unwrap_or(0) as i64;
+                                let ts_cap = cap.delayed(&ts);
+
+                                output.session(&ts_cap).give(Ok(SourceOutput::new(
+                                    key,
+                                    out,
+                                    Some(offset.offset),
+                                )));
+
+                                // Update ingestion metrics
+                                // Entry is guaranteed to exist as it gets created when we initialise the partition
+                                let partition_metrics = consistency_info
+                                    .partition_metrics
+                                    .get_mut(&partition)
+                                    .unwrap();
+                                partition_metrics.offset_ingested.set(offset.offset);
+                                partition_metrics.messages_ingested.inc();
+                            }
                         }
-                        Ok(None) => {
-                            // There were no new messages
-                            break;
-                        }
-                        Err(e) => {
-                            output.session(&cap).give(Err(e.to_string()));
+
+                        //TODO(ncrooks): this behaviour should probably be made configurable
+                        if timer.elapsed().as_millis() > 10 {
+                            // We didn't drain the entire queue, so indicate that we
+                            // should run again.
+                            if bytes_read > 0 {
+                                BYTES_READ_COUNTER.inc_by(bytes_read);
+                            }
+                            // Downgrade capability (if possible) before exiting
                             consistency_info.downgrade_capability(
                                 &id,
                                 cap,
                                 source_info,
                                 &timestamp_histories,
                             );
-                            return SourceStatus::Done;
+                            activator.activate();
+                            return SourceStatus::Alive;
                         }
                     }
+                    Ok(None) => {
+                        // There were no new messages
+                        break;
+                    }
+                    Err(e) => {
+                        output.session(&cap).give(Err(e.to_string()));
+                        consistency_info.downgrade_capability(
+                            &id,
+                            cap,
+                            source_info,
+                            &timestamp_histories,
+                        );
+                        return SourceStatus::Done;
+                    }
                 }
+            }
 
-                // Downgrade capability (if possible) before exiting
-                consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
+            // Downgrade capability (if possible) before exiting
+            consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
 
             // Ensure that we activate the source frequently enough to keep downgrading
             // capabilities, even when no data has arrived
