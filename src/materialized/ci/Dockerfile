@@ -13,4 +13,8 @@ RUN apt-get update && apt-get -qy install ca-certificates
 
 COPY kdestroy kinit materialized /usr/local/bin/
 
+RUN mkdir -p mzdata && chown 9000:9000 mzdata
+
+USER 9000:9000
+
 ENTRYPOINT ["materialized", "--log-file=stderr"]
