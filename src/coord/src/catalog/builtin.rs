@@ -267,6 +267,18 @@ lazy_static! {
         id: GlobalId::System(2015),
         index_id: GlobalId::System(2016),
     };
+    pub static ref MZ_INDEXES: BuiltinTable = BuiltinTable {
+        name: "mz_indexes",
+        desc: RelationDesc::empty()
+            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("on_global_id", ScalarType::String.nullable(false))
+            .with_column("field_number", ScalarType::Int64.nullable(true))
+            .with_column("expression", ScalarType::String.nullable(true))
+            .with_column("nullable", ScalarType::Bool.nullable(false))
+            .with_column("seq_in_index", ScalarType::Int64.nullable(false)),
+        id: GlobalId::System(2017),
+        index_id: GlobalId::System(2018),
+    };
 }
 
 pub const MZ_ADDRESSES_WITH_UNIT_LENGTHS: BuiltinView = BuiltinView {
@@ -467,6 +479,7 @@ lazy_static! {
             Builtin::Table(&MZ_DATABASES),
             Builtin::Table(&MZ_SCHEMAS),
             Builtin::Table(&MZ_COLUMNS),
+            Builtin::Table(&MZ_INDEXES),
             Builtin::View(&MZ_ADDRESSES_WITH_UNIT_LENGTHS),
             Builtin::View(&MZ_DATAFLOW_NAMES),
             Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),

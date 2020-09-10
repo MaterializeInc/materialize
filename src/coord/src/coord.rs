@@ -18,7 +18,7 @@
 
 use std::cmp;
 use std::collections::{BTreeMap, HashMap};
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
@@ -44,6 +44,7 @@ use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
     ScalarExpr, SourceInstanceId,
 };
+use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
 use sql::ast::display::AstDisplay;
@@ -61,11 +62,11 @@ use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_KAFKA_SINKS,
-    MZ_SCHEMAS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
+    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{
-    self, Catalog, CatalogItem, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
+    self, Catalog, CatalogItem, Index, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
 };
 use crate::persistence::{PersistenceConfig, Persister};
 use crate::session::{PreparedStatement, Session};
@@ -312,6 +313,9 @@ where
 
             if let Ok(desc) = item.desc(&name) {
                 coord.report_column_updates(desc, id, 1);
+            }
+            if let CatalogItem::Index(index) = item {
+                coord.report_index_update(id, &index, 1);
             }
         }
 
@@ -983,6 +987,73 @@ where
                         ),
                         Datum::from(column_type.nullable),
                         Datum::String(pgrepr::Type::from(&column_type.scalar_type).name()),
+                    ]),
+                    diff,
+                )),
+            )
+        }
+    }
+
+    /// Inserts or removes a row from [`builtin::MZ_INDEXES`] based on the supplied `diff`.
+    fn report_index_update(&mut self, global_id: GlobalId, index: &Index, diff: isize) {
+        self.report_index_update_inner(
+            global_id,
+            index,
+            index
+                .keys
+                .iter()
+                .map(|key| {
+                    key.typ(self.catalog.get_by_id(&index.on).desc().unwrap().typ())
+                        .nullable
+                })
+                .collect(),
+            diff,
+        )
+    }
+
+    // When updating the mz_indexes system table after dropping an index, it may no longer be possible
+    // to generate the 'nullable' information for that index. This function allows callers to bypass
+    // that computation and provide their own value, instead.
+    fn report_index_update_inner(
+        &mut self,
+        global_id: GlobalId,
+        index: &Index,
+        nullable: Vec<bool>,
+        diff: isize,
+    ) {
+        let key_sqls = match sql::parse::parse(index.create_sql.to_owned())
+            .expect("create_sql cannot be invalid")
+            .into_element()
+        {
+            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts.unwrap(),
+            _ => unreachable!(),
+        };
+        for (i, key) in index.keys.iter().enumerate() {
+            let nullable = *nullable
+                .get(i)
+                .expect("missing nullability information for index key");
+            let seq_in_index = i64::try_from(i + 1).expect("invalid index sequence number");
+            let key_sql = key_sqls
+                .get(i)
+                .expect("missing sql information for index key")
+                .to_string();
+            let (field_number, expression) = match key {
+                ScalarExpr::Column(col) => (
+                    Datum::Int64(i64::try_from(*col).expect("invalid index column number")),
+                    Datum::Null,
+                ),
+                _ => (Datum::Null, Datum::String(&key_sql)),
+            };
+            self.update_catalog_view(
+                MZ_INDEXES.id,
+                iter::once((
+                    Row::pack(&[
+                        Datum::String(&global_id.to_string()),
+                        Datum::String(&index.on.to_string()),
+                        field_number,
+                        expression,
+                        Datum::from(nullable),
+                        Datum::Int64(seq_in_index),
                     ]),
                     diff,
                 )),
@@ -2080,6 +2151,9 @@ where
                     if let Ok(desc) = item.desc(&name) {
                         self.report_column_updates(desc, *id, 1);
                     }
+                    if let CatalogItem::Index(index) = item.clone() {
+                        self.report_index_update(*id, &index, 1);
+                    }
                 }
                 catalog::OpStatus::UpdatedItem { id, from_name } => {
                     // Remove old name from mz_catalog_names.
@@ -2102,6 +2176,14 @@ where
                 } => {
                     self.report_schema_update(*database_id, *schema_id, schema_name, "USER", -1);
                 }
+                catalog::OpStatus::DroppedIndex { entry, nullable } => match entry.item() {
+                    CatalogItem::Index(index) => {
+                        indexes_to_drop.push(entry.id());
+                        self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
+                        self.report_index_update_inner(entry.id(), index, nullable.to_owned(), -1)
+                    }
+                    _ => unreachable!("DroppedIndex for non-index item"),
+                },
                 catalog::OpStatus::DroppedItem(entry) => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
                     match entry.item() {
@@ -2145,7 +2227,9 @@ where
                             // If the sink connector state is pending, the sink
                             // dataflow was never created, so nothing to drop.
                         }
-                        CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
+                        CatalogItem::Index(_) => {
+                            unreachable!("dropped indexes should be handled by DroppedIndex");
+                        }
                     }
                     if let Ok(desc) = entry.desc() {
                         self.report_column_updates(desc, entry.id(), -1);

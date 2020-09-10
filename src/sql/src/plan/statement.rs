@@ -44,7 +44,7 @@ use sql_parser::ast::{
     ShowCreateIndexStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
     ShowCreateTableStatement, ShowCreateViewStatement, ShowDatabasesStatement,
     ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
-    SqlOption, Statement, TableFactor, TableWithJoins, TailStatement, Value,
+    SqlOption, Statement, TableAlias, TableFactor, TableWithJoins, TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -744,53 +744,160 @@ fn handle_show_indexes(
         );
     }
 
-    let arena = RowArena::new();
-    let rows = from_entry
-        .used_by()
-        .iter()
-        .map(|id| scx.catalog.get_item_by_id(id))
-        .filter(|entry| {
-            CatalogItemType::Index == entry.item_type() && entry.uses() == vec![from_entry.id()]
-        })
-        .flat_map(|entry| {
-            let (keys, on) = entry.index_details().expect("known to be an index");
-            let key_sqls = match crate::parse::parse(entry.create_sql().to_owned())
-                .expect("create_sql cannot be invalid")
-                .into_element()
-            {
-                Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => {
-                    key_parts.unwrap()
-                }
-                _ => unreachable!(),
-            };
-            let mut row_subset = Vec::new();
-            for (i, (key_expr, key_sql)) in keys.iter().zip_eq(key_sqls).enumerate() {
-                let desc = scx.catalog.get_item_by_id(&on).desc().unwrap();
-                let key_sql = key_sql.to_string();
-                let (col_name, func) = match key_expr {
-                    expr::ScalarExpr::Column(i) => {
-                        let col_name = match desc.get_unambiguous_name(*i) {
-                            Some(col_name) => col_name.to_string(),
-                            None => format!("@{}", i + 1),
-                        };
-                        (Datum::String(arena.push_string(col_name)), Datum::Null)
-                    }
-                    _ => (Datum::Null, Datum::String(arena.push_string(key_sql))),
-                };
-                row_subset.push(vec![
-                    Datum::String(arena.push_string(from_entry.name().to_string())),
-                    Datum::String(arena.push_string(entry.name().to_string())),
-                    col_name,
-                    func,
-                    Datum::from(key_expr.typ(desc.typ()).nullable),
-                    Datum::from((i + 1) as i64),
-                ]);
-            }
-            row_subset
-        })
-        .collect();
+    let mut selection = Expr::BinaryOp {
+        left: Box::new(Expr::Identifier(vec![
+            Ident::new("on_mz_catalog_names"),
+            Ident::new("name"),
+        ])),
+        op: BinaryOperator::Eq,
+        right: Box::new(Expr::Value(Value::String(from_name.to_string()))),
+    };
+    if let Some(show_statement_filter) = filter_expr(filter, "name") {
+        selection = Expr::BinaryOp {
+            left: Box::new(selection),
+            op: BinaryOperator::And,
+            right: Box::new(show_statement_filter),
+        }
+    }
 
-    finish_show_where(scx, filter, rows, &SHOW_INDEXES_DESC)
+    let select = Select::default()
+        .from(TableWithJoins {
+            relation: TableFactor::Table {
+                name: ObjectName(vec![Ident::new("mz_indexes")]),
+                alias: None,
+            },
+            joins: vec![
+                Join {
+                    // Join to get the name for 'Source_or_view'.
+                    relation: TableFactor::Table {
+                        name: ObjectName(vec![Ident::new("mz_catalog_names")]),
+                        alias: Some(TableAlias {
+                            name: Ident::new("on_mz_catalog_names"),
+                            columns: vec![Ident::new("global_id"), Ident::new("name")],
+                            strict: false,
+                        }),
+                    },
+                    join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![
+                            Ident::new("on_mz_catalog_names"),
+                            Ident::new("global_id"),
+                        ])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_indexes"),
+                            Ident::new("on_global_id"),
+                        ])),
+                    })),
+                },
+                Join {
+                    // Join to get the name for 'Key_name'.
+                    relation: TableFactor::Table {
+                        name: ObjectName(vec![Ident::new("mz_catalog_names")]),
+                        alias: Some(TableAlias {
+                            name: Ident::new("mz_catalog_names"),
+                            columns: vec![Ident::new("global_id"), Ident::new("key_name")],
+                            strict: false,
+                        }),
+                    },
+                    join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_catalog_names"),
+                            Ident::new("global_id"),
+                        ])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_indexes"),
+                            Ident::new("global_id"),
+                        ])),
+                    })),
+                },
+                Join {
+                    // Join to get the name for 'Column_name'.
+                    relation: TableFactor::Table {
+                        name: ObjectName(vec![Ident::new("mz_columns")]),
+                        alias: Some(TableAlias {
+                            name: Ident::new("mz_columns"),
+                            columns: vec![
+                                Ident::new("global_id"),
+                                Ident::new("field_number"),
+                                Ident::new("column_name"),
+                            ],
+                            strict: false,
+                        }),
+                    },
+                    join_operator: JoinOperator::LeftOuter(JoinConstraint::On(Expr::BinaryOp {
+                        left: Box::new(Expr::BinaryOp {
+                            left: Box::new(Expr::Identifier(vec![
+                                Ident::new("mz_indexes"),
+                                Ident::new("on_global_id"),
+                            ])),
+                            op: BinaryOperator::Eq,
+                            right: Box::new(Expr::Identifier(vec![
+                                Ident::new("mz_columns"),
+                                Ident::new("global_id"),
+                            ])),
+                        }),
+                        op: BinaryOperator::And,
+                        right: Box::new(Expr::BinaryOp {
+                            left: Box::new(Expr::Identifier(vec![
+                                Ident::new("mz_indexes"),
+                                Ident::new("field_number"),
+                            ])),
+                            op: BinaryOperator::Eq,
+                            right: Box::new(Expr::Identifier(vec![
+                                Ident::new("mz_columns"),
+                                Ident::new("field_number"),
+                            ])),
+                        }),
+                    })),
+                },
+            ],
+        })
+        .selection(Some(selection))
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![
+                Ident::new("on_mz_catalog_names"),
+                Ident::new("name".to_owned()),
+            ]),
+            alias: None,
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("key_name")]),
+            alias: None,
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("column_name".to_owned())]),
+            alias: None,
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("expression".to_owned())]),
+            alias: None,
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![
+                Ident::new("mz_indexes"),
+                Ident::new("nullable".to_owned()),
+            ]),
+            alias: None,
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("seq_in_index".to_owned())]),
+            alias: None,
+        });
+
+    let mut query = Query::select(select);
+    query.order_by = vec![
+        OrderByExpr {
+            expr: Expr::Identifier(vec![Ident::new("key_name".to_owned())]),
+            asc: Some(true),
+        },
+        OrderByExpr {
+            expr: Expr::Identifier(vec![Ident::new("seq_in_index".to_owned())]),
+            asc: Some(true),
+        },
+    ];
+
+    handle_computed_select(scx, query)
 }
 
 /// Create an immediate result that describes all the columns for the given table
@@ -2087,6 +2194,20 @@ fn handle_select(
         finishing,
         materialize: true,
     })
+}
+
+fn handle_computed_select(scx: &StatementContext, query: Query) -> Result<Plan, anyhow::Error> {
+    handle_select(
+        scx,
+        SelectStatement {
+            query: Box::new(query),
+            as_of: None,
+        },
+        &Params {
+            datums: Row::pack(&[]),
+            types: vec![],
+        },
+    )
 }
 
 fn handle_explain(

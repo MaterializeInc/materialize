@@ -45,8 +45,8 @@ query TTTTBI colnames
 SHOW INDEX FROM foo
 ----
 Source_or_view          Key_name                            Column_name  Expression  Null   Seq_in_index
-materialize.public.foo  materialize.public.edge_columns     NULL         floor(c)    true   2
 materialize.public.foo  materialize.public.edge_columns     a            NULL        false  1
+materialize.public.foo  materialize.public.edge_columns     NULL         floor(c)    true   2
 materialize.public.foo  materialize.public.foo_idx          NULL         a␠+␠c       true   1
 materialize.public.foo  materialize.public.foo_primary_idx  a            NULL        false  1
 materialize.public.foo  materialize.public.foo_primary_idx  b            NULL        true   2

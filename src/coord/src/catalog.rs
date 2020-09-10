@@ -1162,10 +1162,22 @@ impl Catalog {
                             .position(|(idx_id, _keys)| *idx_id == id)
                             .expect("catalog out of sync");
                         indexes.remove(i);
+                        let nullable: Vec<bool> = index
+                            .keys
+                            .iter()
+                            .map(|key| {
+                                key.typ(self.get_by_id(&index.on).desc().unwrap().typ())
+                                    .nullable
+                            })
+                            .collect();
+                        OpStatus::DroppedIndex {
+                            entry: metadata,
+                            nullable,
+                        }
                     } else {
                         self.indexes.remove(&id);
+                        OpStatus::DroppedItem(metadata)
                     }
-                    OpStatus::DroppedItem(metadata)
                 }
 
                 Action::UpdateItem {
@@ -1454,6 +1466,10 @@ pub enum OpStatus {
         database_id: i64,
         schema_id: i64,
         schema_name: String,
+    },
+    DroppedIndex {
+        entry: CatalogEntry,
+        nullable: Vec<bool>,
     },
     DroppedItem(CatalogEntry),
     UpdatedItem {
