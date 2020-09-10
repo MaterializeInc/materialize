@@ -24,7 +24,7 @@ streams.
 
 ```sql
 CREATE SOURCE json_kafka
-KAFKA BROKER 'localhost:9092' TOPIC 'json'
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'json'
 FORMAT BYTES;
 ```
 
