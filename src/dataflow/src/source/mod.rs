@@ -813,7 +813,9 @@ where
                 }
             };
 
-            if active {
+            if !active {
+                return SourceStatus::Alive;
+            }
                 if !read_persisted_files {
                     let msgs = source_info.read_persisted_files(&persisted_files);
                     for m in msgs {
@@ -953,7 +955,6 @@ where
 
                 // Downgrade capability (if possible) before exiting
                 consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
-            }
 
             // Ensure that we activate the source frequently enough to keep downgrading
             // capabilities, even when no data has arrived
