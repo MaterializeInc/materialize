@@ -104,7 +104,7 @@ Check out [our documentation](https://materialize.io/docs/).
 
 Materialize is source-available and [licensed](LICENSE) under the BSL 1.1, converting to the open-source Apache 2.0 license after 4 years. As stated in the BSL, Materialize is free forever on a single node.
 
-Materialize is also available as [a paid cloud service](https://materialize.io/cloud-3/) with additional features such as high availability via multi-active replication.
+Materialize is also available as [a paid cloud service](https://materialize.io/download/) with additional features such as high availability via multi-active replication.
 
 ## How does it work?
 
