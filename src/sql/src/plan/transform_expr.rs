@@ -161,6 +161,11 @@ pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
                 outers.push(input.typ(&outers, &NO_PARAMS));
                 for scalar in scalars {
                     walk_scalar(scalar, &outers, false);
+                    let (inner, outers) = outers
+                        .split_last_mut()
+                        .expect("outers known to have at least one element");
+                    let scalar_type = scalar.typ(&outers, inner, &NO_PARAMS);
+                    inner.column_types.push(scalar_type);
                 }
             }
             RelationExpr::Filter { predicates, input } => {
