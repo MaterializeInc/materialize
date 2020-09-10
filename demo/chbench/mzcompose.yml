@@ -444,6 +444,7 @@ mzconduct:
         PEEKER_PORT: "16875:16875"
         MYSQL_EXPORTER_PORT: "9399:9399"
         NUM_WAREHOUSES: ${NUM_WAREHOUSES:-1}
+        OLTP_THREADS: ${OLTP_THREADS:-1}
       steps:
       - step: workflow
         workflow: bring-up-mysql-kafka
@@ -463,14 +464,27 @@ mzconduct:
         host: ${MZ_HOST:-materialized}
         port: 6875
         timeout_secs: 300
-      - step: workflow
-        workflow: heavy-load
+      - step: run
+        service: chbench
+        daemon: true
+        command: >-
+          run
+          --dsn=mysql --gen-dir=/var/lib/mysql-files
+          --analytic-threads=0
+          --transactional-threads=${OLTP_THREADS:-1}
+          --warmup-seconds=300
+          --run-seconds=1200
+          -l /dev/stdout
+          --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
+          --mz-url=postgresql://${MZ_HOST:-materialized}:6875/materialize?sslmode=disable
       - step: run
         service: peeker
         daemon: true
         command: >-
           --queries ${PEEKER_QUERIES:-loadtest}
           --materialized-url postgres://ignoreuser@${MZ_HOST:-materialized}:6875/materialize
+          --warmup-seconds=300
+          --run-seconds=1200
       - step: ensure-stays-up
         container: peeker
         seconds: 10

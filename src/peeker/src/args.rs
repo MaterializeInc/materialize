@@ -31,6 +31,8 @@ pub struct Args {
     pub only_initialize: bool,
     pub init_attempts: u16,
     pub config: Config,
+    pub warmup_secs: u32,
+    pub run_secs: u32,
 }
 
 impl Args {
@@ -74,6 +76,18 @@ impl Args {
             "How many times to try and initialize. Default: 10",
             "ATTEMPTS",
         );
+        opts.optopt(
+            "",
+            "warmup-seconds",
+            "How long to wait before connecting to Materialize. Default: 0",
+            "WARMUP",
+        );
+        opts.optopt(
+            "",
+            "run-seconds",
+            "How long to run before shutting down, value of 0 never shuts down. Default: 0",
+            "RUN",
+        );
         let popts = match opts.parse(&args[1..]) {
             Ok(popts) => {
                 if popts.opt_present("h") {
@@ -94,6 +108,18 @@ impl Args {
             .transpose()
             .map_err(|e| format!("Error parsing --init-attempts: {}", e))?
             .unwrap_or(10);
+        let warmup_secs = popts
+            .opt_str("warmup-seconds")
+            .map(|s| s.parse())
+            .transpose()
+            .map_err(|e| format!("Error parsing --warmup-seconds: {}", e))?
+            .unwrap_or(0);
+        let run_secs = popts
+            .opt_str("run-seconds")
+            .map(|s| s.parse())
+            .transpose()
+            .map_err(|e| format!("Error parsing --run-seconds: {}", e))?
+            .unwrap_or(u32::MAX);
 
         let config = load_config(popts.opt_str("config-file"), popts.opt_str("queries"))?;
 
@@ -110,6 +136,8 @@ impl Args {
             only_initialize: popts.opt_present("only-initialize"),
             init_attempts,
             config,
+            warmup_secs,
+            run_secs,
         })
     }
 }
