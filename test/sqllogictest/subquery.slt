@@ -672,5 +672,14 @@ SELECT * FROM
 ----
 1  1  1  1
 
+# Regression test for #4157, in which quantified expression simplification
+# failed to handle map expressions which depended upon a column introduced by
+# an earlier expression in the same map node.
+query I
+SELECT (SELECT 1 FROM ((SELECT col1) UNION (SELECT 1)))
+FROM (SELECT 1 col1)
+----
+1
+
 query error aggregate functions that refer exclusively to outer columns not yet supported
 SELECT (SELECT count(likes.likee)) FROM likes
