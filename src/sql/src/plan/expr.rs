@@ -689,39 +689,55 @@ impl RelationExpr {
     }
 
     /// Replaces any parameter references in the expression with the
-    /// corresponding datum from `parameters`.
-    pub fn bind_parameters(&mut self, parameters: &Params) {
-        self.visit_mut(&mut |e| match e {
-            RelationExpr::Join { on, .. } => on.bind_parameters(parameters),
-            RelationExpr::Map { scalars, .. } => {
+    /// corresponding datum from `params`.
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
+        match self {
+            RelationExpr::Join {
+                on, left, right, ..
+            } => {
+                on.bind_parameters(params)?;
+                left.bind_parameters(params)?;
+                right.bind_parameters(params)
+            }
+            RelationExpr::Map { scalars, input } => {
                 for scalar in scalars {
-                    scalar.bind_parameters(parameters);
+                    scalar.bind_parameters(params)?;
                 }
+                input.bind_parameters(params)
             }
             RelationExpr::CallTable { exprs, .. } => {
                 for expr in exprs {
-                    expr.bind_parameters(parameters);
+                    expr.bind_parameters(params)?;
                 }
+                Ok(())
             }
-            RelationExpr::Filter { predicates, .. } => {
+            RelationExpr::Filter { predicates, input } => {
                 for predicate in predicates {
-                    predicate.bind_parameters(parameters);
+                    predicate.bind_parameters(params)?;
                 }
+                input.bind_parameters(params)
             }
-            RelationExpr::Reduce { aggregates, .. } => {
+            RelationExpr::Reduce {
+                aggregates, input, ..
+            } => {
                 for aggregate in aggregates {
-                    aggregate.bind_parameters(parameters);
+                    aggregate.bind_parameters(params)?;
                 }
+                input.bind_parameters(params)
             }
-            RelationExpr::Constant { .. }
-            | RelationExpr::Get { .. }
-            | RelationExpr::Project { .. }
-            | RelationExpr::Distinct { .. }
-            | RelationExpr::TopK { .. }
-            | RelationExpr::Negate { .. }
-            | RelationExpr::Threshold { .. }
-            | RelationExpr::Union { .. } => (),
-        })
+            RelationExpr::Union { base, inputs } => {
+                for input in inputs {
+                    input.bind_parameters(params)?;
+                }
+                base.bind_parameters(params)
+            }
+            RelationExpr::Project { input, .. }
+            | RelationExpr::Distinct { input, .. }
+            | RelationExpr::TopK { input, .. }
+            | RelationExpr::Negate { input, .. }
+            | RelationExpr::Threshold { input, .. } => input.bind_parameters(params),
+            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => Ok(()),
+        }
     }
 
     /// Constructs a constant collection from specific rows and schema.
@@ -759,34 +775,39 @@ impl RelationExpr {
 impl ScalarExpr {
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `parameters`.
-    pub fn bind_parameters(&mut self, parameters: &Params) {
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
         match self {
-            ScalarExpr::Literal(_, _) | ScalarExpr::Column(_) | ScalarExpr::CallNullary(_) => (),
+            ScalarExpr::Literal(_, _) | ScalarExpr::Column(_) | ScalarExpr::CallNullary(_) => {
+                Ok(())
+            }
             ScalarExpr::Parameter(n) => {
-                let datum = parameters.datums.iter().nth(*n - 1).unwrap();
-                let scalar_type = &parameters.types[*n - 1];
+                let datum = match params.datums.iter().nth(*n - 1) {
+                    None => bail!("there is no parameter ${}", n),
+                    Some(datum) => datum,
+                };
+                let scalar_type = &params.types[*n - 1];
                 let row = Row::pack(&[datum]);
                 let column_type = scalar_type.clone().nullable(datum.is_null());
                 *self = ScalarExpr::Literal(row, column_type);
+                Ok(())
             }
-            ScalarExpr::CallUnary { expr, .. } => expr.bind_parameters(parameters),
+            ScalarExpr::CallUnary { expr, .. } => expr.bind_parameters(params),
             ScalarExpr::CallBinary { expr1, expr2, .. } => {
-                expr1.bind_parameters(parameters);
-                expr2.bind_parameters(parameters);
+                expr1.bind_parameters(params)?;
+                expr2.bind_parameters(params)
             }
             ScalarExpr::CallVariadic { exprs, .. } => {
                 for expr in exprs {
-                    expr.bind_parameters(parameters);
+                    expr.bind_parameters(params)?;
                 }
+                Ok(())
             }
             ScalarExpr::If { cond, then, els } => {
-                cond.bind_parameters(parameters);
-                then.bind_parameters(parameters);
-                els.bind_parameters(parameters);
+                cond.bind_parameters(params)?;
+                then.bind_parameters(params)?;
+                els.bind_parameters(params)
             }
-            ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
-                expr.bind_parameters(parameters);
-            }
+            ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => expr.bind_parameters(params),
         }
     }
 
@@ -1030,8 +1051,8 @@ impl ScalarTypeable for ScalarExpr {
 impl AggregateExpr {
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `parameters`.
-    pub fn bind_parameters(&mut self, parameters: &Params) {
-        self.expr.bind_parameters(parameters);
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
+        self.expr.bind_parameters(params)
     }
 
     pub fn typ(
