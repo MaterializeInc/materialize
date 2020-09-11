@@ -24,6 +24,7 @@ use std::collections::HashMap;
 
 use crate::TransformArgs;
 use expr::{Id, RelationExpr, ScalarExpr};
+use itertools::Itertools;
 
 /// Hoist literal values from maps wherever possible.
 #[derive(Debug)]
@@ -418,28 +419,41 @@ impl LiteralLifting {
             }
             RelationExpr::Union { base, inputs } => {
                 let mut base_literals = self.action(base, gets);
-                for input in inputs {
-                    let mut input_literals = self.action(input, gets);
+                let mut input_literals = inputs
+                    .iter_mut()
+                    .map(|input| self.action(input, gets))
+                    .collect::<Vec<Vec<ScalarExpr>>>();
 
-                    let mut results = Vec::new();
-                    while !base_literals.is_empty() && base_literals.last() == input_literals.last()
-                    {
-                        base_literals.pop();
-                        results.push(input_literals.pop().unwrap());
-                    }
-                    results.reverse();
-
-                    if !base_literals.is_empty() {
-                        **base = base.take_dangerous().map(base_literals);
-                    }
-                    if !input_literals.is_empty() {
-                        *input = input.take_dangerous().map(input_literals);
+                // We need to find the longest common suffix between all the arms of the union.
+                let mut suffix = Vec::new();
+                while let Some(lit) = base_literals.last() {
+                    if !input_literals.iter().all(|lits| lits.last() == Some(lit)) {
+                        break;
                     }
 
-                    // TODO(frank): extract non-terminal literals.
-                    base_literals = results;
+                    // Every arm agrees on the last value, so push it onto the shared suffix and
+                    // remove it from each arm.
+                    suffix.push(lit.clone());
+                    base_literals.pop();
+                    for lits in input_literals.iter_mut() {
+                        lits.pop();
+                    }
                 }
-                base_literals
+
+                // Because we pushed stuff onto the vector like a stack, we need to reverse it now.
+                suffix.reverse();
+
+                // Any remaining literals for each expression must be appended to that expression,
+                // while the shared suffix is returned to continue traveling upwards.
+                if !base_literals.is_empty() {
+                    **base = base.take_dangerous().map(base_literals);
+                }
+                for (input, literals) in inputs.iter_mut().zip_eq(input_literals) {
+                    if !literals.is_empty() {
+                        *input = input.take_dangerous().map(literals);
+                    }
+                }
+                suffix
             }
             RelationExpr::ArrangeBy { input, keys } => {
                 // TODO(frank): Not sure if this is the right behavior,
