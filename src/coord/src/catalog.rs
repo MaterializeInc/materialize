@@ -113,7 +113,7 @@ lazy_static! {
 #[derive(Debug, Serialize)]
 pub struct Schema {
     pub id: i64,
-    items: BTreeMap<String, GlobalId>,
+    pub items: BTreeMap<String, GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -887,6 +887,8 @@ impl Catalog {
             },
             CreateItem {
                 id: GlobalId,
+                database_id: i64,
+                schema_id: i64,
                 name: FullName,
                 item: CatalogItem,
             },
@@ -943,12 +945,13 @@ impl Catalog {
                     }]
                 }
                 Op::CreateItem { id, name, item } => {
-                    if item.is_temporary() {
+                    let (database_id, schema_id) = if item.is_temporary() {
                         if name.database != DatabaseSpecifier::Ambient
                             || name.schema != MZ_TEMP_SCHEMA
                         {
                             return Err(Error::new(ErrorKind::InvalidTemporarySchema));
                         }
+                        (AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID)
                     } else {
                         if item.uses().iter().any(|id| match self.try_get_by_id(*id) {
                             Some(entry) => entry.item().is_temporary(),
@@ -969,9 +972,16 @@ impl Catalog {
                         let schema_id = tx.load_schema_id(database_id, &name.schema)?;
                         let serialized_item = self.serialize_item(&item);
                         tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
-                    }
+                        (database_id, schema_id)
+                    };
 
-                    vec![Action::CreateItem { id, name, item }]
+                    vec![Action::CreateItem {
+                        id,
+                        database_id,
+                        schema_id,
+                        name,
+                        item,
+                    }]
                 }
                 Op::DropDatabase { name } => {
                     tx.remove_database(&name)?;
@@ -1106,9 +1116,21 @@ impl Catalog {
                     }
                 }
 
-                Action::CreateItem { id, name, item } => {
+                Action::CreateItem {
+                    id,
+                    database_id,
+                    schema_id,
+                    name,
+                    item,
+                } => {
                     self.insert_item(id, name.clone(), item.clone());
-                    OpStatus::CreatedItem { id, name, item }
+                    OpStatus::CreatedItem {
+                        id,
+                        database_id,
+                        schema_id,
+                        name,
+                        item,
+                    }
                 }
 
                 Action::DropDatabase { name } => match self.by_name.remove(&name).map(|db| db.id) {
@@ -1147,9 +1169,17 @@ impl Catalog {
                         }
                     }
 
+                    let database_id = self
+                        .by_name
+                        .get(&metadata.name().database.to_string())
+                        .expect("database must exist")
+                        .id;
                     let conn_id = metadata.item.conn_id().unwrap_or(SYSTEM_CONN_ID);
-                    self.get_schema_mut(&metadata.name.database, &metadata.name.schema, conn_id)
-                        .expect("catalog out of sync")
+                    let schema = self
+                        .get_schema_mut(&metadata.name.database, &metadata.name.schema, conn_id)
+                        .expect("catalog out of sync");
+                    let schema_id = schema.id;
+                    schema
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
@@ -1171,13 +1201,20 @@ impl Catalog {
                                     .nullable
                             })
                             .collect();
-                        OpStatus::DroppedIndex {
+                        OpStatus::DroppedItem {
+                            database_id,
+                            schema_id,
                             entry: metadata,
-                            nullable,
+                            nullable: Some(nullable),
                         }
                     } else {
                         self.indexes.remove(&id);
-                        OpStatus::DroppedItem(metadata)
+                        OpStatus::DroppedItem {
+                            database_id,
+                            schema_id,
+                            entry: metadata,
+                            nullable: None,
+                        }
                     }
                 }
 
@@ -1456,6 +1493,8 @@ pub enum OpStatus {
     },
     CreatedItem {
         id: GlobalId,
+        database_id: i64,
+        schema_id: i64,
         name: FullName,
         item: CatalogItem,
     },
@@ -1468,11 +1507,12 @@ pub enum OpStatus {
         schema_id: i64,
         schema_name: String,
     },
-    DroppedIndex {
+    DroppedItem {
+        database_id: i64,
+        schema_id: i64,
         entry: CatalogEntry,
-        nullable: Vec<bool>,
+        nullable: Option<Vec<bool>>, // Only used for dropped Indexes
     },
-    DroppedItem(CatalogEntry),
     UpdatedItem {
         id: GlobalId,
         from_name: FullName,

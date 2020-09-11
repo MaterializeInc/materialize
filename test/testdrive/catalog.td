@@ -30,6 +30,8 @@ s
 ! CREATE SCHEMA s
 schema 's' already exists
 
+> SELECT * FROM mz_objects WHERE database_id != -1
+
 # Dropping a schema with a view should only succeed with CASCADE.
 > CREATE VIEW s.v AS SELECT 1
 ! DROP SCHEMA s
@@ -92,6 +94,12 @@ s
 VIEWS
 -----
 v1
+
+> SELECT b.name FROM mz_objects AS a INNER JOIN mz_catalog_names AS b ON a.global_id = b.global_id WHERE database_id != -1
+name
+-----
+d.public.v1
+d.public.v1_primary_idx
 
 # Setting the session database should update name resolution appropriately.
 > SET DATABASE = d
@@ -172,6 +180,10 @@ unknown database 'noexist'
 > CREATE VIEW d1.s1.t as select 1;
 > CREATE VIEW d1.public.tt as select * from d1.s1.t;
 > DROP DATABASE d1;
+> SELECT b.name FROM mz_objects AS a INNER JOIN mz_catalog_names AS b ON a.global_id = b.global_id WHERE database_id != -1
+name
+-----
+materialize.public.v
 
 # Dropping database with cross-database dependencies is ok and drops the
 # dependent views.
@@ -224,6 +236,7 @@ mz_databases
 mz_schemas
 mz_columns
 mz_indexes
+mz_objects
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length
