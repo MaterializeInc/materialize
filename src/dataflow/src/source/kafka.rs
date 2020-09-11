@@ -29,7 +29,7 @@ use dataflow_types::{
 };
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
-use log::{error, info, log_enabled, warn};
+use log::{debug, error, info, log_enabled, warn};
 use repr::Timestamp;
 
 use crate::server::{
@@ -342,23 +342,26 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         self.buffered_metadata.insert(consumer.pid);
     }
 
-    // TODO(rkhaitan): reading files all in one shot like this could cause the system to become
-    // unresponsive
-    fn read_persisted_files(&self) -> Vec<(Vec<u8>, Vec<u8>, Timestamp, i64)> {
-        self.persisted_files
-            .iter()
-            .flat_map(|f| {
-                let data = fs::read(f).unwrap_or_else(|e| {
-                    error!(
-                        "failed to read source persistence file {}: {}",
-                        f.display(),
-                        e
-                    );
-                    vec![]
-                });
-                RecordIter { data, offset: 0 }.map(|r| (r.key, r.value, r.timestamp, r.offset))
-            })
-            .collect()
+    fn next_persisted_file(&mut self) -> Option<Vec<(Vec<u8>, Vec<u8>, Timestamp, i64)>> {
+        if let Some(f) = &self.persisted_files.pop() {
+            debug!("reading persisted data from {}", f.display());
+            let data = fs::read(f).unwrap_or_else(|e| {
+                error!(
+                    "failed to read source persistence file {}: {}",
+                    f.display(),
+                    e
+                );
+                vec![]
+            });
+
+            Some(
+                RecordIter { data, offset: 0 }
+                    .map(|r| (r.key, r.value, r.timestamp, r.offset))
+                    .collect(),
+            )
+        } else {
+            None
+        }
     }
 
     fn persist_message(
@@ -453,12 +456,12 @@ impl KafkaSourceInfo {
                     })
                     .collect::<Vec<_>>();
 
+                // Sort the list in reverse order so we can pop items off of it in
+                // order of increasing `start_offset`
                 filtered.sort_by_key(|(_, metadata)| match metadata {
-                    Ok(Some(meta)) => meta.start_offset,
+                    Ok(Some(meta)) => -meta.start_offset,
                     _ => unreachable!(),
                 });
-                // Reverse the list so we can pop elements off it in sorted order
-                filtered.reverse();
 
                 filtered.iter().map(|(f, _)| (*f).clone()).collect()
             })

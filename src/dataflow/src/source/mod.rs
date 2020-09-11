@@ -313,11 +313,13 @@ pub trait SourceInfo<Out> {
         // Default implementation is to do nothing
     }
 
-    /// Read back any files we previously persisted
+    /// Read back data from a previously persisted file.
+    /// Reads messages back from files in offset order, and returns None when there is
+    /// no more data left to process
     /// TODO(rkhaitan): clean this up to return a proper type and potentially a iterator.
-    fn read_persisted_files(&self) -> Vec<(Vec<u8>, Out, Timestamp, i64)> {
+    fn next_persisted_file(&mut self) -> Option<Vec<(Vec<u8>, Out, Timestamp, i64)>> {
         error!("unimplemented: this source does not support reading persisted files");
-        vec![]
+        None
     }
 }
 
@@ -809,14 +811,23 @@ where
 
             if active {
                 if !read_persisted_files {
-                    let msgs = source_info.read_persisted_files();
-                    for m in msgs {
-                        let ts_cap = cap.delayed(&m.2);
-                        output
-                            .session(&ts_cap)
-                            .give(Ok(SourceOutput::new(m.0, m.1, Some(m.3))));
+                    if let Some(msgs) = source_info.next_persisted_file() {
+                        for m in msgs {
+                            let ts_cap = cap.delayed(&m.2);
+                            output.session(&ts_cap).give(Ok(SourceOutput::new(
+                                m.0,
+                                m.1,
+                                Some(m.3),
+                            )));
+                        }
+
+                        // Yield to give downstream operators time to handle this data.
+                        activator.activate_after(Duration::from_millis(10));
+                        return SourceStatus::Alive;
+                    } else {
+                        // We've finished reading all persistence data
+                        read_persisted_files = true;
                     }
-                    read_persisted_files = true;
                 }
 
                 // Bound execution of operator to prevent a single operator from hogging
