@@ -116,10 +116,15 @@ Expected end of statement, found: RESTRICT
 
 # DROP DATABASE should succeed even when there are objects in the database.
 > DROP DATABASE d
-! SHOW DATABASES
-unknown database 'd'
-! SELECT * FROM mz_catalog.mz_databases
-unknown database 'd'
+# SHOW DATABASES should work, even if the current database has been dropped.
+> SHOW DATABASES
+database
+----
+materialize
+> SELECT * FROM mz_catalog.mz_databases
+id          database
+-----------------------
+1           materialize
 
 # The session database should remain set to the dropped database, but future
 # queries that depend on the session database should fail with sensible error
@@ -127,7 +132,7 @@ unknown database 'd'
 > SHOW DATABASE
 d
 ! SELECT * FROM v
-unknown database 'd'
+unknown catalog item 'v'
 
 # But queries that do not depend on the session database should work fine.
 > CREATE VIEW materialize.public.v AS SELECT 1

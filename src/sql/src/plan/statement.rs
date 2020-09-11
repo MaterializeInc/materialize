@@ -539,7 +539,7 @@ fn handle_show_databases(
     let select = Select::default()
         .from(TableWithJoins {
             relation: TableFactor::Table {
-                name: ObjectName(vec![Ident::new("mz_databases")]),
+                name: ObjectName(vec![Ident::new("mz_catalog"), Ident::new("mz_databases")]),
                 alias: None,
             },
             joins: vec![],

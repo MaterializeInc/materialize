@@ -547,7 +547,8 @@ impl Catalog {
         } else {
             match self.get_schema(current_database, schema_name, conn_id) {
                 Ok(_) => Ok(current_database.clone()),
-                Err(SqlCatalogError::UnknownSchema(_)) => self
+                Err(SqlCatalogError::UnknownSchema(_))
+                | Err(SqlCatalogError::UnknownDatabase(_)) => self
                     .get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id)
                     .map(|_| DatabaseSpecifier::Ambient),
                 Err(e) => Err(e),
