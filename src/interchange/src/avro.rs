@@ -30,7 +30,7 @@ use mz_avro::schema::{
     SchemaPieceOrNamed,
 };
 use mz_avro::{
-    give_value,
+    define_unexpected, give_value,
     types::{DecimalValue, Scalar, Value},
     AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, GeneralDeserializer,
     StatefulAvroDecodeable, TrivialDecoder, ValueDecoder, ValueOrReader,
@@ -146,6 +146,9 @@ impl<'a> AvroDecode for AvroStringDecoder<'a> {
         }
         Ok(())
     }
+    define_unexpected! {
+        record, union_branch, array, map, enum_variant, scalar, decimal, bytes, json, uuid, fixed
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -198,6 +201,9 @@ impl AvroDecode for AvroDbzSnapshotDecoder {
                 String::from_utf8_lossy(s)
             ),
         }))
+    }
+    define_unexpected! {
+        record, array, map, enum_variant, decimal, bytes, json, uuid, fixed
     }
 }
 
@@ -279,6 +285,9 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
         };
         Ok(DebeziumSourceCoordinates { snapshot, row })
     }
+    define_unexpected! {
+        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+    }
 }
 struct OptionalRowDecoder<'a> {
     pub packer: &'a mut RowPacker,
@@ -307,6 +316,9 @@ impl<'a> AvroDecode for OptionalRowDecoder<'a> {
             deserializer.deserialize(reader, d)?;
             Ok(true)
         }
+    }
+    define_unexpected! {
+        record, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
     }
 }
 
@@ -366,6 +378,9 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
         }
         Ok((DiffPair { before, after }, coords))
     }
+    define_unexpected! {
+        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+    }
 }
 
 struct RowDecoder {
@@ -385,6 +400,9 @@ impl AvroDecode for RowDecoder {
         inner.record(a)?;
         let row = packer_borrow.finish_and_reuse();
         Ok(RowWrapper(row))
+    }
+    define_unexpected! {
+        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
     }
 }
 
@@ -630,6 +648,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         *self.buf = str_buf;
         Ok(())
     }
+    define_unexpected! {map}
 }
 
 /// Converts an Apache Avro schema into a list of column names and types.
@@ -1955,8 +1974,8 @@ pub mod cdc_v2 {
     use mz_avro::schema::Schema;
     use mz_avro::types::Value;
     use mz_avro::{
-        ArrayAsVecDecoder, AvroDecode, AvroDecodeable, AvroDeserializer, AvroRead,
-        StatefulAvroDecodeable,
+        define_unexpected, ArrayAsVecDecoder, AvroDecode, AvroDecodeable, AvroDeserializer,
+        AvroRead, StatefulAvroDecodeable,
     };
     use std::{cell::RefCell, rc::Rc};
 
@@ -2096,6 +2115,9 @@ pub mod cdc_v2 {
 
                 _ => bail!("Unrecognized union branch!"),
             }
+        }
+        define_unexpected! {
+            record, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
         }
     }
 
