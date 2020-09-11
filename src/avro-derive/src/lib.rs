@@ -162,6 +162,9 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
                     #(#return_fields),*
                 })
             }
+            ::mz_avro::define_unexpected! {
+                union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+            }
         }
         impl ::mz_avro::StatefulAvroDecodeable for #name {
             type Decoder = #decoder_name;

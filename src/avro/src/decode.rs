@@ -507,11 +507,106 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
     }
 }
 
+#[macro_export]
+macro_rules! define_unexpected {
+    (record) => {
+        fn record<R: $crate::AvroRead, A: $crate::AvroRecordAccess<R>>(
+            self,
+            _a: &mut A,
+        ) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected record");
+        }
+    };
+    (union_branch) => {
+        fn union_branch<'avro_macro_lifetime, R: $crate::AvroRead, D: $crate::AvroDeserializer>(
+            self,
+            _idx: usize,
+            _n_variants: usize,
+            _null_variant: Option<usize>,
+            _deserializer: D,
+            _reader: &'avro_macro_lifetime mut R,
+        ) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected union");
+        }
+    };
+    (array) => {
+        fn array<A: $crate::AvroArrayAccess>(self, _a: &mut A) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected array");
+        }
+    };
+    (map) => {
+        fn map<M: $crate::AvroMapAccess>(self, _m: &mut M) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected map");
+        }
+    };
+    (enum_variant) => {
+        fn enum_variant(self, _symbol: &str, _idx: usize) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected enum");
+        }
+    };
+    (scalar) => {
+        fn scalar(self, _scalar: $crate::types::Scalar) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected scalar");
+        }
+    };
+    (decimal) => {
+        fn decimal<'avro_macro_lifetime, R: AvroRead>(
+            self,
+            _precision: usize,
+            _scale: usize,
+            _r: $crate::ValueOrReader<'avro_macro_lifetime, &'avro_macro_lifetime [u8], R>,
+        ) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected decimal");
+        }
+    };
+    (bytes) => {
+        fn bytes<'avro_macro_lifetime, R: AvroRead>(
+            self,
+            _r: $crate::ValueOrReader<'avro_macro_lifetime, &'avro_macro_lifetime [u8], R>,
+        ) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected bytes");
+        }
+    };
+    (string) => {
+        fn string<'avro_macro_lifetime, R: AvroRead>(
+            self,
+            _r: $crate::ValueOrReader<'avro_macro_lifetime, &'avro_macro_lifetime str, R>,
+        ) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected string");
+        }
+    };
+    (json) => {
+        fn json<'avro_macro_lifetime, R: AvroRead>(
+            self,
+            _r: $crate::ValueOrReader<'avro_macro_lifetime, &'avro_macro_lifetime serde_json::Value, R>,
+        ) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected json");
+        }
+    };
+    (uuid) => {
+        fn uuid<'avro_macro_lifetime, R: AvroRead>(
+            self,
+            _r: $crate::ValueOrReader<'avro_macro_lifetime, &'avro_macro_lifetime [u8], R>,
+        ) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected uuid");
+        }
+    };
+    (fixed) => {
+        fn fixed<'avro_macro_lifetime, R: AvroRead>(
+            self,
+            _r: $crate::ValueOrReader<'avro_macro_lifetime, &'avro_macro_lifetime [u8], R>,
+        ) -> Result<Self::Out, ::anyhow::Error> {
+            bail!("Unexpected fixed");
+        }
+    };
+    ($($kind:ident),+) => {
+        $($crate::define_unexpected!{$kind})+
+    }
+}
+
 pub trait AvroDecode: Sized {
     type Out;
-    fn record<R: AvroRead, A: AvroRecordAccess<R>>(self, _a: &mut A) -> Result<Self::Out, Error> {
-        bail!("Unexpected record");
-    }
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(self, _a: &mut A) -> Result<Self::Out, Error>;
 
     fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
         self,
@@ -520,61 +615,33 @@ pub trait AvroDecode: Sized {
         _null_variant: Option<usize>,
         _deserializer: D,
         _reader: &'a mut R,
-    ) -> Result<Self::Out, Error> {
-        bail!("Unexpected union");
-    }
+    ) -> Result<Self::Out, Error>;
 
-    fn array<A: AvroArrayAccess>(self, _a: &mut A) -> Result<Self::Out, Error> {
-        bail!("Unexpected array");
-    }
+    fn array<A: AvroArrayAccess>(self, _a: &mut A) -> Result<Self::Out, Error>;
 
-    fn map<M: AvroMapAccess>(self, _m: &mut M) -> Result<Self::Out, Error> {
-        bail!("Unexpected map");
-    }
+    fn map<M: AvroMapAccess>(self, _m: &mut M) -> Result<Self::Out, Error>;
 
-    fn enum_variant(self, _symbol: &str, _idx: usize) -> Result<Self::Out, Error> {
-        bail!("Unexpected enum");
-    }
+    fn enum_variant(self, _symbol: &str, _idx: usize) -> Result<Self::Out, Error>;
 
-    fn scalar(self, _scalar: Scalar) -> Result<Self::Out, Error> {
-        bail!("Unexpected scalar");
-    }
+    fn scalar(self, _scalar: Scalar) -> Result<Self::Out, Error>;
 
     fn decimal<'a, R: AvroRead>(
         self,
         _precision: usize,
         _scale: usize,
         _r: ValueOrReader<'a, &'a [u8], R>,
-    ) -> Result<Self::Out, Error> {
-        bail!("Unexpected decimal");
-    }
-    fn bytes<'a, R: AvroRead>(
-        self,
-        _r: ValueOrReader<'a, &'a [u8], R>,
-    ) -> Result<Self::Out, Error> {
-        bail!("Unexpected bytes");
-    }
-    fn string<'a, R: AvroRead>(
-        self,
-        _r: ValueOrReader<'a, &'a str, R>,
-    ) -> Result<Self::Out, Error> {
-        bail!("Unexpected string");
-    }
+    ) -> Result<Self::Out, Error>;
+    fn bytes<'a, R: AvroRead>(self, _r: ValueOrReader<'a, &'a [u8], R>)
+        -> Result<Self::Out, Error>;
+    fn string<'a, R: AvroRead>(self, _r: ValueOrReader<'a, &'a str, R>)
+        -> Result<Self::Out, Error>;
     fn json<'a, R: AvroRead>(
         self,
         _r: ValueOrReader<'a, &'a serde_json::Value, R>,
-    ) -> Result<Self::Out, Error> {
-        bail!("Unexpected json");
-    }
-    fn uuid<'a, R: AvroRead>(self, _r: ValueOrReader<'a, &'a [u8], R>) -> Result<Self::Out, Error> {
-        bail!("Unexpected uuid");
-    }
-    fn fixed<'a, R: AvroRead>(
-        self,
-        _r: ValueOrReader<'a, &'a [u8], R>,
-    ) -> Result<Self::Out, Error> {
-        bail!("Unexpected fixed");
-    }
+    ) -> Result<Self::Out, Error>;
+    fn uuid<'a, R: AvroRead>(self, _r: ValueOrReader<'a, &'a [u8], R>) -> Result<Self::Out, Error>;
+    fn fixed<'a, R: AvroRead>(self, _r: ValueOrReader<'a, &'a [u8], R>)
+        -> Result<Self::Out, Error>;
     fn map_decoder<T, F: FnMut(Self::Out) -> Result<T, Error>>(
         self,
         f: F,
@@ -607,6 +674,9 @@ pub mod public_decoders {
                             other => bail!("Unexpected scalar: {:#?}", other)
                     };
                     Ok(out)
+                }
+                define_unexpected! {
+                    array, record, union_branch, map, enum_variant, decimal, bytes, string, json, uuid, fixed
                 }
             }
 
@@ -767,6 +837,9 @@ pub mod public_decoders {
             }
             Ok(self.buf)
         }
+        define_unexpected! {
+            record, union_branch, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+        }
     }
 
     pub struct DefaultArrayAsVecDecoder<T> {
@@ -787,6 +860,9 @@ pub mod public_decoders {
                 self.buf.push(next);
             }
             Ok(self.buf)
+        }
+        define_unexpected! {
+            record, union_branch, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
         }
     }
     impl<T: AvroDecodeable> StatefulAvroDecodeable for Vec<T> {
@@ -863,6 +939,13 @@ pub mod public_decoders {
         }
         fn array<A: AvroArrayAccess>(self, a: &mut A) -> Result<(), Error> {
             while a.decode_next(TrivialDecoder)?.is_some() {}
+            Ok(())
+        }
+
+        fn map<M: AvroMapAccess>(self, m: &mut M) -> Result<(), Error> {
+            while let Some((_n, entry)) = m.next_entry()? {
+                entry.decode_field(TrivialDecoder)?
+            }
             Ok(())
         }
     }
