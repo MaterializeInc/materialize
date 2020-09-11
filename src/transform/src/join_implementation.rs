@@ -135,15 +135,6 @@ impl JoinImplementation {
                 }
                 available_arrangements[index].sort();
                 available_arrangements[index].dedup();
-                available_arrangements[index].retain(|key| {
-                    key.iter().all(|k| {
-                        if let ScalarExpr::Column(_) = k {
-                            true
-                        } else {
-                            false
-                        }
-                    })
-                });
             }
 
             // Determine if we can perform delta queries with the existing arrangements.
@@ -516,7 +507,7 @@ struct Orderer<'a> {
 
     order: Vec<(Characteristics, Vec<ScalarExpr>, usize)>,
     placed: Vec<bool>,
-    bound: Vec<Vec<usize>>,
+    bound: Vec<Vec<ScalarExpr>>,
     equivalences_active: Vec<bool>,
     arrangement_active: Vec<Vec<usize>>,
     priority_queue: std::collections::BinaryHeap<(Characteristics, Vec<ScalarExpr>, usize)>,
@@ -716,42 +707,64 @@ impl<'a> Orderer<'a> {
                 if fully_supported {
                     self.equivalences_active[*equivalence] = true;
                     for expr in self.equivalences[*equivalence].iter() {
-                        if let ScalarExpr::Column(c) = expr {
-                            let rel = self.input_relation[*c];
-                            let col = *c - self.prior_arities[rel];
-
+                        // find the relations that columns in the expression belong to
+                        let rels = expr
+                            .support()
+                            .into_iter()
+                            .map(|c| self.input_relation[c])
+                            .collect::<Vec<_>>();
+                        // Skip the expression if
+                        // * the expression is a literal -> this would translate
+                        //   to `rels` being empty
+                        // * the expression has columns belonging to more than
+                        //   one relation -> TODO: see how we can plan better in
+                        //   this case. Arguably, if this happens, it would
+                        //   not be unreasonable to ask the user to write the
+                        //   query better.
+                        let rel = rels
+                            .get(0)
+                            .filter(|first_rel| rels[1..].iter().all(|rel| *first_rel == rel));
+                        if let Some(rel) = rel {
+                            let mut expr = expr.clone();
+                            expr.visit_mut(&mut |e| {
+                                if let ScalarExpr::Column(c) = e {
+                                    *c -= self.prior_arities[*rel];
+                                }
+                            });
                             // Update bound columns.
-                            self.bound[rel].push(col);
-                            self.bound[rel].sort();
+                            self.bound[*rel].push(expr);
+                            self.bound[*rel].sort();
+
                             // Reconsider all available arrangements.
-                            for (pos, keys) in self.arrangements[rel].iter().enumerate() {
-                                if !self.arrangement_active[rel].contains(&pos) {
+                            for (pos, keys) in self.arrangements[*rel].iter().enumerate() {
+                                if !self.arrangement_active[*rel].contains(&pos) {
                                     // Determine if the arrangement is viable, which happens when the
                                     // support of its keys are all bound.
-                                    if keys.iter().all(|k| {
-                                        k.support().iter().all(|c| self.bound[rel].contains(c))
-                                    }) {
-                                        self.arrangement_active[rel].push(pos);
+                                    if keys.iter().all(|k| self.bound[*rel].contains(k)) {
+                                        self.arrangement_active[*rel].push(pos);
                                         // TODO: This could be pre-computed, as it is independent of the order.
-                                        let is_unique = self.unique_arrangement[rel][pos];
+                                        let is_unique = self.unique_arrangement[*rel][pos];
                                         self.priority_queue.push((
-                                            Characteristics::new(is_unique, keys.len(), true, rel),
+                                            Characteristics::new(is_unique, keys.len(), true, *rel),
                                             keys.clone(),
-                                            rel,
+                                            *rel,
                                         ));
                                     }
                                 }
                             }
-                            let is_unique = self.unique_keys[rel]
-                                .iter()
-                                .any(|cols| cols.iter().all(|c| self.bound[rel].contains(c)));
+                            let is_unique = self.unique_keys[*rel].iter().any(|cols| {
+                                cols.iter()
+                                    .all(|c| self.bound[*rel].contains(&ScalarExpr::Column(*c)))
+                            });
                             self.priority_queue.push((
-                                Characteristics::new(is_unique, self.bound[rel].len(), false, rel),
-                                self.bound[rel]
-                                    .iter()
-                                    .map(|c| ScalarExpr::Column(*c))
-                                    .collect::<Vec<_>>(),
-                                rel,
+                                Characteristics::new(
+                                    is_unique,
+                                    self.bound[*rel].len(),
+                                    false,
+                                    *rel,
+                                ),
+                                self.bound[*rel].clone(),
+                                *rel,
                             ));
                         }
                     }
