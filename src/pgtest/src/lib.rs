@@ -241,65 +241,67 @@ impl Drop for PgTest {
 }
 
 pub fn walk(addr: &str, user: &str, timeout: Duration, dir: &str) {
-    datadriven::walk(dir, |tf| {
-        let mut pgt = PgTest::new(addr, user, timeout).unwrap();
-        tf.run(|tc| -> String {
-            let lines = tc.input.lines();
-            match tc.directive.as_str() {
-                "send" => {
-                    for line in lines {
-                        let mut line = line.splitn(2, ' ');
-                        let typ = line.next().unwrap_or("");
-                        let args = line.next().unwrap_or("{}");
-                        pgt.send(|buf| match typ {
-                            "Query" => {
-                                let v: Query = serde_json::from_str(args).unwrap();
-                                frontend::query(&v.query, buf).unwrap();
+    datadriven::walk(dir, |tf| run_test(tf, addr, user, timeout));
+}
+
+pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: Duration) {
+    let mut pgt = PgTest::new(addr, user, timeout).unwrap();
+    tf.run(|tc| -> String {
+        let lines = tc.input.lines();
+        match tc.directive.as_str() {
+            "send" => {
+                for line in lines {
+                    let mut line = line.splitn(2, ' ');
+                    let typ = line.next().unwrap_or("");
+                    let args = line.next().unwrap_or("{}");
+                    pgt.send(|buf| match typ {
+                        "Query" => {
+                            let v: Query = serde_json::from_str(args).unwrap();
+                            frontend::query(&v.query, buf).unwrap();
+                        }
+                        "ReadyForQuery" => {
+                            let v: Query = serde_json::from_str(args).unwrap();
+                            frontend::query(&v.query, buf).unwrap();
+                        }
+                        "Parse" => {
+                            let v: Parse = serde_json::from_str(args).unwrap();
+                            frontend::parse("", &v.query, vec![], buf).unwrap();
+                        }
+                        "Sync" => frontend::sync(buf),
+                        "Bind" => {
+                            let v: Bind = serde_json::from_str(args).unwrap();
+                            let values = v.values.unwrap_or_default();
+                            if frontend::bind(
+                                "",     // portal
+                                "",     // statement
+                                vec![], // formats
+                                values, // values
+                                |t, buf| {
+                                    buf.put_slice(t.as_bytes());
+                                    Ok(IsNull::No)
+                                }, // serializer
+                                vec![], // result_formats
+                                buf,
+                            )
+                            .is_err()
+                            {
+                                panic!("bind error");
                             }
-                            "ReadyForQuery" => {
-                                let v: Query = serde_json::from_str(args).unwrap();
-                                frontend::query(&v.query, buf).unwrap();
-                            }
-                            "Parse" => {
-                                let v: Parse = serde_json::from_str(args).unwrap();
-                                frontend::parse("", &v.query, vec![], buf).unwrap();
-                            }
-                            "Sync" => frontend::sync(buf),
-                            "Bind" => {
-                                let v: Bind = serde_json::from_str(args).unwrap();
-                                let values = v.values.unwrap_or_default();
-                                if frontend::bind(
-                                    "",     // portal
-                                    "",     // statement
-                                    vec![], // formats
-                                    values, // values
-                                    |t, buf| {
-                                        buf.put_slice(t.as_bytes());
-                                        Ok(IsNull::No)
-                                    }, // serializer
-                                    vec![], // result_formats
-                                    buf,
-                                )
-                                .is_err()
-                                {
-                                    panic!("bind error");
-                                }
-                            }
-                            "Execute" => {
-                                let v: Execute = serde_json::from_str(args).unwrap();
-                                frontend::execute("", v.max_rows.unwrap_or(0), buf).unwrap();
-                            }
-                            _ => panic!("unknown message type {}", typ),
-                        })
-                        .unwrap();
-                    }
-                    "".to_string()
+                        }
+                        "Execute" => {
+                            let v: Execute = serde_json::from_str(args).unwrap();
+                            frontend::execute("", v.max_rows.unwrap_or(0), buf).unwrap();
+                        }
+                        _ => panic!("unknown message type {}", typ),
+                    })
+                    .unwrap();
                 }
-                "until" => format!("{}\n", pgt.until(lines.collect()).unwrap().join("\n")),
-                _ => panic!("unknown directive {}", tc.input),
+                "".to_string()
             }
-        })
-    });
+            "until" => format!("{}\n", pgt.until(lines.collect()).unwrap().join("\n")),
+            _ => panic!("unknown directive {}", tc.input),
+        }
+    })
 }
 
 // Frontend messages

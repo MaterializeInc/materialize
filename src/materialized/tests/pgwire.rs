@@ -429,3 +429,28 @@ fn test_record_types() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[test]
+fn test_pgtest() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let dir: std::path::PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
+
+    // We want a new server per file, so we can't use pgtest::walk.
+    datadriven::walk(dir.to_str().unwrap(), |tf| {
+        let (server, _client) = util::start_server(util::Config::default()).unwrap();
+        let config = server.pg_config();
+        let addr = match &config.get_hosts()[0] {
+            tokio_postgres::config::Host::Tcp(host) => {
+                format!("{}:{}", host, config.get_ports()[0])
+            }
+            _ => panic!("only tcp connections supported"),
+        };
+        let user = config.get_user().unwrap();
+        let timeout = std::time::Duration::from_secs(5);
+
+        pgtest::run_test(tf, &addr, user, timeout);
+    });
+
+    Ok(())
+}
