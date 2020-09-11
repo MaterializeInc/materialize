@@ -876,13 +876,22 @@ where
         .await?;
         ROWS_RETURNED.inc_by(u64::cast_from(nrows));
 
-        if rows.is_empty() {
+        // Always return rows back, even if it's empty. This prevents an unclosed
+        // portal from re-executing after it has been emptied.
+        portal.set_remaining_rows(rows);
+
+        // If max_rows is not specified, we will always send back a CommandComplete. If
+        // max_rows is specified, we only send CommandComplete if there were more rows
+        // requested than were remaining. That is, if max_rows == number of rows that
+        // were remaining before sending (not that are remaining after sending), then
+        // we still send a PortalSuspended. The number of remaining rows after the rows
+        // have been sent doesn't matter. This matches postgres.
+        if max_rows == 0 || max_rows > nrows {
             self.send(BackendMessage::CommandComplete {
                 tag: format!("SELECT {}", nrows),
             })
             .await?;
         } else {
-            portal.set_remaining_rows(rows);
             self.send(BackendMessage::PortalSuspended).await?;
         }
 
