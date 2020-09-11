@@ -470,3 +470,33 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 | Union %8 %13 %14
 
 EOF
+
+query ITIT rowsort
+SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
+----
+1 l1 1 r1
+1 l1 3 r3
+2 l2 4 r4
+3 l3 1 r1
+3 l3 3 r3
+
+# Test that when both keys are expressions, the join is not planned as a cross
+# join. Protects against regression of #4170.
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
+----
+%0 =
+| Get materialize.public.l (u1)
+| Filter !(isnull(#0))
+| ArrangeBy ((#0 % 2))
+
+%1 =
+| Get materialize.public.r (u3)
+| Filter !(isnull(#0))
+
+%2 =
+| Join %0 %1 (= (#0 % 2) (#2 % 2))
+| | implementation = Differential %1 %0.((#0 % 2))
+| | demand = (#0..#3)
+
+EOF

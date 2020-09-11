@@ -124,3 +124,46 @@ where foo.a = bar.a
 ----
 1
 0
+
+statement ok
+CREATE INDEX foo_idx2 on foo(nullif(a, 0));
+
+statement ok
+CREATE INDEX bar_idx2 on bar(-a);
+
+# Test that when join planning uses indexes on expressions.
+# Protects against regression of #4170.
+query T multiline
+EXPLAIN PLAN FOR
+select foo.b, bar.b
+from foo, bar
+where nullif(foo.a, 0) = -bar.a
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (if (#0 = 0) then {null} else {#0})
+
+%1 =
+| Get materialize.public.bar (u4)
+| ArrangeBy (-(#0))
+
+%2 =
+| Join %0 %1 (= -(#2) if (#0 = 0) then {null} else {#0})
+| | implementation = DeltaQuery
+| |   delta %0 %1.(-(#0))
+| |   delta %1 %0.(if (#0 = 0) then {null} else {#0})
+| | demand = (#0..#3)
+| Filter !(isnull(-(#2))), !(isnull(if (#0 = 0) then {null} else {#0}))
+| Project (#1, #3)
+
+EOF
+
+query II
+select foo.b, bar.b
+from foo, bar
+where nullif(foo.a, 0) = -bar.a
+----
+2
+NULL
+4
+3
