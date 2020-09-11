@@ -1405,8 +1405,7 @@ fn handle_create_view(
     };
     let (mut relation_expr, mut desc, finishing) =
         query::plan_root_query(scx, *query.clone(), QueryLifetime::Static)?;
-    // TODO(jamii) can views even have parameters?
-    relation_expr.bind_parameters(&params);
+    relation_expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     relation_expr.finish(finishing);
     let relation_expr = relation_expr.decorrelate();
@@ -2263,7 +2262,7 @@ fn handle_explain(
     } else {
         Some(finishing)
     };
-    sql_expr.bind_parameters(&params);
+    sql_expr.bind_parameters(&params)?;
     let expr = sql_expr.clone().decorrelate();
     Ok(Plan::ExplainPlan {
         raw_plan: sql_expr,
@@ -2283,7 +2282,7 @@ fn handle_query(
     lifetime: QueryLifetime,
 ) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
     let (mut expr, desc, finishing) = query::plan_root_query(scx, query, lifetime)?;
-    expr.bind_parameters(&params);
+    expr.bind_parameters(&params)?;
     Ok((expr.decorrelate(), desc, finishing))
 }
 

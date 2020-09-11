@@ -87,6 +87,17 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
         assert_eq!(val.to_string(), "2.46");
     }
 
+    // A `CREATE` statement with parameters should be rejected.
+    match client.query_one("CREATE VIEW v AS SELECT $3", &[]) {
+        Ok(_) => panic!("query with invalid parameters executed successfully"),
+        Err(err) => {
+            assert!(err.to_string().contains("there is no parameter $3"));
+            // TODO(benesch): this should be `UNDEFINED_PARAMETER`, but blocked
+            // on #3147.
+            assert_eq!(err.code(), Some(&SqlState::INTERNAL_ERROR));
+        }
+    }
+
     Ok(())
 }
 
