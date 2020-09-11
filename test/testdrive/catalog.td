@@ -54,18 +54,6 @@ id          database
 -----------------------
 1           materialize
 
-# SHOW DATABASES should work, even if the current database has been dropped.
-> CREATE DATABASE j
-
-> SET DATABASE = j
-
-> DROP DATABASE j
-
-> SHOW DATABASES
-database
-----
-materialize
-
 # Creating a database should be reflected in the output of SHOW DATABASES.
 > CREATE DATABASE d
 > SHOW DATABASES
@@ -128,6 +116,7 @@ Expected end of statement, found: RESTRICT
 
 # DROP DATABASE should succeed even when there are objects in the database.
 > DROP DATABASE d
+# SHOW DATABASES should work, even if the current database has been dropped.
 > SHOW DATABASES
 database
 ----
