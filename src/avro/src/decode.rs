@@ -6,7 +6,6 @@ use std::cmp;
 use std::fmt::{self, Display};
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
-use std::mem::transmute;
 
 use anyhow::{bail, Error};
 use chrono::{NaiveDate, NaiveDateTime};
