@@ -9,8 +9,8 @@ use std::str::FromStr;
 use anyhow::Error;
 use libflate::deflate::{Decoder, Encoder};
 
+use crate::error::{DecodeError, Error as AvroError};
 use crate::types::{ToAvro, Value};
-use crate::util::DecodeError;
 
 /// The compression codec used to compress blocks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,7 +44,7 @@ impl ToAvro for Codec {
 }
 
 impl FromStr for Codec {
-    type Err = DecodeError;
+    type Err = AvroError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -52,7 +52,7 @@ impl FromStr for Codec {
             "deflate" => Ok(Codec::Deflate),
             #[cfg(feature = "snappy")]
             "snappy" => Ok(Codec::Snappy),
-            _ => Err(DecodeError::new("unrecognized codec")),
+            other => Err(DecodeError::UnrecognizedCodec(other.to_string()).into()),
         }
     }
 }
@@ -87,7 +87,7 @@ impl Codec {
     }
 
     /// Decompress a stream of bytes in-place.
-    pub fn decompress(self, stream: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn decompress(self, stream: &mut Vec<u8>) -> Result<(), AvroError> {
         match self {
             Codec::Null => (),
             Codec::Deflate => {
@@ -103,19 +103,21 @@ impl Codec {
             Codec::Snappy => {
                 use byteorder::ByteOrder;
 
-                let decompressed_size = snap::raw::decompress_len(&stream[..stream.len() - 4])?;
+                let decompressed_size = snap::raw::decompress_len(&stream[..stream.len() - 4])
+                    .map_err(std::io::Error::from)?;
                 let mut decoded = vec![0; decompressed_size];
                 snap::raw::Decoder::new()
-                    .decompress(&stream[..stream.len() - 4], &mut decoded[..])?;
+                    .decompress(&stream[..stream.len() - 4], &mut decoded[..])
+                    .map_err(std::io::Error::from)?;
 
                 let expected_crc = byteorder::BigEndian::read_u32(&stream[stream.len() - 4..]);
                 let actual_crc = crc::crc32::checksum_ieee(&decoded);
 
                 if expected_crc != actual_crc {
-                    return Err(DecodeError::new(format!(
-                        "bad Snappy CRC32; expected {:x} but got {:x}",
-                        expected_crc, actual_crc
-                    ))
+                    return Err(DecodeError::BadSnappyChecksum {
+                        expected: expected_crc,
+                        actual: actual_crc,
+                    }
                     .into());
                 }
                 *stream = decoded;

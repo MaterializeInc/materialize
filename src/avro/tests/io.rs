@@ -9,9 +9,10 @@ use chrono::{NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
 use mz_avro::schema::resolve_schemas;
 use mz_avro::{
+    error::Error as AvroError,
     from_avro_datum, to_avro_datum,
     types::{DecimalValue, Value},
-    Schema, SchemaResolutionError, ValidationError,
+    Schema, ValidationError,
 };
 
 lazy_static! {
@@ -224,10 +225,13 @@ fn test_no_default_value() -> Result<(), String> {
     let resolved_schema = resolve_schemas(&LONG_RECORD_SCHEMA, &reader_schema);
     match resolved_schema {
         Ok(_) => Err(String::from("Expected SchemaResolutionError, got Ok")),
-        Err(ref e) => match e.downcast_ref::<SchemaResolutionError>() {
-            Some(_) => Ok(()),
-            None => Err(format!("Expected SchemaResolutionError, got {}", e)),
-        },
+        Err(ref e) => {
+            if let AvroError::ResolveSchema(_) = e {
+                Ok(())
+            } else {
+                Err(format!("Expected SchemaResultionError, got {}", e))
+            }
+        }
     }
 }
 

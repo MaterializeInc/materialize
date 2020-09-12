@@ -2,13 +2,13 @@
 //
 // Use of this software is governed by the Apache License, Version 2.0
 
-use std::fmt;
 use std::i64;
 use std::io::Read;
 use std::sync::Once;
 
-use anyhow::Error;
 use serde_json::{Map, Value};
+
+use crate::error::{DecodeError, Error as AvroError};
 
 /// Maximum number of bytes that can be allocated when decoding
 /// Avro-encoded values. This is a protection against ill-formed
@@ -17,47 +17,11 @@ use serde_json::{Map, Value};
 pub static mut MAX_ALLOCATION_BYTES: usize = 512 * 1024 * 1024;
 static MAX_ALLOCATION_BYTES_ONCE: Once = Once::new();
 
-/// Describes errors happened trying to allocate too many bytes
-#[derive(Debug)]
-pub struct AllocationError(String);
-
-impl AllocationError {
-    pub fn new<S>(msg: S) -> AllocationError
-    where
-        S: Into<String>,
-    {
-        AllocationError(msg.into())
-    }
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TsUnit {
+    Millis,
+    Micros,
 }
-
-impl fmt::Display for AllocationError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Allocation error: {}", self.0)
-    }
-}
-
-impl std::error::Error for AllocationError {}
-
-/// Describes errors happened while decoding Avro data.
-#[derive(Debug)]
-pub struct DecodeError(String);
-
-impl DecodeError {
-    pub fn new<S>(msg: S) -> DecodeError
-    where
-        S: Into<String>,
-    {
-        DecodeError(msg.into())
-    }
-}
-
-impl fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Decoding error: {}", self.0)
-    }
-}
-
-impl std::error::Error for DecodeError {}
 
 pub trait MapHelper {
     fn string(&self, key: &str) -> Option<String>;
@@ -79,7 +43,7 @@ impl MapHelper for Map<String, Value> {
     }
 }
 
-pub fn read_long<R: Read>(reader: &mut R) -> Result<i64, Error> {
+pub fn read_long<R: Read>(reader: &mut R) -> Result<i64, AvroError> {
     zag_i64(reader)
 }
 
@@ -91,16 +55,16 @@ pub fn zig_i64(n: i64, buffer: &mut Vec<u8>) {
     encode_variable(((n << 1) ^ (n >> 63)) as u64, buffer)
 }
 
-pub fn zag_i32<R: Read>(reader: &mut R) -> Result<i32, Error> {
+pub fn zag_i32<R: Read>(reader: &mut R) -> Result<i32, AvroError> {
     let i = zag_i64(reader)?;
     if i < i64::from(i32::min_value()) || i > i64::from(i32::max_value()) {
-        Err(DecodeError::new("int out of range").into())
+        Err(AvroError::Decode(DecodeError::I32OutOfRange(i)))
     } else {
         Ok(i as i32)
     }
 }
 
-pub fn zag_i64<R: Read>(reader: &mut R) -> Result<i64, Error> {
+pub fn zag_i64<R: Read>(reader: &mut R) -> Result<i64, AvroError> {
     let z = decode_variable(reader)?;
     Ok(if z & 0x1 == 0 {
         (z >> 1) as i64
@@ -121,7 +85,7 @@ fn encode_variable(mut z: u64, buffer: &mut Vec<u8>) {
     }
 }
 
-fn decode_variable<R: Read>(reader: &mut R) -> Result<u64, Error> {
+fn decode_variable<R: Read>(reader: &mut R) -> Result<u64, AvroError> {
     let mut i = 0u64;
     let mut buf = [0u8; 1];
 
@@ -129,7 +93,7 @@ fn decode_variable<R: Read>(reader: &mut R) -> Result<u64, Error> {
     loop {
         if j > 9 {
             // if j * 7 > 64
-            return Err(DecodeError::new("Overflow when decoding integer value").into());
+            return Err(AvroError::Decode(DecodeError::IntDecodeOverflow));
         }
         reader.read_exact(&mut buf[..])?;
         i |= (u64::from(buf[0] & 0x7F)) << (j * 7);
@@ -159,17 +123,16 @@ pub fn max_allocation_bytes(num_bytes: usize) -> usize {
     }
 }
 
-pub fn safe_len(len: usize) -> Result<usize, Error> {
+pub fn safe_len(len: usize) -> Result<usize, AvroError> {
     let max_bytes = max_allocation_bytes(512 * 1024 * 1024);
 
     if len <= max_bytes {
         Ok(len)
     } else {
-        Err(AllocationError::new(format!(
-            "Unable to allocate {} bytes (Maximum allowed: {})",
-            len, max_bytes
-        ))
-        .into())
+        Err(AvroError::Allocation {
+            attempted: len,
+            allowed: max_bytes,
+        })
     }
 }
 
