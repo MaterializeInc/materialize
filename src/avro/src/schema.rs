@@ -24,11 +24,15 @@ use serde::{
 use serde_json::{self, Map, Value};
 use types::{DecimalValue, Value as AvroValue};
 
+use crate::error::Error as AvroError;
 use crate::reader::SchemaResolver;
 use crate::types;
 use crate::util::MapHelper;
 
-pub fn resolve_schemas(writer_schema: &Schema, reader_schema: &Schema) -> Result<Schema, Error> {
+pub fn resolve_schemas(
+    writer_schema: &Schema,
+    reader_schema: &Schema,
+) -> Result<Schema, AvroError> {
     let r_indices = reader_schema.indices.clone();
     let (reader_to_writer_names, writer_to_reader_names): (HashMap<_, _>, HashMap<_, _>) =
         writer_schema
@@ -66,7 +70,7 @@ pub fn resolve_schemas(writer_schema: &Schema, reader_schema: &Schema) -> Result
 }
 
 /// Describes errors happened while parsing Avro schemas.
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParseSchemaError(String);
 
 impl ParseSchemaError {
@@ -80,7 +84,7 @@ impl ParseSchemaError {
 
 impl fmt::Display for ParseSchemaError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Failed to parse schema: {}", self.0)
+        self.0.fmt(f)
     }
 }
 
@@ -235,7 +239,7 @@ pub enum SchemaPiece {
         /// did not match any field in the reader (or even if it matched by name, resolution failed).
         /// If the `i`th element is `Ok((j, piece))`, then the `i`th field of the writer
         /// matched the `j`th field of the reader, and `piece` is their resolved node.
-        permutation: Vec<Result<(usize, SchemaPieceOrNamed), String>>,
+        permutation: Vec<Result<(usize, SchemaPieceOrNamed), AvroError>>,
         n_reader_variants: usize,
         reader_null_variant: Option<usize>,
     },
@@ -2251,7 +2255,7 @@ mod tests {
         );
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Failed to parse schema: Unions cannot contain duplicate types"
+            "Unions cannot contain duplicate types"
         );
 
         let writer_schema = Schema::parse_str(

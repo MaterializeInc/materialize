@@ -107,7 +107,7 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
             quote! {
                 #id_str => {
                     if self.#id.is_some() {
-                        ::anyhow::bail!(#found_twice);
+                        return Err(::mz_avro::error::Error::Decode(::mz_avro::error::DecodeError::Custom(#found_twice.to_string())));
                     }
                     let decoder = #make_decoder;
                     self.#id = Some(field.decode_field(decoder)?);
@@ -125,7 +125,7 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
                 let #id = if let Some(#id) = self.#id.take() {
                     #id
                 } else {
-                    ::anyhow::bail!(#not_found);
+                    return Err(::mz_avro::error::Error::Decode(::mz_avro::error::DecodeError::Custom(#not_found.to_string())));
                 };
             }
         })
@@ -148,7 +148,7 @@ pub fn derive_decodeable(item: TokenStream) -> TokenStream {
             fn record<R: ::mz_avro::AvroRead, A: ::mz_avro::AvroRecordAccess<R>>(
                 mut self,
                 a: &mut A,
-            ) -> ::anyhow::Result<#name> {
+            ) -> ::std::result::Result<#name, ::mz_avro::error::Error> {
                 while let Some((name, _idx, field)) = a.next_field()? {
                     match name {
                         #(#decode_blocks)*
