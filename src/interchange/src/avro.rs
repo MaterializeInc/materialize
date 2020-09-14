@@ -1984,7 +1984,9 @@ impl SchemaCache {
 
     /// Looks up the writer schema for ID. If the schema is literally identical
     /// to the reader schema, as determined by the reader schema fingerprint
-    /// that this schema cache was initialized with, returns None.
+    /// that this schema cache was initialized with, returns the schema directly.
+    /// If not, performs schema resolution on the reader and writer and
+    /// returns the result.
     async fn get(&mut self, id: i32, reader_schema: &Schema) -> anyhow::Result<&Schema> {
         match self.cache.entry(id) {
             Entry::Occupied(o) => o
