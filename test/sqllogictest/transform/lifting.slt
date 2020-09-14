@@ -1,0 +1,84 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+create table t (
+  a int,
+  b int
+)
+
+query T multiline
+explain
+(select null::int, 1, 2)
+union all
+(select a, b, 2 from t)
+union all
+(select a, b, 2 from t)
+----
+%0 =
+| Get materialize.public.t (u1)
+
+%1 =
+| Get materialize.public.t (u1)
+
+%2 =
+| Constant (null, 1)
+
+%3 =
+| Union %0 %1 %2
+| Map 2
+
+EOF
+
+query T multiline
+explain
+(select null::int, 1, 2, 3)
+union all
+(select a, b, 2, 3 from t)
+union all
+(select a, b, 2, 3 from t)
+----
+%0 =
+| Get materialize.public.t (u1)
+
+%1 =
+| Get materialize.public.t (u1)
+
+%2 =
+| Constant (null, 1)
+
+%3 =
+| Union %0 %1 %2
+| Map 2, 3
+
+EOF
+
+query T multiline
+explain
+(select null::int, 1, 2)
+union all
+(select a, b, 2 from t)
+union all
+(select a, b, 3 from t)
+----
+%0 =
+| Get materialize.public.t (u1)
+| Map 2
+
+%1 =
+| Get materialize.public.t (u1)
+| Map 3
+
+%2 =
+| Constant (null, 1, 2)
+
+%3 =
+| Union %0 %1 %2
+
+EOF
