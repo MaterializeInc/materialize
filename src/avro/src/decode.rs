@@ -6,7 +6,6 @@ use std::cmp;
 use std::fmt::{self, Display};
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
-use std::mem::transmute;
 
 use chrono::{NaiveDate, NaiveDateTime};
 
@@ -72,15 +71,14 @@ fn decode_len<R: Read>(reader: &mut R) -> Result<usize, AvroError> {
 fn decode_float<R: Read>(reader: &mut R) -> Result<f32, AvroError> {
     let mut buf = [0u8; 4];
     reader.read_exact(&mut buf[..])?;
-    // FIXME (btv) - replace this with from_le_bytes
-    Ok(unsafe { transmute::<[u8; 4], f32>(buf) })
+    Ok(f32::from_le_bytes(buf))
 }
 
 #[inline]
 fn decode_double<R: Read>(reader: &mut R) -> Result<f64, AvroError> {
     let mut buf = [0u8; 8];
     reader.read_exact(&mut buf[..])?;
-    Ok(unsafe { transmute::<[u8; 8], f64>(buf) })
+    Ok(f64::from_le_bytes(buf))
 }
 
 impl Display for TsUnit {
