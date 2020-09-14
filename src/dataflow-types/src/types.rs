@@ -65,7 +65,7 @@ pub struct Update {
 pub struct BuildDesc {
     pub id: GlobalId,
     pub relation_expr: OptimizedRelationExpr,
-    /// If a building a view, the types of columns of the built view
+    /// If building a view, the types of columns of the built view
     /// None if building an index
     pub typ: Option<RelationType>,
 }
