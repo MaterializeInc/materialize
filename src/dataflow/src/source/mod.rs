@@ -604,7 +604,7 @@ impl ConsistencyInfo {
     ) -> Option<Timestamp> {
         if let Consistency::RealTime = self.source_type {
             // Simply assign to this message the next timestamp that is not closed
-            Some(self.last_closed_ts + 1)
+            Some(self.find_matching_rt_timestamp())
         } else {
             // The source is a BYO source. Must check the list of timestamp updates for the given partition
             match timestamp_histories.borrow().get(id) {
@@ -623,6 +623,11 @@ impl ConsistencyInfo {
                 _ => panic!("Unexpected entry format in TimestampDataUpdates for BYO source"),
             }
         }
+    }
+
+    /// For a given record from a RT source, find the timestamp that is not closed
+    fn find_matching_rt_timestamp(&self) -> Timestamp {
+        self.last_closed_ts + 1
     }
 }
 
@@ -811,9 +816,25 @@ where
 
             if active {
                 if !read_persisted_files {
+                    // Downgrade capability (if possible) before reading next persisted file.
+                    consistency_info.downgrade_capability(
+                        &id,
+                        cap,
+                        source_info,
+                        &timestamp_histories,
+                    );
+
                     if let Some(msgs) = source_info.next_persisted_file() {
+                        // TODO(rkhaitan) change this to properly re-use old timestamps.
+                        // Currently this is hard to do because there can be arbitrary delays between
+                        // different workers being scheduled, and this means that all persisted state
+                        // can potentially get pulled into memory without being able to close timestamps
+                        // which causes the system to go out of memory.
+                        // For now, constrain we constrain persistence to RT sources, and we re-assign
+                        // timestamps to persisted messages on startup.
+                        let ts = consistency_info.find_matching_rt_timestamp();
+                        let ts_cap = cap.delayed(&ts);
                         for m in msgs {
-                            let ts_cap = cap.delayed(&m.2);
                             output.session(&ts_cap).give(Ok(SourceOutput::new(
                                 m.0,
                                 m.1,
