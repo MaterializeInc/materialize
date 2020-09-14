@@ -113,7 +113,7 @@ lazy_static! {
 #[derive(Debug, Serialize)]
 pub struct Schema {
     pub id: i64,
-    items: BTreeMap<String, GlobalId>,
+    pub items: BTreeMap<String, GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -729,14 +729,14 @@ impl Catalog {
         }
     }
 
-    pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
+    pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) -> OpStatus {
         if !item.is_placeholder() {
             info!("create {} {} ({})", item.type_string(), name, id);
         }
 
         let entry = CatalogEntry {
-            item,
-            name,
+            item: item.clone(),
+            name: name.clone(),
             id,
             used_by: Vec::new(),
         };
@@ -764,11 +764,19 @@ impl Catalog {
         }
 
         let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
-        self.get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
-            .expect("catalog out of sync")
-            .items
-            .insert(entry.name.item.clone(), entry.id);
+        let schema = self
+            .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
+            .expect("catalog out of sync");
+        let schema_id = schema.id;
+        schema.items.insert(entry.name.item.clone(), entry.id);
         self.by_id.insert(entry.id, entry);
+
+        OpStatus::CreatedItem {
+            schema_id,
+            id,
+            name,
+            item,
+        }
     }
 
     pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
@@ -1106,10 +1114,7 @@ impl Catalog {
                     }
                 }
 
-                Action::CreateItem { id, name, item } => {
-                    self.insert_item(id, name.clone(), item.clone());
-                    OpStatus::CreatedItem { id, name, item }
-                }
+                Action::CreateItem { id, name, item } => self.insert_item(id, name, item),
 
                 Action::DropDatabase { name } => match self.by_name.remove(&name).map(|db| db.id) {
                     Some(id) => OpStatus::DroppedDatabase { name, id },
@@ -1148,8 +1153,11 @@ impl Catalog {
                     }
 
                     let conn_id = metadata.item.conn_id().unwrap_or(SYSTEM_CONN_ID);
-                    self.get_schema_mut(&metadata.name.database, &metadata.name.schema, conn_id)
-                        .expect("catalog out of sync")
+                    let schema = self
+                        .get_schema_mut(&metadata.name.database, &metadata.name.schema, conn_id)
+                        .expect("catalog out of sync");
+                    let schema_id = schema.id;
+                    schema
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
@@ -1177,7 +1185,10 @@ impl Catalog {
                         }
                     } else {
                         self.indexes.remove(&id);
-                        OpStatus::DroppedItem(metadata)
+                        OpStatus::DroppedItem {
+                            entry: metadata,
+                            schema_id,
+                        }
                     }
                 }
 
@@ -1455,6 +1466,7 @@ pub enum OpStatus {
         schema_name: String,
     },
     CreatedItem {
+        schema_id: i64,
         id: GlobalId,
         name: FullName,
         item: CatalogItem,
@@ -1472,7 +1484,10 @@ pub enum OpStatus {
         entry: CatalogEntry,
         nullable: Vec<bool>,
     },
-    DroppedItem(CatalogEntry),
+    DroppedItem {
+        entry: CatalogEntry,
+        schema_id: i64,
+    },
     UpdatedItem {
         id: GlobalId,
         from_name: FullName,

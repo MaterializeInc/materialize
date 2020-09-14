@@ -279,6 +279,14 @@ lazy_static! {
         id: GlobalId::System(2017),
         index_id: GlobalId::System(2018),
     };
+    pub static ref MZ_TABLES: BuiltinTable = BuiltinTable {
+        name: "mz_tables",
+        desc: RelationDesc::empty()
+            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false)),
+        id: GlobalId::System(2019),
+        index_id: GlobalId::System(2020),
+    };
 }
 
 pub const MZ_ADDRESSES_WITH_UNIT_LENGTHS: BuiltinView = BuiltinView {
@@ -480,6 +488,7 @@ lazy_static! {
             Builtin::Table(&MZ_SCHEMAS),
             Builtin::Table(&MZ_COLUMNS),
             Builtin::Table(&MZ_INDEXES),
+            Builtin::Table(&MZ_TABLES),
             Builtin::View(&MZ_ADDRESSES_WITH_UNIT_LENGTHS),
             Builtin::View(&MZ_DATAFLOW_NAMES),
             Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),

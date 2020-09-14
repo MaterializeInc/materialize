@@ -227,6 +227,7 @@ mz_databases          SYSTEM
 mz_schemas            SYSTEM
 mz_columns            SYSTEM
 mz_indexes            SYSTEM
+mz_tables             SYSTEM
 
 > SHOW FULL VIEWS FROM mz_catalog
 VIEWS                             TYPE   QUERYABLE MATERIALIZED
