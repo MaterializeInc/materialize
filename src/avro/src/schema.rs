@@ -12,7 +12,6 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::rc::Rc;
 
-use anyhow::Error;
 use digest::Digest;
 use itertools::Itertools;
 use log::{debug, warn};
@@ -499,7 +498,7 @@ impl Name {
     }
 
     /// Parse a `serde_json::Value` into a `Name`.
-    fn parse(complex: &Map<String, Value>) -> Result<Self, Error> {
+    fn parse(complex: &Map<String, Value>) -> Result<Self, AvroError> {
         let name = complex
             .name()
             .ok_or_else(|| ParseSchemaError::new("No `name` field"))?;
@@ -624,7 +623,7 @@ pub struct UnionSchema {
 }
 
 impl UnionSchema {
-    pub(crate) fn new(schemas: Vec<SchemaPieceOrNamed>) -> Result<Self, Error> {
+    pub(crate) fn new(schemas: Vec<SchemaPieceOrNamed>) -> Result<Self, AvroError> {
         let mut avindex = HashMap::new();
         let mut nvindex = HashMap::new();
         for (i, schema) in schemas.iter().enumerate() {
@@ -713,7 +712,7 @@ struct SchemaParser {
 }
 
 impl SchemaParser {
-    fn parse(mut self, value: &Value) -> Result<Schema, Error> {
+    fn parse(mut self, value: &Value) -> Result<Schema, AvroError> {
         let top = self.parse_inner("", value)?;
         let SchemaParser { named, indices } = self;
         Ok(Schema {
@@ -727,7 +726,7 @@ impl SchemaParser {
         &mut self,
         default_namespace: &str,
         value: &Value,
-    ) -> Result<SchemaPieceOrNamed, Error> {
+    ) -> Result<SchemaPieceOrNamed, AvroError> {
         match *value {
             Value::String(ref t) => {
                 let name = FullName::from_parts(t.as_str(), None, default_namespace);
@@ -747,7 +746,7 @@ impl SchemaParser {
         }
     }
 
-    fn alloc_name(&mut self, fullname: FullName) -> Result<usize, Error> {
+    fn alloc_name(&mut self, fullname: FullName) -> Result<usize, AvroError> {
         let idx = match self.indices.entry(fullname) {
             Entry::Vacant(ve) => *ve.insert(self.named.len()),
             Entry::Occupied(oe) => {
@@ -772,7 +771,7 @@ impl SchemaParser {
         type_name: &str,
         default_namespace: &str,
         complex: &Map<String, Value>,
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, AvroError> {
         let name = Name::parse(complex)?;
         match name.name.as_str() {
             "null" | "boolean" | "int" | "long" | "float" | "double" | "bytes" | "string" => {
@@ -814,7 +813,7 @@ impl SchemaParser {
         &mut self,
         default_namespace: &str,
         complex: &Map<String, Value>,
-    ) -> Result<SchemaPieceOrNamed, Error> {
+    ) -> Result<SchemaPieceOrNamed, AvroError> {
         match complex.get("type") {
             Some(&Value::String(ref t)) => Ok(match t.as_str() {
                 "record" | "enum" | "fixed" => SchemaPieceOrNamed::Named(self.parse_named_type(
@@ -856,7 +855,7 @@ impl SchemaParser {
         &mut self,
         default_namespace: &str,
         complex: &Map<String, Value>,
-    ) -> Result<SchemaPiece, Error> {
+    ) -> Result<SchemaPiece, AvroError> {
         let mut lookup = HashMap::new();
 
         let fields: Vec<RecordField> = complex
@@ -891,7 +890,7 @@ impl SchemaParser {
         default_namespace: &str,
         field: &Map<String, Value>,
         position: usize,
-    ) -> Result<RecordField, Error> {
+    ) -> Result<RecordField, AvroError> {
         let name = field
             .name()
             .ok_or_else(|| ParseSchemaError::new("No `name` in record field"))?;
@@ -926,7 +925,7 @@ impl SchemaParser {
 
     /// Parse a `serde_json::Value` representing a Avro enum type into a
     /// `Schema`.
-    fn parse_enum(&mut self, complex: &Map<String, Value>) -> Result<SchemaPiece, Error> {
+    fn parse_enum(&mut self, complex: &Map<String, Value>) -> Result<SchemaPiece, AvroError> {
         let symbols: Vec<String> = complex
             .get("symbols")
             .and_then(|v| v.as_array())
@@ -986,7 +985,7 @@ impl SchemaParser {
         &mut self,
         default_namespace: &str,
         complex: &Map<String, Value>,
-    ) -> Result<SchemaPiece, Error> {
+    ) -> Result<SchemaPiece, AvroError> {
         complex
             .get("items")
             .ok_or_else(|| ParseSchemaError::new("No `items` in array").into())
@@ -1000,7 +999,7 @@ impl SchemaParser {
         &mut self,
         default_namespace: &str,
         complex: &Map<String, Value>,
-    ) -> Result<SchemaPiece, Error> {
+    ) -> Result<SchemaPiece, AvroError> {
         complex
             .get("values")
             .ok_or_else(|| ParseSchemaError::new("No `values` in map").into())
@@ -1014,7 +1013,7 @@ impl SchemaParser {
         &mut self,
         default_namespace: &str,
         items: &[Value],
-    ) -> Result<SchemaPiece, Error> {
+    ) -> Result<SchemaPiece, AvroError> {
         items
             .iter()
             .map(|value| self.parse_inner(default_namespace, value))
@@ -1024,7 +1023,7 @@ impl SchemaParser {
 
     /// Parse a `serde_json::Value` representing a logical decimal type into a
     /// `Schema`.
-    fn parse_decimal(complex: &Map<String, Value>) -> Result<(usize, usize), Error> {
+    fn parse_decimal(complex: &Map<String, Value>) -> Result<(usize, usize), AvroError> {
         let precision = complex
             .get("precision")
             .and_then(|v| v.as_i64())
@@ -1051,7 +1050,7 @@ impl SchemaParser {
 
     /// Parse a `serde_json::Value` representing an Avro bytes type into a
     /// `Schema`.
-    fn parse_bytes(complex: &Map<String, Value>) -> Result<SchemaPiece, Error> {
+    fn parse_bytes(complex: &Map<String, Value>) -> Result<SchemaPiece, AvroError> {
         let logical_type = complex.get("logicalType").and_then(|v| v.as_str());
 
         if let Some("decimal") = logical_type {
@@ -1080,7 +1079,7 @@ impl SchemaParser {
     /// schema to use is `Date`.
     ///
     /// [1]: https://debezium.io/docs/connectors/mysql/#temporal-values
-    fn parse_int(complex: &Map<String, Value>) -> Result<SchemaPiece, Error> {
+    fn parse_int(complex: &Map<String, Value>) -> Result<SchemaPiece, AvroError> {
         const AVRO_DATE: &str = "date";
         const DEBEZIUM_DATE: &str = "io.debezium.time.Date";
         const KAFKA_DATE: &str = "org.apache.kafka.connect.data.Date";
@@ -1113,7 +1112,7 @@ impl SchemaParser {
     ///
     /// [1]: https://debezium.io/docs/connectors/mysql/#temporal-values
     /// [2]: https://avro.apache.org/docs/1.9.0/spec.html
-    fn parse_long(complex: &Map<String, Value>) -> Result<SchemaPiece, Error> {
+    fn parse_long(complex: &Map<String, Value>) -> Result<SchemaPiece, AvroError> {
         const AVRO_MILLI_TS: &str = "timestamp-millis";
         const AVRO_MICRO_TS: &str = "timestamp-micros";
 
@@ -1168,7 +1167,7 @@ impl SchemaParser {
         &mut self,
         _default_namespace: &str,
         complex: &Map<String, Value>,
-    ) -> Result<SchemaPiece, Error> {
+    ) -> Result<SchemaPiece, AvroError> {
         let _name = Name::parse(complex)?;
 
         let size = complex
@@ -1214,14 +1213,15 @@ impl SchemaParser {
 
 impl Schema {
     /// Create a `Schema` from a string representing a JSON Avro schema.
-    pub fn parse_str(input: &str) -> Result<Self, Error> {
-        let value = serde_json::from_str(input)?;
+    pub fn parse_str(input: &str) -> Result<Self, AvroError> {
+        let value = serde_json::from_str(input)
+            .map_err(|e| ParseSchemaError::new(format!("Error parsing JSON: {}", e)))?;
         Self::parse(&value)
     }
 
     /// Create a `Schema` from a `serde_json::Value` representing a JSON Avro
     /// schema.
-    pub fn parse(value: &Value) -> Result<Self, Error> {
+    pub fn parse(value: &Value) -> Result<Self, AvroError> {
         let p = SchemaParser {
             named: vec![],
             indices: Default::default(),
@@ -1254,7 +1254,7 @@ impl Schema {
 
     /// Parse a `serde_json::Value` representing a primitive Avro type into a
     /// `Schema`.
-    fn parse_primitive(primitive: &str) -> Result<SchemaPiece, Error> {
+    fn parse_primitive(primitive: &str) -> Result<SchemaPiece, AvroError> {
         match primitive {
             "null" => Ok(SchemaPiece::Null),
             "boolean" => Ok(SchemaPiece::Boolean),
