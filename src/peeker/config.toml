@@ -60,6 +60,11 @@ name = "loadtest"
 queries = ["q01", "q02", "q05", "q06", "q08", "q09", "q12", "q14", "q17", "q19"]
 thread_count = 5
 
+[[groups]]
+name = "benchmark"
+queries = ["q01", "q02", "q03", "q04", "q05", "q06", "q07", "q08", "q09", "q10", "q11", "q12", "q13", "q14", "q15", "q16", "q17", "q18", "q19", "q20", "q21", "q22"]
+thread_count = ${OLAP_THREADS:-1}
+
 [[queries]]
 name = "q01"
 enabled = true
