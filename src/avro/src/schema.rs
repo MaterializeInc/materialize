@@ -2255,7 +2255,7 @@ mod tests {
         );
         assert_eq!(
             res.unwrap_err().to_string(),
-            "Unions cannot contain duplicate types"
+            "Schema parse error: Unions cannot contain duplicate types"
         );
 
         let writer_schema = Schema::parse_str(
