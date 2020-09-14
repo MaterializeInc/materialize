@@ -3,13 +3,13 @@
 // Use of this software is governed by the Apache License, Version 2.0
 
 //! Logic handling reading from Avro format at user level.
-use std::io::ErrorKind;
+
 use std::str::{from_utf8, FromStr};
 
-use anyhow::Error;
 use serde_json::from_slice;
 
 use crate::decode::{decode, AvroRead};
+use crate::error::{DecodeError, Error as AvroError};
 use crate::schema::{
     resolve_schemas, FullName, NamedSchemaPiece, ParseSchemaError, RecordField,
     ResolvedDefaultValueField, SchemaNodeOrNamed, SchemaPiece, SchemaPieceOrNamed,
@@ -17,7 +17,7 @@ use crate::schema::{
 };
 use crate::schema::{ResolvedRecordField, Schema};
 use crate::types::Value;
-use crate::util::{self, DecodeError};
+use crate::util::{self};
 use crate::{Codec, SchemaResolutionError};
 
 use sha2::Sha256;
@@ -31,7 +31,7 @@ pub(crate) struct Header {
 }
 
 impl Header {
-    pub fn from_reader<R: AvroRead>(reader: &mut R) -> Result<Header, Error> {
+    pub fn from_reader<R: AvroRead>(reader: &mut R) -> Result<Header, AvroError> {
         let meta_schema = Schema {
             named: vec![],
             indices: Default::default(),
@@ -42,24 +42,24 @@ impl Header {
         reader.read_exact(&mut buf)?;
 
         if buf != [b'O', b'b', b'j', 1u8] {
-            return Err(DecodeError::new("wrong magic in header").into());
+            return Err(AvroError::Decode(DecodeError::WrongHeaderMagic(buf)));
         }
 
         if let Value::Map(meta) = decode(meta_schema.top_node(), reader)? {
             // TODO: surface original parse schema errors instead of coalescing them here
             let json = meta
                 .get("avro.schema")
-                .ok_or_else(|| DecodeError::new("unable to parse schema: 'avro.schema' missing"))
+                .ok_or(AvroError::Decode(DecodeError::MissingAvroDotSchema))
                 .and_then(|bytes| {
                     if let Value::Bytes(ref bytes) = *bytes {
                         from_slice(bytes.as_ref()).map_err(|e| {
-                            DecodeError::new(format!("unable to decode schema bytes: {}", e))
+                            AvroError::ParseSchema(ParseSchemaError::new(format!(
+                                "unable to decode schema bytes: {}",
+                                e
+                            )))
                         })
                     } else {
-                        Err(DecodeError::new(format!(
-                            "unable to decode schema: expected Bytes, got: {:?}",
-                            bytes
-                        )))
+                        unreachable!()
                     }
                 })?;
             let writer_schema = Schema::parse(&json).map_err(|e| {
@@ -70,16 +70,13 @@ impl Header {
                 .get("avro.codec")
                 .map(|val| match val {
                     Value::Bytes(ref bytes) => from_utf8(bytes.as_ref())
-                        .map_err(|e| DecodeError::new(format!("unable to decode codec: {}", e)))
+                        .map_err(|_e| AvroError::Decode(DecodeError::CodecUtf8Error))
                         .and_then(|codec| {
                             Codec::from_str(codec).map_err(|_| {
-                                DecodeError::new(format!("unrecognized codec '{}'", codec))
+                                AvroError::Decode(DecodeError::UnrecognizedCodec(codec.to_string()))
                             })
                         }),
-                    codec => Err(DecodeError::new(format!(
-                        "unable to parse codec: expected bytes, got: {:?}",
-                        codec
-                    ))),
+                    _ => unreachable!(),
                 })
                 .unwrap_or(Ok(Codec::Null))?;
 
@@ -92,7 +89,7 @@ impl Header {
                 codec,
             })
         } else {
-            Err(DecodeError::new("no metadata in header").into())
+            unreachable!()
         }
     }
 
@@ -117,7 +114,7 @@ impl<R: AvroRead> Reader<R> {
     /// No reader `Schema` will be set.
     ///
     /// **NOTE** The avro header is going to be read automatically upon creation of the `Reader`.
-    pub fn new(mut inner: R) -> Result<Reader<R>, Error> {
+    pub fn new(mut inner: R) -> Result<Reader<R>, AvroError> {
         let header = Header::from_reader(&mut inner)?;
         let reader = Reader {
             header,
@@ -135,7 +132,7 @@ impl<R: AvroRead> Reader<R> {
     /// to read from.
     ///
     /// **NOTE** The avro header is going to be read automatically upon creation of the `Reader`.
-    pub fn with_schema(reader_schema: &Schema, mut inner: R) -> Result<Reader<R>, Error> {
+    pub fn with_schema(reader_schema: &Schema, mut inner: R) -> Result<Reader<R>, AvroError> {
         let header = Header::from_reader(&mut inner)?;
 
         let writer_schema = &header.writer_schema;
@@ -175,7 +172,7 @@ impl<R: AvroRead> Reader<R> {
 
     #[inline]
     /// Read the next Avro value from the file, if one exists.
-    pub fn read_next(&mut self) -> Result<Option<Value>, Error> {
+    pub fn read_next(&mut self) -> Result<Option<Value>, AvroError> {
         if self.is_empty() {
             self.read_block_next()?;
             if self.is_empty() {
@@ -196,7 +193,7 @@ impl<R: AvroRead> Reader<R> {
         self.messages_remaining == 0
     }
 
-    fn fill_buf(&mut self, n: usize) -> Result<(), Error> {
+    fn fill_buf(&mut self, n: usize) -> Result<(), AvroError> {
         // We don't have enough space in the buffer, need to grow it.
         if n >= self.buf.capacity() {
             self.buf.reserve(n);
@@ -211,7 +208,7 @@ impl<R: AvroRead> Reader<R> {
         Ok(())
     }
 
-    fn read_block_next(&mut self) -> Result<(), Error> {
+    fn read_block_next(&mut self) -> Result<(), AvroError> {
         assert!(self.is_empty(), "Expected self to be empty!");
         match util::read_long(&mut self.inner) {
             Ok(block_len) => {
@@ -222,9 +219,11 @@ impl<R: AvroRead> Reader<R> {
                 self.inner.read_exact(&mut marker)?;
 
                 if marker != self.header.marker {
-                    return Err(
-                        DecodeError::new("block marker does not match header marker").into(),
-                    );
+                    return Err(DecodeError::MismatchedBlockHeader {
+                        expected: self.header.marker,
+                        actual: marker,
+                    }
+                    .into());
                 }
 
                 // NOTE (JAB): This doesn't fit this Reader pattern very well.
@@ -235,21 +234,22 @@ impl<R: AvroRead> Reader<R> {
                 // into the buffer. But this is fine, for now.
                 self.header.codec.decompress(&mut self.buf)?;
 
-                return Ok(());
+                Ok(())
             }
             Err(e) => {
-                if let ErrorKind::UnexpectedEof = e.downcast::<::std::io::Error>()?.kind() {
+                if let AvroError::IO(std::io::ErrorKind::UnexpectedEof) = e {
                     // to not return any error in case we only finished to read cleanly from the stream
-                    return Ok(());
+                    Ok(())
+                } else {
+                    Err(e)
                 }
             }
-        };
-        Err(DecodeError::new("unable to read block").into())
+        }
     }
 }
 
 impl<R: AvroRead> Iterator for Reader<R> {
-    type Item = Result<Value, Error>;
+    type Item = Result<Value, AvroError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // to prevent continuing to read after the first error occurs
@@ -283,7 +283,7 @@ impl<'a> SchemaResolver<'a> {
         reader: &Schema,
         writer_index: usize,
         reader_index: usize,
-    ) -> Result<SchemaPiece, Error> {
+    ) -> Result<SchemaPiece, AvroError> {
         let ws = writer.lookup(writer_index);
         let rs = reader.lookup(reader_index);
         let typ = match (&ws.piece, &rs.piece) {
@@ -519,7 +519,7 @@ impl<'a> SchemaResolver<'a> {
         &mut self,
         writer: SchemaNodeOrNamed,
         reader: SchemaNodeOrNamed,
-    ) -> Result<SchemaPieceOrNamed, Error> {
+    ) -> Result<SchemaPieceOrNamed, AvroError> {
         let inner = match (writer.inner, reader.inner) {
             // Both schemas are unions - the most complicated case, but simpler than it looks.
             // For each variant in the writer, we attempt to find a matching variant in the reader,
@@ -552,14 +552,13 @@ impl<'a> SchemaResolver<'a> {
                     .map(|w_variant| {
                         let (r_idx, r_variant) =
                             r_inner.match_(w_variant, &w2r).ok_or_else(|| {
-                                format!(
+                                SchemaResolutionError::new(format!(
                                     "Failed to match {} against any variant in the reader",
                                     w_variant.get_human_name(writer.root)
-                                )
+                                ))
                             })?;
-                        let resolved = self
-                            .resolve(writer.step(w_variant), reader.step(r_variant))
-                            .map_err(|e| e.to_string())?;
+                        let resolved =
+                            self.resolve(writer.step(w_variant), reader.step(r_variant))?;
                         Ok((r_idx, resolved))
                     })
                     .collect();
@@ -801,7 +800,7 @@ impl<'a> SchemaResolver<'a> {
 /// **NOTE** This function has a quite small niche of usage and does NOT take care of reading the
 /// header and consecutive data blocks; use [`Reader`](struct.Reader.html) if you don't know what
 /// you are doing, instead.
-pub fn from_avro_datum<R: AvroRead>(schema: &Schema, reader: &mut R) -> Result<Value, Error> {
+pub fn from_avro_datum<R: AvroRead>(schema: &Schema, reader: &mut R) -> Result<Value, AvroError> {
     let value = decode(schema.top_node(), reader)?;
     Ok(value)
 }

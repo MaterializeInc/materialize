@@ -9,11 +9,12 @@ use std::u8;
 
 use chrono::{NaiveDate, NaiveDateTime};
 use serde_json::Value as JsonValue;
+use strum_macros::EnumDiscriminants;
 
 use crate::schema::{RecordField, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 
 /// Describes errors happened while performing schema resolution on Avro data.
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SchemaResolutionError(pub String);
 
 impl SchemaResolutionError {
@@ -27,7 +28,7 @@ impl SchemaResolutionError {
 
 impl fmt::Display for SchemaResolutionError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Schema resolution error: {}", self.0)
+        self.0.fmt(f)
     }
 }
 
@@ -41,7 +42,8 @@ pub struct DecimalValue {
     pub scale: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)] // Can't be Eq because there are floats
+#[derive(Clone, Copy, Debug, PartialEq, EnumDiscriminants)] // Can't be Eq because there are floats
+#[strum_discriminants(name(ScalarKind))]
 pub enum Scalar {
     Null,
     Boolean(bool),
