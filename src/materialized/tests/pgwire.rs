@@ -10,7 +10,7 @@
 //! Integration tests for pgwire functionality.
 
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -77,6 +77,52 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
             assert_eq!(err.code(), Some(&SqlState::INTERNAL_ERROR));
         }
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_partial_read() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let query = "VALUES ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7')";
+
+    let simpler = client.query(query, &[])?;
+
+    let mut simpler_iter = simpler.iter();
+
+    let max_rows = 1;
+    let mut trans = client.transaction()?;
+    let portal = trans.bind(query, &[])?;
+    for _ in 0..7 {
+        let rows = trans.query_portal(&portal, max_rows)?;
+        assert_eq!(
+            rows.len(),
+            max_rows as usize,
+            "should get max rows each time"
+        );
+        let eagerly = simpler_iter.next().unwrap().get::<_, String>(0);
+        let prepared: &str = rows.get(0).unwrap().get(0);
+        assert_eq!(prepared, eagerly);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let query = "VALUES (1), (2), (3)";
+
+    let max_rows = 10_000;
+    let mut trans = client.transaction()?;
+    let portal = trans.bind(query, &[])?;
+    let rows = trans.query_portal(&portal, max_rows)?;
+
+    assert_eq!(rows.len(), 3, "row len should be all values");
 
     Ok(())
 }
@@ -368,7 +414,7 @@ fn test_record_types() -> Result<(), Box<dyn Error>> {
 fn test_pgtest() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let dir: std::path::PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
+    let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
 
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
@@ -381,7 +427,7 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
             _ => panic!("only tcp connections supported"),
         };
         let user = config.get_user().unwrap();
-        let timeout = std::time::Duration::from_secs(5);
+        let timeout = Duration::from_secs(5);
 
         pgtest::run_test(tf, &addr, user, timeout);
     });
