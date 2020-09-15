@@ -49,9 +49,11 @@ url = "2"
 [dev-dependencies]
 assert_cmd = "1.0.1"
 chrono = "0.4"
+datadriven = "0.2"
 fallible-iterator = "0.2.0"
 itertools = "0.9"
 pgrepr = { path = "../pgrepr" }
+pgtest = { path = "../pgtest" }
 postgres = { version = "0.17", features = ["with-chrono-0_4"] }
 predicates = "1.0.5"
 repr = { path = "../repr" }

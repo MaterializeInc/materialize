@@ -1,7 +1,18 @@
+# Simple queries with params should be rejected.
+send
+Query {"query": "SELECT $1"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"42P02"},{"typ":"M","value":"there is no parameter $1"}]}
+ReadyForQuery {"status":"I"}
+
 # Test basic prepared statement parameters.
 send
-Parse {"query": "SELECT $1::text, 1 + $2::int4"}
-Bind {"values": ["blah", "4"]}
+Parse {"query": "SELECT $1, $2 + 1, $2 - 1, 1 - $2"}
+Bind {"values": ["blah", "42"]}
 Execute
 Sync
 ----
@@ -11,70 +22,6 @@ ReadyForQuery
 ----
 ParseComplete
 BindComplete
-DataRow {"fields":["blah","5"]}
+DataRow {"fields":["blah","43","41","-41"]}
 CommandComplete {"tag":"SELECT 1"}
-ReadyForQuery {"status":"I"}
-
-# Test portal max rows. Note that even though there are two rows returned,
-# even after the second execute a portal suspended is returned, not
-# command complete.
-send
-Query {"query": "BEGIN"}
-Parse {"query": "VALUES (1), (2)"}
-Bind
-Execute {"max_rows": 1}
-Execute {"max_rows": 1}
-Execute {"max_rows": 1}
-Execute {"max_rows": 1}
-Query {"query": "COMMIT"}
-Sync
-----
-
-until
-ReadyForQuery
-ReadyForQuery
-ReadyForQuery
-----
-CommandComplete {"tag":"BEGIN"}
-ReadyForQuery {"status":"T"}
-ParseComplete
-BindComplete
-DataRow {"fields":["1"]}
-PortalSuspended
-DataRow {"fields":["2"]}
-PortalSuspended
-CommandComplete {"tag":"SELECT 0"}
-CommandComplete {"tag":"SELECT 0"}
-CommandComplete {"tag":"COMMIT"}
-ReadyForQuery {"status":"I"}
-ReadyForQuery {"status":"I"}
-
-# Test when max rows > number of total rows.
-send
-Query {"query": "BEGIN"}
-Parse {"query": "VALUES (1), (2)"}
-Bind
-Execute {"max_rows": 3}
-Execute {"max_rows": 3}
-Execute {"max_rows": 3}
-Query {"query": "COMMIT"}
-Sync
-----
-
-until
-ReadyForQuery
-ReadyForQuery
-ReadyForQuery
-----
-CommandComplete {"tag":"BEGIN"}
-ReadyForQuery {"status":"T"}
-ParseComplete
-BindComplete
-DataRow {"fields":["1"]}
-DataRow {"fields":["2"]}
-CommandComplete {"tag":"SELECT 2"}
-CommandComplete {"tag":"SELECT 0"}
-CommandComplete {"tag":"SELECT 0"}
-CommandComplete {"tag":"COMMIT"}
-ReadyForQuery {"status":"I"}
 ReadyForQuery {"status":"I"}

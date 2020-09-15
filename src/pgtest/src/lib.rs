@@ -26,6 +26,15 @@
 //! - [`Execute`](struct.Execute.html)
 //! - `Sync`
 //!
+//! Supported `until` arguments:
+//! - `no_error_fields` causes `ErrorResponse` messages to have empty
+//! contents. Useful when none of our fields match Postgres. For example `until
+//! no_error_fields`.
+//! - `err_field_typs` specifies the set of error message fields
+//! ([reference](https://www.postgresql.org/docs/current/protocol-error-fields.html)).
+//! For example: `until err_field_typs=VC` would return the severity and code
+//! fields in any ErrorResponse message.
+//!
 //! For example, to execute a simple prepared statement:
 //! ```pgtest
 //! send
@@ -77,7 +86,7 @@ impl PgTest {
             Message::AuthenticationOk => {}
             _ => bail!("expected AuthenticationOk"),
         };
-        pgtest.until(vec!["ReadyForQuery"])?;
+        pgtest.until(vec!["ReadyForQuery"], vec![])?;
         Ok(pgtest)
     }
     pub fn send<F: Fn(&mut BytesMut)>(&mut self, f: F) -> anyhow::Result<()> {
@@ -86,7 +95,11 @@ impl PgTest {
         self.stream.write_all(&self.send_buf)?;
         Ok(())
     }
-    pub fn until(&mut self, until: Vec<&str>) -> anyhow::Result<Vec<String>> {
+    pub fn until(
+        &mut self,
+        until: Vec<&str>,
+        err_field_typs: Vec<char>,
+    ) -> anyhow::Result<Vec<String>> {
         let mut msgs = Vec::with_capacity(until.len());
         for expect in until {
             loop {
@@ -147,11 +160,16 @@ impl PgTest {
                         serde_json::to_string(&ErrorResponse {
                             fields: body
                                 .fields()
-                                .map(|f| {
-                                    Ok(ErrorField {
-                                        typ: f.type_(),
-                                        value: f.value().to_string(),
-                                    })
+                                .filter_map(|f| {
+                                    let typ = f.type_() as char;
+                                    if err_field_typs.contains(&typ) {
+                                        Ok(Some(ErrorField {
+                                            typ,
+                                            value: f.value().to_string(),
+                                        }))
+                                    } else {
+                                        Ok(None)
+                                    }
                                 })
                                 .collect()
                                 .unwrap(),
@@ -230,7 +248,7 @@ pub struct ErrorResponse {
 
 #[derive(Serialize)]
 pub struct ErrorField {
-    pub typ: u8,
+    pub typ: char,
     pub value: String,
 }
 
@@ -241,65 +259,85 @@ impl Drop for PgTest {
 }
 
 pub fn walk(addr: &str, user: &str, timeout: Duration, dir: &str) {
-    datadriven::walk(dir, |tf| {
-        let mut pgt = PgTest::new(addr, user, timeout).unwrap();
-        tf.run(|tc| -> String {
-            let lines = tc.input.lines();
-            match tc.directive.as_str() {
-                "send" => {
-                    for line in lines {
-                        let mut line = line.splitn(2, ' ');
-                        let typ = line.next().unwrap_or("");
-                        let args = line.next().unwrap_or("{}");
-                        pgt.send(|buf| match typ {
-                            "Query" => {
-                                let v: Query = serde_json::from_str(args).unwrap();
-                                frontend::query(&v.query, buf).unwrap();
+    datadriven::walk(dir, |tf| run_test(tf, addr, user, timeout));
+}
+
+pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: Duration) {
+    let mut pgt = PgTest::new(addr, user, timeout).unwrap();
+    tf.run(|tc| -> String {
+        let lines = tc.input.lines();
+        match tc.directive.as_str() {
+            "send" => {
+                for line in lines {
+                    let mut line = line.splitn(2, ' ');
+                    let typ = line.next().unwrap_or("");
+                    let args = line.next().unwrap_or("{}");
+                    pgt.send(|buf| match typ {
+                        "Query" => {
+                            let v: Query = serde_json::from_str(args).unwrap();
+                            frontend::query(&v.query, buf).unwrap();
+                        }
+                        "ReadyForQuery" => {
+                            let v: Query = serde_json::from_str(args).unwrap();
+                            frontend::query(&v.query, buf).unwrap();
+                        }
+                        "Parse" => {
+                            let v: Parse = serde_json::from_str(args).unwrap();
+                            frontend::parse("", &v.query, vec![], buf).unwrap();
+                        }
+                        "Sync" => frontend::sync(buf),
+                        "Bind" => {
+                            let v: Bind = serde_json::from_str(args).unwrap();
+                            let values = v.values.unwrap_or_default();
+                            if frontend::bind(
+                                "",     // portal
+                                "",     // statement
+                                vec![], // formats
+                                values, // values
+                                |t, buf| {
+                                    buf.put_slice(t.as_bytes());
+                                    Ok(IsNull::No)
+                                }, // serializer
+                                vec![], // result_formats
+                                buf,
+                            )
+                            .is_err()
+                            {
+                                panic!("bind error");
                             }
-                            "ReadyForQuery" => {
-                                let v: Query = serde_json::from_str(args).unwrap();
-                                frontend::query(&v.query, buf).unwrap();
-                            }
-                            "Parse" => {
-                                let v: Parse = serde_json::from_str(args).unwrap();
-                                frontend::parse("", &v.query, vec![], buf).unwrap();
-                            }
-                            "Sync" => frontend::sync(buf),
-                            "Bind" => {
-                                let v: Bind = serde_json::from_str(args).unwrap();
-                                let values = v.values.unwrap_or_default();
-                                if frontend::bind(
-                                    "",     // portal
-                                    "",     // statement
-                                    vec![], // formats
-                                    values, // values
-                                    |t, buf| {
-                                        buf.put_slice(t.as_bytes());
-                                        Ok(IsNull::No)
-                                    }, // serializer
-                                    vec![], // result_formats
-                                    buf,
-                                )
-                                .is_err()
-                                {
-                                    panic!("bind error");
-                                }
-                            }
-                            "Execute" => {
-                                let v: Execute = serde_json::from_str(args).unwrap();
-                                frontend::execute("", v.max_rows.unwrap_or(0), buf).unwrap();
-                            }
-                            _ => panic!("unknown message type {}", typ),
-                        })
-                        .unwrap();
-                    }
-                    "".to_string()
+                        }
+                        "Execute" => {
+                            let v: Execute = serde_json::from_str(args).unwrap();
+                            frontend::execute("", v.max_rows.unwrap_or(0), buf).unwrap();
+                        }
+                        _ => panic!("unknown message type {}", typ),
+                    })
+                    .unwrap();
                 }
-                "until" => format!("{}\n", pgt.until(lines.collect()).unwrap().join("\n")),
-                _ => panic!("unknown directive {}", tc.input),
+                "".to_string()
             }
-        })
-    });
+            "until" => {
+                // Our error field values don't always match postgres. Default to reporting
+                // the error code (C) and message (M), but allow the user to specify which ones
+                // they want.
+                let err_field_typs = if tc.args.contains_key("no_error_fields") {
+                    vec![]
+                } else {
+                    match tc.args.get("err_field_typs") {
+                        Some(typs) => typs.join("").chars().collect(),
+                        None => vec!['C', 'M'],
+                    }
+                };
+                format!(
+                    "{}\n",
+                    pgt.until(lines.collect(), err_field_typs)
+                        .unwrap()
+                        .join("\n")
+                )
+            }
+            _ => panic!("unknown directive {}", tc.input),
+        }
+    })
 }
 
 // Frontend messages
