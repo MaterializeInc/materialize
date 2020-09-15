@@ -353,7 +353,7 @@ where
                 coord.report_schema_update(database_id, schema_id, &schema_name, "USER", 1);
 
                 for item_id in items {
-                    if tables_to_report.contains(&item_id) {
+                    if tables_to_report.remove(&item_id) {
                         coord.report_table_update(&item_id, schema_id, 1);
                     }
                 }
@@ -374,7 +374,7 @@ where
             coord.report_schema_update(AMBIENT_DATABASE_ID, schema_id, &schema_name, "SYSTEM", 1);
 
             for item_id in items {
-                if tables_to_report.contains(&item_id) {
+                if tables_to_report.remove(&item_id) {
                     coord.report_table_update(&item_id, schema_id, 1);
                 }
             }
