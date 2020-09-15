@@ -1607,6 +1607,10 @@ fn handle_create_source(
                 Some(_) => bail!("persistence must be a bool!"),
             };
 
+            if enable_persistence && consistency != Consistency::RealTime {
+                unsupported!("BYO source persistence")
+            }
+
             let mut start_offsets = HashMap::new();
             start_offsets.insert(0, start_offset);
 

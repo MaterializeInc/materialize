@@ -15,7 +15,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::Debug;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
@@ -88,8 +87,6 @@ pub struct SourceConfig<'a, G> {
     pub encoding: DataEncoding,
     /// Channel to send persistence information to persister thread
     pub persistence_tx: Option<PersistenceSender>,
-    /// Files to read on startup.
-    pub persisted_files: Vec<PathBuf>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -316,13 +313,13 @@ pub trait SourceInfo<Out> {
         // Default implementation is to do nothing
     }
 
-    /// Read back any files we previously persisted
+    /// Read back data from a previously persisted file.
+    /// Reads messages back from files in offset order, and returns None when there is
+    /// no more data left to process
     /// TODO(rkhaitan): clean this up to return a proper type and potentially a iterator.
-    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Out, Timestamp, i64)> {
-        if !files.is_empty() {
-            error!("unimplemented: this source does not support reading persisted files");
-        }
-        vec![]
+    fn next_persisted_file(&mut self) -> Option<Vec<(Vec<u8>, Out, Timestamp, i64)>> {
+        error!("unimplemented: this source does not support reading persisted files");
+        None
     }
 }
 
@@ -607,7 +604,7 @@ impl ConsistencyInfo {
     ) -> Option<Timestamp> {
         if let Consistency::RealTime = self.source_type {
             // Simply assign to this message the next timestamp that is not closed
-            Some(self.last_closed_ts + 1)
+            Some(self.find_matching_rt_timestamp())
         } else {
             // The source is a BYO source. Must check the list of timestamp updates for the given partition
             match timestamp_histories.borrow().get(id) {
@@ -626,6 +623,11 @@ impl ConsistencyInfo {
                 _ => panic!("Unexpected entry format in TimestampDataUpdates for BYO source"),
             }
         }
+    }
+
+    /// For a given record from a RT source, find the timestamp that is not closed
+    fn find_matching_rt_timestamp(&self) -> Timestamp {
+        self.last_closed_ts + 1
     }
 }
 
@@ -760,7 +762,6 @@ where
         active,
         encoding,
         mut persistence_tx,
-        persisted_files,
         ..
     } = config;
 
@@ -815,14 +816,39 @@ where
 
             if active {
                 if !read_persisted_files {
-                    let msgs = source_info.read_persisted_files(&persisted_files);
-                    for m in msgs {
-                        let ts_cap = cap.delayed(&m.2);
-                        output
-                            .session(&ts_cap)
-                            .give(Ok(SourceOutput::new(m.0, m.1, Some(m.3))));
+                    // Downgrade capability (if possible) before reading next persisted file.
+                    consistency_info.downgrade_capability(
+                        &id,
+                        cap,
+                        source_info,
+                        &timestamp_histories,
+                    );
+
+                    if let Some(msgs) = source_info.next_persisted_file() {
+                        // TODO(rkhaitan) change this to properly re-use old timestamps.
+                        // Currently this is hard to do because there can be arbitrary delays between
+                        // different workers being scheduled, and this means that all persisted state
+                        // can potentially get pulled into memory without being able to close timestamps
+                        // which causes the system to go out of memory.
+                        // For now, constrain we constrain persistence to RT sources, and we re-assign
+                        // timestamps to persisted messages on startup.
+                        let ts = consistency_info.find_matching_rt_timestamp();
+                        let ts_cap = cap.delayed(&ts);
+                        for m in msgs {
+                            output.session(&ts_cap).give(Ok(SourceOutput::new(
+                                m.0,
+                                m.1,
+                                Some(m.3),
+                            )));
+                        }
+
+                        // Yield to give downstream operators time to handle this data.
+                        activator.activate_after(Duration::from_millis(10));
+                        return SourceStatus::Alive;
+                    } else {
+                        // We've finished reading all persistence data
+                        read_persisted_files = true;
                     }
-                    read_persisted_files = true;
                 }
 
                 // Bound execution of operator to prevent a single operator from hogging

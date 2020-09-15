@@ -29,7 +29,7 @@ use dataflow_types::{
 };
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
-use log::{error, info, log_enabled, warn};
+use log::{debug, error, info, log_enabled, warn};
 use repr::Timestamp;
 
 use crate::server::{
@@ -66,6 +66,8 @@ pub struct KafkaSourceInfo {
     worker_id: i32,
     /// Worker Count
     worker_count: i32,
+    /// Files to read on startup
+    persisted_files: Vec<PathBuf>,
 }
 
 impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
@@ -340,38 +342,26 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         self.buffered_metadata.insert(consumer.pid);
     }
 
-    // TODO(rkhaitan): reading files all in one shot like this could cause the system to become
-    // unresponsive
-    fn read_persisted_files(&self, files: &[PathBuf]) -> Vec<(Vec<u8>, Vec<u8>, Timestamp, i64)> {
-        files
-            .iter()
-            .filter(|f| {
-                // We partition the given partitions up amongst workers, so we need to be
-                // careful not to process a partition that this worker was not allocated (or
-                // else we would process files multiple times).
-                match RecordFileMetadata::from_path(f) {
-                    Ok(Some(meta)) => {
-                        assert_eq!(self.source_global_id, meta.source_id);
-                        self.has_partition(meta.partition_id)
-                    }
-                    _ => {
-                        error!("Failed to parse path: {}", f.display());
-                        false
-                    }
-                }
-            })
-            .flat_map(|f| {
-                let data = fs::read(f).unwrap_or_else(|e| {
-                    error!(
-                        "failed to read source persistence file {}: {}",
-                        f.display(),
-                        e
-                    );
-                    vec![]
-                });
-                RecordIter { data, offset: 0 }.map(|r| (r.key, r.value, r.timestamp, r.offset))
-            })
-            .collect()
+    fn next_persisted_file(&mut self) -> Option<Vec<(Vec<u8>, Vec<u8>, Timestamp, i64)>> {
+        if let Some(f) = &self.persisted_files.pop() {
+            debug!("reading persisted data from {}", f.display());
+            let data = fs::read(f).unwrap_or_else(|e| {
+                error!(
+                    "failed to read source persistence file {}: {}",
+                    f.display(),
+                    e
+                );
+                vec![]
+            });
+
+            Some(
+                RecordIter { data, offset: 0 }
+                    .map(|r| (r.key, r.value, r.timestamp, r.offset))
+                    .collect(),
+            )
+        } else {
+            None
+        }
     }
 
     fn persist_message(
@@ -431,6 +421,8 @@ impl KafkaSourceInfo {
             group_id_prefix,
             ..
         } = kc;
+        let worker_id = worker_id.try_into().unwrap();
+        let worker_count = worker_count.try_into().unwrap();
         let kafka_config =
             create_kafka_config(&source_name, &addrs, group_id_prefix, &config_options);
         let source_global_id = source_id.source_id;
@@ -438,6 +430,43 @@ impl KafkaSourceInfo {
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
+        let persisted_files = kc
+            .persisted_files
+            .map(|files| {
+                let mut filtered = files
+                    .iter()
+                    .map(|f| {
+                        let metadata = RecordFileMetadata::from_path(f);
+                        (f, metadata)
+                    })
+                    .filter(|(f, metadata)| {
+                        // We partition the given partitions up amongst workers, so we need to be
+                        // careful not to process a partition that this worker was not allocated (or
+                        // else we would process files multiple times).
+                        match metadata {
+                            Ok(Some(meta)) => {
+                                assert_eq!(source_global_id, meta.source_id);
+                                has_partition(worker_id, worker_count, meta.partition_id)
+                            }
+                            _ => {
+                                error!("Failed to parse path: {}", f.display());
+                                false
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                // Sort the list in reverse order so we can pop items off of it in
+                // order of increasing `start_offset`
+                filtered.sort_by_key(|(_, metadata)| match metadata {
+                    Ok(Some(meta)) => -meta.start_offset,
+                    _ => unreachable!(),
+                });
+
+                filtered.iter().map(|(f, _)| (*f).clone()).collect()
+            })
+            .unwrap_or_default();
+
         KafkaSourceInfo {
             buffered_metadata: HashSet::new(),
             topic_name: topic,
@@ -447,8 +476,9 @@ impl KafkaSourceInfo {
             partition_consumers: VecDeque::new(),
             known_partitions: 0,
             consumer: Arc::new(consumer),
-            worker_id: worker_id.try_into().unwrap(),
-            worker_count: worker_count.try_into().unwrap(),
+            worker_id,
+            worker_count,
+            persisted_files,
         }
     }
 
@@ -456,7 +486,7 @@ impl KafkaSourceInfo {
     /// Ex: if pid=0 and worker_id = 0, then true
     /// if pid=1 and worker_id = 0, then false
     fn has_partition(&self, partition_id: i32) -> bool {
-        (partition_id % self.worker_count) == self.worker_id
+        has_partition(self.worker_id, self.worker_count, partition_id)
     }
 
     /// Returns a count of total number of consumers for this source
@@ -702,4 +732,8 @@ impl ConsumerContext for GlueConsumerContext {
     fn message_queue_nonempty_callback(&self) {
         self.activate();
     }
+}
+
+fn has_partition(worker_id: i32, worker_count: i32, partition_id: i32) -> bool {
+    (partition_id % worker_count) == worker_id
 }
