@@ -325,7 +325,6 @@ where
         }
 
         // Insert initial named objects into system tables.
-        // Databases and named schemas.
         let dbs: Vec<(String, i64, Vec<(String, i64, Vec<GlobalId>)>)> = coord
             .catalog
             .databases()
@@ -360,7 +359,6 @@ where
                 }
             }
         }
-        // Ambient schemas.
         let ambient_schemas: Vec<(String, i64, Vec<GlobalId>)> = coord
             .catalog
             .ambient_schemas()
@@ -2200,8 +2198,8 @@ where
                     if let Ok(desc) = item.desc(&name) {
                         self.report_column_updates(desc, *id, 1);
                     }
-                    match item.clone() {
-                        CatalogItem::Index(index) => self.report_index_update(*id, &index, 1),
+                    match item {
+                        CatalogItem::Index(index) => self.report_index_update(*id, index, 1),
                         CatalogItem::Table(_) => self.report_table_update(id, *schema_id, 1),
                         _ => (),
                     }
@@ -2235,7 +2233,7 @@ where
                     }
                     _ => unreachable!("DroppedIndex for non-index item"),
                 },
-                catalog::OpStatus::DroppedItem { entry, schema_id } => {
+                catalog::OpStatus::DroppedItem { schema_id, entry } => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
                     match entry.item() {
                         CatalogItem::Table(_) => {

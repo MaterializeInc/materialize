@@ -772,12 +772,11 @@ fn handle_show_tables(
         ORDER BY \
             mz_catalog_names.tables {};
     ", full_projection, string_split_index, schema_name, database_equality, filter, full_order_by);
-    if let Statement::Select(SelectStatement { query, as_of: _ }) =
-        parse(formatted)?.get(0).unwrap()
-    {
-        handle_computed_select(scx, *query.clone())
-    } else {
-        unreachable!()
+    match parse(formatted)?.get(0).unwrap() {
+        Statement::Select(SelectStatement { query, as_of: _ }) => {
+            handle_computed_select(scx, *query.clone())
+        }
+        _ => unreachable!(), // Known to be valid SQL.
     }
 }
 

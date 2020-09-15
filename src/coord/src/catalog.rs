@@ -1186,8 +1186,8 @@ impl Catalog {
                     } else {
                         self.indexes.remove(&id);
                         OpStatus::DroppedItem {
-                            entry: metadata,
                             schema_id,
+                            entry: metadata,
                         }
                     }
                 }
@@ -1485,8 +1485,8 @@ pub enum OpStatus {
         nullable: Vec<bool>,
     },
     DroppedItem {
-        entry: CatalogEntry,
         schema_id: i64,
+        entry: CatalogEntry,
     },
     UpdatedItem {
         id: GlobalId,
