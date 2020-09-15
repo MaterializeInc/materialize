@@ -229,6 +229,9 @@ mz_columns            SYSTEM
 mz_indexes            SYSTEM
 mz_tables             SYSTEM
 
+! SHOW EXTENDED TABLES
+SHOW EXTENDED TABLES not yet supported
+
 > SHOW FULL VIEWS FROM mz_catalog
 VIEWS                             TYPE   QUERYABLE MATERIALIZED
 ---------------------------------------------------------------
