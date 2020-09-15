@@ -224,6 +224,7 @@ mz_databases
 mz_schemas
 mz_columns
 mz_indexes
+mz_tables
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

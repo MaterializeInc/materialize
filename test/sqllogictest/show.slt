@@ -200,6 +200,6 @@ SHOW TABLES LIKE 'abc'
 ----
 
 query T
-SHOW TABLES WHERE "TABLES" = 'xyz'
+SHOW TABLES WHERE tables = 'xyz'
 ----
 xyz
