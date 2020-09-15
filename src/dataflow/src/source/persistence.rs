@@ -186,7 +186,9 @@ impl RecordFileMetadata {
         Ok(Some(Self {
             source_id: parts[1].parse()?,
             partition_id: parts[2].parse()?,
-            start_offset: parts[3].parse()?,
+            // Here we revert the transformation we made to convert this to a 0-indexed
+            // offset in `generate_file_name`.
+            start_offset: parts[3].parse::<i64>()? + 1,
             end_offset: parts[4].parse()?,
         }))
     }
@@ -198,9 +200,23 @@ impl RecordFileMetadata {
         start_offset: i64,
         end_offset: i64,
     ) -> String {
+        // We get start and end offsets as 1-indexed MzOffsets that denote the set of
+        // offsets [start, end] (in 1-indexed offsets). Unfortunately, Kafka offsets are
+        // actually 0-indexed, and therefore this construction is not easily explainable to
+        // users. We will instead convert this to [start, end) in 0-indexed offsets.
+        // TODO(rkhaitan): revisit MzOffsets being 1-indexed. This seems extremely confusing
+        // for questionable value.
+        assert!(
+            start_offset > 0,
+            "start offset has to be a valid 1-indexed offset"
+        );
         format!(
             "{}-{}-{}-{}-{}",
-            RECORD_FILE_PREFIX, source_id, partition_id, start_offset, end_offset
+            RECORD_FILE_PREFIX,
+            source_id,
+            partition_id,
+            start_offset - 1,
+            end_offset
         )
     }
 }
