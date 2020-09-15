@@ -287,7 +287,6 @@ where
     }
 
     /// Binds a relation_expr and keys to an imported arrangement.
-    #[allow(dead_code)]
     pub fn set_trace(
         &mut self,
         gid: GlobalId,
