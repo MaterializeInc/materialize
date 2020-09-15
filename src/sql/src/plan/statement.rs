@@ -38,13 +38,14 @@ use sql_parser::ast::{
     BinaryOperator, ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement,
     CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
     CreateViewStatement, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
-    ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement, Join,
-    JoinConstraint, JoinOperator, ObjectName, ObjectType, OrderByExpr, Query, Select, SelectItem,
-    SelectStatement, SetExpr, SetVariableStatement, SetVariableValue, ShowColumnsStatement,
-    ShowCreateIndexStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
-    ShowCreateTableStatement, ShowCreateViewStatement, ShowDatabasesStatement,
-    ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
-    SqlOption, Statement, TableAlias, TableFactor, TableWithJoins, TailStatement, Value,
+    ExplainStatement, Explainee, Expr, Format, Function, FunctionArgs, Ident, IfExistsBehavior,
+    InsertStatement, Join, JoinConstraint, JoinOperator, ObjectName, ObjectType, OrderByExpr,
+    Query, Select, SelectItem, SelectStatement, SetExpr, SetVariableStatement, SetVariableValue,
+    ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
+    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
+    ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter,
+    ShowVariableStatement, SqlOption, Statement, TableAlias, TableFactor, TableWithJoins,
+    TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -591,6 +592,7 @@ fn handle_show_objects(
 
     match object_type {
         ObjectType::Schema => handle_show_schemas(scx, extended, full, from, filter),
+        ObjectType::Table => handle_show_tables(scx, extended, full, from, filter),
         _ => {
             let items = if let Some(from) = from {
                 let (database_spec, schema_name) = scx.resolve_schema(from)?;
@@ -718,6 +720,184 @@ fn handle_show_schemas(
             types: vec![],
         },
     )
+}
+
+fn handle_show_tables(
+    scx: &StatementContext,
+    extended: bool,
+    full: bool,
+    from: Option<ObjectName>,
+    filter: Option<ShowStatementFilter>,
+) -> Result<Plan, anyhow::Error> {
+    if extended {
+        unsupported!("SHOW EXTENDED TABLES");
+    }
+
+    let (mut selection, table_name_index) = {
+        let (database_specifier, schema_name) = if let Some(from) = from {
+            scx.resolve_schema(from)?
+        } else {
+            (scx.resolve_default_database()?, "public".to_owned())
+        };
+        let mut selection = Expr::BinaryOp {
+            left: Box::new(Expr::Identifier(vec![
+                Ident::new("mz_schemas"),
+                Ident::new("schema"),
+            ])),
+            op: BinaryOperator::Eq,
+            right: Box::new(Expr::Value(Value::String(schema_name))),
+        };
+        let table_name_index = match database_specifier {
+            DatabaseSpecifier::Name(name) => {
+                selection = Expr::BinaryOp {
+                    left: Box::new(selection),
+                    op: BinaryOperator::And,
+                    right: Box::new(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_databases"),
+                            Ident::new("database"),
+                        ])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Value(Value::String(name))),
+                    }),
+                };
+                3
+            }
+            DatabaseSpecifier::Ambient => 2,
+        };
+        (selection, table_name_index)
+    };
+    if let Some(show_statement_filter) = filter_expr(filter, "name") {
+        selection = Expr::BinaryOp {
+            left: Box::new(selection),
+            op: BinaryOperator::And,
+            right: Box::new(show_statement_filter),
+        }
+    }
+
+    let name_select = Select::default()
+        .from(TableWithJoins {
+            relation: TableFactor::Table {
+                name: ObjectName(vec![Ident::new("mz_catalog_names")]),
+                alias: None,
+            },
+            joins: vec![],
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("global_id")]),
+            alias: None,
+        })
+        .project(SelectItem::Expr {
+            expr: Expr::Function(Function {
+                name: ObjectName(vec![Ident::new("split_part")]),
+                args: FunctionArgs::Args(vec![
+                    Expr::Identifier(vec![Ident::new("name")]),
+                    Expr::Value(Value::String(".".to_owned())),
+                    Expr::Value(Value::Number(table_name_index.to_string())),
+                ]),
+                filter: None,
+                over: None,
+                distinct: false,
+            }),
+            alias: Some(Ident::new("name")),
+        });
+
+    let mut select = Select::default()
+        .from(TableWithJoins {
+            relation: TableFactor::Table {
+                name: ObjectName(vec![Ident::new("mz_tables")]),
+                alias: None,
+            },
+            joins: vec![
+                Join {
+                    relation: TableFactor::Derived {
+                        lateral: false,
+                        subquery: Box::new(Query {
+                            ctes: vec![],
+                            body: SetExpr::Select(Box::new(name_select)),
+                            order_by: vec![],
+                            limit: None,
+                            offset: None,
+                            fetch: None,
+                        }),
+                        alias: Some(TableAlias {
+                            name: Ident::new("mz_catalog_names"),
+                            columns: vec![Ident::new("global_id"), Ident::new("name")],
+                            strict: false,
+                        }),
+                    },
+                    join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_tables"),
+                            Ident::new("global_id"),
+                        ])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_catalog_names"),
+                            Ident::new("global_id"),
+                        ])),
+                    })),
+                },
+                Join {
+                    relation: TableFactor::Table {
+                        name: ObjectName(vec![Ident::new("mz_schemas")]),
+                        alias: None,
+                    },
+                    join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_tables"),
+                            Ident::new("schema_id"),
+                        ])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_schemas"),
+                            Ident::new("schema_id"),
+                        ])),
+                    })),
+                },
+                Join {
+                    relation: TableFactor::Table {
+                        name: ObjectName(vec![Ident::new("mz_databases")]),
+                        alias: None,
+                    },
+                    join_operator: JoinOperator::LeftOuter(JoinConstraint::On(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_schemas"),
+                            Ident::new("database_id"),
+                        ])),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Identifier(vec![
+                            Ident::new("mz_databases"),
+                            Ident::new("id"),
+                        ])),
+                    })),
+                },
+            ],
+        })
+        .selection(Some(selection))
+        .project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("mz_catalog_names"), Ident::new("name")]),
+            alias: Some(Ident::new("tables")),
+        });
+    if full {
+        select = select.project(SelectItem::Expr {
+            expr: Expr::Identifier(vec![Ident::new("mz_schemas"), Ident::new("type")]),
+            alias: None,
+        });
+    }
+    let mut query = Query::select(select);
+    query.order_by = vec![OrderByExpr {
+        expr: Expr::Identifier(vec![Ident::new("tables".to_owned())]),
+        asc: Some(true),
+    }];
+    if full {
+        query.order_by.push(OrderByExpr {
+            expr: Expr::Identifier(vec![Ident::new("type".to_owned())]),
+            asc: Some(true),
+        })
+    }
+
+    handle_computed_select(scx, query)
 }
 
 fn handle_show_indexes(

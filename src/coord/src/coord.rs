@@ -361,13 +361,25 @@ where
             }
         }
         // Ambient schemas.
-        let ambient_schemas: Vec<(String, i64)> = coord
+        let ambient_schemas: Vec<(String, i64, Vec<GlobalId>)> = coord
             .catalog
             .ambient_schemas()
-            .map(|(schema_name, schema)| (schema_name.to_string(), schema.id))
+            .map(|(schema_name, schema)| {
+                (
+                    schema_name.to_string(),
+                    schema.id,
+                    schema.items.values().cloned().collect(),
+                )
+            })
             .collect();
-        for (schema_name, schema_id) in ambient_schemas {
+        for (schema_name, schema_id, items) in ambient_schemas {
             coord.report_schema_update(AMBIENT_DATABASE_ID, schema_id, &schema_name, "SYSTEM", 1);
+
+            for item_id in items {
+                if tables_to_report.contains(&item_id) {
+                    coord.report_table_update(&item_id, schema_id, 1);
+                }
+            }
         }
         coord.report_schema_update(
             AMBIENT_DATABASE_ID,
