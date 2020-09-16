@@ -25,7 +25,7 @@ use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, Row};
 use sql::ast::display::AstDisplay;
 use sql::catalog::CatalogError as SqlCatalogError;
-use sql::names::{DatabaseSpecifier, FullName, PartialName};
+use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
@@ -539,18 +539,26 @@ impl Catalog {
         database: Option<String>,
         schema_name: &str,
         conn_id: u32,
-    ) -> Result<DatabaseSpecifier, SqlCatalogError> {
+    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), SqlCatalogError> {
         if let Some(database) = database {
             let database_spec = DatabaseSpecifier::Name(database);
             self.get_schema(&database_spec, schema_name, conn_id)
-                .map(|_| database_spec)
+                .map(|schema| (database_spec, SchemaSpecifier::new(schema_name, schema.id)))
         } else {
             match self.get_schema(current_database, schema_name, conn_id) {
-                Ok(_) => Ok(current_database.clone()),
+                Ok(schema) => Ok((
+                    current_database.clone(),
+                    SchemaSpecifier::new(schema_name, schema.id),
+                )),
                 Err(SqlCatalogError::UnknownSchema(_))
                 | Err(SqlCatalogError::UnknownDatabase(_)) => self
                     .get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id)
-                    .map(|_| DatabaseSpecifier::Ambient),
+                    .map(|schema| {
+                        (
+                            DatabaseSpecifier::Ambient,
+                            SchemaSpecifier::new(schema_name, schema.id),
+                        )
+                    }),
                 Err(e) => Err(e),
             }
         }
@@ -591,8 +599,8 @@ impl Catalog {
         for &schema_name in schemas {
             let database_name = name.database.clone();
             let res = self.resolve_schema(&current_database, database_name, schema_name, conn_id);
-            let database_spec = match res {
-                Ok(database_spec) => database_spec,
+            let (database_spec, _) = match res {
+                Ok(specs) => specs,
                 Err(SqlCatalogError::UnknownSchema(_)) => continue,
                 Err(e) => return Err(e),
             };
@@ -1572,7 +1580,7 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         &self,
         database: Option<String>,
         schema_name: &str,
-    ) -> Result<DatabaseSpecifier, SqlCatalogError> {
+    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), SqlCatalogError> {
         Ok(self.catalog.resolve_schema(
             &self.database_spec(),
             database,

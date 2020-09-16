@@ -55,6 +55,21 @@ impl From<Option<String>> for DatabaseSpecifier {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct SchemaSpecifier {
+    pub name: String,
+    pub id: i64,
+}
+
+impl SchemaSpecifier {
+    pub fn new(name: &str, id: i64) -> SchemaSpecifier {
+        SchemaSpecifier {
+            name: name.to_owned(),
+            id,
+        }
+    }
+}
+
 impl From<FullName> for ObjectName {
     fn from(full_name: FullName) -> ObjectName {
         let mut name_parts = Vec::new();

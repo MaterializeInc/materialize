@@ -50,7 +50,7 @@ use sql_parser::ast::{
 use crate::ast::InsertSource;
 use crate::catalog::{Catalog, CatalogItemType};
 use crate::kafka_util;
-use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
 use crate::normalize;
 use crate::parse::parse;
 use crate::plan::error::PlanError;
@@ -595,8 +595,8 @@ fn handle_show_objects(
         ObjectType::Table => handle_show_tables(scx, extended, full, from, filter),
         _ => {
             let items = if let Some(from) = from {
-                let (database_spec, schema_name) = scx.resolve_schema(from)?;
-                scx.catalog.list_items(&database_spec, &schema_name)
+                let (database_spec, schema_spec) = scx.resolve_schema(from)?;
+                scx.catalog.list_items(&database_spec, &schema_spec.name)
             } else {
                 scx.catalog
                     .list_items(&scx.resolve_default_database()?, "public")
@@ -733,46 +733,33 @@ fn handle_show_tables(
         unsupported!("SHOW EXTENDED TABLES");
     }
 
-    let (database_specifier, schema_name) = if let Some(from) = from {
-        scx.resolve_schema(from)?
+    let schema_spec = if let Some(from) = from {
+        scx.resolve_schema(from)?.1
     } else {
-        (scx.resolve_default_database()?, "public".to_owned())
-    };
-    let (database_equality, string_split_index) = match database_specifier {
-        DatabaseSpecifier::Ambient => ("".to_owned(), 2),
-        DatabaseSpecifier::Name(name) => (format!("AND mz_databases.database = '{}'", name), 3),
+        scx.resolve_default_schema()?
     };
     let filter = match filter {
         Some(ShowStatementFilter::Like(like)) => format!("AND tables LIKE {}", Value::String(like)),
         Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
         None => "".to_owned(),
     };
-    let (full_projection, full_order_by) = if full {
-        (", mz_schemas.type", ", mz_schemas.type ASC")
-    } else {
-        ("", "ASC")
-    };
 
-    let formatted = format!("\
-        SELECT \
-            mz_catalog_names.tables \
-            {} \
-        FROM \
-            mz_tables \
-            INNER JOIN (SELECT global_id, split_part(name, '.', {}) as tables FROM mz_catalog_names) as mz_catalog_names \
-            ON mz_tables.global_id = mz_catalog_names.global_id \
-            INNER JOIN mz_schemas \
-            ON mz_tables.schema_id = mz_schemas.schema_id \
-            LEFT OUTER JOIN mz_databases \
-            ON mz_schemas.database_id = mz_databases.id \
-        WHERE \
-            mz_schemas.schema = '{}' \
-            {} \
-            {} \
-        ORDER BY \
-            mz_catalog_names.tables {};
-    ", full_projection, string_split_index, schema_name, database_equality, filter, full_order_by);
-    match parse(formatted)?.into_element() {
+    let query = if full {
+        format!(
+            "SELECT name, type
+            FROM mz_tables
+            JOIN mz_schemas ON mz_tables.schema_id = mz_schemas.schema_id
+            WHERE schema_id = {} {}
+            ORDER BY name, type",
+            schema_spec.id, filter
+        )
+    } else {
+        format!(
+            "SELECT name FROM mz_tables WHERE schema_id = {} {} ORDER BY name",
+            schema_spec.id, filter
+        )
+    };
+    match parse(query)?.into_element() {
         Statement::Select(SelectStatement { query, as_of: _ }) => {
             handle_computed_select(scx, *query)
         }
@@ -2062,24 +2049,24 @@ fn handle_drop_schema(
         unsupported!("DROP SCHEMA with multiple schemas");
     }
     match scx.resolve_schema(names.into_element()) {
-        Ok((database_spec, schema_name)) => {
+        Ok((database_spec, schema_spec)) => {
             if let DatabaseSpecifier::Ambient = database_spec {
                 bail!(
                     "cannot drop schema {} because it is required by the database system",
-                    schema_name
+                    schema_spec.name
                 );
             }
-            let mut items = scx.catalog.list_items(&database_spec, &schema_name);
+            let mut items = scx.catalog.list_items(&database_spec, &schema_spec.name);
             if !cascade && items.next().is_some() {
                 bail!(
                     "schema '{}.{}' cannot be dropped without CASCADE while it contains objects",
                     database_spec,
-                    schema_name
+                    schema_spec.name
                 );
             }
             Ok(Plan::DropSchema {
                 database_name: database_spec,
-                schema_name,
+                schema_name: schema_spec.name,
             })
         }
         Err(_) if if_exists => {
@@ -2418,6 +2405,12 @@ impl<'a> StatementContext<'a> {
         Ok(DatabaseSpecifier::Name(name.into()))
     }
 
+    pub fn resolve_default_schema(&self) -> Result<SchemaSpecifier, PlanError> {
+        Ok(self
+            .resolve_schema(ObjectName(vec![Ident::new("public")]))?
+            .1)
+    }
+
     pub fn resolve_database(&self, name: ObjectName) -> Result<String, PlanError> {
         if name.0.len() != 1 {
             return Err(PlanError::OverqualifiedDatabaseName(name.to_string()));
@@ -2434,14 +2427,13 @@ impl<'a> StatementContext<'a> {
     pub fn resolve_schema(
         &self,
         mut name: ObjectName,
-    ) -> Result<(DatabaseSpecifier, String), PlanError> {
+    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), PlanError> {
         if name.0.len() > 2 {
             return Err(PlanError::OverqualifiedSchemaName(name.to_string()));
         }
         let schema_name = normalize::ident(name.0.pop().unwrap());
         let database_spec = name.0.pop().map(normalize::ident);
-        let database_spec = self.catalog.resolve_schema(database_spec, &schema_name)?;
-        Ok((database_spec, schema_name))
+        Ok(self.catalog.resolve_schema(database_spec, &schema_name)?)
     }
 
     pub fn resolve_item(&self, name: ObjectName) -> Result<FullName, PlanError> {
