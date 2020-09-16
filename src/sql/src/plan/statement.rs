@@ -151,7 +151,7 @@ pub fn describe_statement(
                     describe_statement(
                         catalog,
                         Statement::Select(SelectStatement {
-                            query: Box::new(q),
+                            query: q,
                             as_of: None,
                         }),
                         param_types_in,
@@ -257,7 +257,7 @@ pub fn describe_statement(
             // `handle_statement` is called. This will require a complicated
             // dance when bind parameters are implemented, so punting for now.
             let (_relation_expr, desc, _finishing) =
-                query::plan_root_query(&scx, *query, QueryLifetime::OneShot)?;
+                query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
             let mut param_types = vec![];
             for (i, (n, typ)) in scx.unwrap_param_types().into_iter().enumerate() {
                 if n != i + 1 {
@@ -552,7 +552,7 @@ fn handle_show_databases(
     handle_select(
         scx,
         SelectStatement {
-            query: Box::new(Query::select(select)),
+            query: Query::select(select),
             as_of: None,
         },
         &Params {
@@ -710,7 +710,7 @@ fn handle_show_schemas(
     handle_select(
         scx,
         SelectStatement {
-            query: Box::new(Query::select(select)),
+            query: Query::select(select),
             as_of: None,
         },
         &Params {
@@ -989,10 +989,7 @@ fn handle_show_columns(
 
     handle_select(
         scx,
-        SelectStatement {
-            query: Box::new(query),
-            as_of: None,
-        },
+        SelectStatement { query, as_of: None },
         &Params {
             datums: Row::pack(&[]),
             types: vec![],
@@ -1404,7 +1401,7 @@ fn handle_create_view(
         None
     };
     let (mut relation_expr, mut desc, finishing) =
-        query::plan_root_query(scx, *query.clone(), QueryLifetime::Static)?;
+        query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
     relation_expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     relation_expr.finish(finishing);
@@ -2185,7 +2182,7 @@ fn handle_select(
     SelectStatement { query, as_of }: SelectStatement,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    let (relation_expr, _, finishing) = handle_query(scx, *query, params, QueryLifetime::OneShot)?;
+    let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
         Some(ts) => PeekWhen::AtTimestamp(ts),
         None => PeekWhen::Immediately,
@@ -2202,10 +2199,7 @@ fn handle_select(
 fn handle_computed_select(scx: &StatementContext, query: Query) -> Result<Plan, anyhow::Error> {
     handle_select(
         scx,
-        SelectStatement {
-            query: Box::new(query),
-            as_of: None,
-        },
+        SelectStatement { query, as_of: None },
         &Params {
             datums: Row::pack(&[]),
             types: vec![],
@@ -2249,7 +2243,7 @@ fn handle_explain(
                 catalog: scx.catalog,
                 param_types: scx.param_types.clone(),
             };
-            (scx, *query)
+            (scx, query)
         }
         Explainee::Query(query) => (scx.clone(), query),
     };

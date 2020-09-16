@@ -106,7 +106,7 @@ impl_display!(Statement);
 /// `SELECT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SelectStatement {
-    pub query: Box<Query>,
+    pub query: Query,
     pub as_of: Option<Expr>,
 }
 
@@ -373,7 +373,7 @@ pub struct CreateViewStatement {
     pub name: ObjectName,
     pub columns: Vec<Ident>,
     pub with_options: Vec<SqlOption>,
-    pub query: Box<Query>,
+    pub query: Query,
     pub if_exists: IfExistsBehavior,
     pub temporary: bool,
     pub materialized: bool,
@@ -950,7 +950,7 @@ impl_display!(ExplainStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsertSource {
-    Query(Box<Query>),
+    Query(Query),
     DefaultValues,
 }
 

@@ -195,7 +195,7 @@ impl Parser {
                     "SELECT" | "WITH" | "VALUES" => {
                         self.prev_token();
                         Ok(Statement::Select(SelectStatement {
-                            query: Box::new(self.parse_query()?),
+                            query: self.parse_query()?,
                             as_of: self.parse_optional_as_of()?,
                         }))
                     }
@@ -229,7 +229,7 @@ impl Parser {
                 Token::LParen => {
                     self.prev_token();
                     Ok(Statement::Select(SelectStatement {
-                        query: Box::new(self.parse_query()?),
+                        query: self.parse_query()?,
                         as_of: None, // Only the outermost SELECT may have an AS OF clause.
                     }))
                 }
@@ -1622,7 +1622,7 @@ impl Parser {
         let columns = self.parse_parenthesized_column_list(Optional)?;
         let with_options = self.parse_with_options()?;
         self.expect_keyword("AS")?;
-        let query = Box::new(self.parse_query()?);
+        let query = self.parse_query()?;
         // Optional `WITH [ CASCADED | LOCAL ] CHECK OPTION` is widely supported here.
         Ok(Statement::CreateView(CreateViewStatement {
             name,
@@ -2901,7 +2901,7 @@ impl Parser {
         let source = if self.parse_keywords(vec!["DEFAULT", "VALUES"]) {
             InsertSource::DefaultValues
         } else {
-            InsertSource::Query(Box::new(self.parse_query()?))
+            InsertSource::Query(self.parse_query()?)
         };
         Ok(Statement::Insert(InsertStatement {
             table_name,
