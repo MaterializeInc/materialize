@@ -31,7 +31,8 @@ pub mod util;
 fn test_bind_params() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let config = util::Config::default().experimental_mode();
+    let (_server, mut client) = util::start_server(config)?;
 
     match client.query("SELECT ROW(1, 2) = $1", &[&42_i32]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
@@ -76,6 +77,14 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
             // on #3147.
             assert_eq!(err.code(), Some(&SqlState::INTERNAL_ERROR));
         }
+    }
+
+    // Test that `INSERT` statements support prepared statements.
+    {
+        client.batch_execute("CREATE TABLE t (a int)")?;
+        client.query("INSERT INTO t VALUES ($1)", &[&42_i32])?;
+        let val: i32 = client.query_one("SELECT * FROM t", &[])?.get(0);
+        assert_eq!(val, 42);
     }
 
     Ok(())
