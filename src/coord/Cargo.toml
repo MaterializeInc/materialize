@@ -43,3 +43,4 @@ tokio = "0.2"
 transform = { path = "../transform" }
 unicase = "2.6.0"
 url = "2"
+uuid = { version = "0.8", features = ["v4"] }

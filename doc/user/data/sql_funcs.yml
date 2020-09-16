@@ -244,6 +244,11 @@
     description: Converts Unix epoch (seconds since 00:00:00 UTC on January 1, 1970)
       to timestamp
 
+- type: UUID
+  functions:
+  - signature: mz_cluster_id() -> uuid
+    description: The `uuid` uniquely identifying this Materialize cluster.
+
 - type: JSON
   functions:
   - signature: 'jsonb_array_elements(j: jsonb) -> Col<jsonb>'

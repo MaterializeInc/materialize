@@ -52,6 +52,9 @@ Wrap your release notes at the 80 character mark.
 - Support [`CREATE TABLE`](/sql/create-table), [`DROP TABLE`](/sql/drop-table),
   [`INSERT`](/sql/insert) and [`SHOW CREATE TABLE`](/sql/show-create-table).
 
+- Generate a persistent, unique identifier associated with each
+  cluster. This can be retrieved using a new `mz_cluster_id()` SQL function.
+
 <span id="v0.4.2"></span>
 ## v0.4.2
 
