@@ -1988,11 +1988,8 @@ impl SchemaCache {
     /// If not, performs schema resolution on the reader and writer and
     /// returns the result.
     async fn get(&mut self, id: i32, reader_schema: &Schema) -> anyhow::Result<&Schema> {
-        match self.cache.entry(id) {
-            Entry::Occupied(o) => o
-                .into_mut()
-                .as_ref()
-                .map_err(|e| anyhow::Error::new(e.clone())),
+        let entry = match self.cache.entry(id) {
+            Entry::Occupied(o) => o.into_mut(),
             Entry::Vacant(v) => {
                 // An issue with _fetching_ the schema should be returned
                 // immediately, and not cached, since it might get better on the
@@ -2006,8 +2003,7 @@ impl SchemaCache {
                 // which  we don't want to repeat for every record. So, parse and resolve it, and cache the
                 // result (whether schema or error).
                 let rf = &self.reader_fingerprint.bytes;
-                let result = (|| {
-                    let schema = Schema::parse_str(&response.raw)?;
+                let result = Schema::parse_str(&response.raw).and_then(|schema| {
                     if &schema.fingerprint::<Sha256>().bytes == rf {
                         Ok(schema)
                     } else {
@@ -2016,12 +2012,11 @@ impl SchemaCache {
                         let resolved = resolve_schemas(&schema, reader_schema)?;
                         Ok(resolved)
                     }
-                })();
+                });
                 v.insert(result)
-                    .as_ref()
-                    .map_err(|e| anyhow::Error::new(e.clone()))
             }
-        }
+        };
+        entry.as_ref().map_err(|e| anyhow::Error::new(e.clone()))
     }
 }
 
