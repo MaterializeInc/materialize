@@ -746,16 +746,16 @@ fn handle_show_tables(
 
     let query = if full {
         format!(
-            "SELECT name, type
+            "SELECT tables, type
             FROM mz_tables
             JOIN mz_schemas ON mz_tables.schema_id = mz_schemas.schema_id
             WHERE schema_id = {} {}
-            ORDER BY name, type",
+            ORDER BY tables, type",
             schema_spec.id, filter
         )
     } else {
         format!(
-            "SELECT name FROM mz_tables WHERE schema_id = {} {} ORDER BY name",
+            "SELECT tables FROM mz_tables WHERE schema_id = {} {} ORDER BY tables",
             schema_spec.id, filter
         )
     };
