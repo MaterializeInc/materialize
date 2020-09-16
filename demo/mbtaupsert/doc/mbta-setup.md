@@ -4,10 +4,10 @@
 
 The Boston public transit system goes to sleep at around midnight local time and
 generally does not wake up until 5-6 am, so there may be no data in the stream
-when the system has closed for the night. 
+when the system has closed for the night.
 
-To make sure that the demo works properly, avoid changing things in 
-[workspace](../workspace). 
+To make sure that the demo works properly, avoid changing things in
+[workspace](../workspace).
 
 All the setup assumes you are running commands from [mbtaupsert directory](../)
 (<materialize root directory>/demo/mbtaupsert).
@@ -18,8 +18,8 @@ Get an API key from https://api-v3.mbta.com/ . This will enable you to send 1000
 
 ## Automatic setup (Docker)
 
-To automatically start the demo using Docker, run 
-`API_KEY=<insert_api_key_here> ../../bin/mzconduct run mbtaupsert -w start-live-data`. 
+To automatically start the demo using Docker, run
+`API_KEY=<insert_api_key_here> ../../bin/mzconduct run mbtaupsert -w start-live-data`.
 
 By default, the streams that get fired up correspond to the ones in
 [demo/all-frequent-routes-config-weekend](../demo/all-frequent-routes-config-weekend),
@@ -44,22 +44,22 @@ Then run `docker stop <container_id> -t 30`. The `30` can be replaced with
 however many seconds you think it will take to archive all the data. You can
 tear down the rest of the containers using the command above.
 
-Archives can be found at `workspace-<current_date_and_time>.tar.gz` file 
+Archives can be found at `workspace-<current_date_and_time>.tar.gz` file
 [in the `archive` directory](../archive).
 
-To replay an archive, run 
+To replay an archive, run
 `API_KEY=<insert_api_key_here> ARCHIVE_PATH=<insert_path_archive> ../../bin/mzconduct run mbtaupsert -w replay`. Do not uncompress the archive.
 
 ## Automatic setup (Bash)
 
-To start and tear down a bunch of streams at once, create a config file like 
+To start and tear down a bunch of streams at once, create a config file like
 [this one](/demo/predictions-config).
 
 Then run `ci/mbta-demo-cmd.sh start <path_to_config_file> <api_key> <kafka_address>`.
 This should start up live kafka streams for every stream you specified in the
 config file.
 
-To tear down all the streams at once, run 
+To tear down all the streams at once, run
 `ci/mbta-demo-cmd.sh purge <path_to_config_file> <kafka_address>`.
 The data downloaded from the MBTA streams will be automatically archived.
 Replace `purge` with `pause` if you don't want to delete the kafka topics created.
@@ -81,13 +81,13 @@ of these two files somehow and want to tear down the processes, use:
 * `pkill curl` to kill all the curl commands downloading the streams. Note that
    you should kill the connection maintenance threads before killing the curl commands because
    the connection maintenance threads will spin up a new curl command if the curl command goes
-   down. 
+   down.
 * `ps -f|grep "sleep 1"` to find the thread that prints the current time every
   second. Note that you want to kill the parent pid as opposed to the pid itself.
 
 *Note 3*: Kafka topic deletion doesn't seem to always delete the metadata
    associated with a topic. If you want to recreate a topic with say, a
-   different number of partitions, you should rename it in the config file. 
+   different number of partitions, you should rename it in the config file.
 
 ## Manual setup (Unix)
 
@@ -115,11 +115,11 @@ To manually connect to a single MBTA stream and load it into Kafka:
     "https://api-v3.mbta.com/predictions/?filter\\[route\\]=Red" > red-stream.log
   ```
 
-2. Convert the file into a key-value kafka topic like so: 
+2. Convert the file into a key-value kafka topic like so:
 
   ```
   cargo run -- -f path_to_stream_file.log -t topic_name
-  ``` 
+  ```
 
   See the [mbtaupsert package documentation](../mbtaupsert-doc.md) for more
   details on other options you can run with.
@@ -139,4 +139,4 @@ To manually connect to a single MBTA stream and load it into Kafka:
 
 3. Turn on materialize and create the sources and views corresponding to the kafka topics.
 
-  Check out the reference for creating a view to parse each type of stream [here](../mbta-reference.md). 
+  Check out the reference for creating a view to parse each type of stream [here](../mbta-reference.md).

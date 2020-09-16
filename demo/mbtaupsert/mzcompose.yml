@@ -55,7 +55,7 @@ services:
 mzconduct:
   workflows:
     # TODO: create a workflow to verify the demo continues to work in automation
-    #verify-demo: 
+    #verify-demo:
     #  env:
     #    MZ_SQL_EXPORTER_PORT: "9400:9399"
     #  steps:
@@ -83,7 +83,7 @@ mzconduct:
         daemon: true
         command: >-
           start_docker
-          ${CONFIG_FILE_PATH:-/workdir/configs/all-frequent-routes-config-weekend} 
+          ${CONFIG_FILE_PATH:-/workdir/configs/all-frequent-routes-config-weekend}
           kafka:${KAFKA_PORT:-9092}
           ${API_KEY}
 
@@ -102,6 +102,6 @@ mzconduct:
         daemon: true
         command: >-
           replay
-          ${CONFIG_FILE_PATH:-/workdir/configs/all-frequent-routes-config-weekend} 
+          ${CONFIG_FILE_PATH:-/workdir/configs/all-frequent-routes-config-weekend}
           ${ARCHIVE_PATH}
           kafka:${KAFKA_PORT:-9092}
