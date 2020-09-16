@@ -506,6 +506,7 @@ dependencies = [
  "transform",
  "unicase",
  "url",
+ "uuid",
 ]
 
 [[package]]

@@ -483,6 +483,12 @@ impl<'a> From<DateTime<Utc>> for Datum<'a> {
     }
 }
 
+impl From<Uuid> for Datum<'static> {
+    fn from(uuid: Uuid) -> Datum<'static> {
+        Datum::Uuid(uuid)
+    }
+}
+
 impl<'a, T> From<Option<T>> for Datum<'a>
 where
     Datum<'a>: From<T>,
