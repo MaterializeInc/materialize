@@ -25,7 +25,7 @@ use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, Row};
 use sql::ast::display::AstDisplay;
 use sql::catalog::CatalogError as SqlCatalogError;
-use sql::names::{DatabaseSpecifier, FullName, PartialName};
+use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
@@ -113,7 +113,7 @@ lazy_static! {
 #[derive(Debug, Serialize)]
 pub struct Schema {
     pub id: i64,
-    items: BTreeMap<String, GlobalId>,
+    pub items: BTreeMap<String, GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -539,18 +539,26 @@ impl Catalog {
         database: Option<String>,
         schema_name: &str,
         conn_id: u32,
-    ) -> Result<DatabaseSpecifier, SqlCatalogError> {
+    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), SqlCatalogError> {
         if let Some(database) = database {
             let database_spec = DatabaseSpecifier::Name(database);
             self.get_schema(&database_spec, schema_name, conn_id)
-                .map(|_| database_spec)
+                .map(|schema| (database_spec, SchemaSpecifier::new(schema_name, schema.id)))
         } else {
             match self.get_schema(current_database, schema_name, conn_id) {
-                Ok(_) => Ok(current_database.clone()),
+                Ok(schema) => Ok((
+                    current_database.clone(),
+                    SchemaSpecifier::new(schema_name, schema.id),
+                )),
                 Err(SqlCatalogError::UnknownSchema(_))
                 | Err(SqlCatalogError::UnknownDatabase(_)) => self
                     .get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id)
-                    .map(|_| DatabaseSpecifier::Ambient),
+                    .map(|schema| {
+                        (
+                            DatabaseSpecifier::Ambient,
+                            SchemaSpecifier::new(schema_name, schema.id),
+                        )
+                    }),
                 Err(e) => Err(e),
             }
         }
@@ -591,8 +599,8 @@ impl Catalog {
         for &schema_name in schemas {
             let database_name = name.database.clone();
             let res = self.resolve_schema(&current_database, database_name, schema_name, conn_id);
-            let database_spec = match res {
-                Ok(database_spec) => database_spec,
+            let (database_spec, _) = match res {
+                Ok(specs) => specs,
                 Err(SqlCatalogError::UnknownSchema(_)) => continue,
                 Err(e) => return Err(e),
             };
@@ -729,14 +737,14 @@ impl Catalog {
         }
     }
 
-    pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
+    pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) -> OpStatus {
         if !item.is_placeholder() {
             info!("create {} {} ({})", item.type_string(), name, id);
         }
 
         let entry = CatalogEntry {
-            item,
-            name,
+            item: item.clone(),
+            name: name.clone(),
             id,
             used_by: Vec::new(),
         };
@@ -764,11 +772,19 @@ impl Catalog {
         }
 
         let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
-        self.get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
-            .expect("catalog out of sync")
-            .items
-            .insert(entry.name.item.clone(), entry.id);
+        let schema = self
+            .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
+            .expect("catalog out of sync");
+        let schema_id = schema.id;
+        schema.items.insert(entry.name.item.clone(), entry.id);
         self.by_id.insert(entry.id, entry);
+
+        OpStatus::CreatedItem {
+            schema_id,
+            id,
+            name,
+            item,
+        }
     }
 
     pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
@@ -1106,10 +1122,7 @@ impl Catalog {
                     }
                 }
 
-                Action::CreateItem { id, name, item } => {
-                    self.insert_item(id, name.clone(), item.clone());
-                    OpStatus::CreatedItem { id, name, item }
-                }
+                Action::CreateItem { id, name, item } => self.insert_item(id, name, item),
 
                 Action::DropDatabase { name } => match self.by_name.remove(&name).map(|db| db.id) {
                     Some(id) => OpStatus::DroppedDatabase { name, id },
@@ -1148,8 +1161,11 @@ impl Catalog {
                     }
 
                     let conn_id = metadata.item.conn_id().unwrap_or(SYSTEM_CONN_ID);
-                    self.get_schema_mut(&metadata.name.database, &metadata.name.schema, conn_id)
-                        .expect("catalog out of sync")
+                    let schema = self
+                        .get_schema_mut(&metadata.name.database, &metadata.name.schema, conn_id)
+                        .expect("catalog out of sync");
+                    let schema_id = schema.id;
+                    schema
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
@@ -1177,7 +1193,10 @@ impl Catalog {
                         }
                     } else {
                         self.indexes.remove(&id);
-                        OpStatus::DroppedItem(metadata)
+                        OpStatus::DroppedItem {
+                            schema_id,
+                            entry: metadata,
+                        }
                     }
                 }
 
@@ -1196,18 +1215,23 @@ impl Catalog {
                     );
                     assert_eq!(entry.uses(), item.uses());
                     let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
-                    let schema_items = &mut self
+                    let schema = &mut self
                         .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
-                        .expect("catalog out of sync")
-                        .items;
-                    schema_items.remove(&entry.name.item);
+                        .expect("catalog out of sync");
+                    let schema_id = schema.id;
+                    schema.items.remove(&entry.name.item);
                     entry.name = to_name;
-                    entry.item = item;
-                    schema_items.insert(entry.name.item.clone(), id);
+                    entry.item = item.clone();
+                    schema.items.insert(entry.name.item.clone(), id);
                     self.by_id.insert(id, entry);
 
                     match from_name {
-                        Some(from_name) => OpStatus::UpdatedItem { id, from_name },
+                        Some(from_name) => OpStatus::UpdatedItem {
+                            schema_id,
+                            id,
+                            from_name,
+                            item,
+                        },
                         None => OpStatus::NoOp, // If name didn't change, don't update system tables.
                     }
                 }
@@ -1455,6 +1479,7 @@ pub enum OpStatus {
         schema_name: String,
     },
     CreatedItem {
+        schema_id: i64,
         id: GlobalId,
         name: FullName,
         item: CatalogItem,
@@ -1472,10 +1497,15 @@ pub enum OpStatus {
         entry: CatalogEntry,
         nullable: Vec<bool>,
     },
-    DroppedItem(CatalogEntry),
+    DroppedItem {
+        schema_id: i64,
+        entry: CatalogEntry,
+    },
     UpdatedItem {
+        schema_id: i64,
         id: GlobalId,
         from_name: FullName,
+        item: CatalogItem,
     },
     NoOp,
 }
@@ -1550,7 +1580,7 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         &self,
         database: Option<String>,
         schema_name: &str,
-    ) -> Result<DatabaseSpecifier, SqlCatalogError> {
+    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), SqlCatalogError> {
         Ok(self.catalog.resolve_schema(
             &self.database_spec(),
             database,

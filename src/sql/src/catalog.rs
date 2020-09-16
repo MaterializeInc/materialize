@@ -18,7 +18,7 @@ use std::time::SystemTime;
 use expr::{GlobalId, ScalarExpr};
 use repr::RelationDesc;
 
-use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
 use crate::plan::PlanContext;
 
 /// A catalog keeps track of SQL objects available to the planner.
@@ -83,7 +83,7 @@ pub trait Catalog: fmt::Debug {
         &self,
         database_name: Option<String>,
         schema_name: &str,
-    ) -> Result<DatabaseSpecifier, CatalogError>;
+    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), CatalogError>;
 
     /// Resolves a partially-specified item name.
     ///
@@ -270,7 +270,7 @@ impl Catalog for DummyCatalog {
         &self,
         _: Option<String>,
         _: &str,
-    ) -> Result<DatabaseSpecifier, CatalogError> {
+    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), CatalogError> {
         unimplemented!();
     }
 
