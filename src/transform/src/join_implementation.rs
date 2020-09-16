@@ -75,7 +75,12 @@ impl JoinImplementation {
 
     /// Determines the join implementation for join operators.
     pub fn action(&self, relation: &mut RelationExpr, indexes: &HashMap<Id, Vec<Vec<ScalarExpr>>>) {
-        if let RelationExpr::Join { inputs, .. } = relation {
+        if let RelationExpr::Join {
+            inputs,
+            equivalences,
+            ..
+        } = relation
+        {
             // Common information of broad utility.
             // TODO: Figure out how to package this up for everyone who uses it.
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -135,6 +140,21 @@ impl JoinImplementation {
                 }
                 available_arrangements[index].sort();
                 available_arrangements[index].dedup();
+                // Currently we only support using arrangements all of whose
+                // keys can be found in some equivalence.
+                available_arrangements[index].retain(|key| {
+                    key.iter().all(|k| {
+                        let mut k = k.clone();
+                        k.visit_mut(&mut |e| {
+                            if let ScalarExpr::Column(c) = e {
+                                *c += prior_arities[index]
+                            }
+                        });
+                        equivalences
+                            .iter()
+                            .any(|equivalence| equivalence.contains(&k))
+                    })
+                });
             }
 
             // Determine if we can perform delta queries with the existing arrangements.
@@ -637,33 +657,35 @@ impl<'a> Orderer<'a> {
                         }
                     });
                     // ... find the equivalence it belongs to ...
-                    let key_equivalence = self
+                    if let Some(key_equivalence) = self
                         .equivalences
                         .iter()
                         .position(|e| e.iter().any(|expr| expr == &k))
-                        .unwrap();
-                    // ... then within that equivalence, find the position
-                    // of an expression that came from start ...
-                    let key_pos =
-                        self.reverse_equivalences[start]
-                            .iter()
-                            .find_map(|(idx, idx2)| {
-                                if idx == &key_equivalence {
-                                    Some(idx2)
-                                } else {
-                                    None
+                    {
+                        // ... then within that equivalence, find the position
+                        // of an expression that came from start ...
+                        let key_pos =
+                            self.reverse_equivalences[start]
+                                .iter()
+                                .find_map(|(idx, idx2)| {
+                                    if idx == &key_equivalence {
+                                        Some(idx2)
+                                    } else {
+                                        None
+                                    }
+                                }); // ... extract the expression that came from start
+                                    // and shift the column numbers
+                        if let Some(key_pos) = key_pos {
+                            let mut result = self.equivalences[key_equivalence][*key_pos].clone();
+                            result.visit_mut(&mut |e| {
+                                if let ScalarExpr::Column(c) = e {
+                                    *c -= self.prior_arities[start]
                                 }
                             });
-                    // ... extract the expression that came from start
-                    // and shift the column numbers
-                    if let Some(key_pos) = key_pos {
-                        let mut result = self.equivalences[key_equivalence][*key_pos].clone();
-                        result.visit_mut(&mut |e| {
-                            if let ScalarExpr::Column(c) = e {
-                                *c -= self.prior_arities[start]
-                            }
-                        });
-                        Some(result)
+                            Some(result)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -738,8 +760,17 @@ impl<'a> Orderer<'a> {
                             // Reconsider all available arrangements.
                             for (pos, keys) in self.arrangements[*rel].iter().enumerate() {
                                 if !self.arrangement_active[*rel].contains(&pos) {
+                                    // TODO: support the restoration of the
+                                    // following original lines, which have been
+                                    // commented out because Materialize may
+                                    // panic otherwise. The original line and comments
+                                    // here are:
                                     // Determine if the arrangement is viable, which happens when the
                                     // support of its keys are all bound.
+                                    // if keys.iter().all(|k| k.support().iter().all(|c| self.bound[*rel].contains(&ScalarExpr::Column(*c))) {
+
+                                    // Determine if the arrangement is viable,
+                                    // which happens when all its keys are bound.
                                     if keys.iter().all(|k| self.bound[*rel].contains(k)) {
                                         self.arrangement_active[*rel].push(pos);
                                         // TODO: This could be pre-computed, as it is independent of the order.
