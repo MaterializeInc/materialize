@@ -378,7 +378,9 @@ explain plan for select b, c from foo, bar where bar.a = foo.a and bar.a=5 and f
 
 %2 =
 | Join %0 %1 (= #0 #3 5 -45)
-| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
+| | implementation = DeltaQuery
+| |   delta %0 %1.(#0)
+| |   delta %1 %0.(#0)
 | | demand = (#1, #2)
 | Project (#1, #2)
 
@@ -408,7 +410,9 @@ EXPLAIN PLAN FOR SELECT foo.a, b, c, d, e FROM foo, bar WHERE bar.a = foo.a and 
 
 %2 =
 | Join %0 %1 (= #1 "this") (= #0 #3)
-| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
+| | implementation = DeltaQuery
+| |   delta %0 %1.(#0)
+| |   delta %1 %0.(#0)
 | | demand = (#0..#2, #4, #5)
 | Project (#0..#2, #4, #5)
 
@@ -440,7 +444,9 @@ EXPLAIN PLAN FOR SELECT foo.a, b, c, d, e FROM foo, bar WHERE bar.a = foo.a and 
 
 %2 =
 | Join %0 %1 (= #1 "this") (= #0 #3)
-| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
+| | implementation = DeltaQuery
+| |   delta %0 %1.(#0)
+| |   delta %1 %0.(#0)
 | | demand = (#0..#2, #4, #5)
 | Project (#0..#2, #4, #5)
 
@@ -472,7 +478,9 @@ EXPLAIN PLAN FOR SELECT foo.a, b, c, d, e FROM foo, bar WHERE bar.a = foo.a and 
 
 %2 =
 | Join %0 %1 (= #0 #3)
-| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
+| | implementation = DeltaQuery
+| |   delta %0 %1.(#0)
+| |   delta %1 %0.(#0)
 | | demand = (#0..#2, #4, #5)
 | Filter (#1 = "this")
 | Project (#0..#2, #4, #5)
@@ -685,7 +693,9 @@ SELECT x36, x57 FROM t36, t57 WHERE a36=3 AND a36=b57
 
 %2 =
 | Join %0 %1 (= #0 #4 3)
-| | implementation = DeltaQuery %0 %1.(#1) | %1 %0.(#0)
+| | implementation = DeltaQuery
+| |   delta %0 %1.(#1)
+| |   delta %1 %0.(#0)
 | | demand = (#2, #5)
 | Project (#2, #5)
 
@@ -811,7 +821,9 @@ SELECT x36, foo.b FROM t36, foo WHERE foo.a = 5 AND foo.c = 5 AND a36 = foo.a
 
 %2 =
 | Join %0 %1 (= #0 #3 #5 5)
-| | implementation = DeltaQuery %0 %1.(#0, #2) | %1 %0.(#0)
+| | implementation = DeltaQuery
+| |   delta %0 %1.(#0, #2)
+| |   delta %1 %0.(#0)
 | | demand = (#2, #4)
 | Project (#2, #4)
 
@@ -852,7 +864,10 @@ SELECT x36, x57, foo.b FROM foo, t36, t57 WHERE a36 = 5 AND foo.a = a36 AND b36 
 
 %3 =
 | Join %0 %1 %2 (= #0 #3 5) (= #4 #7)
-| | implementation = DeltaQuery %0 %1.(#0) %2.(#1) | %1 %0.(#0) %2.(#1) | %2 %1.(#1) %0.(#0)
+| | implementation = DeltaQuery
+| |   delta %0 %1.(#0) %2.(#1)
+| |   delta %1 %0.(#0) %2.(#1)
+| |   delta %2 %1.(#1) %0.(#0)
 | | demand = (#1, #4, #5, #8)
 | Filter !(isnull(#4))
 | Project (#5, #8, #1)
@@ -894,7 +909,10 @@ EXPLAIN PLAN FOR SELECT x36, x57, foo.b FROM foo, t36, t57 WHERE a36=5 AND foo.a
 
 %3 =
 | Join %0 %1 %2 (= #0 #3 5) (= #2 #7 12)
-| | implementation = DeltaQuery %0 %1.(#0) %2.(#1) | %1 %0.(#0) %2.(#1) | %2 %0.(#2) %1.(#0)
+| | implementation = DeltaQuery
+| |   delta %0 %1.(#0) %2.(#1)
+| |   delta %1 %0.(#0) %2.(#1)
+| |   delta %2 %0.(#2) %1.(#0)
 | | demand = (#1, #5, #8)
 | Project (#5, #8, #1)
 
@@ -936,7 +954,10 @@ WHERE foo.a = bar.a
 
 %3 =
 | Join %0 %1 %2 (= #0 #3 #6 5) (= #2 #5)
-| | implementation = DeltaQuery %0 %2.(#0) %1.(#0, #2) | %1 %2.(#0) %0.(#0, #2) | %2 %0.(#0) %1.(#0, #2)
+| | implementation = DeltaQuery
+| |   delta %0 %2.(#0) %1.(#0, #2)
+| |   delta %1 %2.(#0) %0.(#0, #2)
+| |   delta %2 %0.(#0) %1.(#0, #2)
 | | demand = (#1, #2, #4, #8)
 | Filter !(isnull(#2))
 | Project (#8, #4, #1)
@@ -997,7 +1018,10 @@ where foo.a = baz.a
 
 %3 =
 | Join %0 %1 %2 (= #0 #3 #6 3) (= #1 #7 "just") (= #2 #5 11)
-| | implementation = DeltaQuery %0 %1.(#0, #2) %2.(#0, #1) | %1 %0.(#0, #2) %2.(#0, #1) | %2 %0.(#1, #0) %1.(#0, #2)
+| | implementation = DeltaQuery
+| |   delta %0 %1.(#0, #2) %2.(#0, #1)
+| |   delta %1 %0.(#0, #2) %2.(#0, #1)
+| |   delta %2 %0.(#1, #0) %1.(#0, #2)
 | | demand = (#2, #8)
 | Project (#2, #2, #8)
 
