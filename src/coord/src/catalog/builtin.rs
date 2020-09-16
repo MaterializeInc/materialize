@@ -283,7 +283,8 @@ lazy_static! {
         name: "mz_tables",
         desc: RelationDesc::empty()
             .with_column("global_id", ScalarType::String.nullable(false))
-            .with_column("schema_id", ScalarType::Int64.nullable(false)),
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(2019),
         index_id: GlobalId::System(2020),
     };

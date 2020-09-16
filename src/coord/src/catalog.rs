@@ -1207,18 +1207,23 @@ impl Catalog {
                     );
                     assert_eq!(entry.uses(), item.uses());
                     let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
-                    let schema_items = &mut self
+                    let schema = &mut self
                         .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
-                        .expect("catalog out of sync")
-                        .items;
-                    schema_items.remove(&entry.name.item);
+                        .expect("catalog out of sync");
+                    let schema_id = schema.id;
+                    schema.items.remove(&entry.name.item);
                     entry.name = to_name;
-                    entry.item = item;
-                    schema_items.insert(entry.name.item.clone(), id);
+                    entry.item = item.clone();
+                    schema.items.insert(entry.name.item.clone(), id);
                     self.by_id.insert(id, entry);
 
                     match from_name {
-                        Some(from_name) => OpStatus::UpdatedItem { id, from_name },
+                        Some(from_name) => OpStatus::UpdatedItem {
+                            schema_id,
+                            id,
+                            from_name,
+                            item,
+                        },
                         None => OpStatus::NoOp, // If name didn't change, don't update system tables.
                     }
                 }
@@ -1489,8 +1494,10 @@ pub enum OpStatus {
         entry: CatalogEntry,
     },
     UpdatedItem {
+        schema_id: i64,
         id: GlobalId,
         from_name: FullName,
+        item: CatalogItem,
     },
     NoOp,
 }

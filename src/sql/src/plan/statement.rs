@@ -743,7 +743,7 @@ fn handle_show_tables(
         DatabaseSpecifier::Name(name) => (format!("AND mz_databases.database = '{}'", name), 3),
     };
     let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("AND tables LIKE '{}'", like),
+        Some(ShowStatementFilter::Like(like)) => format!("AND tables LIKE {}", Value::String(like)),
         Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
         None => "".to_owned(),
     };
@@ -772,11 +772,11 @@ fn handle_show_tables(
         ORDER BY \
             mz_catalog_names.tables {};
     ", full_projection, string_split_index, schema_name, database_equality, filter, full_order_by);
-    match parse(formatted)?.get(0).unwrap() {
+    match parse(formatted)?.into_element() {
         Statement::Select(SelectStatement { query, as_of: _ }) => {
-            handle_computed_select(scx, *query.clone())
+            handle_computed_select(scx, *query)
         }
-        _ => unreachable!(), // Known to be valid SQL.
+        _ => unreachable!(), // Known to be Select statement.
     }
 }
 

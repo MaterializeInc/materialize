@@ -325,7 +325,7 @@ where
         }
 
         // Insert initial named objects into system tables.
-        let dbs: Vec<(String, i64, Vec<(String, i64, Vec<GlobalId>)>)> = coord
+        let dbs: Vec<(String, i64, Vec<(String, i64, Vec<(String, GlobalId)>)>)> = coord
             .catalog
             .databases()
             .map(|(name, database)| {
@@ -339,7 +339,11 @@ where
                             (
                                 schema_name.to_string(),
                                 schema.id,
-                                schema.items.values().cloned().collect(),
+                                schema
+                                    .items
+                                    .iter()
+                                    .map(|(name, id)| (name.clone(), *id))
+                                    .collect(),
                             )
                         })
                         .collect(),
@@ -352,30 +356,34 @@ where
             for (schema_name, schema_id, items) in schemas {
                 coord.report_schema_update(database_id, schema_id, &schema_name, "USER", 1);
 
-                for item_id in items {
+                for (item_name, item_id) in items {
                     if tables_to_report.remove(&item_id) {
-                        coord.report_table_update(&item_id, schema_id, 1);
+                        coord.report_table_update(&item_id, schema_id, &item_name, 1);
                     }
                 }
             }
         }
-        let ambient_schemas: Vec<(String, i64, Vec<GlobalId>)> = coord
+        let ambient_schemas: Vec<(String, i64, Vec<(String, GlobalId)>)> = coord
             .catalog
             .ambient_schemas()
             .map(|(schema_name, schema)| {
                 (
                     schema_name.to_string(),
                     schema.id,
-                    schema.items.values().cloned().collect(),
+                    schema
+                        .items
+                        .iter()
+                        .map(|(name, id)| (name.clone(), *id))
+                        .collect(),
                 )
             })
             .collect();
         for (schema_name, schema_id, items) in ambient_schemas {
             coord.report_schema_update(AMBIENT_DATABASE_ID, schema_id, &schema_name, "SYSTEM", 1);
 
-            for item_id in items {
+            for (item_name, item_id) in items {
                 if tables_to_report.remove(&item_id) {
-                    coord.report_table_update(&item_id, schema_id, 1);
+                    coord.report_table_update(&item_id, schema_id, &item_name, 1);
                 }
             }
         }
@@ -1090,13 +1098,20 @@ where
     }
 
     /// Inserts or removes a row from [`builtin::MZ_TABLES`] based on the supplied `diff`.
-    fn report_table_update(&mut self, global_id: &GlobalId, schema_id: i64, diff: isize) {
+    fn report_table_update(
+        &mut self,
+        global_id: &GlobalId,
+        schema_id: i64,
+        name: &str,
+        diff: isize,
+    ) {
         self.update_catalog_view(
             MZ_TABLES.id,
             iter::once((
                 Row::pack(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int64(schema_id),
+                    Datum::String(name),
                 ]),
                 diff,
             )),
@@ -2200,20 +2215,30 @@ where
                     }
                     match item {
                         CatalogItem::Index(index) => self.report_index_update(*id, index, 1),
-                        CatalogItem::Table(_) => self.report_table_update(id, *schema_id, 1),
+                        CatalogItem::Table(_) => {
+                            self.report_table_update(id, *schema_id, &name.item, 1)
+                        }
                         _ => (),
                     }
                 }
-                catalog::OpStatus::UpdatedItem { id, from_name } => {
+                catalog::OpStatus::UpdatedItem {
+                    schema_id,
+                    id,
+                    from_name,
+                    item,
+                } => {
                     // Remove old name from mz_catalog_names.
                     self.report_catalog_update(*id, from_name.to_string(), -1);
 
                     // Add new name to mz_catalog_names.
-                    self.report_catalog_update(
-                        *id,
-                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
-                        1,
-                    );
+                    let updated_name = self.catalog.humanize_id(expr::Id::Global(*id)).unwrap();
+                    self.report_catalog_update(*id, updated_name.clone(), 1);
+
+                    // Remove old name and add new name to relevant mz system tables.
+                    if let CatalogItem::Table(_) = item {
+                        self.report_table_update(&id, *schema_id, &from_name.item, -1);
+                        self.report_table_update(&id, *schema_id, &updated_name, 1);
+                    }
                 }
                 catalog::OpStatus::DroppedDatabase { name, id } => {
                     self.report_database_update(*id, name, -1);
@@ -2238,7 +2263,12 @@ where
                     match entry.item() {
                         CatalogItem::Table(_) => {
                             sources_to_drop.push(entry.id());
-                            self.report_table_update(&entry.id(), *schema_id, -1);
+                            self.report_table_update(
+                                &entry.id(),
+                                *schema_id,
+                                &entry.name().item,
+                                -1,
+                            );
                         }
                         CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
