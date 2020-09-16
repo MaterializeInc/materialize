@@ -51,7 +51,7 @@ create a row with the following six fields in order:
 Here's a mapping of example apis you want to create a stream for, together with
 how it should be specified in the config file:
 * `/trips/?filter[route]=Green-E` to a 5-partition Kafka topic, and only check
-  it every 30 seconds because this is an infrequently updated stream: 
+  it every 30 seconds because this is an infrequently updated stream:
   `,trips,route,Green-E,5,30s`
 * `/trips/?alerts` to a Kafka topic named `alerts-live`: `alerts-live,alerts,,,,`
 

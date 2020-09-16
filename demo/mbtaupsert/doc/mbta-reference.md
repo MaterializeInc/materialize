@@ -25,11 +25,11 @@ The option `tail=true` will ensure that Materialize will keep checking the file
 for updates.
 
 ```
-CREATE SOURCE current_time 
+CREATE SOURCE current_time
 FROM FILE 'path-to-workspace-directory/workspace/current_time' WITH(tail=true) FORMAT TEXT
 
 CREATE MATERIALIZED VIEW current_time_v AS
-SELECT max(to_timestamp(cast(text as int))) AS now 
+SELECT max(to_timestamp(cast(text as int))) AS now
 FROM current_time;
 ```
 
@@ -51,7 +51,8 @@ the same kafka topic.
 
 If you want really want one Kafka topic per MBTA stream, you may want create a
 view to union them together. For example, if you want to have predictions for
-the entirety of the Green Line, you need to combine the streams for Green-B, Green-C, Green-D, and Green-E like this: 
+the entirety of the Green Line, you need to combine the streams for Green-B,
+Green-C, Green-D, and Green-E like this:
 ```
 CREATE VIEW all-green-pred as
   SELECT * FROM green-b-pred UNION
@@ -69,7 +70,7 @@ of interest to you.
 ### Predictions
 
 ```
-CREATE VIEW parsed_x_pred as 
+CREATE VIEW parsed_x_pred as
 SELECT pred_id,
 CAST(payload->'attributes'->>'arrival_time' AS timestamptz) arrival_time,
 CAST(payload->'attributes'->>'departure_time'  AS timestamptz) departure_time,
@@ -87,7 +88,7 @@ FROM (SELECT key0 as pred_id, cast ("text" as jsonb) AS payload FROM x_pred);
 ### Schedules
 
 ```
-CREATE VIEW parsed_x_schd as 
+CREATE VIEW parsed_x_schd as
 SELECT schd_id,
 CAST(payload->'attributes'->>'arrival_time' AS timestamptz) arrival_time,
 CAST(payload->'attributes'->>'departure_time'  AS timestamptz) departure_time,
@@ -102,7 +103,7 @@ FROM (SELECT key0 as schd_id, cast ("text" as jsonb) AS payload FROM x_schd);
 ### Trips
 
 ```
-CREATE VIEW parsed_x_trips as 
+CREATE VIEW parsed_x_trips as
 SELECT trip_id,
 payload->'attributes'->>'bikes_allowed' bikes_allowed,
 CAST(CAST(payload->'attributes'->>'direction_id' AS DECIMAL(5,1)) AS INT) direction_id,
@@ -118,7 +119,7 @@ FROM (SELECT key0 as trip_id, cast ("text" as jsonb) AS payload FROM x_trips);
 ### Vehicles
 
 ```
-CREATE VIEW parsed_vehicles as 
+CREATE VIEW parsed_vehicles as
 SELECT vehicle_id,
 payload->'attributes'->>'current_status' status,
 CAST(CAST(payload->'attributes'->>'direction_id' AS DECIMAL(5,1)) AS INT) direction_id,

@@ -31,7 +31,7 @@ CREATE SOURCE vehicles
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'all-vehicles'
   FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT;
 
-CREATE MATERIALIZED VIEW parsed_all_pred as 
+CREATE MATERIALIZED VIEW parsed_all_pred as
 SELECT id,
     CAST(payload->'attributes'->>'arrival_time' AS timestamptz) arrival_time,
     CAST(payload->'attributes'->>'departure_time'  AS timestamptz) departure_time,
@@ -45,7 +45,7 @@ SELECT id,
     payload->'relationships'->'vehicle'->'data'->>'id' vehicle_id
 FROM (SELECT key0 as id, cast (text as jsonb) AS payload FROM all_pred);
 
-CREATE MATERIALIZED VIEW parsed_all_schd as 
+CREATE MATERIALIZED VIEW parsed_all_schd as
 SELECT id,
 CAST(payload->'attributes'->>'arrival_time' AS timestamptz) arrival_time,
 CAST(payload->'attributes'->>'departure_time'  AS timestamptz) departure_time,
@@ -56,7 +56,7 @@ payload->'relationships'->'stop'->'data'->>'id' stop_id,
 payload->'relationships'->'trip'->'data'->>'id' trip_id
 FROM (SELECT key0 as id, cast ("text" as jsonb) AS payload FROM all_schd);
 
-CREATE MATERIALIZED VIEW parsed_all_trip as 
+CREATE MATERIALIZED VIEW parsed_all_trip as
 SELECT id,
 payload->'attributes'->>'bikes_allowed' bikes_allowed,
 CAST(CAST(payload->'attributes'->>'direction_id' AS DECIMAL(5,1)) AS INT) direction_id,
@@ -68,7 +68,7 @@ payload->'relationships'->'service'->'data'->>'id' service_id,
 payload->'relationships'->'shape'->'data'->>'id' shape_id
 FROM (SELECT key0 as id, cast ("text" as jsonb) AS payload FROM all_trip);
 
-CREATE MATERIALIZED VIEW parsed_vehicles as 
+CREATE MATERIALIZED VIEW parsed_vehicles as
 SELECT id,
 payload->'attributes'->>'current_status' status,
 CAST(CAST(payload->'attributes'->>'direction_id' AS DECIMAL(5,1)) AS INT) direction_id,

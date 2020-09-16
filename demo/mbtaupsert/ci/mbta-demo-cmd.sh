@@ -11,7 +11,7 @@
 #
 # mbta-demo-cmd.sh — runs the mbta demo
 
-mbtaupsert=$(which mbtaupsert)
+mbtaupsert=$(whereis mbtaupsert)
 
 if [ -z "$mbtaupsert" ]; then
   mbtaupsert=target/release/mbtaupsert
@@ -21,16 +21,16 @@ function archive() {
   current_datetime=$(date +'%F-%H%M')
   archive_name="workspace-$current_datetime"
   folder_name="archive/$archive_name"
-  mkdir $folder_name
-  cp workspace/mbta*log $folder_name
-  cp -r workspace/MBTA_GTFS $folder_name
+  mkdir "$folder_name"
+  cp workspace/mbta*log "$folder_name"
+  cp -r workspace/MBTA_GTFS "$folder_name"
 
-  if [[ "$(ls -A $folder_name)" ]]; then
-    cd $folder_name
-    tar -czf ../$archive_name.tar.gz ./*
+  if [[ "$(ls -A "$folder_name")" ]]; then
+    cd "$folder_name" || exit
+    tar -czf "../$archive_name.tar.gz" ./*
     cd ../../
   fi
-  rm -rf $folder_name
+  rm -rf "$folder_name"
 
   echo "Created archive at $folder_name"
 }
@@ -43,13 +43,13 @@ function cleanup_kafka_topics() {
     kafka_addr=localhost:9092
   fi
   # derive list of topics to delete
-  awk 'BEGIN { FS = "," } ; { if ($1=="") { if($3=="") {print "mbta-" $2} else {print "mbta-" $2 "-" $3 "-" $4} } else { print $1 } }' $config_file > workspace/topics.log 
+  awk 'BEGIN { FS = "," } ; { if ($1=="") { if($3=="") {print "mbta-" $2} else {print "mbta-" $2 "-" $3 "-" $4} } else { print $1 } }' "$config_file" > workspace/topics.log
   sort workspace/topics.log | uniq > workspace/unique-topics.log
 
   while read -r line
   do
     echo "Deleting kafka topic $line"
-    kafka-topics --bootstrap-server $kafka_addr --delete --topic $line
+    kafka-topics --bootstrap-server $kafka_addr --delete --topic "$line"
   done < workspace/unique-topics.log
 
   # cleanup temp files
@@ -64,11 +64,11 @@ function cleanup_http_streams() {
   # spawn curl threads
   current_stream=-1
   IFS=','
-  while read -r stream_num unimportant pid
+  while read -r stream_num _ pid
   do
-    if [ $current_stream != $stream_num ]; then
+    if [ $current_stream != "$stream_num" ]; then
       echo "Killing process at pid $pid"
-      kill -9 $pid
+      kill -9 "$pid"
       current_stream=$stream_num
     fi
   done < workspace/sorted-curl-pid.log
@@ -79,7 +79,7 @@ function cleanup_stream_to_kafka() {
     while read -r line
     do
       echo "Killing process at pid $line"
-      kill -9 $line	
+      kill -9 "$line"
     done < workspace/steady-pid.log
   fi
 }
@@ -100,7 +100,7 @@ function create_connection() {
   filter_on=$6
 
   echo "Cleaning up temp file $filename"
-  rm -f $filename
+  rm -f "$filename"
 
   url="https://api-v3.mbta.com/$stream_type"
   if [ -n "$filter_type" ]; then
@@ -114,8 +114,7 @@ function create_connection() {
     mypid=$!
     echo "$line_num,$curl_num,$!" >> workspace/curl-pid.log
     wait $mypid
-    curl_num+=1
-    let "curl_num+=1"
+    (( curl_num+=1 ))
   done
 }
 
@@ -128,19 +127,15 @@ function start_stream_convert() {
   filename=$5
   heartbeat_time=$6
 
+  options=(--kafka-addr "$kafka_addr" -f "$filename" -t "$topic_name" -p "$partitions" )
   if [ -n "$heartbeat_time" ]; then
-    heartbeat_clause="--heartbeat $heartbeat_time"
-  fi
-
-  if [ -n "$partitions" ]; then
-    partitions_clause="--partitions $partitions"
+    options+=( --heartbeat "$heartbeat_time" )
   fi
 
   if [ "$api_key" == "None" ]; then
-    exit_clause="--exit-at-end"
+    options+=( --exit-at-end )
   fi
-
-  eval $mbtaupsert  --kafka-addr $kafka_addr -f $filename -t $topic_name $heartbeat_clause $partitions_clause $exit_clause &
+  $mbtaupsert "${options[@]}" &
 
   echo "$!" >> workspace/steady-pid.log
 }
@@ -162,7 +157,7 @@ function start_streams_from_config_file() {
   line_num=0
   while read -r topic_name stream_type filter_type filter_on partitions heartbeat_time
   do
-    if [ -z "$topic_name" ]; then 
+    if [ -z "$topic_name" ]; then
       if [ -n "$filter_type" ]; then
         topic_name="mbta-$stream_type-$filter_type-$filter_on"
       else
@@ -182,7 +177,7 @@ function start_streams_from_config_file() {
     filename="workspace/$file_id.log"
 
     if [ "$api_key" != "None" ] ; then
-      create_connection $line_num $api_key $filename $stream_type $filter_type $filter_on &
+      create_connection $line_num "$api_key" "$filename" "$stream_type" "$filter_type" "$filter_on" &
       echo "$!" >> workspace/steady-pid.log
       #The first thing the stream sends is a snapshot of the current state of the
       #system. If we start reading from the stream too quickly, the snapshot can be
@@ -190,8 +185,8 @@ function start_streams_from_config_file() {
       sleep 5
     fi
 
-    start_stream_convert $api_key $partitions $kafka_addr $topic_name $filename $heartbeat_time
-    let "line_num+=1"
+    start_stream_convert "$api_key" $partitions $kafka_addr "$topic_name" "$filename" "$heartbeat_time"
+    (( line_num+=1 ))
   done < "$config_file"
 }
 
@@ -204,7 +199,7 @@ function pause() {
 
 function refresh_metadata() {
   if [[ -f "workspace/last-metadata" ]]; then
-    eval $(tr -d '\r\n' < workspace/last-metadata)
+    eval "$(tr -d '\r\n' < workspace/last-metadata)"
   else
     curl -s https://cdn.mbta.com/MBTA_GTFS.zip -J -L -o workspace/MBTA_GTFS.zip
   fi
@@ -226,17 +221,18 @@ function refresh_metadata() {
 function unpack_archive() {
   # copy archive to workspace and untar
   archive_path=$1
-  cp $archive_path workspace
-  cd workspace
-  tar -xzf $(basename $archive_path)
-  cd ..
+  cp "$archive_path" workspace
+  (
+    cd workspace || exit
+    tar -xzf "$(basename "$archive_path")"
+  )
 }
 
 function wait_for_stream_conversion() {
   if [ -f workspace/steady-pid.log ]; then
     while read -r line
     do
-      wait $line	
+      wait "$line"
     done < workspace/steady-pid.log
   fi
 }
@@ -250,7 +246,7 @@ case "$1" in
       exit 1
     fi
     refresh_metadata;
-    start_streams_from_config_file $2 $3 $4;
+    start_streams_from_config_file "$2" "$3" "$4";
     ;;
   start_docker)
     if [[ $# -lt 3 ]]; then
@@ -267,7 +263,7 @@ case "$1" in
       api_key=$(cat /run/secrets/mbta_api_key)
     fi
     refresh_metadata;
-    start_streams_from_config_file $2 $api_key $kafka_addr;
+    start_streams_from_config_file "$2" "$api_key" "$kafka_addr";
     trap "pause; exit " SIGTERM
     while : ; do wait ; done
     ;;
@@ -280,8 +276,8 @@ case "$1" in
       echo ""
       exit 1
     fi
-    unpack_archive $3
-    start_streams_from_config_file $2 None $4;
+    unpack_archive "$3"
+    start_streams_from_config_file "$2" None "$4";
     wait_for_stream_conversion;
     ;;
   archive)
@@ -294,7 +290,7 @@ case "$1" in
       exit 1
     fi
     pause;
-    cleanup_kafka_topics $2 $3
+    cleanup_kafka_topics "$2" "$3"
     ;;
   purge_topics)
     if [[ $# -lt 2 ]]; then
@@ -302,8 +298,8 @@ case "$1" in
       echo ""
       exit 1
     fi
-    cleanup_kafka_topics $2 $3
-    ;;     
+    cleanup_kafka_topics "$2" "$3"
+    ;;
   *)
     echo "Usage: $0 COMMAND [arguments]
 
@@ -311,17 +307,17 @@ Set up MBTA streams and convert them into Kafka topics to ingest using Materiali
 
 Commands:
 start        Starts an indefinitely long run of the demo in the
-             background. Call this script again with the command 
+             background. Call this script again with the command
              'pause' or 'purge' to stop the demo.
 archive      Creates an archive of the files containing data downloaded
              from the MBTA streams.
 replay       Replay data from an archive into a kafka topic. This script
              will remain in the foreground until the replay is complete.
-pause        Archives the files, halts the http streaming threads, and 
-             halts the processes 
+pause        Archives the files, halts the http streaming threads, and
+             halts the processes
 purge_topics Deletes just the kafka topics.
 purge        Pause demo then purges the kafka topics.
-start_docker Starts an indefinitely long run of the demo in the 
+start_docker Starts an indefinitely long run of the demo in the
              foreground. The tasks in 'pause' will run automatically
              upon receiving a SIGTERM."
     exit 1

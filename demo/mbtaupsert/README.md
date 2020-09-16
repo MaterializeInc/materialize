@@ -22,7 +22,7 @@ event: remove
 ## What will I be able to do in this demo?
 
 You will be able to issue SQL queries and maintain views on the live state of
-the Boston-area public transit system. 
+the Boston-area public transit system.
 [doc/mbta-predictions.md](/doc/mbta-predictions.md) contains some inspiration to
 get you started. It tells you:
 * How to reproduce the MBTA countdown clock.
@@ -30,12 +30,12 @@ get you started. It tells you:
 
 In addition, you can run SQL queries and maintain views on the history of the
 state of the Boston-area public transit system from the time you started running
-the demo onwards by omitting the `ENVELOPE UPSERT` when creating a source. 
+the demo onwards by omitting the `ENVELOPE UPSERT` when creating a source.
 
 ## What does this code do?
 
 This code is a workaround for the fact that we don't yet support:
-* directly connecting server-sent event sources yet. 
+* directly connecting server-sent event sources yet.
   (Follow progress on this at #2237)
 * converting a kafka topic not in key-value format to key-value format.
   (Follow progress on this at #1576)
@@ -66,6 +66,8 @@ data into a Kafka stream of the key-value format:
    {other_field1: whatever_is_in_this_field, other_field2: ..., etc}
    ```
 
-Technically, this code is not MBTA stream-specific. With a few lines of changes, it should be able to take any stream of json objects, parse out the desired key, and then produce a key-value Kafka topic out of it. 
+Technically, this code is not MBTA stream-specific. With a few lines of changes,
+it should be able to take any stream of json objects, parse out the desired key,
+and then produce a key-value Kafka topic out of it.
 
 Look in [doc/mbtaupsert-doc.md](doc/mbtaupsert-doc.md) for more information.

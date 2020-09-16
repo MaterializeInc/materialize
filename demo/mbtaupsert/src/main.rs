@@ -1,3 +1,12 @@
+// Copyright Materialize, Inc. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
 use getopts::Options;
 use parse_duration::parse;
 
@@ -122,7 +131,9 @@ fn run_stream() -> Result<(), String> {
         kafka_addr: opts.opt_str("kafka-addr"),
     };
 
-    let heartbeat_spec = opts.opt_str("heartbeat").unwrap_or("250ms".to_string());
+    let heartbeat_spec = opts
+        .opt_str("heartbeat")
+        .unwrap_or_else(|| "250ms".to_string());
     let heartbeat = match parse(&heartbeat_spec) {
         Ok(x) => x,
         Err(err) => {
@@ -130,7 +141,9 @@ fn run_stream() -> Result<(), String> {
         }
     };
 
-    let partitions = opts.opt_str("partitions").unwrap_or("1".to_string());
+    let partitions = opts
+        .opt_str("partitions")
+        .unwrap_or_else(|| "1".to_string());
     let partitions = match partitions.parse::<i32>() {
         Ok(x) => x,
         Err(err) => {
@@ -140,7 +153,9 @@ fn run_stream() -> Result<(), String> {
     if partitions < 1 {
         return Err("partitions must be positive".to_string());
     }
-    let replication = opts.opt_str("replication").unwrap_or("1".to_string());
+    let replication = opts
+        .opt_str("replication")
+        .unwrap_or_else(|| "1".to_string());
     let replication = match replication.parse::<i32>() {
         Ok(x) => x,
         Err(err) => {
@@ -160,19 +175,17 @@ fn run_stream() -> Result<(), String> {
         .opt_strs("topic-property")
         .into_iter()
         .map(|property| {
-            let mut split_iter = property.split("=");
+            let mut split_iter = property.split('=');
             let property_name = split_iter.next();
             let property_value = split_iter.next();
-            if property_value.is_none() {
-                Err(format!(
+            match property_value {
+                Some(property_value) => {
+                    Ok((property_name.unwrap().to_owned(), property_value.to_owned()))
+                }
+                None => Err(format!(
                     "Property {} has no argument",
                     property_name.unwrap()
-                ))
-            } else {
-                Ok((
-                    property_name.unwrap().to_owned(),
-                    property_value.unwrap().to_owned(),
-                ))
+                )),
             }
         })
         .collect();
@@ -189,7 +202,7 @@ fn run_stream() -> Result<(), String> {
 
     //read off of the stream file
     let filename = opts.opt_str("f").unwrap();
-    let f = match File::open(filename.clone()) {
+    let f = match File::open(filename) {
         Ok(x) => x,
         Err(err) => {
             return Err(err.to_string());
@@ -268,6 +281,6 @@ fn run_stream() -> Result<(), String> {
 fn main() {
     match run_stream() {
         Ok(()) => {}
-        Err(err) => println!("{}", err.to_string()),
+        Err(err) => println!("{}", err),
     }
 }
