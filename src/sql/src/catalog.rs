@@ -17,6 +17,7 @@ use std::time::SystemTime;
 
 use expr::{GlobalId, ScalarExpr};
 use repr::RelationDesc;
+use uuid::Uuid;
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::plan::PlanContext;
@@ -57,6 +58,9 @@ pub trait Catalog: fmt::Debug {
     /// NOTE(benesch): this is only necessary for producing unique Kafka sink
     /// topics. Perhaps we can remove this when #2915 is complete.
     fn nonce(&self) -> u64;
+
+    /// Returns a persistent UUID for the the catalog.
+    fn cluster_id(&self) -> Uuid;
 
     /// Returns the database to use if one is not explicitly specified.
     fn default_database(&self) -> &str;
@@ -256,6 +260,10 @@ impl Catalog for DummyCatalog {
 
     fn nonce(&self) -> u64 {
         0
+    }
+
+    fn cluster_id(&self) -> Uuid {
+        Uuid::from_u128(0)
     }
 
     fn default_database(&self) -> &str {

@@ -19,6 +19,7 @@ use log::{info, trace};
 use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
@@ -81,6 +82,7 @@ pub struct Catalog {
     startup_time: SystemTime,
     nonce: u64,
     experimental_mode: bool,
+    cluster_id: Uuid,
 }
 
 #[derive(Debug)]
@@ -336,7 +338,7 @@ impl Catalog {
     /// `initialize` callback will be invoked after database and schemas are
     /// loaded but before any persisted user items are loaded.
     pub fn open(config: Config) -> Result<Catalog, Error> {
-        let (storage, experimental_mode) = storage::Connection::open(&config)?;
+        let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
 
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
@@ -348,6 +350,7 @@ impl Catalog {
             startup_time: SystemTime::now(),
             nonce: rand::random(),
             experimental_mode,
+            cluster_id,
         };
         catalog.create_temporary_schema(SYSTEM_CONN_ID);
 
@@ -1533,6 +1536,10 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
 
     fn nonce(&self) -> u64 {
         self.catalog.nonce
+    }
+
+    fn cluster_id(&self) -> Uuid {
+        self.catalog.cluster_id
     }
 
     fn default_database(&self) -> &str {
