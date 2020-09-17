@@ -125,10 +125,10 @@ a    b
 3    "c"
 
 ! INSERT INTO t DEFAULT VALUES;
-INSERT DEFAULT VALUES not yet supported
+INSERT ... DEFAULT VALUES not yet supported
 
 ! INSERT INTO t SELECT * FROM t;
-INSERT body SELECT * FROM t not yet supported
+complicated INSERT bodies not yet supported
 
 ! INSERT INTO t VALUES (1);
 INSERT statement specifies 2 columns, but table has 1 columns
@@ -138,6 +138,9 @@ NULL value in column b violates not-null constraint
 
 ! INSERT INTO t VALUES ('d', 4);
 expected type string for column b, found i32
+
+! INSERT INTO t WITH v AS (SELECT 1) VALUES (1)
+complicated INSERT bodies not yet supported
 
 > INSERT INTO t VALUES (NULL, 'd');
 

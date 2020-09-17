@@ -29,17 +29,18 @@ use std::mem;
 use anyhow::{anyhow, bail, ensure, Context};
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
-    BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, JoinConstraint, JoinOperator,
-    ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter,
-    TableAlias, TableFactor, TableWithJoins, Value, Values,
+    BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
+    JoinOperator, ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator,
+    ShowStatementFilter, TableAlias, TableFactor, TableWithJoins, Value, Values,
 };
 
-use ::expr::{Id, RowSetFinishing};
+use ::expr::{GlobalId, Id, RowSetFinishing};
 use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{
     strconv, ColumnName, Datum, RelationDesc, RelationType, RowArena, ScalarType, Timestamp,
 };
 
+use crate::catalog::CatalogItemType;
 use crate::names::PartialName;
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -103,6 +104,76 @@ pub fn plan_root_query(
     let desc = RelationDesc::new(typ, scope.column_names());
 
     Ok((expr, desc, finishing))
+}
+
+pub fn plan_insert_query(
+    scx: &StatementContext,
+    table_name: ObjectName,
+    source: InsertSource,
+) -> Result<(GlobalId, RelationExpr), anyhow::Error> {
+    let name = scx.resolve_item(table_name)?;
+    let table = scx.catalog.get_item(&name);
+    let desc = table.desc()?;
+
+    // Validate the target of the insert.
+    if table.item_type() != CatalogItemType::Table {
+        bail!(
+            "cannot insert into {} '{}'",
+            table.item_type(),
+            table.name()
+        );
+    }
+    if table.id().is_system() {
+        bail!("cannot insert into system table '{}'", table.name());
+    }
+
+    // Plan the source.
+    let (expr, typ) = match source {
+        InsertSource::Query(Query {
+            body: SetExpr::Values(mut values),
+            ctes,
+            order_by,
+            limit,
+            offset,
+            fetch,
+        }) if ctes.is_empty()
+            && order_by.is_empty()
+            && limit.is_none()
+            && offset.is_none()
+            && fetch.is_none() =>
+        {
+            transform_ast::transform_values(&mut values)?;
+            let type_hints = Some(desc.iter_types().map(|typ| &typ.scalar_type).collect());
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+            let (expr, _scope) = plan_values(&qcx, &values.0, type_hints)?;
+            let typ = qcx.relation_type(&expr);
+            (expr, typ)
+        }
+        InsertSource::Query(..) => unsupported!("complicated INSERT bodies"),
+        InsertSource::DefaultValues => unsupported!("INSERT ... DEFAULT VALUES"),
+    };
+
+    // Validate that the type of the source query matches the type
+    // of the target table.
+    if typ.arity() != desc.arity() {
+        bail!(
+            "INSERT statement specifies {} columns, but table has {} columns",
+            desc.arity(),
+            typ.arity(),
+        );
+    }
+    for ((name, exp_typ), typ) in desc.iter().zip(&typ.column_types) {
+        if typ.scalar_type != exp_typ.scalar_type {
+            bail!(
+                "expected type {} for column {}, found {}",
+                exp_typ.scalar_type,
+                name.unwrap_or(&ColumnName::from("unnamed column")),
+                typ,
+            );
+        }
+    }
+
+    Ok((table.id(), expr))
 }
 
 /// Plans a SHOW statement that might have a WHERE or LIKE clause attached to it. A LIKE clause is
@@ -502,15 +573,6 @@ fn plan_values(
     }
 
     Ok((out, scope))
-}
-
-pub fn plan_insert_query(
-    scx: &StatementContext,
-    values: &Values,
-    type_hints: Option<Vec<&ScalarType>>,
-) -> Result<RelationExpr, anyhow::Error> {
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-    Ok(plan_values(&qcx, &values.0, type_hints)?.0)
 }
 
 fn plan_join_identity(qcx: &QueryContext) -> (RelationExpr, Scope) {

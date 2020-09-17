@@ -31,8 +31,7 @@ use dataflow_types::{
 use expr::{GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
-use repr::{strconv, ColumnName};
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use repr::{strconv, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
     BinaryOperator, ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement,
@@ -40,14 +39,13 @@ use sql_parser::ast::{
     CreateViewStatement, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
     ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement, Join,
     JoinConstraint, JoinOperator, ObjectName, ObjectType, OrderByExpr, Query, Select, SelectItem,
-    SelectStatement, SetExpr, SetVariableStatement, SetVariableValue, ShowColumnsStatement,
+    SelectStatement, SetVariableStatement, SetVariableValue, ShowColumnsStatement,
     ShowCreateIndexStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
     ShowCreateTableStatement, ShowCreateViewStatement, ShowDatabasesStatement,
     ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
     SqlOption, Statement, TableAlias, TableFactor, TableWithJoins, TailStatement, Value,
 };
 
-use crate::ast::InsertSource;
 use crate::catalog::{Catalog, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
@@ -55,7 +53,6 @@ use crate::normalize;
 use crate::parse::parse;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
-use crate::plan::transform_ast::transform_query;
 use crate::plan::{
     query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, Index, LogicalCompactionWindow,
     Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, View,
@@ -133,8 +130,7 @@ pub fn describe_statement(
         | Statement::Rollback(_)
         | Statement::Commit(_)
         | Statement::AlterObjectRename(_)
-        | Statement::AlterIndexOptions(_)
-        | Statement::Insert(_) => (None, vec![]),
+        | Statement::AlterIndexOptions(_) => (None, vec![]),
 
         Statement::Explain(ExplainStatement {
             stage, explainee, ..
@@ -152,7 +148,7 @@ pub fn describe_statement(
                     describe_statement(
                         catalog,
                         Statement::Select(SelectStatement {
-                            query: Box::new(q),
+                            query: q,
                             as_of: None,
                         }),
                         param_types_in,
@@ -252,21 +248,21 @@ pub fn describe_statement(
             (Some(sql_object.desc()?.clone()), vec![])
         }
 
+        // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
+        // plans the whole query to determine its shape and parameter types,
+        // and then throws away that plan. If we were smarter, we'd stash that
+        // plan somewhere so we don't have to recompute it when the query is
+        // executed.
         Statement::Select(SelectStatement { query, .. }) => {
-            // TODO(benesch): ideally we'd save `relation_expr` and `finishing`
-            // somewhere, so we don't have to reanalyze the whole query when
-            // `handle_statement` is called. This will require a complicated
-            // dance when bind parameters are implemented, so punting for now.
             let (_relation_expr, desc, _finishing) =
-                query::plan_root_query(&scx, *query, QueryLifetime::OneShot)?;
-            let mut param_types = vec![];
-            for (i, (n, typ)) in scx.unwrap_param_types().into_iter().enumerate() {
-                if n != i + 1 {
-                    bail!("unable to infer type for parameter ${}", i + 1);
-                }
-                param_types.push(typ);
-            }
-            (Some(desc), param_types)
+                query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
+            (Some(desc), scx.finalize_param_types()?)
+        }
+        Statement::Insert(InsertStatement {
+            table_name, source, ..
+        }) => {
+            query::plan_insert_query(&scx, table_name, source)?;
+            (None, scx.finalize_param_types()?)
         }
 
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
@@ -321,7 +317,7 @@ pub fn handle_statement(
         Statement::Select(stmt) => handle_select(scx, stmt, params),
         Statement::Tail(stmt) => handle_tail(scx, stmt),
 
-        Statement::Insert(stmt) => handle_insert(scx, stmt),
+        Statement::Insert(stmt) => handle_insert(scx, stmt, params),
 
         Statement::StartTransaction(_) => Ok(Plan::StartTransaction),
         Statement::Rollback(_) => Ok(Plan::AbortTransaction),
@@ -553,7 +549,7 @@ fn handle_show_databases(
     handle_select(
         scx,
         SelectStatement {
-            query: Box::new(Query::select(select)),
+            query: Query::select(select),
             as_of: None,
         },
         &Params {
@@ -714,7 +710,7 @@ fn handle_show_schemas(
     handle_select(
         scx,
         SelectStatement {
-            query: Box::new(Query::select(select)),
+            query: Query::select(select),
             as_of: None,
         },
         &Params {
@@ -1150,10 +1146,7 @@ fn handle_show_columns(
 
     handle_select(
         scx,
-        SelectStatement {
-            query: Box::new(query),
-            as_of: None,
-        },
+        SelectStatement { query, as_of: None },
         &Params {
             datums: Row::pack(&[]),
             types: vec![],
@@ -1565,7 +1558,7 @@ fn handle_create_view(
         None
     };
     let (mut relation_expr, mut desc, finishing) =
-        query::plan_root_query(scx, *query.clone(), QueryLifetime::Static)?;
+        query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
     relation_expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     relation_expr.finish(finishing);
@@ -2273,6 +2266,7 @@ fn handle_insert(
         columns,
         source,
     }: InsertStatement,
+    params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("INSERT")?;
 
@@ -2280,65 +2274,11 @@ fn handle_insert(
         unsupported!("INSERT statement with specified columns");
     }
 
-    match source {
-        InsertSource::Query(mut query) => {
-            let table = scx.catalog.get_item(&scx.resolve_item(table_name)?);
-            if table.id().is_system() {
-                bail!("cannot insert into system table '{}'", table.name());
-            }
-            if table.item_type() != CatalogItemType::Table {
-                bail!(
-                    "cannot insert into {} '{}'",
-                    table.item_type(),
-                    table.name()
-                );
-            }
-            transform_query(&mut query)?;
-            if let SetExpr::Values(values) = &query.body {
-                let column_info: Vec<(Option<&ColumnName>, &ColumnType)> =
-                    table.desc()?.iter().collect();
-                let relation_expr = query::plan_insert_query(
-                    scx,
-                    values,
-                    Some(
-                        table
-                            .desc()?
-                            .iter_types()
-                            .map(|typ| &typ.scalar_type)
-                            .collect(),
-                    ),
-                )?
-                .decorrelate();
+    let (id, mut expr) = query::plan_insert_query(scx, table_name, source)?;
+    expr.bind_parameters(&params)?;
+    let expr = expr.decorrelate();
 
-                let column_types = relation_expr.typ().column_types;
-                if column_types.len() != column_info.len() {
-                    bail!(
-                        "INSERT statement specifies {} columns, but table has {} columns",
-                        column_info.len(),
-                        column_types.len()
-                    );
-                }
-                for ((name, exp_typ), typ) in column_info.iter().zip(&column_types) {
-                    if typ.scalar_type != exp_typ.scalar_type {
-                        bail!(
-                            "expected type {} for column {}, found {}",
-                            exp_typ.scalar_type,
-                            name.unwrap_or(&ColumnName::from("unnamed column")),
-                            typ,
-                        );
-                    }
-                }
-
-                Ok(Plan::Insert {
-                    id: table.id(),
-                    values: relation_expr,
-                })
-            } else {
-                unsupported!(format!("INSERT body {}", query.body));
-            }
-        }
-        InsertSource::DefaultValues => unsupported!("INSERT DEFAULT VALUES"),
-    }
+    Ok(Plan::Insert { id, values: expr })
 }
 
 fn handle_select(
@@ -2346,7 +2286,7 @@ fn handle_select(
     SelectStatement { query, as_of }: SelectStatement,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    let (relation_expr, _, finishing) = handle_query(scx, *query, params, QueryLifetime::OneShot)?;
+    let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
         Some(ts) => PeekWhen::AtTimestamp(ts),
         None => PeekWhen::Immediately,
@@ -2372,10 +2312,7 @@ fn handle_generated_select(scx: &StatementContext, query: String) -> Result<Plan
 fn handle_computed_select(scx: &StatementContext, query: Query) -> Result<Plan, anyhow::Error> {
     handle_select(
         scx,
-        SelectStatement {
-            query: Box::new(query),
-            as_of: None,
-        },
+        SelectStatement { query, as_of: None },
         &Params {
             datums: Row::pack(&[]),
             types: vec![],
@@ -2419,7 +2356,7 @@ fn handle_explain(
                 catalog: scx.catalog,
                 param_types: scx.param_types.clone(),
             };
-            (scx, *query)
+            (scx, query)
         }
         Explainee::Query(query) => (scx.clone(), query),
     };
@@ -2583,7 +2520,15 @@ impl<'a> StatementContext<'a> {
         Ok(())
     }
 
-    pub fn unwrap_param_types(self) -> BTreeMap<usize, ScalarType> {
-        Rc::try_unwrap(self.param_types).unwrap().into_inner()
+    pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, anyhow::Error> {
+        let param_types = Rc::try_unwrap(self.param_types).unwrap().into_inner();
+        let mut out = vec![];
+        for (i, (n, typ)) in param_types.into_iter().enumerate() {
+            if n != i + 1 {
+                bail!("unable to infer type for parameter ${}", i + 1);
+            }
+            out.push(typ);
+        }
+        Ok(out)
     }
 }

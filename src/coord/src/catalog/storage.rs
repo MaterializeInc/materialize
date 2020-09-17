@@ -16,6 +16,7 @@ use expr::GlobalId;
 use ore::cast::CastFrom;
 use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName};
+use uuid::Uuid;
 
 use crate::catalog::config::Config;
 use crate::catalog::error::{Error, ErrorKind};
@@ -112,7 +113,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn open(config: &Config) -> Result<(Connection, bool), Error> {
+    pub fn open(config: &Config) -> Result<(Connection, bool, Uuid), Error> {
         let mut sqlite = match &config.path {
             Some(path) => rusqlite::Connection::open(path)?,
             None => rusqlite::Connection::open_in_memory()?,
@@ -151,8 +152,9 @@ impl Connection {
 
         let experimental_mode =
             Self::set_or_get_experimental_mode(&mut sqlite, config.experimental_mode)?;
+        let cluster_id = Self::set_or_get_cluster_id(&mut sqlite)?;
 
-        Ok((Connection { inner: sqlite }, experimental_mode))
+        Ok((Connection { inner: sqlite }, experimental_mode, cluster_id))
     }
 
     /// Sets catalog's `experimental_mode` setting on initialization or gets
@@ -215,6 +217,35 @@ impl Connection {
                 tx.commit()?;
                 panic!("experimental_mode not set in catalog and not provided on server init")
             }
+        };
+        tx.commit()?;
+        res
+    }
+
+    /// Sets catalog's `cluster_id` setting on initialization or gets that value.
+    fn set_or_get_cluster_id(sqlite: &mut rusqlite::Connection) -> Result<Uuid, Error> {
+        let tx = sqlite.transaction()?;
+        let current_setting: Option<SqlVal<Uuid>> = tx
+            .query_row(
+                "SELECT value FROM settings WHERE name = 'cluster_id';",
+                params![],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let res = match current_setting {
+            // Server init
+            None => {
+                // Generate a new version 4 UUID. These are generated from random input.
+                let cluster_id = Uuid::new_v4();
+                tx.execute(
+                    "INSERT INTO settings VALUES ('cluster_id', ?);",
+                    params![SqlVal(cluster_id)],
+                )?;
+                Ok(cluster_id)
+            }
+            // Server reboot
+            Some(cs) => Ok(cs.0),
         };
         tx.commit()?;
         res
