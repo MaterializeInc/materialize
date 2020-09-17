@@ -757,7 +757,7 @@ fn handle_show_tables(
     };
     match parse(query)?.into_element() {
         Statement::Select(SelectStatement { query, as_of: _ }) => {
-            handle_computed_select(scx, *query)
+            handle_computed_select(scx, query)
         }
         _ => unreachable!(), // Known to be Select statement.
     }
