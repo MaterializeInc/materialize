@@ -34,16 +34,15 @@ use ore::collections::CollectionExt;
 use repr::{strconv, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    BinaryOperator, ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement,
-    CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
-    ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement, Join,
-    JoinConstraint, JoinOperator, ObjectName, ObjectType, OrderByExpr, Query, Select, SelectItem,
+    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
+    DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
+    Format, Ident, IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query,
     SelectStatement, SetVariableStatement, SetVariableValue, ShowColumnsStatement,
     ShowCreateIndexStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
     ShowCreateTableStatement, ShowCreateViewStatement, ShowDatabasesStatement,
     ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
-    SqlOption, Statement, TableAlias, TableFactor, TableWithJoins, TailStatement, Value,
+    SqlOption, Statement, TailStatement, Value,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -63,7 +62,7 @@ lazy_static! {
     static ref SHOW_DATABASES_DESC: RelationDesc =
         RelationDesc::empty().with_column("database", ScalarType::String.nullable(false));
     static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::empty()
-        .with_column("Source_or_view", ScalarType::String.nullable(false))
+        .with_column("On_name", ScalarType::String.nullable(false))
         .with_column("Key_name", ScalarType::String.nullable(false))
         .with_column("Column_name", ScalarType::String.nullable(true))
         .with_column("Expression", ScalarType::String.nullable(true))
@@ -513,49 +512,25 @@ fn finish_show_where(
     })
 }
 
-fn filter_expr(
-    show_statement_filter: Option<ShowStatementFilter>,
-    like_identifier: &str,
-) -> Option<Expr> {
-    match show_statement_filter {
-        Some(ShowStatementFilter::Like(l)) => Some(Expr::BinaryOp {
-            left: Box::new(Expr::Identifier(vec![Ident::new(like_identifier)])),
-            op: BinaryOperator::Like,
-            right: Box::new(Expr::Value(Value::String(l))),
-        }),
-        Some(ShowStatementFilter::Where(w)) => Some(w),
-        None => None,
-    }
-}
-
 fn handle_show_databases(
     scx: &StatementContext,
     ShowDatabasesStatement { filter }: ShowDatabasesStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let filter = filter_expr(filter, "database");
-    let select = Select::default()
-        .from(TableWithJoins {
-            relation: TableFactor::Table {
-                name: ObjectName(vec![Ident::new("mz_catalog"), Ident::new("mz_databases")]),
-                alias: None,
-            },
-            joins: vec![],
-        })
-        .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("database")]),
-            alias: None,
-        })
-        .selection(filter);
-    handle_select(
+    let filter = match filter {
+        Some(ShowStatementFilter::Like(like)) => {
+            format!("AND database LIKE {}", Value::String(like))
+        }
+        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
+        None => "".to_owned(),
+    };
+    handle_generated_select(
         scx,
-        SelectStatement {
-            query: Query::select(select),
-            as_of: None,
-        },
-        &Params {
-            datums: Row::pack(&[]),
-            types: vec![],
-        },
+        format!(
+            "SELECT database
+             FROM mz_catalog.mz_databases
+             WHERE mz_catalog.mz_databases.id != -1 {}",
+            filter
+        ),
     )
 }
 
@@ -644,80 +619,53 @@ fn handle_show_schemas(
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
 ) -> Result<Plan, anyhow::Error> {
-    let mut selection = {
-        let database_name = if let Some(from) = from {
-            scx.resolve_database(from)?
-        } else {
-            scx.resolve_default_database()?.to_string()
-        };
-        let mut selection = Expr::BinaryOp {
-            left: Box::new(Expr::Identifier(vec![Ident::new("database")])),
-            op: BinaryOperator::Eq,
-            right: Box::new(Expr::Value(Value::String(database_name))),
-        };
-        if extended {
-            selection = Expr::BinaryOp {
-                left: Box::new(selection),
-                op: BinaryOperator::Or,
-                right: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(vec![Ident::new("database_id")])),
-                    op: BinaryOperator::Eq,
-                    right: Box::new(Expr::Value(Value::Number("-1".to_owned()))), // AMBIENT_DATABASE_ID
-                }),
-            }
-        }
-        selection
+    let database_name = if let Some(from) = from {
+        scx.resolve_database(from)?
+    } else {
+        scx.resolve_default_database()?.to_string()
     };
-    if let Some(show_statement_filter) = filter_expr(filter, "schema") {
-        selection = Expr::BinaryOp {
-            left: Box::new(selection),
-            op: BinaryOperator::And,
-            right: Box::new(show_statement_filter),
-        }
-    }
+    let filter = match filter {
+        Some(ShowStatementFilter::Like(like)) => format!("AND schema LIKE {}", Value::String(like)),
+        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
+        None => "".to_owned(),
+    };
 
-    let mut select = Select::default()
-        .from(TableWithJoins {
-            relation: TableFactor::Table {
-                name: ObjectName(vec![Ident::new("mz_schemas")]),
-                alias: None,
-            },
-            joins: vec![Join {
-                relation: TableFactor::Table {
-                    name: ObjectName(vec![Ident::new("mz_databases")]),
-                    alias: None,
-                },
-                join_operator: JoinOperator::LeftOuter(JoinConstraint::On(Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(vec![Ident::new("database_id")])),
-                    op: BinaryOperator::Eq,
-                    right: Box::new(Expr::Identifier(vec![Ident::new("id")])),
-                })),
-            }],
-        })
-        .selection(Some(selection))
-        .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("schema".to_owned())]),
-            alias: None,
-        });
-
-    if full {
-        select.projection.push(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("type".to_owned())]),
-            alias: None,
-        })
-    }
-
-    handle_select(
-        scx,
-        SelectStatement {
-            query: Query::select(select),
-            as_of: None,
-        },
-        &Params {
-            datums: Row::pack(&[]),
-            types: vec![],
-        },
-    )
+    let query = if !full & !extended {
+        format!(
+            "SELECT schema
+            FROM mz_catalog.mz_schemas
+            JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
+            WHERE mz_catalog.mz_databases.database = '{}' {}",
+            database_name, filter
+        )
+    } else if full & !extended {
+        format!(
+            "SELECT schema, type
+            FROM mz_catalog.mz_schemas
+            JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
+            WHERE mz_catalog.mz_databases.database = '{}' {}",
+            database_name, filter
+        )
+    } else if !full & extended {
+        // -1 is the ambient database id.
+        format!(
+            "SELECT schema
+            FROM mz_catalog.mz_schemas
+            JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
+            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.id = -1 {}",
+            database_name, filter
+        )
+    } else {
+        // -1 is the ambient database id.
+        format!(
+            "SELECT schema, type
+            FROM mz_catalog.mz_schemas
+            JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
+            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.id = -1 {}",
+            database_name, filter
+        )
+    };
+    handle_generated_select(scx, query)
 }
 
 fn handle_show_sinks(
@@ -740,15 +688,15 @@ fn handle_show_sinks(
     let query = if full {
         format!(
             "SELECT sinks, type
-            FROM mz_sinks
-            JOIN mz_schemas ON mz_sinks.schema_id = mz_schemas.schema_id
+            FROM mz_catalog.mz_sinks
+            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sinks.schema_id = mz_catalog.mz_schemas.schema_id
             WHERE schema_id = {} {}
             ORDER BY sinks, type",
             schema_spec.id, filter
         )
     } else {
         format!(
-            "SELECT sinks FROM mz_sinks WHERE schema_id = {} {} ORDER BY sinks",
+            "SELECT sinks FROM mz_catalog.mz_sinks WHERE schema_id = {} {} ORDER BY sinks",
             schema_spec.id, filter
         )
     };
@@ -777,60 +725,49 @@ fn handle_show_sources(
 
     let query = if !full & !materialized {
         format!(
-            "SELECT sources FROM mz_sources WHERE schema_id = {} {} ORDER BY sources",
+            "SELECT sources FROM mz_catalog.mz_sources WHERE schema_id = {} {} ORDER BY sources",
             schema_spec.id, filter
         )
     } else if full & !materialized {
         format!(
-            "SELECT
-            sources,
-            type,
-            CASE
-                WHEN count > 0 then true
-                ELSE false
-            END materialized
-        FROM mz_sources
-        JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.schema_id
-        JOIN (SELECT mz_sources.global_id as global_id, count(mz_indexes.on_global_id) AS count
-              FROM mz_sources
-              LEFT JOIN mz_indexes on mz_sources.global_id = mz_indexes.on_global_id
-              GROUP BY mz_sources.global_id) as mz_indexes_count
-            ON mz_sources.global_id = mz_indexes_count.global_id
-        WHERE schema_id = {} {}
-        ORDER BY sources, type",
+            "SELECT sources, type, CASE WHEN count > 0 then true ELSE false END materialized
+            FROM mz_catalog.mz_sources
+            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.schema_id
+            JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
+                  FROM mz_catalog.mz_sources
+                  LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
+                  GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
+                ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
+            WHERE schema_id = {} {}
+            ORDER BY sources, type",
             schema_spec.id, filter
         )
     } else if !full & materialized {
         format!(
-            "SELECT
-            sources
-        FROM mz_sources
-        JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.schema_id
-        JOIN (SELECT mz_sources.global_id as global_id, count(mz_indexes.on_global_id) AS count
-              FROM mz_sources
-              LEFT JOIN mz_indexes on mz_sources.global_id = mz_indexes.on_global_id
-              GROUP BY mz_sources.global_id) as mz_indexes_count
-            ON mz_sources.global_id = mz_indexes_count.global_id
-        WHERE schema_id = {} {}
-            AND mz_indexes_count.count > 0
-        ORDER BY sources, type",
+            "SELECT sources
+            FROM mz_catalog.mz_sources
+            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.schema_id
+            JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
+                  FROM mz_catalog.mz_sources
+                  LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
+                  GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
+                ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
+            WHERE schema_id = {} {} AND mz_indexes_count.count > 0
+            ORDER BY sources, type",
             schema_spec.id, filter
         )
     } else {
         format!(
-            "SELECT
-            sources,
-            type
-        FROM mz_sources
-        JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.schema_id
-        JOIN (SELECT mz_sources.global_id as global_id, count(mz_indexes.on_global_id) AS count
-              FROM mz_sources
-              LEFT JOIN mz_indexes on mz_sources.global_id = mz_indexes.on_global_id
-              GROUP BY mz_sources.global_id) as mz_indexes_count
-            ON mz_sources.global_id = mz_indexes_count.global_id
-        WHERE schema_id = {} {}
-            AND mz_indexes_count.count > 0
-        ORDER BY sources, type",
+            "SELECT sources, type
+            FROM mz_catalog.mz_sources
+            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.schema_id
+            JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
+                  FROM mz_catalog.mz_sources
+                  LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
+                  GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
+                ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
+            WHERE schema_id = {} {} AND mz_indexes_count.count > 0
+            ORDER BY sources, type",
             schema_spec.id, filter
         )
     };
@@ -862,15 +799,15 @@ fn handle_show_tables(
     let query = if full {
         format!(
             "SELECT tables, type
-            FROM mz_tables
-            JOIN mz_schemas ON mz_tables.schema_id = mz_schemas.schema_id
+            FROM mz_catalog.mz_tables
+            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_tables.schema_id = mz_catalog.mz_schemas.schema_id
             WHERE schema_id = {} {}
             ORDER BY tables, type",
             schema_spec.id, filter
         )
     } else {
         format!(
-            "SELECT tables FROM mz_tables WHERE schema_id = {} {} ORDER BY tables",
+            "SELECT tables FROM mz_catalog.mz_tables WHERE schema_id = {} {} ORDER BY tables",
             schema_spec.id, filter
         )
     };
@@ -901,160 +838,42 @@ fn handle_show_indexes(
         );
     }
 
-    let mut selection = Expr::BinaryOp {
-        left: Box::new(Expr::Identifier(vec![
-            Ident::new("on_mz_catalog_names"),
-            Ident::new("name"),
-        ])),
-        op: BinaryOperator::Eq,
-        right: Box::new(Expr::Value(Value::String(from_name.to_string()))),
+    let base_query = format!(
+        "SELECT
+            on_names.name as on_name,
+            index_names.name as key_name,
+            mz_catalog.mz_columns.field as column_name,
+            mz_catalog.mz_indexes.expression as expression,
+            mz_catalog.mz_indexes.nullable as nullable,
+            mz_catalog.mz_indexes.seq_in_index as seq_in_index
+        FROM
+            mz_catalog.mz_indexes
+            JOIN mz_catalog.mz_catalog_names AS on_names ON mz_catalog.mz_indexes.on_global_id = on_names.global_id
+            JOIN mz_catalog.mz_catalog_names AS index_names ON mz_catalog.mz_indexes.global_id = index_names.global_id
+            LEFT OUTER JOIN mz_catalog.mz_columns ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_columns.global_id
+                AND mz_catalog.mz_indexes.field_number = mz_catalog.mz_columns.field_number
+        WHERE
+            on_names.name = '{}'
+        ORDER BY
+            key_name asc,
+            seq_in_index asc", from_name
+    );
+
+    let query = if let Some(filter) = filter {
+        let filter = match filter {
+            ShowStatementFilter::Like(like) => format!("key_name LIKE {}", Value::String(like)),
+            ShowStatementFilter::Where(expr) => expr.to_string(),
+        };
+        format!(
+            "SELECT on_name, key_name, column_name, expression, nullable, seq_in_index
+             FROM ({})
+             WHERE {}",
+            base_query, filter,
+        )
+    } else {
+        base_query
     };
-    if let Some(show_statement_filter) = filter_expr(filter, "name") {
-        selection = Expr::BinaryOp {
-            left: Box::new(selection),
-            op: BinaryOperator::And,
-            right: Box::new(show_statement_filter),
-        }
-    }
-
-    let select = Select::default()
-        .from(TableWithJoins {
-            relation: TableFactor::Table {
-                name: ObjectName(vec![Ident::new("mz_indexes")]),
-                alias: None,
-            },
-            joins: vec![
-                Join {
-                    // Join to get the name for 'Source_or_view'.
-                    relation: TableFactor::Table {
-                        name: ObjectName(vec![Ident::new("mz_catalog_names")]),
-                        alias: Some(TableAlias {
-                            name: Ident::new("on_mz_catalog_names"),
-                            columns: vec![Ident::new("global_id"), Ident::new("name")],
-                            strict: false,
-                        }),
-                    },
-                    join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
-                        left: Box::new(Expr::Identifier(vec![
-                            Ident::new("on_mz_catalog_names"),
-                            Ident::new("global_id"),
-                        ])),
-                        op: BinaryOperator::Eq,
-                        right: Box::new(Expr::Identifier(vec![
-                            Ident::new("mz_indexes"),
-                            Ident::new("on_global_id"),
-                        ])),
-                    })),
-                },
-                Join {
-                    // Join to get the name for 'Key_name'.
-                    relation: TableFactor::Table {
-                        name: ObjectName(vec![Ident::new("mz_catalog_names")]),
-                        alias: Some(TableAlias {
-                            name: Ident::new("mz_catalog_names"),
-                            columns: vec![Ident::new("global_id"), Ident::new("key_name")],
-                            strict: false,
-                        }),
-                    },
-                    join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
-                        left: Box::new(Expr::Identifier(vec![
-                            Ident::new("mz_catalog_names"),
-                            Ident::new("global_id"),
-                        ])),
-                        op: BinaryOperator::Eq,
-                        right: Box::new(Expr::Identifier(vec![
-                            Ident::new("mz_indexes"),
-                            Ident::new("global_id"),
-                        ])),
-                    })),
-                },
-                Join {
-                    // Join to get the name for 'Column_name'.
-                    relation: TableFactor::Table {
-                        name: ObjectName(vec![Ident::new("mz_columns")]),
-                        alias: Some(TableAlias {
-                            name: Ident::new("mz_columns"),
-                            columns: vec![
-                                Ident::new("global_id"),
-                                Ident::new("field_number"),
-                                Ident::new("column_name"),
-                            ],
-                            strict: false,
-                        }),
-                    },
-                    join_operator: JoinOperator::LeftOuter(JoinConstraint::On(Expr::BinaryOp {
-                        left: Box::new(Expr::BinaryOp {
-                            left: Box::new(Expr::Identifier(vec![
-                                Ident::new("mz_indexes"),
-                                Ident::new("on_global_id"),
-                            ])),
-                            op: BinaryOperator::Eq,
-                            right: Box::new(Expr::Identifier(vec![
-                                Ident::new("mz_columns"),
-                                Ident::new("global_id"),
-                            ])),
-                        }),
-                        op: BinaryOperator::And,
-                        right: Box::new(Expr::BinaryOp {
-                            left: Box::new(Expr::Identifier(vec![
-                                Ident::new("mz_indexes"),
-                                Ident::new("field_number"),
-                            ])),
-                            op: BinaryOperator::Eq,
-                            right: Box::new(Expr::Identifier(vec![
-                                Ident::new("mz_columns"),
-                                Ident::new("field_number"),
-                            ])),
-                        }),
-                    })),
-                },
-            ],
-        })
-        .selection(Some(selection))
-        .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![
-                Ident::new("on_mz_catalog_names"),
-                Ident::new("name".to_owned()),
-            ]),
-            alias: None,
-        })
-        .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("key_name")]),
-            alias: None,
-        })
-        .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("column_name".to_owned())]),
-            alias: None,
-        })
-        .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("expression".to_owned())]),
-            alias: None,
-        })
-        .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![
-                Ident::new("mz_indexes"),
-                Ident::new("nullable".to_owned()),
-            ]),
-            alias: None,
-        })
-        .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("seq_in_index".to_owned())]),
-            alias: None,
-        });
-
-    let mut query = Query::select(select);
-    query.order_by = vec![
-        OrderByExpr {
-            expr: Expr::Identifier(vec![Ident::new("key_name".to_owned())]),
-            asc: Some(true),
-        },
-        OrderByExpr {
-            expr: Expr::Identifier(vec![Ident::new("seq_in_index".to_owned())]),
-            asc: Some(true),
-        },
-    ];
-
-    handle_computed_select(scx, query)
+    handle_generated_select(scx, query)
 }
 
 /// Create an immediate result that describes all the columns for the given table
@@ -1074,84 +893,24 @@ fn handle_show_columns(
         unsupported!("SHOW FULL COLUMNS");
     }
 
-    let mut selection = Expr::BinaryOp {
-        left: Box::new(Expr::Identifier(vec![
-            Ident::new("mz_catalog_names"),
-            Ident::new("name"),
-        ])),
-        op: BinaryOperator::Eq,
-        right: Box::new(Expr::Value(Value::String(
-            scx.resolve_item(table_name)?.to_string(),
-        ))),
+    let name = scx.resolve_item(table_name)?;
+    let filter = match filter {
+        Some(ShowStatementFilter::Like(like)) => format!("AND field LIKE {}", Value::String(like)),
+        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
+        None => "".to_owned(),
     };
-    if let Some(show_statement_filter) = filter_expr(filter, "field") {
-        selection = Expr::BinaryOp {
-            left: Box::new(selection),
-            op: BinaryOperator::And,
-            right: Box::new(show_statement_filter),
-        }
-    }
-
-    let select = Select::default()
-        .from(TableWithJoins {
-            relation: TableFactor::Table {
-                name: ObjectName(vec![Ident::new("mz_columns")]),
-                alias: None,
-            },
-            joins: vec![Join {
-                relation: TableFactor::Table {
-                    name: ObjectName(vec![Ident::new("mz_catalog_names")]),
-                    alias: None,
-                },
-                join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(vec![
-                        Ident::new("mz_columns"),
-                        Ident::new("global_id"),
-                    ])),
-                    op: BinaryOperator::Eq,
-                    right: Box::new(Expr::Identifier(vec![
-                        Ident::new("mz_catalog_names"),
-                        Ident::new("global_id"),
-                    ])),
-                })),
-            }],
-        })
-        .selection(Some(selection))
-        .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("field".to_owned())]),
-            alias: None,
-        })
-        .project(SelectItem::Expr {
-            expr: Expr::Case {
-                operand: None,
-                conditions: vec![Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(vec![Ident::new("nullable".to_owned())])),
-                    op: BinaryOperator::Eq,
-                    right: Box::new(Expr::Value(Value::Boolean(true))),
-                }],
-                results: vec![Expr::Value(Value::String("YES".to_owned()))],
-                else_result: Some(Box::new(Expr::Value(Value::String("NO".to_owned())))),
-            },
-            alias: None,
-        })
-        .project(SelectItem::Expr {
-            expr: Expr::Identifier(vec![Ident::new("type".to_owned())]),
-            alias: None,
-        });
-    let mut query = Query::select(select);
-    query.order_by = vec![OrderByExpr {
-        expr: Expr::Identifier(vec![Ident::new("field_number".to_owned())]),
-        asc: Some(true),
-    }];
-
-    handle_select(
-        scx,
-        SelectStatement { query, as_of: None },
-        &Params {
-            datums: Row::pack(&[]),
-            types: vec![],
-        },
-    )
+    let query = format!(
+        "SELECT
+            mz_columns.field,
+            CASE WHEN mz_columns.nullable THEN 'YES' ELSE 'NO' END nullable,
+            mz_columns.type
+         FROM mz_catalog.mz_columns AS mz_columns
+         JOIN mz_catalog.mz_catalog_names AS mz_catalog_names ON mz_columns.global_id = mz_catalog_names.global_id
+         WHERE mz_catalog_names.name = '{}' {}
+         ORDER BY mz_columns.field_number ASC",
+        name, filter
+    );
+    handle_generated_select(scx, query)
 }
 
 fn handle_show_create_view(
@@ -2302,22 +2061,16 @@ fn handle_select(
 
 fn handle_generated_select(scx: &StatementContext, query: String) -> Result<Plan, anyhow::Error> {
     match parse(query)?.into_element() {
-        Statement::Select(SelectStatement { query, as_of: _ }) => {
-            handle_computed_select(scx, query)
-        }
+        Statement::Select(SelectStatement { query, as_of: _ }) => handle_select(
+            scx,
+            SelectStatement { query, as_of: None },
+            &Params {
+                datums: Row::pack(&[]),
+                types: vec![],
+            },
+        ),
         _ => unreachable!("known to be select statement"),
     }
-}
-
-fn handle_computed_select(scx: &StatementContext, query: Query) -> Result<Plan, anyhow::Error> {
-    handle_select(
-        scx,
-        SelectStatement { query, as_of: None },
-        &Params {
-            datums: Row::pack(&[]),
-            types: vec![],
-        },
-    )
 }
 
 fn handle_explain(

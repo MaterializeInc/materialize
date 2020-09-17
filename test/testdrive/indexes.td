@@ -38,7 +38,7 @@ field_number     field
 2                mz_obj_no
 
 > SHOW INDEXES FROM mz_data
-Source_or_view                Key_name                              Column_name  Expression  Null   Seq_in_index
+On_name                       Key_name                              Column_name  Expression  Null   Seq_in_index
 ----------------------------------------------------------------------------------------------------------------
 materialize.public.mz_data  materialize.public.mz_data_primary_idx  a            <null>      false             1
 materialize.public.mz_data  materialize.public.mz_data_primary_idx  b            <null>      false             2
@@ -49,14 +49,14 @@ materialize.public.mz_data  materialize.public.mz_data_primary_idx  mz_obj_no   
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
 
 > SHOW INDEXES FROM data
-Source_or_view            Key_name                              Column_name  Expression  Null  Seq_in_index
+On_name                   Key_name                              Column_name  Expression  Null  Seq_in_index
 -----------------------------------------------------------------------------------------------------------
 
 # Views can have default indexes added
 > CREATE DEFAULT INDEX ON data
 
 > SHOW INDEXES FROM data
-Source_or_view           Key_name                             Column_name  Expression  Null   Seq_in_index
+On_name                  Key_name                             Column_name  Expression  Null   Seq_in_index
 ----------------------------------------------------------------------------------------------------------
 materialize.public.data  materialize.public.data_primary_idx  a            <null>      false             1
 materialize.public.data  materialize.public.data_primary_idx  b            <null>      false             2
@@ -65,7 +65,7 @@ materialize.public.data  materialize.public.data_primary_idx  mz_obj_no    <null
 > CREATE DEFAULT INDEX ON mz_data
 
 > SHOW INDEXES FROM mz_data
-Source_or_view                Key_name                               Column_name  Expression  Null   Seq_in_index
+On_name                       Key_name                               Column_name  Expression  Null   Seq_in_index
 ------------------------------------------------------------------------------------------------------------------
 materialize.public.mz_data  materialize.public.mz_data_primary_idx   a            <null>      false             1
 materialize.public.mz_data  materialize.public.mz_data_primary_idx   b            <null>      false             2
@@ -79,7 +79,7 @@ materialize.public.mz_data  materialize.public.mz_data_primary_idx1  mz_obj_no  
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW INDEXES FROM matv
-Source_or_view            Key_name                              Column_name  Expression  Null  Seq_in_index
+On_name                   Key_name                              Column_name  Expression  Null  Seq_in_index
 -----------------------------------------------------------------------------------------------------------
 materialize.public.matv  materialize.public.matv_primary_idx  b            <null>      false             1
 
@@ -87,14 +87,14 @@ materialize.public.matv  materialize.public.matv_primary_idx  b            <null
 > CREATE VIEW data_view as SELECT * from data
 
 > SHOW INDEXES FROM data_view
-Source_or_view            Key_name                              Column_name  Expression  Null  Seq_in_index
+On_name                   Key_name                              Column_name  Expression  Null  Seq_in_index
 -----------------------------------------------------------------------------------------------------------
 
 # Views can have default indexes added
 > CREATE DEFAULT INDEX ON data_view
 
 > SHOW INDEXES FROM data_view
-Source_or_view                Key_name                                  Column_name  Expression  Null   Seq_in_index
+On_name                       Key_name                                  Column_name  Expression  Null   Seq_in_index
 --------------------------------------------------------------------------------------------------------------------
 materialize.public.data_view  materialize.public.data_view_primary_idx  a            <null>      false             1
 materialize.public.data_view  materialize.public.data_view_primary_idx  b            <null>      false             2
@@ -104,7 +104,7 @@ materialize.public.data_view  materialize.public.data_view_primary_idx  mz_obj_n
 > CREATE MATERIALIZED VIEW mz_data_view as SELECT * from data
 
 > SHOW INDEXES FROM mz_data_view
-Source_or_view                   Key_name                                     Column_name  Expression  Null   Seq_in_index
+On_name                          Key_name                                     Column_name  Expression  Null   Seq_in_index
 --------------------------------------------------------------------------------------------------------------------------
 materialize.public.mz_data_view  materialize.public.mz_data_view_primary_idx  a            <null>      false             1
 materialize.public.mz_data_view  materialize.public.mz_data_view_primary_idx  b            <null>      false             2
@@ -114,7 +114,7 @@ materialize.public.mz_data_view  materialize.public.mz_data_view_primary_idx  mz
 > CREATE DEFAULT INDEX IF NOT EXISTS ON data_view
 
 > SHOW INDEXES FROM data_view
-Source_or_view                Key_name                                  Column_name  Expression  Null   Seq_in_index
+On_name                       Key_name                                  Column_name  Expression  Null   Seq_in_index
 --------------------------------------------------------------------------------------------------------------------
 materialize.public.data_view  materialize.public.data_view_primary_idx  a            <null>      false             1
 materialize.public.data_view  materialize.public.data_view_primary_idx  b            <null>      false             2
@@ -124,7 +124,7 @@ materialize.public.data_view  materialize.public.data_view_primary_idx  mz_obj_n
 > CREATE DEFAULT INDEX IF NOT EXISTS ON matv
 
 > SHOW INDEXES FROM matv
-Source_or_view            Key_name                              Column_name  Expression  Null  Seq_in_index
+On_name                   Key_name                              Column_name  Expression  Null  Seq_in_index
 -----------------------------------------------------------------------------------------------------------
 materialize.public.matv  materialize.public.matv_primary_idx  b            <null>      false             1
 
@@ -132,7 +132,7 @@ materialize.public.matv  materialize.public.matv_primary_idx  b            <null
 > CREATE DEFAULT INDEX ON matv
 
 > SHOW INDEXES FROM matv
-Source_or_view            Key_name                               Column_name  Expression  Null   Seq_in_index
+On_name                   Key_name                               Column_name  Expression  Null   Seq_in_index
 -------------------------------------------------------------------------------------------------------------
 materialize.public.matv  materialize.public.matv_primary_idx   b            <null>      false             1
 materialize.public.matv  materialize.public.matv_primary_idx1  b            <null>      false             1
@@ -141,7 +141,7 @@ materialize.public.matv  materialize.public.matv_primary_idx1  b            <nul
 > CREATE DEFAULT INDEX named_idx ON data_view
 
 > SHOW INDEXES FROM data_view
-Source_or_view                Key_name                                  Column_name  Expression  Null   Seq_in_index
+On_name                       Key_name                                  Column_name  Expression  Null   Seq_in_index
 --------------------------------------------------------------------------------------------------------------------
 materialize.public.data_view  materialize.public.data_view_primary_idx  a            <null>      false             1
 materialize.public.data_view  materialize.public.data_view_primary_idx  b            <null>      false             2
@@ -157,7 +157,7 @@ materialize.public.data_view  materialize.public.named_idx              mz_obj_n
 > CREATE INDEX ON data_view(a)
 
 > SHOW INDEXES FROM data_view
-Source_or_view                Key_name                                  Column_name  Expression  Null   Seq_in_index
+On_name                       Key_name                                  Column_name  Expression  Null   Seq_in_index
 --------------------------------------------------------------------------------------------------------------------
 materialize.public.data_view  materialize.public.data_view_a_idx        a            <null>      false             1
 
@@ -168,7 +168,7 @@ materialize.public.data_view  materialize.public.data_view_a_idx        a       
 > CREATE INDEX ON data_view(b - a, a)
 
 > SHOW INDEXES FROM data_view
-Source_or_view                Key_name                                  Column_name  Expression  Null   Seq_in_index
+On_name                       Key_name                                  Column_name  Expression  Null   Seq_in_index
 --------------------------------------------------------------------------------------------------------------------
 materialize.public.data_view  materialize.public.data_view_b_a_idx      a            <null>      false             2
 materialize.public.data_view  materialize.public.data_view_b_a_idx      b            <null>      false             1
@@ -182,7 +182,7 @@ materialize.public.data_view  materialize.public.data_view_expr_a_idx   a       
 > CREATE INDEX named_idx ON data_view (b - a, a)
 
 > SHOW INDEXES FROM data_view
-Source_or_view                Key_name                       Column_name  Expression  Null   Seq_in_index
+On_name                       Key_name                       Column_name  Expression  Null   Seq_in_index
 ---------------------------------------------------------------------------------------------------------
 materialize.public.data_view  materialize.public.named_idx   <null>       "b - a"     false             1
 materialize.public.data_view  materialize.public.named_idx   a            <null>      false             2
@@ -194,7 +194,7 @@ materialize.public.data_view  materialize.public.named_idx   a            <null>
 > CREATE DEFAULT INDEX IF NOT EXISTS ON data_view
 
 > SHOW INDEXES FROM data_view
-Source_or_view                Key_name                                   Column_name  Expression  Null   Seq_in_index
+On_name                       Key_name                                   Column_name  Expression  Null   Seq_in_index
 ---------------------------------------------------------------------------------------------------------------------
 materialize.public.data_view  materialize.public.data_view_primary_idx   <null>       "b - a"     false             1
 materialize.public.data_view  materialize.public.data_view_primary_idx   a            <null>      false             2

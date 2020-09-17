@@ -35,7 +35,7 @@ SOURCES
 -------
 
 > SHOW INDEXES FROM t;
-Source_or_view        Key_name                          Column_name  Expression  Null   Seq_in_index
+On_name               Key_name                          Column_name  Expression  Null   Seq_in_index
 ----------------------------------------------------------------------------------------------------------------
 materialize.public.t  materialize.public.t_primary_idx  a            <null>      true              1
 materialize.public.t  materialize.public.t_primary_idx  b            <null>      false             2

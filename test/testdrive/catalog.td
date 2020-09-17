@@ -48,10 +48,10 @@ database
 ----
 materialize
 
-# This SELECT should always return the same result as SHOW DATABASES.
 > SELECT * FROM mz_catalog.mz_databases
 id          database
 -----------------------
+-1          AMBIENT
 1           materialize
 
 # Creating a database should be reflected in the output of SHOW DATABASES.
@@ -62,7 +62,7 @@ database
 d
 materialize
 
-> SELECT * FROM mz_catalog.mz_databases
+> SELECT * FROM mz_catalog.mz_databases WHERE id != -1
 id          database
 -----------------------
 1           materialize
@@ -124,6 +124,7 @@ materialize
 > SELECT * FROM mz_catalog.mz_databases
 id          database
 -----------------------
+-1          AMBIENT
 1           materialize
 
 # The session database should remain set to the dropped database, but future
@@ -189,6 +190,7 @@ materialize
 > SELECT * FROM mz_catalog.mz_databases
 id          database
 -----------------------
+-1          AMBIENT
 1           materialize
 2           d
 4           d2
