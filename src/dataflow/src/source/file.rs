@@ -29,7 +29,7 @@ use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
 use crate::source::{
-    ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+    ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
 
 /// Contains all information necessary to ingest data from file sources (either
@@ -250,9 +250,9 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         &mut self,
         _consistency_info: &mut ConsistencyInfo,
         _activator: &Activator,
-    ) -> Result<Option<SourceMessage<Out>>, anyhow::Error> {
+    ) -> Result<NextMessage<Out>, anyhow::Error> {
         if let Some(message) = self.buffer.take() {
-            Ok(Some(message))
+            Ok(NextMessage::Ready(message))
         } else {
             match self.receiver_stream.try_recv() {
                 Ok(Ok(record)) => {
@@ -263,15 +263,14 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
                         key: None,
                         payload: Some(record),
                     };
-                    Ok(Some(message))
+                    Ok(NextMessage::Ready(message))
                 }
                 Ok(Err(e)) => {
                     error!("Failed to read file for {}. Error: {}.", self.id, e);
                     Err(e)
                 }
-                Err(TryRecvError::Empty) => Ok(None),
-                //TODO(ncrooks): add mechanism to return SourceStatus::Done
-                Err(TryRecvError::Disconnected) => Ok(None),
+                Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
+                Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
             }
         }
     }

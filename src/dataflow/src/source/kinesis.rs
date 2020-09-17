@@ -31,7 +31,7 @@ use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
 use crate::source::{
-    ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+    ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
 
 lazy_static! {
@@ -225,7 +225,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
         &mut self,
         consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
-    ) -> Result<Option<SourceMessage<Vec<u8>>>, anyhow::Error> {
+    ) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
         //TODO move to timestamper
@@ -238,7 +238,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
         }
 
         if let Some(message) = self.buffered_messages.pop_front() {
-            Ok(Some(message))
+            Ok(NextMessage::Ready(message))
         } else {
             // Rotate through all of a stream's shards, start with a new shard on each activation.
             if let Some((shard_id, mut shard_iterator)) = self.shard_queue.pop_front() {
@@ -259,7 +259,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                             self.shard_queue.push_back((shard_id, shard_iterator));
                             activator.activate();
                             // Do not send error message as this would cause source to terminate
-                            return Ok(None);
+                            return Ok(NextMessage::Pending);
                         }
                         Err(RusotoError::Service(GetRecordsError::ExpiredIterator(e))) => {
                             // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
@@ -272,7 +272,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                             self.shard_queue.push_back((shard_id, shard_iterator));
                             activator.activate();
                             // Do not send error message as this would cause source to terminate
-                            return Ok(None);
+                            return Ok(NextMessage::Pending);
                         }
                         Err(e) => {
                             // Fatal service errors:
@@ -309,7 +309,10 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                     self.shard_queue.push_back((shard_id, shard_iterator));
                 }
             }
-            Ok(self.buffered_messages.pop_front())
+            Ok(match self.buffered_messages.pop_front() {
+                Some(message) => NextMessage::Ready(message),
+                None => NextMessage::Pending,
+            })
         }
     }
 

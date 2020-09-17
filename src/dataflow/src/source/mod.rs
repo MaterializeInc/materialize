@@ -198,7 +198,7 @@ lazy_static! {
 
 /// Creates a specific source, parameterised by 'Out'. Out denotes the encoding
 /// of the ingested data (Vec<u8> or Value).
-pub trait SourceConstructor<Out> {
+pub(crate) trait SourceConstructor<Out> {
     /// Constructor for source creation
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -247,7 +247,7 @@ impl MaybeLength for Value {
 
 /// Each source must implement this trait. Sources will then get created as part of the
 /// [`create_source`] function.
-pub trait SourceInfo<Out> {
+pub(crate) trait SourceInfo<Out> {
     /// Activates timestamping for a given source. The actions
     /// take are a function of the source type and the consistency
     fn activate_source_timestamping(
@@ -297,7 +297,7 @@ pub trait SourceInfo<Out> {
         &mut self,
         consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
-    ) -> Result<Option<SourceMessage<Out>>, anyhow::Error>;
+    ) -> Result<NextMessage<Out>, anyhow::Error>;
 
     /// Buffer a message that cannot get timestamped
     fn buffer_message(&mut self, message: SourceMessage<Out>);
@@ -322,6 +322,12 @@ pub trait SourceInfo<Out> {
         debug!("unimplemented: this source does not support reading persisted files");
         None
     }
+}
+
+pub(crate) enum NextMessage<Out> {
+    Ready(SourceMessage<Out>),
+    Pending,
+    Finished,
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
@@ -735,7 +741,7 @@ impl PartitionMetrics {
 
 /// Creates a source dataflow operator. The type of ExternalSourceConnector determines the
 /// type of source that should be created
-pub fn create_source<G, S: 'static, Out>(
+pub(crate) fn create_source<G, S: 'static, Out>(
     config: SourceConfig<G>,
     source_connector: ExternalSourceConnector,
 ) -> (
@@ -866,7 +872,7 @@ where
 
                 loop {
                     match source_info.get_next_message(&mut consistency_info, &activator) {
-                        Ok(Some(message)) => {
+                        Ok(NextMessage::Ready(message)) => {
                             let partition = message.partition.clone();
                             let offset = message.offset;
                             let msg_predecessor = predecessor;
@@ -961,9 +967,16 @@ where
                                 return SourceStatus::Alive;
                             }
                         }
-                        Ok(None) => {
+                        Ok(NextMessage::Pending) => {
                             // There were no new messages
                             break;
+                        }
+                        Ok(NextMessage::Finished) => {
+                            if let Consistency::RealTime = consistency_info.source_type {
+                                return SourceStatus::Done;
+                            } else {
+                                break;
+                            }
                         }
                         Err(e) => {
                             output.session(&cap).give(Err(e.to_string()));
