@@ -859,12 +859,7 @@ fn handle_show_tables(
             schema_spec.id, filter
         )
     };
-    match parse(query)?.into_element() {
-        Statement::Select(SelectStatement { query, as_of: _ }) => {
-            handle_computed_select(scx, *query)
-        }
-        _ => unreachable!(), // Known to be Select statement.
-    }
+    handle_generated_select(scx, query)
 }
 
 fn handle_show_indexes(

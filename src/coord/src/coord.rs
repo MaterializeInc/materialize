@@ -984,13 +984,11 @@ where
         );
     }
 
-    /// Inserts or removes a row from [`builtin::MZ_CATALOG_NAMES`] based on the supplied `diff`.
     fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
         let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
         self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)));
     }
 
-    /// Inserts or removes a row from [`builtin::MZ_DATABASES`] based on the supplied `diff`.
     fn report_database_update(&mut self, database_id: i64, name: &str, diff: isize) {
         self.update_catalog_view(
             MZ_DATABASES.id,
@@ -1001,7 +999,6 @@ where
         )
     }
 
-    /// Inserts or removes a row from [`builtin::MZ_SCHEMAS`] based on the supplied `diff`.
     fn report_schema_update(
         &mut self,
         database_id: i64,
@@ -1024,7 +1021,6 @@ where
         )
     }
 
-    /// Inserts or removes a row from [`builtin::MZ_COLUMNS`] based on the supplied `diff`.
     fn report_column_updates(&mut self, desc: &RelationDesc, global_id: GlobalId, diff: isize) {
         for (i, (column_name, column_type)) in desc.iter().enumerate() {
             self.update_catalog_view(
@@ -1047,7 +1043,6 @@ where
         }
     }
 
-    /// Inserts or removes a row from [`builtin::MZ_INDEXES`] based on the supplied `diff`.
     fn report_index_update(&mut self, global_id: GlobalId, index: &Index, diff: isize) {
         self.report_index_update_inner(
             global_id,
@@ -1114,7 +1109,6 @@ where
         }
     }
 
-    /// Inserts or removes a row from [`builtin::MZ_TABLES`] based on the supplied `diff`.
     fn report_table_update(
         &mut self,
         global_id: &GlobalId,
@@ -1135,7 +1129,6 @@ where
         )
     }
 
-    /// Inserts or removes a row from [`builtin::MZ_SOURCES`] based on the supplied `diff`.
     fn report_source_update(
         &mut self,
         global_id: &GlobalId,
@@ -1156,7 +1149,6 @@ where
         )
     }
 
-    /// Inserts or removes a row from [`builtin::MZ_SINKS`] based on the supplied `diff`.
     fn report_sink_update(
         &mut self,
         global_id: &GlobalId,
@@ -2297,11 +2289,7 @@ where
                     self.report_catalog_update(*id, from_name.to_string(), -1);
 
                     // Add new name to mz_catalog_names.
-                    self.report_catalog_update(
-                        *id,
-                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
-                        1,
-                    );
+                    self.report_catalog_update(*id, to_name.to_string(), 1);
 
                     // Remove old name and add new name to relevant mz system tables.
                     match item {
@@ -2313,7 +2301,7 @@ where
                             self.report_sink_update(id, *schema_id, &from_name.item, -1);
                             self.report_sink_update(id, *schema_id, &to_name.item, 1);
                         }
-                        CatalogItem::Table(_) => unreachable!(),
+                        CatalogItem::Table(_) => unreachable!(), // Table names can't be altered.
                         _ => (),
                     }
                 }
