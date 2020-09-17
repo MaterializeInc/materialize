@@ -25,7 +25,7 @@ use timely::dataflow::{
 use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError};
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
-use log::error;
+use log::{debug, error};
 use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{
     register_int_counter, register_int_counter_vec, register_int_gauge_vec,
@@ -318,7 +318,8 @@ pub trait SourceInfo<Out> {
     /// no more data left to process
     /// TODO(rkhaitan): clean this up to return a proper type and potentially a iterator.
     fn next_persisted_file(&mut self) -> Option<Vec<(Vec<u8>, Out, Timestamp, i64)>> {
-        error!("unimplemented: this source does not support reading persisted files");
+        // Default implementation is to do nothing.
+        debug!("unimplemented: this source does not support reading persisted files");
         None
     }
 }
