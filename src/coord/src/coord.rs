@@ -2301,7 +2301,10 @@ where
                             self.report_sink_update(id, *schema_id, &from_name.item, -1);
                             self.report_sink_update(id, *schema_id, &to_name.item, 1);
                         }
-                        CatalogItem::Table(_) => unreachable!(), // Table names can't be altered.
+                        CatalogItem::Table(_) => {
+                            self.report_table_update(id, *schema_id, &from_name.item, -1);
+                            self.report_table_update(id, *schema_id, &to_name.item, 1);
+                        }
                         _ => (),
                     }
                 }

@@ -1,5 +1,5 @@
 alter_rename ::=
-  'ALTER' ('INDEX' | 'SINK' | 'SOURCE' | 'VIEW') name 'RENAME TO' new_name
+  'ALTER' ('INDEX' | 'SINK' | 'SOURCE' | 'VIEW' | 'TABLE') name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' '(' field '=' val ( ',' field '=' val )* ')'
   | 'ALTER' 'INDEX' name 'RESET' '(' field ( ',' field )* ')'

@@ -14,8 +14,8 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateViewStatement, Expr,
-    Ident, ObjectName, Query, Statement,
+    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateViewStatement, Expr, Ident, ObjectName, Query, Statement,
 };
 use crate::names::FullName;
 
@@ -30,7 +30,8 @@ pub fn create_stmt_rename(create_stmt: &mut Statement, to_item_name: String) {
         }
         Statement::CreateSink(CreateSinkStatement { name, .. })
         | Statement::CreateSource(CreateSourceStatement { name, .. })
-        | Statement::CreateView(CreateViewStatement { name, .. }) => {
+        | Statement::CreateView(CreateViewStatement { name, .. })
+        | Statement::CreateTable(CreateTableStatement { name, .. }) => {
             name.0[2] = Ident::new(to_item_name);
         }
         _ => unreachable!("Internal error: only catalog items can be renamed"),
@@ -69,10 +70,10 @@ pub fn create_stmt_rename_refs(
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
             maybe_update_object_name(from);
         }
-        Statement::CreateSource(CreateSourceStatement { .. }) => {}
         Statement::CreateView(CreateViewStatement { query, .. }) => {
             rewrite_query(from_name, to_item_name, query)?;
         }
+        Statement::CreateSource(_) | Statement::CreateTable(_) => {}
         _ => unreachable!("Internal error: only catalog items need to update item refs"),
     }
 

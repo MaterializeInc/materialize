@@ -1921,13 +1921,15 @@ impl Parser {
     }
 
     fn parse_alter(&mut self) -> Result<Statement, ParserError> {
-        let object_type = match self.expect_one_of_keywords(&["INDEX", "SINK", "SOURCE", "VIEW"])? {
-            "INDEX" => ObjectType::Index,
-            "SINK" => ObjectType::Sink,
-            "SOURCE" => ObjectType::Source,
-            "VIEW" => ObjectType::View,
-            _ => unreachable!(),
-        };
+        let object_type =
+            match self.expect_one_of_keywords(&["INDEX", "SINK", "SOURCE", "VIEW", "TABLE"])? {
+                "INDEX" => ObjectType::Index,
+                "SINK" => ObjectType::Sink,
+                "SOURCE" => ObjectType::Source,
+                "VIEW" => ObjectType::View,
+                "TABLE" => ObjectType::Table,
+                _ => unreachable!(),
+            };
 
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
