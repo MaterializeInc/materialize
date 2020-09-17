@@ -205,47 +205,17 @@ etc.), and then create a new node with those items.
 
 ### Persistence
 
-{{< warning >}}
+{{< experimental v0.4.2 >}}
 
-Persistence is a experimental feature at this time. Please don't use it
-with any data you are not comfortable losing. To use persistence you need to have
-both the `--persistence` and `--experimental` flags enabled.
+To avoid re-reading data from Kafka on restart, Materialize lets you create
+persistent sources, which persist input messages from Kafka topics to files
+on the Materialize instance's local hard drive. Persistence will not solve all
+restart time related problems, as there are other factors beyond Kafka broker
+read performance that contribute to high restart times.
 
-{{< /warning >}}
-
-Materialize lets you persist input data from Kafka sources to files on the
-Materialize instance's local hard drive, so that subsequent restarts can read the
-previously ingested data from those local files instead of reading the data from
-Kafka again. Currently, source persistence will not solve many restart time or
-memory usage related problems, as it presently only copies data directly from
-Kafka and stores them in local files.
-
-We recommend using persistence if you are using real-time consistency Kafka sources,
-need to relieve load on upstream Kafka brokers, and are comfortable using
-[experimental](#experimental-mode) features. We will continue iterating on
-persistence and making it support a wider set of source types and improving
-performance and reliability.
-
-Materialize will store one copy of all input data for each persistent Kafka source.
-Materialize will store these files in a directory stored at:
-
-```
-{data-directory}/persistence/{source-id}
-```
-
-Within this directory, Materialize will write to files named
-
-```
-materialize-{source-id}-{partition-id}-{start-offset}-{end-offset}
-```
-
-Here, each file stores data for ranges of offsets per `partition-id`. Each file
-stores all the data from `start-offset` (inclusive) to `end-offset` (exclusive).
-Materialize will buffer up to `--persistence-max-pending-records` records in memory
-per source, before flushing them all to disk immediately. Setting this flag to a
-higher value helps Materialize achieve higher ingest and disk write throughput,
-however this also increases the average latency before records are persisted.
-Additionally, Materialize flushes input records to disk every 10 minutes.
+We recommend enabling persistence if you are using Kafka sources, need to relieve
+load on upstream Kafka brokers, and are comfortable using
+[experimental](#experimental-mode) features.
 
 {{< warning >}}
 
@@ -257,6 +227,33 @@ source.
 
 {{< /warning >}}
 
+#### Details
+
+You can define a persistent source with the [`CREATE SOURCE`][cs] command. Materialize
+stores one copy of all input data for each persistent Kafka source. Materialize
+stores these files in:
+
+```
+{data-directory}/persistence/{source-id}
+```
+
+Within this directory, Materialize writes to files named
+
+```
+materialize-{source-id}-{partition-id}-{start-offset}-{end-offset}
+```
+
+Here, each file stores data for ranges of offsets per `partition-id`. Each file
+stores all the data from `start-offset` (inclusive) to `end-offset` (exclusive).
+Materialize buffers up to `--persistence-max-pending-records` records in memory
+per source, before flushing them all to disk immediately. Setting this flag to a
+higher value helps Materialize achieve higher ingest and disk write throughput,
+however this also increases the average latency before records are persisted.
+Additionally, Materialize flushes input records to disk every 10 minutes.
+
+
 On restart, Materialize reads back all of the records that had been previously
 persisted in offset order, and then continues reading from the upstream source
-for data after the last persisted offset in each partition.
+for data after the last persisted record in each partition.
+
+[cs]: /sql/create-source
