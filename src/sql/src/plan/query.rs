@@ -31,7 +31,7 @@ use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
     JoinOperator, ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator,
-    ShowStatementFilter, TableAlias, TableFactor, TableWithJoins, Value, Values,
+    TableAlias, TableFactor, TableWithJoins, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -174,64 +174,6 @@ pub fn plan_insert_query(
     }
 
     Ok((table.id(), expr))
-}
-
-/// Plans a SHOW statement that might have a WHERE or LIKE clause attached to it. A LIKE clause is
-/// treated as a WHERE applied to the first column in the result set.
-pub fn plan_show_where(
-    scx: &StatementContext,
-    filter: Option<ShowStatementFilter>,
-    rows: Vec<Vec<Datum>>,
-    desc: &RelationDesc,
-) -> Result<(RelationExpr, RowSetFinishing), anyhow::Error> {
-    let names: Vec<Option<String>> = desc
-        .iter_names()
-        .map(|name| name.map(|x| x.as_str().into()))
-        .collect();
-
-    let num_cols = names.len();
-    let mut row_expr = RelationExpr::constant(rows, desc.typ().clone());
-
-    if let Some(f) = filter {
-        let mut predicate = match &f {
-            ShowStatementFilter::Like(s) => Expr::BinaryOp {
-                left: Box::new(Expr::Identifier(vec![Ident::new(
-                    names[0].clone().unwrap(),
-                )])),
-                op: BinaryOperator::Like,
-                right: Box::new(Expr::Value(Value::String(s.into()))),
-            },
-            ShowStatementFilter::Where(selection) => selection.clone(),
-        };
-        let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-        let scope = Scope::from_source(None, names, None);
-        let ecx = ExprContext {
-            qcx: &qcx,
-            name: "SHOW WHERE clause",
-            scope: &scope,
-            relation_type: &qcx.relation_type(&row_expr),
-            allow_aggregates: false,
-            allow_subqueries: true,
-        };
-        transform_ast::transform_expr(&mut predicate)?;
-        let expr = plan_expr(&ecx, &predicate)?.type_as(&ecx, ScalarType::Bool)?;
-        row_expr = row_expr.filter(vec![expr]);
-    }
-
-    Ok((
-        row_expr,
-        RowSetFinishing {
-            order_by: (0..num_cols)
-                .map(|c| ColumnOrder {
-                    column: c,
-                    desc: false,
-                })
-                .collect(),
-            limit: None,
-            offset: 0,
-            project: (0..num_cols).collect(),
-        },
-    ))
 }
 
 /// Evaluates an expression in the AS OF position of a TAIL statement.

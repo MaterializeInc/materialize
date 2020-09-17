@@ -31,7 +31,7 @@ use dataflow_types::{
 use expr::{GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
-use repr::{strconv, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use repr::{strconv, Datum, RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
     BinaryOperator, ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement,
@@ -497,22 +497,6 @@ fn handle_alter_index_options(
     Ok(Plan::AlterIndexLogicalCompactionWindow(alter_index))
 }
 
-fn finish_show_where(
-    scx: &StatementContext,
-    filter: Option<ShowStatementFilter>,
-    rows: Vec<Vec<Datum>>,
-    desc: &RelationDesc,
-) -> Result<Plan, anyhow::Error> {
-    let (r, finishing) = query::plan_show_where(scx, filter, rows, desc)?;
-
-    Ok(Plan::Peek {
-        source: r.decorrelate(),
-        when: PeekWhen::Immediately,
-        finishing,
-        materialize: true,
-    })
-}
-
 fn filter_expr(
     show_statement_filter: Option<ShowStatementFilter>,
     like_identifier: &str,
@@ -570,70 +554,13 @@ fn handle_show_objects(
         filter,
     }: ShowObjectsStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let classify_id = |id| match id {
-        GlobalId::System(_) => "SYSTEM",
-        GlobalId::User(_) => "USER",
-    };
-    let arena = RowArena::new();
-    let make_row = |name: &str, class: &str| {
-        if full {
-            vec![
-                Datum::from(arena.push_string(name.to_string())),
-                Datum::from(arena.push_string(class.to_string())),
-            ]
-        } else {
-            vec![Datum::from(arena.push_string(name.to_string()))]
-        }
-    };
-
     match object_type {
         ObjectType::Schema => handle_show_schemas(scx, extended, full, from, filter),
         ObjectType::Table => handle_show_tables(scx, extended, full, from, filter),
         ObjectType::Source => handle_show_sources(scx, full, materialized, from, filter),
+        ObjectType::View => handle_show_views(scx, full, materialized, from, filter),
         ObjectType::Sink => handle_show_sinks(scx, full, from, filter),
-        _ => {
-            let items = if let Some(from) = from {
-                let (database_spec, schema_spec) = scx.resolve_schema(from)?;
-                scx.catalog.list_items(&database_spec, &schema_spec.name)
-            } else {
-                scx.catalog
-                    .list_items(&scx.resolve_default_database()?, "public")
-            };
-
-            let rows = items
-                .filter(|entry| object_type == entry.item_type())
-                .filter_map(|entry| {
-                    let name = &entry.name().item;
-                    let class = classify_id(entry.id());
-                    match object_type {
-                        ObjectType::View | ObjectType::Source => {
-                            let mut row = vec![Datum::from(arena.push_string(name.to_string()))];
-                            if full {
-                                row.push(Datum::from(arena.push_string(class.to_string())));
-                            }
-                            if full && object_type == ObjectType::View {
-                                row.push(Datum::from(scx.catalog.is_queryable(entry.id())));
-                            }
-                            if full && !materialized {
-                                row.push(Datum::from(scx.catalog.is_materialized(entry.id())));
-                            }
-                            if !materialized || scx.catalog.is_materialized(entry.id()) {
-                                Some(row)
-                            } else {
-                                None
-                            }
-                        }
-                        _ => Some(make_row(name, class)),
-                    }
-                });
-
-            finish_show_where(
-                scx,
-                filter,
-                rows.collect(),
-                &make_show_objects_desc(object_type, materialized, full),
-            )
-        }
+        ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }
 
@@ -749,6 +676,73 @@ fn handle_show_sinks(
     } else {
         format!(
             "SELECT sinks FROM mz_sinks WHERE schema_id = {} {} ORDER BY sinks",
+            schema_spec.id, filter
+        )
+    };
+    handle_generated_select(scx, query)
+}
+
+fn handle_show_views(
+    scx: &StatementContext,
+    full: bool,
+    materialized: bool,
+    from: Option<ObjectName>,
+    filter: Option<ShowStatementFilter>,
+) -> Result<Plan, anyhow::Error> {
+    let schema_spec = if let Some(from) = from {
+        scx.resolve_schema(from)?.1
+    } else {
+        scx.resolve_default_schema()?
+    };
+    let filter = match filter {
+        Some(ShowStatementFilter::Like(like)) => format!("AND views LIKE {}", Value::String(like)),
+        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
+        None => "".to_owned(),
+    };
+
+    let query = if !full & !materialized {
+        format!(
+            "SELECT views FROM mz_catalog.mz_views WHERE mz_catalog.mz_views.schema_id = {} {}",
+            schema_spec.id, filter
+        )
+    } else if full & !materialized {
+        format!(
+            "SELECT
+                views,
+                type,
+                false as queryable,
+                CASE WHEN count > 0 then true ELSE false END materialized
+             FROM mz_catalog.mz_views as mz_views
+             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_views.schema_id = mz_catalog.mz_schemas.schema_id
+             JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
+                   FROM mz_views
+                   LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
+                   GROUP BY mz_views.global_id) as mz_indexes_count
+                ON mz_views.global_id = mz_indexes_count.global_id
+             WHERE mz_catalog.mz_views.schema_id = {} {}",
+            schema_spec.id, filter
+        )
+    } else if !full & materialized {
+        format!(
+            "SELECT views
+             FROM mz_catalog.mz_views
+             WHERE mz_catalog.mz_views.schema_id = {}
+                AND true {}",
+            schema_spec.id, filter
+        )
+    } else {
+        format!(
+            "SELECT views, type, false as queryable
+             FROM mz_catalog.mz_views
+             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_views.schema_id = mz_catalog.mz_schemas.schema_id
+             JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
+                   FROM mz_views
+                   LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
+                   GROUP BY mz_views.global_id) as mz_indexes_count
+                ON mz_views.global_id = mz_indexes_count.global_id
+             WHERE mz_catalog.mz_views.schema_id = {}
+                AND mz_indexes_count.count > 0
+                AND true {}",
             schema_spec.id, filter
         )
     };
