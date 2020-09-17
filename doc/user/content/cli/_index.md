@@ -14,8 +14,9 @@ Flag | Default | Modifies
 [`--address-file`](#horizontally-scaled-clusters) | N/A |  Address of all coordinating Materialize nodes
 [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
-[`--experimental`](#experimental-mode) | Disabled | Get more details [here](#experimental-mode).
+[`--experimental`](#experimental-mode) | Disabled | Get more details [here](#experimental-mode)
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
+[`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
 [`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
 [`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
@@ -102,6 +103,24 @@ responsibility of the network firewall to limit incoming connections. If you
 wish to configure `materialized` to only listen to, e.g. localhost connections,
 you can set `--listen-addr` to `localhost:6875`. You can also use this to change
 the port that Materialize listens on from the default `6875`.
+
+### Compaction window
+
+The `--logical-compaction-window` option specifies the duration of time for
+which Materialize is required to maintain full historical detail in its
+[arrangements](/overview/api-components#indexes). Note that compaction happens
+lazily, so Materialize may retain more historical detail than requested, but it
+will never retain less.
+
+The value of the option is a duration string like `10ms` (10 milliseconds) or
+`1min 30s` (1 minute, 30 seconds).  The special value `off` indicates disables
+logical compaction.
+
+The logical compaction window ends at the current time and extends backwards in
+time for the configured duration. The default window is 60 seconds.
+
+See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
+the compaction window.
 
 ### TLS encryption
 
@@ -198,5 +217,6 @@ view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][s
 etc.), and then create a new node with those items.
 
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
+[parse-duration-syntax]: https://docs.rs/parse_duration/2.1.0/parse_duration/#syntax
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source
