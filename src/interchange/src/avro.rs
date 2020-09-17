@@ -951,7 +951,7 @@ fn validate_schema_2(
 
 pub fn parse_schema(schema: &str) -> anyhow::Result<Schema> {
     let schema = serde_json::from_str(schema)?;
-    Schema::parse(&schema)
+    Ok(Schema::parse(&schema)?)
 }
 
 fn is_null(schema: &SchemaPieceOrNamed) -> bool {
@@ -1459,10 +1459,7 @@ impl Decoder {
         }
 
         let resolved_schema = match &mut self.writer_schemas {
-            Some(cache) => cache
-                .get(schema_id, &self.reader_schema)
-                .await?
-                .unwrap_or(&self.reader_schema),
+            Some(cache) => cache.get(schema_id, &self.reader_schema).await?,
             // If we haven't been asked to use a schema registry, we have no way
             // to discover the writer's schema. That's ok; we'll just use the
             // reader's schema and hope it lines up.
@@ -1967,7 +1964,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
 }
 
 struct SchemaCache {
-    cache: HashMap<i32, Option<Schema>>,
+    cache: HashMap<i32, Result<Schema, AvroError>>,
     ccsr_client: ccsr::Client,
 
     reader_fingerprint: SchemaFingerprint,
@@ -1987,25 +1984,39 @@ impl SchemaCache {
 
     /// Looks up the writer schema for ID. If the schema is literally identical
     /// to the reader schema, as determined by the reader schema fingerprint
-    /// that this schema cache was initialized with, returns None.
-    async fn get(&mut self, id: i32, reader_schema: &Schema) -> anyhow::Result<Option<&Schema>> {
-        match self.cache.entry(id) {
-            Entry::Occupied(o) => Ok(o.into_mut().as_ref()),
+    /// that this schema cache was initialized with, returns the schema directly.
+    /// If not, performs schema resolution on the reader and writer and
+    /// returns the result.
+    async fn get(&mut self, id: i32, reader_schema: &Schema) -> anyhow::Result<&Schema> {
+        let entry = match self.cache.entry(id) {
+            Entry::Occupied(o) => o.into_mut(),
             Entry::Vacant(v) => {
-                // TODO(benesch): make this asynchronous, to avoid blocking the
-                // Timely thread on this network request.
-                let res = self.ccsr_client.get_schema_by_id(id).await?;
-                let schema = parse_schema(&res.raw)?;
-                if schema.fingerprint::<Sha256>().bytes == self.reader_fingerprint.bytes {
-                    Ok(v.insert(None).as_ref())
-                } else {
-                    // the writer schema differs from the reader schema,
-                    // so we need to perform schema resolution.
-                    let resolved = resolve_schemas(&schema, reader_schema)?;
-                    Ok(v.insert(Some(resolved)).as_ref())
-                }
+                // An issue with _fetching_ the schema should be returned
+                // immediately, and not cached, since it might get better on the
+                // next retry.
+                // TODO - some sort of exponential backoff or similar logic
+                let response = self.ccsr_client.get_schema_by_id(id).await?;
+                // Now, we've gotten some json back, so we want to cache it (regardless of whether it's a valid
+                // avro schema, it won't change).
+                //
+                // However, we can't just cache it directly, since resolving schemas takes significant CPU work,
+                // which  we don't want to repeat for every record. So, parse and resolve it, and cache the
+                // result (whether schema or error).
+                let rf = &self.reader_fingerprint.bytes;
+                let result = Schema::parse_str(&response.raw).and_then(|schema| {
+                    if &schema.fingerprint::<Sha256>().bytes == rf {
+                        Ok(schema)
+                    } else {
+                        // the writer schema differs from the reader schema,
+                        // so we need to perform schema resolution.
+                        let resolved = resolve_schemas(&schema, reader_schema)?;
+                        Ok(resolved)
+                    }
+                });
+                v.insert(result)
             }
-        }
+        };
+        entry.as_ref().map_err(|e| anyhow::Error::new(e.clone()))
     }
 }
 
