@@ -142,6 +142,10 @@ impl JoinImplementation {
                 available_arrangements[index].dedup();
                 // Currently we only support using arrangements all of whose
                 // keys can be found in some equivalence.
+                // Note: because `order_input` currently only finds arrangements
+                // with exact key matches, the code below can be removed with no
+                // change in behavior, but this is being kept for a future
+                // TODO: expand `order_input`
                 available_arrangements[index].retain(|key| {
                     key.iter().all(|k| {
                         let mut k = k.clone();
@@ -673,8 +677,9 @@ impl<'a> Orderer<'a> {
                                     } else {
                                         None
                                     }
-                                }); // ... extract the expression that came from start
-                                    // and shift the column numbers
+                                });
+                        // ... extract the expression that came from start
+                        // and shift the column numbers
                         if let Some(key_pos) = key_pos {
                             let mut result = self.equivalences[key_equivalence][*key_pos].clone();
                             result.visit_mut(&mut |e| {
