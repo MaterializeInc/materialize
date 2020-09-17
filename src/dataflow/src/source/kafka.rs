@@ -40,7 +40,7 @@ use crate::source::persistence::{
     PersistenceSender, Record, RecordFileMetadata, RecordIter, WorkerPersistenceData,
 };
 use crate::source::{
-    ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+    ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
 
 /// Contains all information necessary to ingest data from Kafka
@@ -261,8 +261,8 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         &mut self,
         consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
-    ) -> Result<Option<SourceMessage<Vec<u8>>>, anyhow::Error> {
-        let mut next_message = None;
+    ) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
+        let mut next_message = NextMessage::Pending;
         let consumer_count = self.get_partition_consumers_count();
         let mut attempts = 0;
         while attempts < consumer_count {
@@ -314,11 +314,11 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     // to read from this consumer again (even if no new data arrives)
                     activator.activate();
                 } else {
-                    next_message = Some(message);
+                    next_message = NextMessage::Ready(message);
                 }
             }
             self.partition_consumers.push_back(partition_queue);
-            if next_message.is_some() {
+            if let NextMessage::Ready(_) = next_message {
                 // Found a message, exit the loop and return message
                 break;
             } else {
