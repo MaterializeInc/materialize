@@ -733,3 +733,22 @@ materialize.public.count "CREATE VIEW \"materialize\".\"public\".\"count\" AS SE
 > DROP VIEW count CASCADE;
 
 > CREATE VIEW count AS SELECT 1
+
+> CREATE TABLE j (b int)
+
+> SHOW TABLES
+TABLES
+----
+j
+
+> ALTER TABLE j RENAME TO renamed_j
+
+> SHOW TABLES
+TABLES
+----
+renamed_j
+
+> SELECT tables FROM mz_tables WHERE global_id like 'u%';
+tables
+----
+renamed_j
