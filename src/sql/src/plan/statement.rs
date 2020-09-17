@@ -784,39 +784,58 @@ fn handle_show_sources(
             "SELECT sources FROM mz_sources WHERE schema_id = {} {} ORDER BY sources",
             schema_spec.id, filter
         )
-    } else {
-        let full_projection = ",
-                type";
-        let materialized_projection = ",
-                CASE
-                    WHEN count > 0 then true
-                    ELSE false
-                END materialized";
-        let materialized_where = "
-            AND mz_indexes_count.count > 0
-        ";
+    } else if full & !materialized {
         format!(
             "SELECT
-                sources
-                {} {}
-            FROM mz_sources
-            JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.schema_id
-            JOIN (SELECT mz_sources.global_id as global_id, count(mz_indexes.on_global_id) AS count
-                  FROM mz_sources
-                  LEFT JOIN mz_indexes on mz_sources.global_id = mz_indexes.on_global_id
-                  GROUP BY mz_sources.global_id) as mz_indexes_count
-                ON mz_sources.global_id = mz_indexes_count.global_id
-            WHERE schema_id = {} {} {}
-            ORDER BY sources, type",
-            if full { full_projection } else { "" },
-            if full & !materialized {
-                materialized_projection
-            } else {
-                ""
-            },
-            schema_spec.id,
-            filter,
-            if materialized { materialized_where } else { "" }
+            sources,
+            type,
+            CASE
+                WHEN count > 0 then true
+                ELSE false
+            END materialized
+        FROM mz_sources
+        JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.schema_id
+        JOIN (SELECT mz_sources.global_id as global_id, count(mz_indexes.on_global_id) AS count
+              FROM mz_sources
+              LEFT JOIN mz_indexes on mz_sources.global_id = mz_indexes.on_global_id
+              GROUP BY mz_sources.global_id) as mz_indexes_count
+            ON mz_sources.global_id = mz_indexes_count.global_id
+        WHERE schema_id = {} {}
+        ORDER BY sources, type",
+            schema_spec.id, filter
+        )
+    } else if !full & materialized {
+        format!(
+            "SELECT
+            sources
+        FROM mz_sources
+        JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.schema_id
+        JOIN (SELECT mz_sources.global_id as global_id, count(mz_indexes.on_global_id) AS count
+              FROM mz_sources
+              LEFT JOIN mz_indexes on mz_sources.global_id = mz_indexes.on_global_id
+              GROUP BY mz_sources.global_id) as mz_indexes_count
+            ON mz_sources.global_id = mz_indexes_count.global_id
+        WHERE schema_id = {} {}
+            AND mz_indexes_count.count > 0
+        ORDER BY sources, type",
+            schema_spec.id, filter
+        )
+    } else {
+        format!(
+            "SELECT
+            sources,
+            type
+        FROM mz_sources
+        JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.schema_id
+        JOIN (SELECT mz_sources.global_id as global_id, count(mz_indexes.on_global_id) AS count
+              FROM mz_sources
+              LEFT JOIN mz_indexes on mz_sources.global_id = mz_indexes.on_global_id
+              GROUP BY mz_sources.global_id) as mz_indexes_count
+            ON mz_sources.global_id = mz_indexes_count.global_id
+        WHERE schema_id = {} {}
+            AND mz_indexes_count.count > 0
+        ORDER BY sources, type",
+            schema_spec.id, filter
         )
     };
     handle_generated_select(scx, query)
