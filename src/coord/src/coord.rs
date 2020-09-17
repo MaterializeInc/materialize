@@ -334,6 +334,7 @@ where
         }
 
         // Insert initial named objects into system tables.
+        coord.report_database_update(AMBIENT_DATABASE_ID, "AMBIENT", 1);
         let dbs: Vec<(String, i64, Vec<(String, i64, Vec<(String, GlobalId)>)>)> = coord
             .catalog
             .databases()
