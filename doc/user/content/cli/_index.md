@@ -116,7 +116,7 @@ The value of the option is a duration like `10ms` (10 milliseconds) or `1min
 30s` (1 minute, 30 seconds).
 
 By default, the logical compaction window is 60 seconds.
-The special value `off` indicates disables logical compaction.
+The special value `off` disables logical compaction.
 
 See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
 the compaction window.
