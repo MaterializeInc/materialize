@@ -2303,7 +2303,7 @@ fn handle_select(
 fn handle_generated_select(scx: &StatementContext, query: String) -> Result<Plan, anyhow::Error> {
     match parse(query)?.into_element() {
         Statement::Select(SelectStatement { query, as_of: _ }) => {
-            handle_computed_select(scx, *query)
+            handle_computed_select(scx, query)
         }
         _ => unreachable!("known to be select statement"),
     }
