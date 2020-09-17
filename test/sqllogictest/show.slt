@@ -179,10 +179,23 @@ SHOW SOURCES
 ----
 
 query T
-SHOW SOURCES WHERE "SOURCES" = 'u'
+SHOW SOURCES WHERE sources = 'u'
 ----
 
-# SHOW OBJECTS
+query TTB colnames
+SHOW FULL SOURCES
+----
+SOURCES TYPE MATERIALIZED
+
+query T colnames
+SHOW MATERIALIZED SOURCES
+----
+SOURCES
+
+query TT colnames
+SHOW FULL MATERIALIZED SOURCES
+----
+SOURCES TYPE
 
 query T colnames
 SHOW TABLES
@@ -203,3 +216,13 @@ query T
 SHOW TABLES WHERE tables = 'xyz'
 ----
 xyz
+
+query T colnames
+SHOW SINKS
+----
+SINKS
+
+query TT colnames
+SHOW FULL SINKS
+----
+SINKS TYPE

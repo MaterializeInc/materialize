@@ -52,6 +52,15 @@ goofus,gallant
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk5'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+> SHOW SINKS
+SINKS
+----
+snk1
+snk2
+snk3
+snk4
+snk5
+
 $ kafka-verify format=avro sink=materialize.public.snk1
 {"before": null, "after": {"a": "jack", "b": "jill", "mz_line_no": 2}}
 {"before": null, "after": {"a": "goofus", "b": "gallant", "mz_line_no": 3}}
@@ -137,3 +146,17 @@ $ kafka-verify format=avro sink=materialize.public.sink10
 {"before": null, "after": {"column1": 1}}
 {"before": null, "after": {"column1": 2}}
 {"before": null, "after": {"column1": 3}}
+
+> SHOW FULL SINKS
+SINKS       TYPE
+----------------
+snk1        USER
+snk2        USER
+snk3        USER
+snk4        USER
+snk5        USER
+snk6        USER
+snk7        USER
+snk8        USER
+sink9       USER
+sink10      USER

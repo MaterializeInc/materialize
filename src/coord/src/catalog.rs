@@ -1223,7 +1223,7 @@ impl Catalog {
                         .expect("catalog out of sync");
                     let schema_id = schema.id;
                     schema.items.remove(&entry.name.item);
-                    entry.name = to_name;
+                    entry.name = to_name.clone();
                     entry.item = item.clone();
                     schema.items.insert(entry.name.item.clone(), id);
                     self.by_id.insert(id, entry);
@@ -1233,6 +1233,7 @@ impl Catalog {
                             schema_id,
                             id,
                             from_name,
+                            to_name,
                             item,
                         },
                         None => OpStatus::NoOp, // If name didn't change, don't update system tables.
@@ -1508,6 +1509,7 @@ pub enum OpStatus {
         schema_id: i64,
         id: GlobalId,
         from_name: FullName,
+        to_name: FullName,
         item: CatalogItem,
     },
     NoOp,

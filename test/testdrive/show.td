@@ -131,8 +131,8 @@ plurals
 > SHOW FULL SOURCES
 SOURCES  TYPE  MATERIALIZED
 -----------------------------
-names    USER  false
 mods     USER  true
+names    USER  false
 plurals  USER  false
 
 > SHOW MATERIALIZED SOURCES
@@ -228,6 +228,8 @@ mz_schemas            SYSTEM
 mz_columns            SYSTEM
 mz_indexes            SYSTEM
 mz_tables             SYSTEM
+mz_sinks              SYSTEM
+mz_sources            SYSTEM
 
 ! SHOW EXTENDED TABLES
 SHOW EXTENDED TABLES not yet supported
