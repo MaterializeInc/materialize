@@ -2365,7 +2365,7 @@ fn handle_generated_select(scx: &StatementContext, query: String) -> Result<Plan
         Statement::Select(SelectStatement { query, as_of: _ }) => {
             handle_computed_select(scx, *query)
         }
-        _ => unreachable!(), // Known to be Select statement.
+        _ => unreachable!("known to be select statement"),
     }
 }
 
