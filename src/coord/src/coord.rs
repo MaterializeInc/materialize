@@ -63,7 +63,8 @@ use transform::Optimizer;
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
     BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
-    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_TABLES, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEW_FOREIGN_KEYS,
+    MZ_VIEW_KEYS,
 };
 use crate::catalog::{
     self, Catalog, CatalogItem, Index, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
@@ -308,6 +309,8 @@ where
         }
 
         let mut tables_to_report = HashSet::new();
+        let mut sources_to_report = HashSet::new();
+        let mut sinks_to_report = HashSet::new();
         for (id, name, item) in catalog_entries {
             // Mirror each recovered catalog entry.
             coord.report_catalog_update(id, name.to_string(), 1);
@@ -319,6 +322,12 @@ where
                 CatalogItem::Index(index) => coord.report_index_update(id, &index, 1),
                 CatalogItem::Table(_) => {
                     tables_to_report.insert(id);
+                }
+                CatalogItem::Source(_) => {
+                    sources_to_report.insert(id);
+                }
+                CatalogItem::Sink(_) => {
+                    sinks_to_report.insert(id);
                 }
                 _ => (),
             }
@@ -359,6 +368,10 @@ where
                 for (item_name, item_id) in items {
                     if tables_to_report.remove(&item_id) {
                         coord.report_table_update(&item_id, schema_id, &item_name, 1);
+                    } else if sources_to_report.remove(&item_id) {
+                        coord.report_source_update(&item_id, schema_id, &item_name, 1);
+                    } else if sinks_to_report.remove(&item_id) {
+                        coord.report_sink_update(&item_id, schema_id, &item_name, 1);
                     }
                 }
             }
@@ -384,6 +397,10 @@ where
             for (item_name, item_id) in items {
                 if tables_to_report.remove(&item_id) {
                     coord.report_table_update(&item_id, schema_id, &item_name, 1);
+                } else if sources_to_report.remove(&item_id) {
+                    coord.report_source_update(&item_id, schema_id, &item_name, 1);
+                } else if sinks_to_report.remove(&item_id) {
+                    coord.report_sink_update(&item_id, schema_id, &item_name, 1);
                 }
             }
         }
@@ -1107,6 +1124,48 @@ where
     ) {
         self.update_catalog_view(
             MZ_TABLES.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String(&global_id.to_string()),
+                    Datum::Int64(schema_id),
+                    Datum::String(name),
+                ]),
+                diff,
+            )),
+        )
+    }
+
+    /// Inserts or removes a row from [`builtin::MZ_SOURCES`] based on the supplied `diff`.
+    fn report_source_update(
+        &mut self,
+        global_id: &GlobalId,
+        schema_id: i64,
+        name: &str,
+        diff: isize,
+    ) {
+        self.update_catalog_view(
+            MZ_SOURCES.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String(&global_id.to_string()),
+                    Datum::Int64(schema_id),
+                    Datum::String(name),
+                ]),
+                diff,
+            )),
+        )
+    }
+
+    /// Inserts or removes a row from [`builtin::MZ_SINKS`] based on the supplied `diff`.
+    fn report_sink_update(
+        &mut self,
+        global_id: &GlobalId,
+        schema_id: i64,
+        name: &str,
+        diff: isize,
+    ) {
+        self.update_catalog_view(
+            MZ_SINKS.id,
             iter::once((
                 Row::pack(&[
                     Datum::String(&global_id.to_string()),
@@ -2218,6 +2277,12 @@ where
                         CatalogItem::Table(_) => {
                             self.report_table_update(id, *schema_id, &name.item, 1)
                         }
+                        CatalogItem::Source(_) => {
+                            self.report_source_update(id, *schema_id, &name.item, 1);
+                        }
+                        CatalogItem::Sink(_) => {
+                            self.report_sink_update(id, *schema_id, &name.item, 1);
+                        }
                         _ => (),
                     }
                 }
@@ -2225,19 +2290,31 @@ where
                     schema_id,
                     id,
                     from_name,
+                    to_name,
                     item,
                 } => {
                     // Remove old name from mz_catalog_names.
                     self.report_catalog_update(*id, from_name.to_string(), -1);
 
                     // Add new name to mz_catalog_names.
-                    let updated_name = self.catalog.humanize_id(expr::Id::Global(*id)).unwrap();
-                    self.report_catalog_update(*id, updated_name.clone(), 1);
+                    self.report_catalog_update(
+                        *id,
+                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
+                        1,
+                    );
 
                     // Remove old name and add new name to relevant mz system tables.
-                    if let CatalogItem::Table(_) = item {
-                        self.report_table_update(&id, *schema_id, &from_name.item, -1);
-                        self.report_table_update(&id, *schema_id, &updated_name, 1);
+                    match item {
+                        CatalogItem::Source(_) => {
+                            self.report_source_update(id, *schema_id, &from_name.item, -1);
+                            self.report_source_update(id, *schema_id, &to_name.item, 1);
+                        }
+                        CatalogItem::Sink(_) => {
+                            self.report_sink_update(id, *schema_id, &from_name.item, -1);
+                            self.report_sink_update(id, *schema_id, &to_name.item, 1);
+                        }
+                        CatalogItem::Table(_) => unreachable!(),
+                        _ => (),
                     }
                 }
                 catalog::OpStatus::DroppedDatabase { name, id } => {
@@ -2272,6 +2349,12 @@ where
                         }
                         CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
+                            self.report_source_update(
+                                &entry.id(),
+                                *schema_id,
+                                &entry.name().item,
+                                -1,
+                            );
                         }
                         CatalogItem::View(_) => (),
                         CatalogItem::Sink(catalog::Sink {
@@ -2279,6 +2362,12 @@ where
                             ..
                         }) => {
                             sinks_to_drop.push(entry.id());
+                            self.report_sink_update(
+                                &entry.id(),
+                                *schema_id,
+                                &entry.name().item,
+                                -1,
+                            );
                             match connector {
                                 SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
                                     let row = Row::pack(&[

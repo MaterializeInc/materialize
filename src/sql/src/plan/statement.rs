@@ -593,6 +593,8 @@ fn handle_show_objects(
     match object_type {
         ObjectType::Schema => handle_show_schemas(scx, extended, full, from, filter),
         ObjectType::Table => handle_show_tables(scx, extended, full, from, filter),
+        ObjectType::Source => handle_show_sources(scx, full, materialized, from, filter),
+        ObjectType::Sink => handle_show_sinks(scx, full, from, filter),
         _ => {
             let items = if let Some(from) = from {
                 let (database_spec, schema_spec) = scx.resolve_schema(from)?;
@@ -720,6 +722,104 @@ fn handle_show_schemas(
             types: vec![],
         },
     )
+}
+
+fn handle_show_sinks(
+    scx: &StatementContext,
+    full: bool,
+    from: Option<ObjectName>,
+    filter: Option<ShowStatementFilter>,
+) -> Result<Plan, anyhow::Error> {
+    let schema_spec = if let Some(from) = from {
+        scx.resolve_schema(from)?.1
+    } else {
+        scx.resolve_default_schema()?
+    };
+    let filter = match filter {
+        Some(ShowStatementFilter::Like(like)) => format!("AND sinks LIKE {}", Value::String(like)),
+        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
+        None => "".to_owned(),
+    };
+
+    let query = if full {
+        format!(
+            "SELECT sinks, type
+            FROM mz_sinks
+            JOIN mz_schemas ON mz_sinks.schema_id = mz_schemas.schema_id
+            WHERE schema_id = {} {}
+            ORDER BY sinks, type",
+            schema_spec.id, filter
+        )
+    } else {
+        format!(
+            "SELECT sinks FROM mz_sinks WHERE schema_id = {} {} ORDER BY sinks",
+            schema_spec.id, filter
+        )
+    };
+    handle_generated_select(scx, query)
+}
+
+fn handle_show_sources(
+    scx: &StatementContext,
+    full: bool,
+    materialized: bool,
+    from: Option<ObjectName>,
+    filter: Option<ShowStatementFilter>,
+) -> Result<Plan, anyhow::Error> {
+    let schema_spec = if let Some(from) = from {
+        scx.resolve_schema(from)?.1
+    } else {
+        scx.resolve_default_schema()?
+    };
+    let filter = match filter {
+        Some(ShowStatementFilter::Like(like)) => {
+            format!("AND sources LIKE {}", Value::String(like))
+        }
+        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
+        None => "".to_owned(),
+    };
+
+    let query = if !full & !materialized {
+        format!(
+            "SELECT sources FROM mz_sources WHERE schema_id = {} {} ORDER BY sources",
+            schema_spec.id, filter
+        )
+    } else {
+        let full_projection = ",
+                type";
+        let materialized_projection = ",
+                CASE
+                    WHEN count > 0 then true
+                    ELSE false
+                END materialized";
+        let materialized_where = "
+            AND mz_indexes_count.count > 0
+        ";
+        format!(
+            "SELECT
+                sources
+                {} {}
+            FROM mz_sources
+            JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.schema_id
+            JOIN (SELECT mz_sources.global_id as global_id, count(mz_indexes.on_global_id) AS count
+                  FROM mz_sources
+                  LEFT JOIN mz_indexes on mz_sources.global_id = mz_indexes.on_global_id
+                  GROUP BY mz_sources.global_id) as mz_indexes_count
+                ON mz_sources.global_id = mz_indexes_count.global_id
+            WHERE schema_id = {} {} {}
+            ORDER BY sources, type",
+            if full { full_projection } else { "" },
+            if full & !materialized {
+                materialized_projection
+            } else {
+                ""
+            },
+            schema_spec.id,
+            filter,
+            if materialized { materialized_where } else { "" }
+        )
+    };
+    handle_generated_select(scx, query)
 }
 
 fn handle_show_tables(
@@ -2244,6 +2344,15 @@ fn handle_select(
         finishing,
         materialize: true,
     })
+}
+
+fn handle_generated_select(scx: &StatementContext, query: String) -> Result<Plan, anyhow::Error> {
+    match parse(query)?.into_element() {
+        Statement::Select(SelectStatement { query, as_of: _ }) => {
+            handle_computed_select(scx, *query)
+        }
+        _ => unreachable!(), // Known to be Select statement.
+    }
 }
 
 fn handle_computed_select(scx: &StatementContext, query: Query) -> Result<Plan, anyhow::Error> {
