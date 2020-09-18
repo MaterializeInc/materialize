@@ -108,11 +108,6 @@ fn run() -> Result<(), anyhow::Error> {
         "timestamp advancement frequency (default 10ms)",
         "DURATION",
     );
-    opts.optflag(
-        "",
-        "persistence",
-        "enable source persistence (currently requires --experimental as well)",
-    );
     opts.optopt(
         "",
         "persistence-max-pending-records",
@@ -247,7 +242,6 @@ fn run() -> Result<(), anyhow::Error> {
         None => Duration::from_millis(10),
         Some(d) => parse_duration::parse(&d)?,
     };
-    let persistence_enabled = popts.opt_present("persistence");
     let persistence_max_pending_records =
         popts.opt_get_default("persistence-max-pending-records", 1000000)?;
 
@@ -272,12 +266,8 @@ fn run() -> Result<(), anyhow::Error> {
     fs::create_dir_all(&data_directory)
         .with_context(|| anyhow!("creating data directory {}", data_directory.display()))?;
 
-    // Configure source persistence
-    if persistence_enabled && !experimental_mode {
-        bail!("--persistence requires experimental mode. See https://materialize.io/docs/cli/#experimental-mode");
-    }
-
-    let persistence = if persistence_enabled {
+    // Configure source persistence.
+    let persistence = if experimental_mode {
         let persistence_directory = data_directory.join("persistence/");
         fs::create_dir_all(&persistence_directory).with_context(|| {
             anyhow!(
