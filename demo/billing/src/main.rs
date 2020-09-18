@@ -91,13 +91,13 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     let k_client = Arc::new(kafka_client::KafkaClient::new(
         &config.url,
         &config.group_id,
-        &config.topic,
         &[],
     )?);
 
     if let Some(create_topic) = &config.create_topic {
         k_client
             .create_topic(
+                &config.topic,
                 create_topic.partitions,
                 create_topic.replication_factor,
                 &[],
@@ -116,7 +116,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
             let m = randomizer::random_batch(rng, &mut recordstate);
             m.write_to_vec(&mut buf)?;
             log::trace!("sending: {:?}", m);
-            let res = k_client.send(&buf);
+            let res = k_client.send(&config.topic, &buf);
             match res {
                 Ok(fut) => {
                     tokio::spawn(fut);

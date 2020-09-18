@@ -72,7 +72,6 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     let k_client = Arc::new(kafka_client::KafkaClient::new(
         &config.url,
         &config.group_id,
-        &config.topic,
         &[],
     )?);
 
@@ -85,6 +84,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         ];
         k_client
             .create_topic(
+                &config.topic,
                 create_topic.partitions,
                 create_topic.replication_factor,
                 &configs,
@@ -109,7 +109,11 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
             } else {
                 rng.gen_range(0, 10_000_000)
             };
-            let res = k_client.send_key_value(key.to_string().as_bytes(), val_a.as_slice());
+            let res = k_client.send_key_value(
+                &config.topic,
+                key.to_string().as_bytes(),
+                Some(val_a.as_slice().to_owned()),
+            );
             match res {
                 Ok(fut) => {
                     tokio::spawn(fut);

@@ -21,14 +21,12 @@ use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};
 pub struct KafkaClient {
     producer: FutureProducer<DefaultClientContext>,
     kafka_url: String,
-    topic: String,
 }
 
 impl KafkaClient {
     pub fn new(
         kafka_url: &str,
         group_id: &str,
-        topic: &str,
         configs: &[(&str, &str)],
     ) -> Result<KafkaClient, anyhow::Error> {
         let mut config = ClientConfig::new();
@@ -43,12 +41,12 @@ impl KafkaClient {
         Ok(KafkaClient {
             producer,
             kafka_url: kafka_url.to_string(),
-            topic: topic.to_string(),
         })
     }
 
     pub async fn create_topic(
         &self,
+        topic_name: &str,
         partitions: i32,
         replication: i32,
         configs: &[(&str, &str)],
@@ -63,34 +61,37 @@ impl KafkaClient {
 
         let admin_opts = AdminOptions::new().request_timeout(timeout);
 
-        let mut topic = NewTopic::new(
-            &self.topic,
-            partitions,
-            TopicReplication::Fixed(replication),
-        );
+        let mut topic = NewTopic::new(topic_name, partitions, TopicReplication::Fixed(replication));
         for (key, val) in configs {
             topic = topic.set(key, val);
         }
 
         kafka_util::admin::create_topic(&client, &admin_opts, &topic)
             .await
-            .context(format!("creating Kafka topic: {}", &self.topic))?;
+            .context(format!("creating Kafka topic: {}", topic_name))?;
 
         Ok(())
     }
 
-    pub fn send(&self, message: &[u8]) -> Result<DeliveryFuture, KafkaError> {
-        let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&self.topic)
+    pub fn send(&self, topic_name: &str, message: &[u8]) -> Result<DeliveryFuture, KafkaError> {
+        let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&topic_name)
             .payload(message)
             .timestamp(chrono::Utc::now().timestamp_millis());
         self.producer.send_result(record).map_err(|(e, _message)| e)
     }
 
-    pub fn send_key_value(&self, key: &[u8], message: &[u8]) -> Result<DeliveryFuture, KafkaError> {
-        let record: FutureRecord<_, _> = FutureRecord::to(&self.topic)
+    pub fn send_key_value(
+        &self,
+        topic_name: &str,
+        key: &[u8],
+        message: Option<Vec<u8>>,
+    ) -> Result<DeliveryFuture, KafkaError> {
+        let mut record: FutureRecord<_, _> = FutureRecord::to(&topic_name)
             .key(key)
-            .payload(message)
             .timestamp(chrono::Utc::now().timestamp_millis());
+        if let Some(message) = &message {
+            record = record.payload(message);
+        }
         self.producer.send_result(record).map_err(|(e, _message)| e)
     }
 }
