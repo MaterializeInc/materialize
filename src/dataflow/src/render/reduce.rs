@@ -283,68 +283,62 @@ where
     // Our strategy will depend on whether the function is accumulable in-place,
     // or can be subjected to hierarchical aggregation. At the moment all functions
     // are one of the two, but this should work even with methods that are neither.
-    let (accumulable, hierarchical) = accumulable_hierarchical(&func);
+    let (_accumulable, hierarchical) = accumulable_hierarchical(&func);
 
-    // let partial =
-    // if accumulable {
-    //     build_accumulable(partial, func, prepend_key)
-    // } else
-    {
-        // If hierarchical, we can repeatedly digest the groups, to minimize the incremental
-        // update costs on relatively small updates.
-        if hierarchical {
-            if monotonic && is_min_or_max(&func) {
-                // At this point, we assert that inputs are never retracted.
-                // We could move the datum to the `diff` component, wrapped
-                // in a min/max monoid wrapper. This would permit in-place
-                // compaction, and a substantially smaller memory footprint.
-                // The records in the stream are pairs `(key, row)` where
-                // `row` contains a single value that can be minimized or
-                // maximized over.
+    // If hierarchical, we can repeatedly digest the groups, to minimize the incremental
+    // update costs on relatively small updates.
+    if hierarchical {
+        if monotonic && is_min_or_max(&func) {
+            // At this point, we assert that inputs are never retracted.
+            // We could move the datum to the `diff` component, wrapped
+            // in a min/max monoid wrapper. This would permit in-place
+            // compaction, and a substantially smaller memory footprint.
+            // The records in the stream are pairs `(key, row)` where
+            // `row` contains a single value that can be minimized or
+            // maximized over.
 
-                use differential_dataflow::operators::consolidate::Consolidate;
-                use differential_dataflow::operators::reduce::Count;
-                use timely::dataflow::operators::map::Map;
+            use differential_dataflow::operators::consolidate::Consolidate;
+            use differential_dataflow::operators::reduce::Count;
+            use timely::dataflow::operators::map::Map;
 
-                // We need two different code paths for min and max, as the
-                // monoid wrapper type encodes the logic. In each case, we
-                // wrap the value with the monoid wrapper, which will allow
-                // in-place accumulation using either "min" or "max".
-                // The `count` operator promotes the accumulated value back
-                // to data, and we pass along the reduced form to the final
-                // operator.
-                // TODO(frank): the `count` operator very nearly produces
-                // the arrangement we want as output, minus some formatting
-                // with prefixed keys and such. But we could fuse them and
-                // save an operator.
-                if is_min(&func) {
-                    partial = partial
-                        .consolidate()
-                        .inner
-                        .map(|((key, value), time, diff)| {
-                            assert!(diff > 0);
-                            (key, time, monoids::MinMonoid { value })
-                        })
-                        .as_collection()
-                        .count()
-                        .map(|(key, min)| (key, min.value));
-                } else if is_max(&func) {
-                    partial = partial
-                        .consolidate()
-                        .inner
-                        .map(|((key, value), time, diff)| {
-                            assert!(diff > 0);
-                            (key, time, monoids::MaxMonoid { value })
-                        })
-                        .as_collection()
-                        .count()
-                        .map(|(key, max)| (key, max.value));
-                }
-            } else {
-                partial = build_hierarchical(partial, &func)
+            // We need two different code paths for min and max, as the
+            // monoid wrapper type encodes the logic. In each case, we
+            // wrap the value with the monoid wrapper, which will allow
+            // in-place accumulation using either "min" or "max".
+            // The `count` operator promotes the accumulated value back
+            // to data, and we pass along the reduced form to the final
+            // operator.
+            // TODO(frank): the `count` operator very nearly produces
+            // the arrangement we want as output, minus some formatting
+            // with prefixed keys and such. But we could fuse them and
+            // save an operator.
+            if is_min(&func) {
+                partial = partial
+                    .consolidate()
+                    .inner
+                    .map(|((key, value), time, diff)| {
+                        assert!(diff > 0);
+                        (key, time, monoids::MinMonoid { value })
+                    })
+                    .as_collection()
+                    .count()
+                    .map(|(key, min)| (key, min.value));
+            } else if is_max(&func) {
+                partial = partial
+                    .consolidate()
+                    .inner
+                    .map(|((key, value), time, diff)| {
+                        assert!(diff > 0);
+                        (key, time, monoids::MaxMonoid { value })
+                    })
+                    .as_collection()
+                    .count()
+                    .map(|(key, max)| (key, max.value));
             }
+        } else {
+            partial = build_hierarchical(partial, &func)
         }
-    };
+    }
 
     // Perform a final aggregation, on potentially hierarchically reduced data.
     // The same code should work on data that can not be hierarchically reduced.
