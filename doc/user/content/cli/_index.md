@@ -17,7 +17,6 @@ Flag | Default | Modifies
 [`--experimental`](#experimental-mode) | Disabled | Get more details [here](#experimental-mode)
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
-[`--persistence`](#persistence) | Disabled | Source data persistence
 [`--persistence-max-pending-records`](#persistence) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
 [`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
 [`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
@@ -225,55 +224,7 @@ etc.), and then create a new node with those items.
 
 ### Persistence
 
-{{< experimental v0.4.2 >}}
-
-To avoid re-reading data from Kafka on restart, Materialize lets you create
-persistent sources, which persist input messages from Kafka topics to files
-on the Materialize instance's local hard drive. Persistence will not solve all
-restart time related problems, as there are other factors beyond Kafka broker
-read performance that contribute to high restart times.
-
-We recommend enabling persistence if you are using Kafka sources, need to relieve
-load on upstream Kafka brokers, and are comfortable using
-[experimental](#experimental-mode) features.
-
-{{< warning >}}
-
-Materialize currently does not delete persisted records when the source is dropped.
-Additionally, Materialize does not currently compact persisted data. If you enable
-persistence on sources from compacted Kafka topics, Materialize will store and re-read
-all records that have been persisted, even if some of them were compacted by the upstream
-source.
-
-{{< /warning >}}
-
-#### Details
-
-You can define a persistent source with the [`CREATE SOURCE`][cs] command. Materialize
-stores one copy of all input data for each persistent Kafka source. Materialize
-stores these files in:
-
-```
-{data-directory}/persistence/{source-id}
-```
-
-Within this directory, Materialize writes to files named
-
-```
-materialize-{source-id}-{partition-id}-{start-offset}-{end-offset}
-```
-
-Here, each file stores data for ranges of offsets per `partition-id`. Each file
-stores all the data from `start-offset` (inclusive) to `end-offset` (exclusive).
-Materialize buffers up to `--persistence-max-pending-records` records in memory
-per source, before flushing them all to disk immediately. Setting this flag to a
-higher value helps Materialize achieve higher ingest and disk write throughput,
-however this also increases the average latency before records are persisted.
-Additionally, Materialize flushes input records to disk every 10 minutes.
-
-
-On restart, Materialize reads back all of the records that had been previously
-persisted in offset order, and then continues reading from the upstream source
-for data after the last persisted record in each partition.
-
-[cs]: /sql/create-source
+The `--persistence-max-pending-records` specifies the number of input messages Materialize
+will buffer in memory before flushing them all to disk. The default value is 1000000 messages.
+Note that Materialize will also flush buffered records every 10 minutes as well. See the
+[Deployment section](/ops/deployment#persistence) for more guidance on how to tune this parameter.
