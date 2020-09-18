@@ -6,9 +6,9 @@ menu:
     parent: 'sql'
 ---
 
-`CREATE TABLE` creates a non-streaming, in-memory data source.
+{{< version-added v0.5.0 >}}
 
-{{< experimental v0.4.1 >}}
+`CREATE TABLE` creates a non-streaming, in-memory data source.
 
 {{< warning >}}
 At the moment, tables do not persist any data that is inserted. This means that restarting a

@@ -2027,8 +2027,6 @@ fn handle_create_table(
     scx: &StatementContext,
     stmt: CreateTableStatement,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("CREATE TABLE")?;
-
     let CreateTableStatement {
         name,
         columns,
@@ -2268,8 +2266,6 @@ fn handle_insert(
     }: InsertStatement,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("INSERT")?;
-
     if !columns.is_empty() {
         unsupported!("INSERT statement with specified columns");
     }
