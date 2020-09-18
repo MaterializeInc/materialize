@@ -10,16 +10,17 @@
 use getopts::Options;
 use parse_duration::parse;
 
-use std::collections::hash_map::DefaultHasher;
+//use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs::File;
-use std::hash::{Hash, Hasher};
+//use std::hash::{Hash, Hasher};
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::io::SeekFrom;
 use std::{thread, time};
 
-mod kafka_interaction;
+use test_util::kafka;
 
 extern crate futures;
 extern crate json;
@@ -57,26 +58,32 @@ fn parse_line(line: &str) -> Result<Vec<(String, Option<String>)>, String> {
     }
     Ok(results)
 }
-
+/*
 fn calculate_hash<T: Hash>(t: &T) -> u64 {
     let mut s = DefaultHasher::new();
     t.hash(&mut s);
     s.finish()
-}
+}*/
 
-fn run_stream() -> Result<(), String> {
+async fn run_stream() -> Result<(), anyhow::Error> {
     let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
     opts.optopt("", "kafka-addr", "kafka bootstrap address", "HOST:PORT");
-    opts.reqopt(
+    opts.optopt(
+        "c",
+        "config-file",
+        "path to file listing all logs to tail",
+        "PATH",
+    );
+    opts.optopt(
         "f",
         "file-name",
         "path to file where information is being logged",
-        "ABSOLUTE_PATH",
+        "PATH",
     );
     opts.optflag("h", "help", "show this usage information");
-    opts.reqopt("t", "topic-name", "name of topic to write to", "STRING");
+    opts.optopt("t", "topic-name", "name of topic to write to", "STRING");
     opts.optopt(
         "",
         "heartbeat",
@@ -106,71 +113,109 @@ fn run_stream() -> Result<(), String> {
         "disable-topic-create",
         "add this flag to disable topic creation",
     );
-    opts.optflag("", "byo", "enable byo consistency");
+    /*opts.optflag("", "byo", "enable byo consistency");
     opts.optopt(
-        "c",
+        "",
         "consistency-name",
         "name of consistency topic to write to (default TOPIC_NAME-consistency topic)",
         "STRING",
-    );
+    );*/
     opts.optflag(
         "e",
         "exit-at-end",
         "automatically exit when the end of the file is reached",
     );
     let usage_details = opts.usage("usage: mbtaupsert [options] FILE");
-    let opts = opts
-        .parse(&args[1..])
-        .map_err(|e| format!("{}\n{}\n", usage_details, e))?;
+    let opts = opts.parse(&args[1..])?;
 
     if opts.opt_present("h") {
-        return Err(usage_details);
+        print!("{}", usage_details);
+        std::process::exit(0);
     }
 
-    let config = kafka_interaction::Config {
-        kafka_addr: opts.opt_str("kafka-addr"),
-    };
+    let (stream_configs, heartbeat) = if let Some(config_file) = opts.opt_str("config-file") {
+        // read the config file line by line, skipping comments
+        let mut configs = Vec::new();
+        let mut min_heartbeat = time::Duration::new(0, 0);
+        let f = File::open(config_file)?;
+        let reader = BufReader::new(f);
+        for line in reader.lines().map(|l| l.unwrap()) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let record: Vec<_> = line.split(',').collect();
+            if record.len() != 6 {
+                return Err(anyhow::anyhow!(
+                    "Config file requires six fields per row".to_owned()
+                ));
+            }
+            let filename = if record[2].is_empty() {
+                format!("workspace/mbta-{}.log", &record[1])
+            } else {
+                format!(
+                    "workspace/mbta-{}-{}-{}.log",
+                    &record[1], &record[2], &record[3]
+                )
+            };
+            let topic_name = if record[0].is_empty() {
+                if record[2].is_empty() {
+                    format!("mbta-{}", &record[1])
+                } else {
+                    format!("mbta-{}-{}-{}", &record[1], &record[2], &record[3])
+                }
+            } else {
+                record[0].to_string()
+            };
+            let partitions = if record[4].is_empty() {
+                1
+            } else {
+                record[4].parse::<i32>()?
+            };
+            configs.push((filename, topic_name, partitions));
+            let heartbeat = if record[5].is_empty() {
+                "250ms".to_string()
+            } else {
+                record[5].to_string()
+            };
+            let heartbeat = parse(&heartbeat)?;
+            if min_heartbeat > heartbeat
+                || (min_heartbeat.as_secs() == 0 && min_heartbeat.subsec_nanos() == 0)
+            {
+                min_heartbeat = heartbeat;
+            }
+        }
+        if configs.is_empty() {
+            return Err(anyhow::anyhow!("Config file is empty".to_owned()));
+        }
+        (configs, min_heartbeat)
+    } else {
+        // we assume that the user is specifying the translation of a single
+        // topic using command line argument
+        if let Some(filename) = opts.opt_str("f") {
+            if let Some(topic_name) = opts.opt_str("t") {
+                let heartbeat_spec = opts
+                    .opt_str("heartbeat")
+                    .unwrap_or_else(|| "250ms".to_string());
+                let heartbeat = parse(&heartbeat_spec)?;
 
-    let heartbeat_spec = opts
-        .opt_str("heartbeat")
-        .unwrap_or_else(|| "250ms".to_string());
-    let heartbeat = match parse(&heartbeat_spec) {
-        Ok(x) => x,
-        Err(err) => {
-            return Err(err.to_string());
+                let partitions = opts
+                    .opt_str("partitions")
+                    .unwrap_or_else(|| "1".to_string());
+                let partitions = partitions.parse::<i32>()?;
+
+                (vec![(filename, topic_name, partitions)], heartbeat)
+            } else {
+                return Err(anyhow::anyhow!("Must specify target topic".to_owned()));
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "Must specify a config file with -c or a file to tail with -f".to_owned()
+            ));
         }
     };
 
-    let partitions = opts
-        .opt_str("partitions")
-        .unwrap_or_else(|| "1".to_string());
-    let partitions = match partitions.parse::<i32>() {
-        Ok(x) => x,
-        Err(err) => {
-            return Err(err.to_string());
-        }
-    };
-    if partitions < 1 {
-        return Err("partitions must be positive".to_string());
-    }
-    let replication = opts
-        .opt_str("replication")
-        .unwrap_or_else(|| "1".to_string());
-    let replication = match replication.parse::<i32>() {
-        Ok(x) => x,
-        Err(err) => {
-            return Err(err.to_string());
-        }
-    };
-    if replication < 1 {
-        return Err("replication must be positive".to_string());
-    }
+    //let byo = opts.opt_present("byo");
 
-    let byo = opts.opt_present("byo");
-
-    let mut state = kafka_interaction::State::new(config, byo)?;
-
-    let topic_name = opts.opt_str("t").unwrap();
     let topic_configs: Result<Vec<_>, _> = opts
         .opt_strs("topic-property")
         .into_iter()
@@ -182,61 +227,102 @@ fn run_stream() -> Result<(), String> {
                 Some(property_value) => {
                     Ok((property_name.unwrap().to_owned(), property_value.to_owned()))
                 }
-                None => Err(format!(
+                None => Err(anyhow::anyhow!(format!(
                     "Property {} has no argument",
                     property_name.unwrap()
-                )),
+                ))),
             }
         })
         .collect();
     let topic_configs = topic_configs?;
+    let topic_configs_refs: Vec<_> = topic_configs
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+
+    let replication = opts
+        .opt_str("replication")
+        .unwrap_or_else(|| "1".to_string());
+    let replication = replication.parse::<i32>()?;
+
+    let k_client = kafka::kafka_client::KafkaClient::new(
+        &opts
+            .opt_str("kafka-addr")
+            .unwrap_or_else(|| "localhost:9092".to_string()),
+        "materialize.mbtaupsert",
+        &[],
+    )?;
+
     if !opts.opt_present("disable-topic-create") {
-        state.create_topic(&topic_name, partitions, replication, topic_configs)?;
+        // find the unique topic names, then create them
+        let mut unique_topics = HashMap::new();
+        for (_, topic_name, partitions) in stream_configs.iter() {
+            let old_partitions = unique_topics.insert(topic_name, *partitions);
+            if let Some(old_partitions) = old_partitions {
+                if old_partitions != *partitions {
+                    return Err(anyhow::anyhow!(format!(
+                        "Different partition numbers for topic {} were specified",
+                        &topic_name
+                    )));
+                }
+            }
+        }
+        for (topic_name, partitions) in unique_topics.iter() {
+            k_client
+                .create_topic(
+                    &topic_name,
+                    *partitions,
+                    replication,
+                    topic_configs_refs.as_slice(),
+                    None,
+                )
+                .await?;
+        }
     }
-    let consistency_name = opts
+
+    // byo stuff commented out
+    /*let consistency_name = opts
         .opt_str("c")
         .unwrap_or(format!("{}-data-consistency", topic_name));
     if byo && !opts.opt_present("disable-topic-create") {
-        state.create_consistency_topic(&consistency_name, replication)?;
+        k_client.create_topic(&consistency_name,
+            1,
+            replication,
+            &vec![
+                ("cleanup.policy", "delete"),
+                ("retention.ms", "-1"),
+            ], None).await?;
     }
-
-    //read off of the stream file
-    let filename = opts.opt_str("f").unwrap();
-    let f = match File::open(filename) {
-        Ok(x) => x,
-        Err(err) => {
-            return Err(err.to_string());
-        }
-    };
-
-    // tracks position in the logs
-    let mut pos = 0;
-    let mut reader = BufReader::new(f);
-    let mut timestamp = 0;
-    // tracks bytes read in the previous iteration of the loop.
-    // this is only used when there is an error parsing the line
-    // sometimes, the log parser is overly eager and reads a line before
-    // it has finished writing. so we want to retry reading the whole line
-    // until number of bytes read from the line is no longer increasing
-    let mut old_len = 0;
+    let mut timestamp = 0; */
 
     let exit_at_end = opts.opt_present("exit-at-end");
 
-    loop {
+    // we read from all the files in a round-robin fashion
+    let mut file_readers = VecDeque::with_capacity(stream_configs.len());
+    for (filename, topic_name, _) in stream_configs {
+        let f = File::open(filename)?;
+        let reader = BufReader::new(f);
+        file_readers.push_back((reader, topic_name, 0, 0));
+    }
+
+    let mut consecutive_ends = 0;
+    while let Some((mut reader, topic_name, mut pos, mut old_len)) = file_readers.pop_front() {
         let mut line = String::new();
         let resp = reader.read_line(&mut line);
         match resp {
             Ok(len) => {
                 if len > 0 {
+                    consecutive_ends = 0;
+                    // try to parse the line into JSON objects
                     match parse_line(&line) {
                         Ok(key_values) => {
                             for (key, value) in key_values {
-                                let mut partition_key = (calculate_hash(&key) as i32) % partitions;
-                                if partition_key < 0 {
-                                    partition_key += partitions;
-                                }
-                                state.ingest(&topic_name, partition_key, Some(key), value)?;
-                                if byo {
+                                k_client.send_key_value(
+                                    &topic_name,
+                                    key.as_bytes(),
+                                    value.map(|v| v.as_bytes().to_owned()),
+                                )?;
+                                /*if byo {
                                     state.ingest_consistency(
                                         &consistency_name,
                                         &topic_name,
@@ -244,43 +330,56 @@ fn run_stream() -> Result<(), String> {
                                         timestamp + 1,
                                     )?;
                                 }
-                                timestamp += 1;
+                                timestamp += 1;*/
                             }
                             old_len = 0;
                             pos += len as u64;
-                            reader.seek(SeekFrom::Start(pos)).unwrap();
                         }
                         Err(msg) => {
+                            // sometimes, the log parser is overly eager and reads a line before
+                            // it has finished writing. so we want to retry reading the whole line
+                            // until number of bytes read from the line is no longer increasing
                             if len <= old_len {
-                                // emit an error and advance the reader.
                                 println!("{}", msg);
                                 pos += len as u64;
-                                reader.seek(SeekFrom::Start(pos)).unwrap();
+                                old_len = 0;
                             } else {
-                                //retry after waiting for the line to update.
                                 old_len = len;
-                                thread::sleep(time::Duration::from_millis(250));
+                                reader.seek(SeekFrom::Start(pos)).unwrap();
+                                std::thread::sleep(time::Duration::from_millis(250));
                             }
                         }
                     }
                     line.clear();
                 } else {
+                    // we have reached the end of the file
                     if exit_at_end {
-                        return Ok(());
+                        // stop reading the file by not returning the reader to the queue
+                        continue;
                     }
-                    thread::sleep(heartbeat);
+                    consecutive_ends += 1;
+                    if consecutive_ends == file_readers.len() {
+                        // if in this round, we found that we reached the end of
+                        // every log, sleep before checking for updates again
+                        thread::sleep(heartbeat);
+                        consecutive_ends = 0;
+                    }
                 }
             }
             Err(err) => {
                 println!("{}", err);
             }
         }
+        // schedule another read
+        file_readers.push_back((reader, topic_name, pos, old_len));
     }
+    Ok(())
 }
 
-fn main() {
-    match run_stream() {
-        Ok(()) => {}
-        Err(err) => println!("{}", err),
+#[tokio::main]
+async fn main() {
+    if let Err(e) = run_stream().await {
+        eprintln!("ERROR: {:#?}", e);
+        std::process::exit(1);
     }
 }

@@ -135,20 +135,15 @@ function create_connection() {
 # Create a kafka topic out of each stream
 function start_stream_convert() {
   api_key=$1
-  partitions=$2
-  kafka_addr=$3
-  topic_name=$4
-  filename=$5
-  heartbeat_time=$6
+  kafka_addr=$2
+  filename=$3
 
-  options=(--kafka-addr "$kafka_addr" -f "$filename" -t "$topic_name" -p "$partitions" )
-  if [ -n "$heartbeat_time" ]; then
-    options+=( --heartbeat "$heartbeat_time" )
-  fi
+  options=( --kafka-addr "$kafka_addr" -c "$filename" )
 
   if [ "$api_key" == "None" ]; then
     options+=( --exit-at-end )
   fi
+
   $mbtaupsert "${options[@]}" &
 
   echo "$!" >> workspace/steady-pid.log
@@ -169,7 +164,7 @@ function start_streams_from_config_file() {
 
   IFS=','
   line_num=0
-  while read -r topic_name stream_type filter_type filter_on partitions heartbeat_time
+  while read -r topic_name stream_type filter_type filter_on partitions _
   do
     if [ -z "$stream_type" ]; then
         continue
@@ -198,15 +193,16 @@ function start_streams_from_config_file() {
     if [ "$api_key" != "None" ] ; then
       create_connection $line_num "$api_key" "$filename" "$stream_type" "$filter_type" "$filter_on" &
       echo "$!" >> workspace/steady-pid.log
-      #The first thing the stream sends is a snapshot of the current state of the
-      #system. If we start reading from the stream too quickly, the snapshot can be
-      #incomplete.
-      sleep 5
     fi
 
-    start_stream_convert "$api_key" $partitions $kafka_addr "$topic_name" "$filename" "$heartbeat_time"
     (( line_num+=1 ))
   done < "$config_file"
+
+  #The first thing the stream sends is a snapshot of the current state of the
+  #system. If we start reading from the stream too quickly, the snapshot can be
+  #incomplete.
+  sleep 5
+  start_stream_convert "$api_key" $kafka_addr "$config_file"
 }
 
 function pause() {
