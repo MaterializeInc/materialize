@@ -131,6 +131,12 @@ in the infrastructure repository. All of these tests can be run in parallel.
   git push origin $tag
   ```
 
+### Verify the Release Build and Deploy
+
+- [ ] Find your build in buildkite, for example
+  https://buildkite.com/materialize/tests/builds?branch=v0.4.3
+- [ ] Wait for the completion of the "Deploy" step
+
 ### Create Homebrew bottle and update tap
 
 - [ ] Follow the instructions in [MaterializeInc/homebrew-materialize's
