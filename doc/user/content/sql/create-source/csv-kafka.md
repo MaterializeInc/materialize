@@ -32,7 +32,7 @@ This creates a source that...
 - Has 3 columns (`col_foo`, `col_bar`, `col_baz`). Materialize will not ingest
   any row without 3 columns.
 
-### Creating a persistent source from a CSV-formatted Kafka topic
+### Persisting records to local disk
 
 ```sql
 CREATE SOURCE csv_kafka (col_foo, col_bar, col_baz)

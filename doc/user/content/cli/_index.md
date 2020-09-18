@@ -224,7 +224,11 @@ etc.), and then create a new node with those items.
 
 ### Persistence
 
-The `--persistence-max-pending-records` specifies the number of input messages Materialize
-will buffer in memory before flushing them all to disk. The default value is 1000000 messages.
-Note that Materialize will also flush buffered records every 10 minutes as well. See the
-[Deployment section](/ops/deployment#persistence) for more guidance on how to tune this parameter.
+The `--persistence-max-pending-records` specifies the number of input messages
+Materialize buffers in memory before flushing them all to disk when using
+[persisted sources][persistence]. The default value is 1000000 messages. Note
+that Materialize will also flush buffered records every 10 minutes as well. See
+the [Deployment section][persistence] for more guidance on how to tune this
+parameter.
+
+[persistence]: /ops/deployment/#persistence

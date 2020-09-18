@@ -43,7 +43,7 @@ CREATE MATERIALIZED VIEW jsonified_kafka_source AS
   )
 ```
 
-### Persisting JSON records to disk
+### Persisting records to local disk
 
 ```sql
 CREATE SOURCE json_kafka

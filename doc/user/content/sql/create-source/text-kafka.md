@@ -37,7 +37,7 @@ This creates a source that...
 - Uses message keys to determine what should be inserted, deleted, and updated.
 - Treats both message keys and values as text.
 
-### Persisted source
+### Persisting records to local disk
 
 ```sql
 CREATE SOURCE persisted_records

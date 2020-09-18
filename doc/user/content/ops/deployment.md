@@ -178,10 +178,12 @@ source.
 
 ### Details
 
-Any Kafka source can be declared as persistent source ([Avro][avro], [text/bytes][text],
-[csv][csv], [Protobuf][proto] and [JSON][json] are all supported). Materialize
-stores one copy of all input data for each persistent Kafka source. Materialize
-stores these files in:
+Any Kafka source can be declared as persistent source, irrespective of its
+format ([Avro][avro], [text/bytes][text], [csv][csv], [Protobuf][proto] and
+[JSON][json]).
+
+Materialize stores one copy of all input data for each persistent Kafka source.
+Materialize stores these files in:
 
 ```
 {data-directory}/persistence/{source-id}
@@ -197,17 +199,17 @@ Here, each file stores data for ranges of offsets per `partition-id`. Each file
 stores all the data from `start-offset` (inclusive) to `end-offset` (exclusive).
 Materialize buffers input records in memory and flushes them every 10 minutes or
 immediately if the number of buffered records per source exceeds the
-`--persistence-max-pending-records` parameter. Setting this flag to a
+[`--persistence-max-pending-records`][persistence-flag] parameter. Setting this flag to a
 higher value helps Materialize achieve higher ingest and disk write throughput,
 however this also increases the average latency before records are persisted.
-
 
 On restart, Materialize reads back all of the records that had been previously
 persisted in offset order, and then continues reading from the upstream source
 for data after the last persisted record in each partition.
 
-[avro]: /sql/create-source/avro-kafka/#persisting-records-to-local-disk
-[text]: /sql/create-source/text-kafka/#persisted-source
-[proto]: /sql/create-source/protobuf-kafka/#persisting-protobuf-messages
-[csv]: /sql/create-source/csv-kafka/#creating-a-persistent-source-from-a-csv-formatted-kafka-topic
-[json]: /sql/create-source/json-kafka/#persisting-json-records-to-disk
+[avro]: /sql/create-source/avro-kafka/#persisted-kafka-sources
+[text]: /sql/create-source/text-kafka/#persisted-kafka-sources
+[proto]: /sql/create-source/protobuf-kafka/#persisted-kafka-sources
+[csv]: /sql/create-source/csv-kafka/#persisted-kafka-sources
+[json]: /sql/create-source/json-kafka/#persisted-kafka-sources
+[persistence-flag]: /cli/#persistence

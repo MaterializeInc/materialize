@@ -42,7 +42,7 @@ This creates a source that...
 - Decodes data as the `Batch` message from the `billing` package, as described
   in the [generated `FileDescriptorSet`](#filedescriptorset).
 
-### Persisting Protobuf messages
+### Persisting records to local disk
 
 Assuming you've already generated a [`FileDescriptorSet`](#filedescriptorset)
 named `SCHEMA`:
