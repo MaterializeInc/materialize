@@ -6,9 +6,9 @@ menu:
     parent: 'sql'
 ---
 
-`INSERT` inserts values into a table.
+{{< version-added v0.5.0 >}}
 
-{{< experimental v0.4.1 >}}
+`INSERT` inserts values into a table.
 
 {{< warning >}}
 At the moment, tables do not persist any data that is inserted. This means that restarting a
