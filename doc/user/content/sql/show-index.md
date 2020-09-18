@@ -17,7 +17,7 @@ aliases:
 
 Field | Use
 ------|-----
-_view&lowbar;name_ | The name of the view whose indexes you want to show.
+_on&lowbar;name_ | The name of the object whose indexes you want to show. This can be the name of a table, source, or view.
 
 ## Details
 
@@ -26,14 +26,14 @@ _view&lowbar;name_ | The name of the view whose indexes you want to show.
 `SHOW INDEX`'s output is a table, with this structure:
 
 ```nofmt
- View | Key_name | Column_name | Expression | Null | Seq_in_index
-------+----------+-------------+------------+------+--------------
- ...  | ...      | ...         | ...        | ...  | ...
+ On_name | Key_name | Column_name | Expression | Null | Seq_in_index
+---------+----------+-------------+------------+------+--------------
+ ...     | ...      | ...         | ...        | ...  | ...
 ```
 
 Field | Meaning
 ------|--------
-**View** | The name of the view the index belongs to.
+**On_name** | The name of the table, source, or view the index belongs to.
 **Key_name** | The name of the index.
 **Column_name** | The indexed column.
 **Expression** | An expression used to generate the column in the index.
@@ -59,9 +59,9 @@ SHOW FULL VIEWS;
 SHOW INDEXES FROM my_materialized_view;
 ```
 ```nofmt
- View | Key_name | Column_name | Expression | Null | Seq_in_index
-------+----------+-------------+------------+------+--------------
- ...  | ...      | ...         | ...        | ...  | ...
+ On_name | Key_name | Column_name | Expression | Null | Seq_in_index
+---------+----------+-------------+------------+------+--------------
+ ...     | ...      | ...         | ...        | ...  | ...
 ```
 
 ## Related pages

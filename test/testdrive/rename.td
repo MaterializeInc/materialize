@@ -31,7 +31,7 @@ $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
     SELECT * FROM mz_data
 
 > SHOW INDEXES FROM mz_view
-Source_or_view                Key_name                              Column_name  Expression  Null   Seq_in_index
+On_name                       Key_name                              Column_name  Expression  Null   Seq_in_index
 ----------------------------------------------------------------------------------------------------------------
 materialize.public.mz_view  materialize.public.mz_view_primary_idx  a            <null>      false             1
 materialize.public.mz_view  materialize.public.mz_view_primary_idx  b            <null>      false             2
@@ -146,7 +146,7 @@ materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"re
 
 # Item's indexes are properly re-attributed
 > SHOW INDEXES FROM renamed_mz_view
-Source_or_view                      Key_name                          Column_name Expression Null  Seq_in_index
+On_name                             Key_name                          Column_name Expression Null  Seq_in_index
 ---------------------------------------------------------------------------------------------------------------
  materialize.public.renamed_mz_view materialize.public.renamed_index  a           <null>     false            1
  materialize.public.renamed_mz_view materialize.public.renamed_index  b           <null>     false            2

@@ -372,3 +372,13 @@ Field    Nullable   Type
 ------------------------
 b        YES        date
 a        YES        text
+
+> SHOW COLUMNS in t WHERE Field = 'a'
+Field    Nullable   Type
+------------------------
+a        YES        text
+
+> SHOW COLUMNS in t LIKE '%b%'
+Field    Nullable   Type
+------------------------
+b        YES        date

@@ -645,7 +645,9 @@ fn plan_view_select_intrusive(
             allow_aggregates: false,
             allow_subqueries: true,
         };
-        let expr = plan_expr(ecx, &selection)?.type_as(ecx, ScalarType::Bool)?;
+        let expr = plan_expr(ecx, &selection)
+            .map_err(|e| anyhow::anyhow!("WHERE clause error: {}", e))?
+            .type_as(ecx, ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
