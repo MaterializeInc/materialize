@@ -47,7 +47,7 @@ impl ReduceElision {
                 keys.iter()
                     .all(|k| group_key.contains(&crate::ScalarExpr::Column(*k)))
             }) {
-                use expr::{AggregateFunc, UnaryFunc};
+                use expr::{AggregateFunc, UnaryFunc, VariadicFunc};
                 use repr::Datum;
                 let map_scalars = aggregates
                     .iter()
@@ -66,6 +66,18 @@ impl ReduceElision {
                                 ),
                             )
                         }
+
+                        // SumInt32 takes Int32s as input, but outputs Int64s.
+                        AggregateFunc::SumInt32 => {
+                            a.expr.clone().call_unary(UnaryFunc::CastInt32ToInt64)
+                        }
+
+                        // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
+                        AggregateFunc::JsonbAgg => ScalarExpr::CallVariadic {
+                            func: VariadicFunc::JsonbBuildArray,
+                            exprs: vec![a.expr.clone()],
+                        },
+
                         // All other variants should return the argument to the aggregation.
                         _ => a.expr.clone(),
                     })
