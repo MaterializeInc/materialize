@@ -260,9 +260,10 @@ where
             .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
             .collect();
 
-        for (id, name, item) in &catalog_entries {
+        // Sources and indexes may be depended upon by other catalog items,
+        // insert them first.
+        for (id, _, item) in &catalog_entries {
             match item {
-                CatalogItem::Table(_) | CatalogItem::View(_) => (),
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
                 //about how it was built. If we start building multiple sinks and/or indexes
@@ -270,22 +271,6 @@ where
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
                     coord.maybe_begin_persistence(*id, &source.connector);
-                }
-                CatalogItem::Sink(sink) => {
-                    let builder = match &sink.connector {
-                        SinkConnectorState::Pending(builder) => builder,
-                        SinkConnectorState::Ready(_) => {
-                            panic!("sink already initialized during catalog boot")
-                        }
-                    };
-                    let connector = block_on(sink_connector::build(
-                        builder.clone(),
-                        sink.with_snapshot,
-                        coord.determine_frontier(sink.as_of, sink.from)?,
-                        *id,
-                    ))
-                    .with_context(|| format!("recreating sink {}", name))?;
-                    coord.handle_sink_connector_ready(*id, connector);
                 }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == *id) {
@@ -305,6 +290,30 @@ where
                         coord.ship_dataflow(coord.build_index_dataflow(*id));
                     }
                 }
+                _ => (), // Handled in next loop.
+            }
+        }
+
+        for (id, name, item) in &catalog_entries {
+            match item {
+                CatalogItem::Table(_) | CatalogItem::View(_) => (),
+                CatalogItem::Sink(sink) => {
+                    let builder = match &sink.connector {
+                        SinkConnectorState::Pending(builder) => builder,
+                        SinkConnectorState::Ready(_) => {
+                            panic!("sink already initialized during catalog boot")
+                        }
+                    };
+                    let connector = block_on(sink_connector::build(
+                        builder.clone(),
+                        sink.with_snapshot,
+                        coord.determine_frontier(sink.as_of, sink.from)?,
+                        *id,
+                    ))
+                    .with_context(|| format!("recreating sink {}", name))?;
+                    coord.handle_sink_connector_ready(*id, connector);
+                }
+                _ => (), // Handled in prior loop.
             }
         }
 
