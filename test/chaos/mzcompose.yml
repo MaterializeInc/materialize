@@ -96,7 +96,7 @@ services:
       - NET_ADMIN
 
   mysql:
-    image: debezium/example-mysql:1.1
+    image: debezium/example-mysql:1.2
     ports:
       - *mysql
     environment:
