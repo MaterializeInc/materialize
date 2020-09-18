@@ -139,6 +139,18 @@ where
             let ok_input = ok.as_collection();
             err_input = err.as_collection().concat(&err_input);
 
+            // At this point, we need plan out the reduction based on the aggregation
+            // functions used.
+            //   1. If there are no aggregation functions, the operation is a "distinct"
+            //      and we can / should just apply that differential operator.
+            //   2. If there is a single aggregation function, we can build the dataflow
+            //      for that aggregation function.
+            //   3. If all aggregation functions are accumulable (sums) we can build
+            //      a dataflow for that concludes with their sums arranged.
+            //   4. If there are multiple aggregation functions at least one of which
+            //      is non-accumulable, we'll need to build dataflows for each group
+            //      and then meld the results together in a final finishing reduce.
+
             // Distinct is a special case, as there are no aggregates to aggregate.
             // In this case, we use a special implementation that does not rely on
             // collating aggregates.
@@ -528,8 +540,8 @@ where
                     // let agg1 = accum.element2.element1;
                     // let agg2 = accum.element2.element2;
                     let tot = accum[3 * index];
-                    let agg1 = accum[3 * index];
-                    let agg2 = accum[3 * index];
+                    let agg1 = accum[3 * index + 1];
+                    let agg2 = accum[3 * index + 2];
 
                     if tot == 0 && (agg1 != 0 || agg2 != 0) {
                         // This should perhaps be un-recoverable, as we risk panicking in the ReduceCollation
