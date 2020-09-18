@@ -164,6 +164,8 @@ We recommend enabling persistence if you are using Kafka sources, need to reliev
 load on upstream Kafka brokers, and are comfortable using
 [experimental][exp] features.
 
+[exp]: /cli/#experimental-mode
+
 {{< warning >}}
 
 Materialize currently does not delete persisted records when the source is dropped.
@@ -176,7 +178,8 @@ source.
 
 ### Details
 
-You can define a persistent source with the [`CREATE SOURCE`][cs] command. Materialize
+Any Kafka source can be declared as persistent source ([Avro][avro], [text/bytes][text],
+[csv][csv], [Protobuf][proto] and [JSON][json] are all supported). Materialize
 stores one copy of all input data for each persistent Kafka source. Materialize
 stores these files in:
 
@@ -203,5 +206,8 @@ On restart, Materialize reads back all of the records that had been previously
 persisted in offset order, and then continues reading from the upstream source
 for data after the last persisted record in each partition.
 
-[exp] /cli/#experimental-mode
-[cs]: /sql/create-source
+[avro]: /sql/create-source/avro-kafka/#persisting-records-to-local-disk
+[text]: /sql/create-source/text-kafka/#persisted-source
+[proto]: /sql/create-source/protobuf-kafka/#persisting-protobuf-messages
+[csv]: /sql/create-source/csv-kafka/#creating-a-persistent-source-from-a-csv-formatted-kafka-topic
+[json]: /sql/create-source/json-kafka/#persisting-json-records-to-disk
