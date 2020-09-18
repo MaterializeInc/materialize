@@ -42,6 +42,27 @@ This creates a source that...
 - Decodes data as the `Batch` message from the `billing` package, as described
   in the [generated `FileDescriptorSet`](#filedescriptorset).
 
+### Persisting records to local disk
+
+Assuming you've already generated a [`FileDescriptorSet`](#filedescriptorset)
+named `SCHEMA`:
+
+```sql
+CREATE SOURCE batches
+KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+WITH (persistence = true)
+FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
+```
+
+This creates a source that...
+
+- Is append-only.
+- Decodes data received from the `billing` topic published by Kafka running on
+  `localhost:9092`.
+- Decodes data as the `Batch` message from the `billing` package, as described
+  in the [generated `FileDescriptorSet`](#filedescriptorset).
+- Persists messages from the `billing` topic to local disk.
+
 ### Connecting to a Kafka broker using SSL authentication
 
 ```sql

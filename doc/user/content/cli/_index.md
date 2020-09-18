@@ -17,6 +17,7 @@ Flag | Default | Modifies
 [`--experimental`](#experimental-mode) | Disabled | Get more details [here](#experimental-mode)
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
+[`--persistence-max-pending-records`](#persistence) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
 [`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
 [`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
@@ -220,3 +221,14 @@ etc.), and then create a new node with those items.
 [parse-duration-syntax]: https://docs.rs/parse_duration/2.1.0/parse_duration/#syntax
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source
+
+### Persistence
+
+The `--persistence-max-pending-records` specifies the number of input messages
+Materialize buffers in memory before flushing them all to disk when using
+[persisted sources][persistence]. The default value is 1000000 messages. Note
+that Materialize will also flush buffered records every 10 minutes as well. See
+the [Deployment section][persistence] for more guidance on how to tune this
+parameter.
+
+[persistence]: /ops/deployment/#persistence
