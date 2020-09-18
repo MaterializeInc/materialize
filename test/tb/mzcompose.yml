@@ -16,7 +16,7 @@ services:
     volumes:
       - tbshare:/tbshare
   mysql:
-    image: debezium/example-mysql:1.1
+    image: debezium/example-mysql:1.2
     ports: [3306]
     environment:
       - MYSQL_ROOT_PASSWORD=rootpw
