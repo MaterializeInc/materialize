@@ -32,6 +32,7 @@ use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
+use uuid::Uuid;
 
 use dataflow::source::persistence::PersistenceSender;
 use dataflow::{PersistenceMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
@@ -2713,6 +2714,10 @@ where
                 }
             }
         }
+    }
+
+    pub fn cluster_id(&self) -> Uuid {
+        self.catalog.cluster_id()
     }
 }
 

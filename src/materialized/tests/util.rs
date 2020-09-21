@@ -83,6 +83,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         listen_addr: None,
         tls: config.tls,
         experimental_mode: config.experimental_mode,
+        telemetry_url: None,
     })?);
     let client = server.connect()?;
     Ok((server, client))

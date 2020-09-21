@@ -14,15 +14,18 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::any::Any;
+use std::env;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use compile_time_run::run_command_str;
 use futures::channel::mpsc;
+use log::{info, warn};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use serde::{Deserialize, Serialize};
 use stream_cancel::{StreamExt as _, Trigger, Tripwire};
 use tokio::io;
 use tokio::net::TcpListener;
@@ -130,6 +133,8 @@ pub struct Config {
     pub symbiosis_url: Option<String>,
     /// Whether to permit usage of experimental features.
     pub experimental_mode: bool,
+    /// An optional telemetry endpoint. Use None to disable telemetry.
+    pub telemetry_url: Option<String>,
 }
 
 impl Config {
@@ -289,6 +294,14 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             executor: &executor,
             experimental_mode: config.experimental_mode,
         })?;
+
+        // Start a thread that checks for the latest version and prints a warning if it
+        // finds a different version than currently running.
+        if let Some(telemetry_url) = config.telemetry_url {
+            let cluster_id = coord.cluster_id().to_string();
+            thread::spawn(move || check_version_loop(telemetry_url, cluster_id));
+        }
+
         Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
     } else {
         None
@@ -319,4 +332,58 @@ impl Server {
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
+}
+
+// Runs fetch_latest_version in a backoff loop until it succeeds once, prints a
+// warning if there is another version, then returns.
+fn check_version_loop(telemetry_url: String, cluster_id: String) {
+    let mut backoff = Duration::from_secs(5);
+    loop {
+        let latest_version = match fetch_latest_version(&telemetry_url, &cluster_id) {
+            Ok(version) => version,
+            Err(err) => {
+                backoff *= 2;
+                info!(
+                    "could not fetch latest version: {}; retrying in {:?}",
+                    err, backoff
+                );
+                thread::sleep(backoff);
+                continue;
+            }
+        };
+
+        if latest_version != version() {
+            warn!(
+                "A new version of materialized is available: {}.",
+                latest_version
+            );
+        }
+        return;
+    }
+}
+
+fn fetch_latest_version(telemetry_url: &str, cluster_id: &str) -> anyhow::Result<String> {
+    let version_url = format!("{}/api/v1/version/{}", telemetry_url, cluster_id);
+    let version_request = V1VersionRequest { version: version() };
+
+    let resp = reqwest::blocking::Client::new()
+        .post(&version_url)
+        .timeout(Duration::from_secs(10))
+        .json(&version_request)
+        .send()?;
+    if !resp.status().is_success() {
+        bail!("failed request: {}", resp.status());
+    }
+    let version: V1VersionResponse = resp.json()?;
+    Ok(version.latest_release)
+}
+
+#[derive(Serialize)]
+struct V1VersionRequest {
+    version: String,
+}
+
+#[derive(Deserialize)]
+struct V1VersionResponse {
+    latest_release: String,
 }

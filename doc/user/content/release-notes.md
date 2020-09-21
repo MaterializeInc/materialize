@@ -56,6 +56,10 @@ Wrap your release notes at the 80 character mark.
   can be retrieved using the new [`mz_cluster_id`](/sql/functions#uuid-func) SQL
   function.
 
+- Report the current version to a central server operated by
+  materialize.io. If a new version is available a warning will be
+  logged. This can be disabled with the `--disable-telemetry` option.
+
 <span id="v0.4.3"></span>
 ## v0.4.3
 

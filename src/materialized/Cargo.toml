@@ -36,7 +36,9 @@ pgwire = { path = "../pgwire" }
 prof = { path = "../prof", features = ["auto-jemalloc"] }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
+reqwest = { version = "0.10.8", features = ["blocking", "json"] }
 rlimit = "0.4.0"
+serde = { version = "1.0", features = ["derive"] }
 stream-cancel = "0.6.1"
 sysctl = "0.4.0"
 tempfile = "3.1"

@@ -154,6 +154,9 @@ fn run() -> Result<(), anyhow::Error> {
         "enable experimental features (DANGEROUS)",
     );
 
+    // Telemetry options.
+    opts.optflag("", "disable-telemetry", "disables telemetry reporting");
+
     let popts = opts.parse(&args[1..])?;
 
     // Handle options that request informational output.
@@ -284,6 +287,27 @@ fn run() -> Result<(), anyhow::Error> {
         None
     };
 
+    // If --disable-telemetry is present, disable telemetry. Otherwise, if
+    // a TELEMETRY_URL environment variable is set, use that as the telemetry
+    // URL. Otherwise (the defaults), enable the production server for release mode
+    // and disable telemetry in debug mode. This should allow for good defaults (on
+    // in release, off in debug), but also easy development during testing of this
+    // feature via the environment variable.
+    let telemetry_url = if popts.opt_present("disable-telemetry") {
+        None
+    } else {
+        match env::var("TELEMETRY_URL") {
+            Ok(url) => Some(url),
+            Err(_) => {
+                if cfg!(debug_assertions) {
+                    None
+                } else {
+                    Some("https://telemetry.mtrlz.dev/".to_string())
+                }
+            }
+        }
+    };
+
     // Configure tracing.
     {
         use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -371,6 +395,7 @@ environment:{}",
         data_directory: Some(data_directory),
         symbiosis_url,
         experimental_mode,
+        telemetry_url,
     })?;
 
     // Block forever.

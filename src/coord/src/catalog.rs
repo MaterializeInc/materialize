@@ -1429,6 +1429,10 @@ impl Catalog {
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
+
+    pub fn cluster_id(&self) -> Uuid {
+        self.cluster_id
+    }
 }
 
 impl IdHumanizer for Catalog {
