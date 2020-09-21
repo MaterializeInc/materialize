@@ -122,11 +122,11 @@ async fn bytes_to_kafka(args: Args) -> Result<(), anyhow::Error> {
     let kafka_client = kafka::kafka_client::KafkaClient::new(
         &args.kafka_url,
         "materialize.chaos",
-        &topic,
         &[("enable.idempotence", "true")],
     )?;
     retry::retry_for(Duration::from_secs(10), |_| {
         kafka_client.create_topic(
+            &topic,
             args.kafka_partitions.unwrap_or(1),
             1,
             &[],
@@ -135,8 +135,9 @@ async fn bytes_to_kafka(args: Args) -> Result<(), anyhow::Error> {
     })
     .await?;
 
+    let topic_name_copy = topic.clone();
     let kafka_task = tokio::spawn({
-        async move { generate_and_push_records(kafka_client, message_count).await }
+        async move { generate_and_push_records(kafka_client, topic_name_copy, message_count).await }
     });
     let materialize_task = tokio::spawn({
         let materialized_host = args.materialized_host.clone();
@@ -174,6 +175,7 @@ async fn bytes_to_kafka(args: Args) -> Result<(), anyhow::Error> {
 /// Generate byte records, push them to Kafka, and return their md5 hash.
 async fn generate_and_push_records(
     kafka_client: kafka::kafka_client::KafkaClient,
+    topic_name: String,
     message_count: usize,
 ) -> Result<String, anyhow::Error> {
     log::info!("pushing {} records to Kafka", message_count);
@@ -186,7 +188,7 @@ async fn generate_and_push_records(
         }
 
         let record = generator::bytes::generate_bytes(30);
-        match kafka_client.send(&record)?.await? {
+        match kafka_client.send(&topic_name, &record)?.await? {
             Ok(_) => {
                 sent += 1;
                 records.push(record);
