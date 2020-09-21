@@ -73,7 +73,7 @@ Materialize also quickly returns results for queries that only filter, project, 
 
 Performing a `SELECT` query that does not directly read out of a materialization requires Materialize to evaluate your query. Materialize will construct a temporary dataflow to materialize your query, and remove the dataflow as soon as it returns the query results to you.
 
-When you perform a `SELECT` query, all of your inputs must be *queryable*. An input is queryable if it is a constant collection, materialized, or it depends only on queryable inputs itself. The main reason an input might not be queryable is it if relies on an unmaterialized source for its definition. You can use the [`SHOW FULL VIEWS`](../show-views) command to report which sources and views are queryable.
+When you perform a `SELECT` query, all of your inputs must be *queryable*. An input is queryable if it is a constant collection, materialized, or it depends only on queryable inputs itself. The main reason an input might not be queryable is it if relies on an unmaterialized source for its definition.
 
 You can create a materialized view out of any query using [`CREATE MATERIALIZED VIEW`](../create-materialized-view), and it will always then be queryable.
 

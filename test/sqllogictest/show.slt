@@ -157,12 +157,12 @@ SHOW VIEWS
 u
 v
 
-query TTBB colnames
+query TTB colnames
 SHOW FULL VIEWS
 ----
-VIEWS TYPE QUERYABLE MATERIALIZED
-u     USER true      true
-v     USER true      true
+VIEWS TYPE MATERIALIZED
+u     USER true
+v     USER true
 
 query T
 SHOW VIEWS LIKE '%u'
@@ -170,7 +170,7 @@ SHOW VIEWS LIKE '%u'
 u
 
 query T
-SHOW VIEWS WHERE "VIEWS" = 'u'
+SHOW VIEWS WHERE views = 'u'
 ----
 u
 

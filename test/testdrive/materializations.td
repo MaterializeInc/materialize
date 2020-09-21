@@ -37,10 +37,10 @@ Unable to automatically determine a timestamp for your query; this can happen if
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW FULL VIEWS
-VIEWS       TYPE     QUERYABLE   MATERIALIZED
----------------------------------------------
-data_view   USER     false       false
-test1       USER     true        true
+VIEWS       TYPE     MATERIALIZED
+----------------------------------
+data_view   USER     false
+test1       USER     true
 
 > SHOW MATERIALIZED VIEWS
 test1
