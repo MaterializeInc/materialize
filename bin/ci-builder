@@ -130,18 +130,16 @@ case "$cmd" in
                 )
             fi
 
-            # Forward the host's Cargo cache. Make the directory first, so that
-            # Docker doesn't try to create it as root.
-            mkdir -p ~/.cargo
-            args+=(
-                --volume "$HOME/.cargo:/cargo"
-                --env "CARGO_HOME=/cargo"
-            )
-
             # Forward the host's buildkite-agent binary, if available.
             if command -v buildkite-agent > /dev/null 2>&1; then
                 args+=(--volume "$(command -v buildkite-agent)":/usr/local/bin/buildkite-agent)
             fi
+
+            # Install a persistent volume to hold Cargo metadata. We can't
+            # forward the host's `~/.cargo` directly to the container, since
+            # that can forward binaries in `~/.cargo/bin` that override the
+            # version of Cargo installed in the container (!).
+            args+=(--volume "mz-ci-builder-cargo:/cargo")
         else
             args+=(--user "$(id -u):1001")
         fi

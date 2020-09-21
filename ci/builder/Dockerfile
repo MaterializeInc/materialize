@@ -129,7 +129,8 @@ RUN mkdir rust \
         ;; \
     esac \
     && rm -rf rust \
-    && cargo install --root /usr/local cargo-deb cargo-deny
+    && cargo install --root /usr/local --version "=1.28.0" cargo-deb \
+    && cargo install --root /usr/local --version "=0.7.3" cargo-deny
 
 # Step 2d. Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become
 # unnecessary when we upgrade to Python 3.7+.
@@ -186,5 +187,12 @@ ENV RUSTDOCFLAGS="-C linker=x86_64-unknown-linux-gnu-cc"
 
 ENV MZ_DEV_CI_BUILDER=1
 
-# Step 2j. Make the image as small as possible.
+# Step 2j. Set up for a persistent volume to hold Cargo metadata, so that
+# crate metadata does not need to be refetched on every compile.
+
+ENV CARGO_HOME=/cargo
+RUN mkdir /cargo && chmod 777 /cargo
+VOLUME /cargo
+
+# Step 2k. Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +

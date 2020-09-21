@@ -45,6 +45,7 @@ fn bench_sort_unpack(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     b.iter_with_setup(
         || rows.clone(),
         |mut rows| {
+            #[allow(clippy::unnecessary_sort_by)]
             rows.sort_by(move |a, b| a.unpack().cmp(&b.unpack()));
         },
     )

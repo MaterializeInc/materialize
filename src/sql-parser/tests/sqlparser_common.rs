@@ -22,6 +22,7 @@ use std::error::Error;
 
 use datadriven::walk;
 
+use ore::collections::CollectionExt;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit::Visit;
 use sql_parser::ast::visit_mut::{self, VisitMut};
@@ -48,9 +49,9 @@ fn datadriven() {
                             if s.len() != 1 {
                                 "expected exactly one statement".to_string()
                             } else if test_case.args.get("roundtrip").is_some() {
-                                format!("{}\n", s.iter().next().unwrap().to_string())
+                                format!("{}\n", s.into_element().to_string())
                             } else {
-                                let stmt = s.iter().next().unwrap();
+                                let stmt = s.into_element();
                                 // TODO(justin): it would be nice to have a middle-ground between this
                                 // all-on-one-line and {:#?}'s huge number of lines.
                                 format!("{}\n=>\n{:?}\n", stmt.to_string(), stmt)
