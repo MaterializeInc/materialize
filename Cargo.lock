@@ -686,9 +686,9 @@ dependencies = [
 
 [[package]]
 name = "datadriven"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10d88d4b27d39931f3de453073f3241e7ee112782765d2eb1ddd1b462dbdccb8"
+checksum = "599d28227798cd93b5f7b5e816837428d5ce7f89fdf1932db3619d0a0154a6d7"
 dependencies = [
  "anyhow",
 ]
