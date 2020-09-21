@@ -1,3 +1,15 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# all-frequent-routes-config-weekend.csv - streams for all routes on the
+# standard rapid transit map
+
 all-pred,predictions,route,Red,,
 all-pred,predictions,route,Mattapan,,
 all-pred,predictions,route,Orange,,
@@ -27,8 +39,6 @@ all-pred,predictions,route,77,,
 all-pred,predictions,route,111,,
 all-pred,predictions,route,116,,
 all-pred,predictions,route,117,,
-all-pred,predictions,route,747,,
-all-pred,predictions,route,708,,
 all-trip,trips,route,Red,,30s
 all-trip,trips,route,Orange,,30s
 all-trip,trips,route,Green-B,,30s
@@ -57,8 +67,6 @@ all-trip,trips,route,77,,30s
 all-trip,trips,route,111,,30s
 all-trip,trips,route,116,,30s
 all-trip,trips,route,117,,30s
-all-trip,trips,route,747,,30s
-all-trip,trips,route,708,,30s
 all-schd,schedules,route,Red,,30s
 all-schd,schedules,route,Orange,,30s
 all-schd,schedules,route,Green-B,,30s
@@ -87,6 +95,4 @@ all-schd,schedules,route,77,,30s
 all-schd,schedules,route,111,,30s
 all-schd,schedules,route,116,,30s
 all-schd,schedules,route,117,,30s
-all-schd,schedules,route,747,,30s
-all-schd,schedules,route,708,,30s
-,vehicles,,,,
+all-vehicles,vehicles,,,,

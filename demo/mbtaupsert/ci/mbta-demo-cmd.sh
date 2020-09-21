@@ -11,17 +11,17 @@
 #
 # mbta-demo-cmd.sh — runs the mbta demo
 
-mbtaupsert=$(whereis mbtaupsert)
+mbtaupsert="$(whereis mbtaupsert| awk '{print $NF}')"
 
 if [ -z "$mbtaupsert" ]; then
-  mbtaupsert=target/release/mbtaupsert
+  mbtaupsert=../../target/release/mbtaupsert
 fi;
 
 function archive() {
   current_datetime=$(date +'%F-%H%M')
   archive_name="workspace-$current_datetime"
   folder_name="archive/$archive_name"
-  mkdir "$folder_name"
+  mkdir -p "$folder_name"
   cp workspace/mbta*log "$folder_name"
   cp -r workspace/MBTA_GTFS "$folder_name"
 
@@ -43,7 +43,21 @@ function cleanup_kafka_topics() {
     kafka_addr=localhost:9092
   fi
   # derive list of topics to delete
-  awk 'BEGIN { FS = "," } ; { if ($1=="") { if($3=="") {print "mbta-" $2} else {print "mbta-" $2 "-" $3 "-" $4} } else { print $1 } }' "$config_file" > workspace/topics.log
+  awk \
+  'BEGIN { FS = "," } ;
+  { if ($1 == "") {
+      if ($2 != "") {
+        if($3 == "") {
+          print "mbta-" $2
+        } else {
+          print "mbta-" $2 "-" $3 "-" $4
+        }
+      }
+    } else {
+      if ($1 !~ /^#/)
+        print $1
+    }
+  }' "$config_file" > workspace/topics.log
   sort workspace/topics.log | uniq > workspace/unique-topics.log
 
   while read -r line
@@ -157,13 +171,18 @@ function start_streams_from_config_file() {
   line_num=0
   while read -r topic_name stream_type filter_type filter_on partitions heartbeat_time
   do
-    if [ -z "$topic_name" ]; then
-      if [ -n "$filter_type" ]; then
+    if [ -z "$stream_type" ]; then
+        continue
+    fi
+
+    case "$topic_name" in
+      \#*) continue ;;
+      "") if [ -n "$filter_type" ]; then
         topic_name="mbta-$stream_type-$filter_type-$filter_on"
       else
         topic_name="mbta-$stream_type"
-      fi
-    fi
+      fi;;
+    esac
 
     if [ -z "$partitions" ]; then
       partitions=1
@@ -198,6 +217,7 @@ function pause() {
 }
 
 function refresh_metadata() {
+  mkdir -p workspace
   if [[ -f "workspace/last-metadata" ]]; then
     eval "$(tr -d '\r\n' < workspace/last-metadata)"
   else
@@ -221,6 +241,7 @@ function refresh_metadata() {
 function unpack_archive() {
   # copy archive to workspace and untar
   archive_path=$1
+  mkdir -p workspace
   cp "$archive_path" workspace
   (
     cd workspace || exit

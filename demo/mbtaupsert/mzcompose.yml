@@ -83,7 +83,7 @@ mzconduct:
         daemon: true
         command: >-
           start_docker
-          ${CONFIG_FILE_PATH:-/workdir/configs/all-frequent-routes-config-weekend}
+          ${CONFIG_FILE_PATH:-/workdir/configs/all-frequent-routes-config-weekend.csv}
           kafka:${KAFKA_PORT:-9092}
           ${API_KEY}
 
@@ -102,6 +102,6 @@ mzconduct:
         daemon: true
         command: >-
           replay
-          ${CONFIG_FILE_PATH:-/workdir/configs/all-frequent-routes-config-weekend}
+          ${CONFIG_FILE_PATH:-/workdir/configs/all-frequent-routes-config-weekend.csv}
           ${ARCHIVE_PATH}
           kafka:${KAFKA_PORT:-9092}

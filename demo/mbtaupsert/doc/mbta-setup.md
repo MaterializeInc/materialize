@@ -52,6 +52,8 @@ To replay an archive, run
 
 ## Automatic setup (Bash)
 
+First run `cargo build --release` in order to build the mbtaupsert binary.
+
 To start and tear down a bunch of streams at once, create a config file like
 [this one](/demo/predictions-config).
 
