@@ -25,16 +25,15 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 `SHOW FULL VIEW`'s output is a table, with this structure:
 
 ```nofmt
- VIEWS | TYPE | QUERYABLE | MATERIALIZED
--------+------+-----------+--------------
- ...   | ...  | ...       | ...
+ VIEWS | TYPE | MATERIALIZED
+-------+------+--------------
+ ...   | ...  | ...
 ```
 
 Field | Meaning
 ------|--------
 **VIEWS** | The name of the view
 **TYPE** | Whether the view was created by the user or the system
-**QUERYABLE** | Can the view process [`SELECT`](../select) statements? You can always `SELECT FROM...` materialized views, but non-materialized views [have a specific set of requirements](../create-view/#querying-non-materialized-views).
 **MATERIALIZED** | Does the view have an in-memory index? For more details, see [`CREATE INDEX`](../create-index)
 
 ## Examples
@@ -68,13 +67,11 @@ SHOW MATERIALIZED VIEWS;
 SHOW FULL VIEWS
 ```
 ```nofmt
-          VIEWS          | TYPE | QUERYABLE | MATERIALIZED
--------------------------+------+-----------+--------------
- my_nonmaterialized_view | USER | t         | f
- my_materialized_view    | USER | t         | t
+          VIEWS          | TYPE | MATERIALIZED
+-------------------------+------+--------------
+ my_nonmaterialized_view | USER | f
+ my_materialized_view    | USER | t
 ```
-
-In this case `my_nonmaterialized_view` would only be queryable if it depended on `my_materialized_view`, e.g.
 
 ```sql
 CREATE VIEW my_nonmaterialized_view AS

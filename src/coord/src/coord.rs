@@ -63,7 +63,7 @@ use transform::Optimizer;
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
     BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
-    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEW_FOREIGN_KEYS,
+    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS,
     MZ_VIEW_KEYS,
 };
 use crate::catalog::{
@@ -319,6 +319,7 @@ where
 
         let mut tables_to_report = HashSet::new();
         let mut sources_to_report = HashSet::new();
+        let mut views_to_report = HashSet::new();
         let mut sinks_to_report = HashSet::new();
         for (id, name, item) in catalog_entries {
             // Mirror each recovered catalog entry.
@@ -335,10 +336,12 @@ where
                 CatalogItem::Source(_) => {
                     sources_to_report.insert(id);
                 }
+                CatalogItem::View(_) => {
+                    views_to_report.insert(id);
+                }
                 CatalogItem::Sink(_) => {
                     sinks_to_report.insert(id);
                 }
-                _ => (),
             }
         }
 
@@ -380,6 +383,8 @@ where
                         coord.report_table_update(&item_id, schema_id, &item_name, 1);
                     } else if sources_to_report.remove(&item_id) {
                         coord.report_source_update(&item_id, schema_id, &item_name, 1);
+                    } else if views_to_report.remove(&item_id) {
+                        coord.report_view_update(&item_id, schema_id, &item_name, 1);
                     } else if sinks_to_report.remove(&item_id) {
                         coord.report_sink_update(&item_id, schema_id, &item_name, 1);
                     }
@@ -409,6 +414,8 @@ where
                     coord.report_table_update(&item_id, schema_id, &item_name, 1);
                 } else if sources_to_report.remove(&item_id) {
                     coord.report_source_update(&item_id, schema_id, &item_name, 1);
+                } else if views_to_report.remove(&item_id) {
+                    coord.report_view_update(&item_id, schema_id, &item_name, 1);
                 } else if sinks_to_report.remove(&item_id) {
                     coord.report_sink_update(&item_id, schema_id, &item_name, 1);
                 }
@@ -1159,6 +1166,26 @@ where
         )
     }
 
+    fn report_view_update(
+        &mut self,
+        global_id: &GlobalId,
+        schema_id: i64,
+        name: &str,
+        diff: isize,
+    ) {
+        self.update_catalog_view(
+            MZ_VIEWS.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String(&global_id.to_string()),
+                    Datum::Int64(schema_id),
+                    Datum::String(name),
+                ]),
+                diff,
+            )),
+        )
+    }
+
     fn report_sink_update(
         &mut self,
         global_id: &GlobalId,
@@ -1610,7 +1637,6 @@ where
             index_name.item += "_primary_idx";
             let index =
                 auto_generate_primary_idx(index_name.item.clone(), name, view_id, &view.desc);
-
             let index_id = self.catalog.allocate_id()?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
@@ -2282,10 +2308,12 @@ where
                         CatalogItem::Source(_) => {
                             self.report_source_update(id, *schema_id, &name.item, 1);
                         }
+                        CatalogItem::View(_) => {
+                            self.report_view_update(id, *schema_id, &name.item, 1);
+                        }
                         CatalogItem::Sink(_) => {
                             self.report_sink_update(id, *schema_id, &name.item, 1);
                         }
-                        _ => (),
                     }
                 }
                 catalog::OpStatus::UpdatedItem {
@@ -2306,6 +2334,10 @@ where
                         CatalogItem::Source(_) => {
                             self.report_source_update(id, *schema_id, &from_name.item, -1);
                             self.report_source_update(id, *schema_id, &to_name.item, 1);
+                        }
+                        CatalogItem::View(_) => {
+                            self.report_view_update(id, *schema_id, &from_name.item, -1);
+                            self.report_view_update(id, *schema_id, &to_name.item, 1);
                         }
                         CatalogItem::Sink(_) => {
                             self.report_sink_update(id, *schema_id, &from_name.item, -1);
@@ -2357,7 +2389,14 @@ where
                                 -1,
                             );
                         }
-                        CatalogItem::View(_) => (),
+                        CatalogItem::View(_) => {
+                            self.report_view_update(
+                                &entry.id(),
+                                *schema_id,
+                                &entry.name().item,
+                                -1,
+                            );
+                        }
                         CatalogItem::Sink(catalog::Sink {
                             connector: SinkConnectorState::Ready(connector),
                             ..

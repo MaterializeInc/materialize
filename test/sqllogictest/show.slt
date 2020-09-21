@@ -74,17 +74,21 @@ CREATE INDEX idx1 ON v (b)
 query TTTTTT colnames
 SHOW INDEXES FROM v
 ----
-On_name               Key_name                 Column_name Expression Null  Seq_in_index
-materialize.public.v  materialize.public.idx1  b           NULL       false 1
+On_name               Key_name                          Column_name Expression Null  Seq_in_index
+materialize.public.v  materialize.public.idx1           b           NULL       false 1
+materialize.public.v  materialize.public.v_primary_idx  a           NULL       false 1
+materialize.public.v  materialize.public.v_primary_idx  b           NULL       false 2
+materialize.public.v  materialize.public.v_primary_idx  c           NULL       false 3
 
 query TTTTTT colnames
 SHOW INDEXES FROM v WHERE Column_name = 'b'
 ----
-On_name               Key_name                 Column_name Expression Null  Seq_in_index
-materialize.public.v  materialize.public.idx1  b           NULL       false 1
+On_name               Key_name                          Column_name Expression Null  Seq_in_index
+materialize.public.v  materialize.public.idx1           b           NULL       false 1
+materialize.public.v  materialize.public.v_primary_idx  b           NULL       false 2
 
 query TTTTTT colnames
-SHOW INDEXES FROM v WHERE Column_name = 'c'
+SHOW INDEXES FROM v WHERE Column_name = 'd'
 ----
 On_name               Key_name                 Column_name Expression Null  Seq_in_index
 
@@ -157,12 +161,12 @@ SHOW VIEWS
 u
 v
 
-query TTBB colnames
+query TTB colnames
 SHOW FULL VIEWS
 ----
-VIEWS TYPE QUERYABLE MATERIALIZED
-u     USER true      true
-v     USER true      true
+VIEWS TYPE MATERIALIZED
+u     USER true
+v     USER true
 
 query T
 SHOW VIEWS LIKE '%u'
@@ -170,7 +174,7 @@ SHOW VIEWS LIKE '%u'
 u
 
 query T
-SHOW VIEWS WHERE "VIEWS" = 'u'
+SHOW VIEWS WHERE views = 'u'
 ----
 u
 

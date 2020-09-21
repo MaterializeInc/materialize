@@ -16,10 +16,10 @@ select_constant
 select_constant2
 
 > SHOW FULL VIEWS
-VIEWS             TYPE QUERYABLE MATERIALIZED
----------------------------------------------
-select_constant   USER true      false
-select_constant2  USER true      true
+VIEWS             TYPE MATERIALIZED
+------------------------------------
+select_constant   USER false
+select_constant2  USER true
 
 > SHOW MATERIALIZED VIEWS
 VIEWS
@@ -185,18 +185,18 @@ Expected one of SCHEMAS or INDEX or INDEXES or KEYS or TABLES or COLUMNS or FULL
 Expected one of SCHEMAS or COLUMNS or TABLES, found: VIEWS
 
 > SHOW FULL VIEWS
-VIEWS        TYPE QUERYABLE MATERIALIZED
-----------------------------------
-mods_view    USER true      false
-names_view   USER true      true
-plurals_view USER false     false
-test1        USER true      false
-test2        USER false     false
+VIEWS        TYPE MATERIALIZED
+------------------------------
+mods_view    USER false
+names_view   USER true
+plurals_view USER false
+test1        USER false
+test2        USER false
 
 > SHOW FULL MATERIALIZED VIEWS
-VIEWS        TYPE  QUERYABLE
-----------------------------
-names_view   USER  true
+VIEWS        TYPE
+------------------
+names_view   USER
 
 > SHOW FULL SOURCES FROM mz_catalog
 SOURCES                              TYPE   MATERIALIZED
@@ -230,44 +230,45 @@ mz_indexes            SYSTEM
 mz_tables             SYSTEM
 mz_sinks              SYSTEM
 mz_sources            SYSTEM
+mz_views              SYSTEM
 
 ! SHOW EXTENDED TABLES
 SHOW EXTENDED TABLES not yet supported
 
 > SHOW FULL VIEWS FROM mz_catalog
-VIEWS                             TYPE   QUERYABLE MATERIALIZED
----------------------------------------------------------------
-mz_addresses_with_unit_length     SYSTEM true      false
-mz_dataflow_names                 SYSTEM true      false
-mz_dataflow_operator_dataflows    SYSTEM true      false
-mz_materialization_frontiers      SYSTEM true      false
-mz_perf_arrangement_records       SYSTEM true      false
-mz_perf_dependency_frontiers      SYSTEM true      false
-mz_perf_peek_durations_aggregates SYSTEM true      false
-mz_perf_peek_durations_bucket     SYSTEM true      false
-mz_perf_peek_durations_core       SYSTEM true      false
-mz_records_per_dataflow           SYSTEM true      false
-mz_records_per_dataflow_global    SYSTEM true      false
-mz_records_per_dataflow_operator  SYSTEM true      false
+VIEWS                             TYPE   MATERIALIZED
+-------------------------------------------------------
+mz_addresses_with_unit_length     SYSTEM false
+mz_dataflow_names                 SYSTEM false
+mz_dataflow_operator_dataflows    SYSTEM false
+mz_materialization_frontiers      SYSTEM false
+mz_perf_arrangement_records       SYSTEM false
+mz_perf_dependency_frontiers      SYSTEM false
+mz_perf_peek_durations_aggregates SYSTEM false
+mz_perf_peek_durations_bucket     SYSTEM false
+mz_perf_peek_durations_core       SYSTEM false
+mz_records_per_dataflow           SYSTEM false
+mz_records_per_dataflow_global    SYSTEM false
+mz_records_per_dataflow_operator  SYSTEM false
 
 # test that information in shows correctly responds to materialization and unmaterialization of views
 
 > CREATE INDEX plurals_idx ON plurals_view(noun)
 
 > SHOW FULL VIEWS
-VIEWS        TYPE QUERYABLE MATERIALIZED
-----------------------------------
-mods_view    USER true      false
-names_view   USER true      true
-plurals_view USER true      true
-test1        USER true      false
-test2        USER true      false
+VIEWS        TYPE MATERIALIZED
+--------------------------------
+mods_view    USER false
+names_view   USER true
+plurals_view USER true
+test1        USER false
+test2        USER false
 
 > SHOW FULL MATERIALIZED VIEWS
-VIEWS        TYPE  QUERYABLE
-----------------------------
-names_view   USER  true
-plurals_view USER  true
+VIEWS        TYPE
+------------------
+names_view   USER
+plurals_view USER
 
 > SHOW MATERIALIZED VIEWS
 VIEWS
@@ -283,18 +284,18 @@ names_view
 > DROP INDEX names_view_primary_idx
 
 > SHOW FULL VIEWS
-VIEWS        TYPE QUERYABLE MATERIALIZED
-----------------------------------
-mods_view    USER true      false
-names_view   USER false     false
-plurals_view USER true      true
-test1        USER false     false
-test2        USER false     false
+VIEWS        TYPE MATERIALIZED
+-------------------------------
+mods_view    USER false
+names_view   USER false
+plurals_view USER true
+test1        USER false
+test2        USER false
 
 > SHOW FULL MATERIALIZED VIEWS
-VIEWS        TYPE  QUERYABLE
-----------------------------
-plurals_view USER  true
+VIEWS        TYPE
+------------------
+plurals_view USER
 
 > SHOW MATERIALIZED VIEWS
 VIEWS
@@ -305,13 +306,13 @@ plurals_view
 > CREATE INDEX names_idx on names(num)
 
 > SHOW FULL VIEWS
-VIEWS        TYPE QUERYABLE MATERIALIZED
-----------------------------------
-mods_view    USER true      false
-names_view   USER true      false
-plurals_view USER true      true
-test1        USER true      false
-test2        USER true      false
+VIEWS        TYPE MATERIALIZED
+-------------------------------
+mods_view    USER false
+names_view   USER false
+plurals_view USER true
+test1        USER false
+test2        USER false
 
 > SHOW MATERIALIZED VIEWS
 VIEWS
@@ -339,13 +340,13 @@ mods
 > DROP INDEX mods_primary_idx;
 
 > SHOW FULL VIEWS
-VIEWS        TYPE QUERYABLE MATERIALIZED
-----------------------------------
-mods_view    USER false     false
-names_view   USER true      false
-plurals_view USER true      true
-test1        USER false     false
-test2        USER false     false
+VIEWS        TYPE MATERIALIZED
+----------------------------
+mods_view    USER false
+names_view   USER false
+plurals_view USER true
+test1        USER false
+test2        USER false
 
 > SHOW MATERIALIZED VIEWS
 VIEWS
