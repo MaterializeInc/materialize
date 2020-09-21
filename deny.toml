@@ -7,8 +7,7 @@ skip = [
     { name = "miow", version = "0.2.1" },
     { name = "winapi", version = "0.2.8" },
 
-    # Waiting on chrono to migrate to time v0.2, and hyper v0.13.8, which will
-    # drop hyper's dependency on time altogether.
+    # Waiting on chrono to migrate to time v0.2.
     { name = "time", version = "0.1.42" },
 ]
 
