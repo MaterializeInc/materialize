@@ -129,7 +129,8 @@ RUN mkdir rust \
         ;; \
     esac \
     && rm -rf rust \
-    && cargo install --root /usr/local cargo-deb cargo-deny
+    && cargo install --root /usr/local --version "=1.28.0" cargo-deb \
+    && cargo install --root /usr/local --version "=0.7.3" cargo-deny
 
 # Step 2d. Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become
 # unnecessary when we upgrade to Python 3.7+.
