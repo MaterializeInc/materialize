@@ -186,5 +186,12 @@ ENV RUSTDOCFLAGS="-C linker=x86_64-unknown-linux-gnu-cc"
 
 ENV MZ_DEV_CI_BUILDER=1
 
-# Step 2j. Make the image as small as possible.
+# Step 2j. Set up for a persistent volume to hold Cargo metadata, so that
+# crate metadata does not need to be refetched on every compile.
+
+ENV CARGO_HOME=/cargo
+RUN mkdir /cargo && chmod 777 /cargo
+VOLUME /cargo
+
+# Step 2k. Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
