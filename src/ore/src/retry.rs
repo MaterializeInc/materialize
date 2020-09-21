@@ -25,37 +25,101 @@ pub struct RetryState {
     /// before the next attempt. If this is the last attempt, then this
     /// field will be `None`.
     pub next_backoff: Option<Duration>,
+    /// If the operation is still failing after a cumulative delay of `max_sleep`,
+    /// its last error is returned. Set to `None` to retry forever.
+    pub max_sleep: Option<Duration>,
+}
+
+impl RetryState {
+    /// Retries a fallible operation `f` with exponential backoff.
+    ///
+    /// If the operation is still failing after a cumulative delay of `max_sleep`,
+    /// its last error is returned.
+    pub async fn retry<F, U, T, E>(mut self, mut f: F) -> Result<T, E>
+    where
+        F: FnMut(RetryState) -> U,
+        U: Future<Output = Result<T, E>>,
+    {
+        let mut total_backoff = ZERO_DURATION;
+        loop {
+            match f(self.clone()).await {
+                Ok(t) => return Ok(t),
+                Err(e) => match self.next_backoff {
+                    None => return Err(e),
+                    Some(mut backoff) => {
+                        total_backoff += backoff;
+                        time::delay_for(backoff).await;
+                        self.i += 1;
+                        backoff *= 2;
+                        self.next_backoff = match self.max_sleep {
+                            None => Some(backoff),
+                            Some(max_sleep) => match cmp::min(backoff, max_sleep - total_backoff) {
+                                ZERO_DURATION => None,
+                                b => Some(b),
+                            },
+                        };
+                    }
+                },
+            }
+        }
+    }
 }
 
 /// Retries a fallible operation `f` with exponential backoff.
 ///
 /// If the operation is still failing after a cumulative delay of `max_sleep`,
 /// its last error is returned.
-pub async fn retry_for<F, U, T, E>(max_sleep: Duration, mut f: F) -> Result<T, E>
+pub async fn retry_for<F, U, T, E>(max_sleep: Duration, f: F) -> Result<T, E>
 where
     F: FnMut(RetryState) -> U,
     U: Future<Output = Result<T, E>>,
 {
-    let mut state = RetryState {
-        i: 0,
-        next_backoff: Some(Duration::from_millis(125)),
-    };
-    let mut total_backoff = ZERO_DURATION;
-    loop {
-        match f(state.clone()).await {
-            Ok(t) => return Ok(t),
-            Err(e) => match state.next_backoff {
-                None => return Err(e),
-                Some(backoff) => {
-                    total_backoff += backoff;
-                    time::delay_for(backoff).await;
-                    state.i += 1;
-                    state.next_backoff = match cmp::min(backoff * 2, max_sleep - total_backoff) {
-                        ZERO_DURATION => None,
-                        b => Some(b),
-                    }
-                }
-            },
+    RetryBuilder::new()
+        .max_sleep(Some(max_sleep))
+        .build()
+        .retry(f)
+        .await
+}
+
+/// A builder for a RetryState.
+#[derive(Debug)]
+pub struct RetryBuilder {
+    initial_backoff: Duration,
+    max_sleep: Option<Duration>,
+}
+
+impl RetryBuilder {
+    /// Creates the default RetryBuilder.
+    pub fn new() -> Self {
+        RetryBuilder {
+            initial_backoff: Duration::from_millis(125),
+            max_sleep: None,
         }
+    }
+    /// Constructs the RetryState.
+    pub fn build(self) -> RetryState {
+        RetryState {
+            i: 0,
+            next_backoff: Some(self.initial_backoff),
+            max_sleep: self.max_sleep,
+        }
+    }
+    /// If the operation is still failing after a cumulative delay of `max`, its
+    /// last error is returned. Set to `None` to retry forever.
+    pub fn max_sleep(mut self, max: Option<Duration>) -> Self {
+        self.max_sleep = max;
+        self
+    }
+    /// If a try fails, the amount of time that `retry_for` will sleep
+    /// before the next attempt.
+    pub fn initial_backoff(mut self, duration: Duration) -> Self {
+        self.initial_backoff = duration;
+        self
+    }
+}
+
+impl Default for RetryBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }

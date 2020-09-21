@@ -14,6 +14,7 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::any::Any;
+use std::env;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -35,6 +36,7 @@ use crate::mux::Mux;
 
 mod http;
 mod mux;
+mod version_check;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -128,6 +130,8 @@ pub struct Config {
     pub symbiosis_url: Option<String>,
     /// Whether to permit usage of experimental features.
     pub experimental_mode: bool,
+    /// An optional telemetry endpoint. Use None to disable telemetry.
+    pub telemetry_url: Option<String>,
 }
 
 impl Config {
@@ -261,24 +265,31 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     // dataflow workers, as booting the coordinator can involve sending enough
     // data to workers to fill up a `comm` channel buffer (#3280).
     let coord_thread = if is_primary {
-        Some(
-            coord::serve(coord::Config {
-                switchboard,
-                cmd_rx,
-                num_timely_workers,
-                symbiosis_url: config.symbiosis_url.as_deref(),
-                logging_granularity: config.logging_granularity,
-                data_directory: config.data_directory.as_deref(),
-                timestamp: coord::TimestampConfig {
-                    frequency: config.timestamp_frequency,
-                },
-                persistence: config.persistence,
-                logical_compaction_window: config.logical_compaction_window,
-                experimental_mode: config.experimental_mode,
-            })
-            .await?
-            .join_on_drop(),
-        )
+        let (handle, cluster_id) = coord::serve(coord::Config {
+            switchboard,
+            cmd_rx,
+            num_timely_workers,
+            symbiosis_url: config.symbiosis_url.as_deref(),
+            logging_granularity: config.logging_granularity,
+            data_directory: config.data_directory.as_deref(),
+            timestamp: coord::TimestampConfig {
+                frequency: config.timestamp_frequency,
+            },
+            persistence: config.persistence,
+            logical_compaction_window: config.logical_compaction_window,
+            experimental_mode: config.experimental_mode,
+        })
+        .await?;
+
+        // Start a task that checks for the latest version and prints a warning if it
+        // finds a different version than currently running.
+        if let Some(telemetry_url) = config.telemetry_url {
+            tokio::spawn(version_check::check_version_loop(
+                telemetry_url,
+                cluster_id.to_string(),
+            ));
+        }
+        Some(handle.join_on_drop())
     } else {
         None
     };

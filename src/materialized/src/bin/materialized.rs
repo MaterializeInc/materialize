@@ -154,6 +154,9 @@ fn run() -> Result<(), anyhow::Error> {
         "enable experimental features (DANGEROUS)",
     );
 
+    // Telemetry options.
+    opts.optflag("", "disable-telemetry", "disables telemetry reporting");
+
     let popts = opts.parse(&args[1..])?;
 
     // Handle options that request informational output.
@@ -284,6 +287,26 @@ fn run() -> Result<(), anyhow::Error> {
         None
     };
 
+    // If --disable-telemetry is present, disable telemetry. Otherwise, if a
+    // MZ_TELEMETRY_URL environment variable is set, use that as the telemetry
+    // URL. Otherwise (the defaults), enable the production server for release mode
+    // and disable telemetry in debug mode. This should allow for good defaults (on
+    // in release, off in debug), but also easy development during testing of this
+    // feature via the environment variable.
+    let telemetry_url = match popts.opt_present("disable-telemetry") {
+        true => None,
+        false => match env::var("MZ_TELEMETRY_URL") {
+            Ok(url) => Some(url),
+            Err(VarError::NotUnicode(_)) => {
+                bail!("non-unicode character found in MZ_TELEMETRY_URL")
+            }
+            Err(VarError::NotPresent) => match cfg!(debug_assertions) {
+                true => None,
+                false => Some("https://telemetry.materialize.com/".to_string()),
+            },
+        },
+    };
+
     // Configure tracing.
     {
         use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -383,6 +406,7 @@ environment:{}",
         data_directory: Some(data_directory),
         symbiosis_url,
         experimental_mode,
+        telemetry_url,
     }))?;
 
     // Block forever.
