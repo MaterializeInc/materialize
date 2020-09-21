@@ -24,5 +24,5 @@ pkgs=(
 )
 
 for pkg in "${pkgs[@]}"; do
-    (cd src/"$pkg" && cargo miri test -- -- miri)
+    (cd src/"$pkg" && cargo miri test miri)
 done
