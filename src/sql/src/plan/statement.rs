@@ -654,7 +654,7 @@ fn handle_show_views(
             "SELECT
                 views,
                 type,
-                CASE WHEN count > 0 then true ELSE false END materialized
+                count > 0 as materialized
              FROM mz_catalog.mz_views as mz_views
              JOIN mz_catalog.mz_schemas ON mz_catalog.mz_views.schema_id = mz_catalog.mz_schemas.schema_id
              JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
