@@ -29,7 +29,7 @@ where
 {
     let name = String::from(name);
     stream.unary(
-        SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
+        SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
         "RegexDecode",
         |_, _| {
             let mut row_packer = repr::RowPacker::new();
