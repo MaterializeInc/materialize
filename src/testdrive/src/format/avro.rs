@@ -138,7 +138,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
             }
             Ok(builder.avro())
         }
-        (val, /*JsonValue::Object(items),*/ SchemaPiece::Union(us)) => {
+        (val, SchemaPiece::Union(us)) => {
             let variants = us.variants();
             let null_variant = variants
                 .iter()
@@ -157,7 +157,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
             }
             let items = match val {
                 JsonValue::Object(items) => items,
-                _ => return Err(format!("Union scheme element must be `null` or a map from type name to value; found {:?}", val))
+                _ => return Err(format!("Union schema element must be `null` or a map from type name to value; found {:?}", val))
             };
             let (name, val) = if items.len() == 1 {
                 (items.keys().next().unwrap(), items.values().next().unwrap())
