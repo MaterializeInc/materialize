@@ -646,7 +646,10 @@ fn handle_show_views(
 
     let query = if !full & !materialized {
         format!(
-            "SELECT views FROM mz_catalog.mz_views WHERE mz_catalog.mz_views.schema_id = {} {}",
+            "SELECT views
+             FROM mz_catalog.mz_views
+             WHERE mz_catalog.mz_views.schema_id = {} {}
+             ORDER BY views ASC",
             schema_spec.id, filter
         )
     } else if full & !materialized {
@@ -662,7 +665,8 @@ fn handle_show_views(
                    LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
                    GROUP BY mz_views.global_id) as mz_indexes_count
                 ON mz_views.global_id = mz_indexes_count.global_id
-             WHERE mz_catalog.mz_views.schema_id = {} {}",
+             WHERE mz_catalog.mz_views.schema_id = {} {}
+             ORDER BY views ASC",
             schema_spec.id, filter
         )
     } else if !full & materialized {
@@ -675,7 +679,8 @@ fn handle_show_views(
                    GROUP BY mz_views.global_id) as mz_indexes_count
                 ON mz_views.global_id = mz_indexes_count.global_id
              WHERE mz_catalog.mz_views.schema_id = {}
-                AND mz_indexes_count.count > 0 {}",
+                AND mz_indexes_count.count > 0 {}
+             ORDER BY views ASC",
             schema_spec.id, filter
         )
     } else {
@@ -689,7 +694,8 @@ fn handle_show_views(
                    GROUP BY mz_views.global_id) as mz_indexes_count
                 ON mz_views.global_id = mz_indexes_count.global_id
              WHERE mz_catalog.mz_views.schema_id = {}
-                AND mz_indexes_count.count > 0 {}",
+                AND mz_indexes_count.count > 0 {}
+             ORDER BY views ASC",
             schema_spec.id, filter
         )
     };

@@ -230,6 +230,7 @@ mz_indexes            SYSTEM
 mz_tables             SYSTEM
 mz_sinks              SYSTEM
 mz_sources            SYSTEM
+mz_views              SYSTEM
 
 ! SHOW EXTENDED TABLES
 SHOW EXTENDED TABLES not yet supported
