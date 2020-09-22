@@ -229,6 +229,7 @@ mz_indexes
 mz_tables
 mz_sources
 mz_sinks
+mz_views
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length
