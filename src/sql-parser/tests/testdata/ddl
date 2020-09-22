@@ -505,42 +505,49 @@ CREATE INDEX foo ON myschema.bar (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: ObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: ObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+
+parse-statement
+CREATE INDEX foo ON myschema.bar (a, b) WITH (baz = 'raz')
+----
+CREATE INDEX foo ON myschema.bar (a, b) WITH (baz = 'raz')
+=>
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: ObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [SqlOption { name: Ident("baz"), value: String("raz") }], if_not_exists: false })
 
 parse-statement
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), on_name: ObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: ObjectName([Ident("ascii")]), args: Args([Identifier([Ident("x")])]), filter: None, over: None, distinct: false }), IsNull { expr: Identifier([Ident("a")]), negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("boop")]), alias: None }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("boop"), Ident("z")]), op: Eq, right: Identifier([Ident("z")]) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })), Identifier([Ident("delta")])]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), on_name: ObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: ObjectName([Ident("ascii")]), args: Args([Identifier([Ident("x")])]), filter: None, over: None, distinct: false }), IsNull { expr: Identifier([Ident("a")]), negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("boop")]), alias: None }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("boop"), Ident("z")]), op: Eq, right: Identifier([Ident("z")]) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))
 ----
 CREATE INDEX ind ON tab ((col + 1))
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), on_name: ObjectName([Ident("tab")]), key_parts: Some([Nested(BinaryOp { left: Identifier([Ident("col")]), op: Plus, right: Value(Number("1")) })]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), on_name: ObjectName([Ident("tab")]), key_parts: Some([Nested(BinaryOp { left: Identifier([Ident("col")]), op: Plus, right: Value(Number("1")) })]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 ----
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), on_name: ObjectName([Ident("no_parentheses")]), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), on_name: ObjectName([Ident("no_parentheses")]), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab
 ----
 CREATE DEFAULT INDEX ON tab
 =>
-CreateIndex(CreateIndexStatement { name: None, on_name: ObjectName([Ident("tab")]), key_parts: None, if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, on_name: ObjectName([Ident("tab")]), key_parts: None, with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DEFAULT INDEX IF NOT EXISTS ON tab
 ----
 CREATE DEFAULT INDEX IF NOT EXISTS ON tab
 =>
-CreateIndex(CreateIndexStatement { name: None, on_name: ObjectName([Ident("tab")]), key_parts: None, if_not_exists: true })
+CreateIndex(CreateIndexStatement { name: None, on_name: ObjectName([Ident("tab")]), key_parts: None, with_options: [], if_not_exists: true })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab (a, b)
@@ -565,7 +572,7 @@ CREATE INDEX ON tab (a, b)
 ----
 CREATE INDEX ON tab (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: None, on_name: ObjectName([Ident("tab")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, on_name: ObjectName([Ident("tab")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX IF NOT EXISTS ON tab (a, b)

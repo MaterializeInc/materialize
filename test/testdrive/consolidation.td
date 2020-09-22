@@ -112,7 +112,7 @@ num name
 ---------
 4 "four"
 
-> ALTER INDEX materialize.public.names_primary_idx SET(logical_compaction_window='1ms')
+> ALTER INDEX materialize.public.names_primary_idx SET (logical_compaction_window = '1ms')
 
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=3
 {"before": {"num": 5, "name": "five"}, "after": {"num": 6, "name": "six"}}
@@ -127,8 +127,14 @@ $ kafka-ingest format=avro topic=data-consistency timestamp=3 schema=${trxschema
 ! SELECT * FROM names AS OF 2;
 Timestamp (2) is not valid for all inputs
 
+> DROP INDEX names_primary_idx
+> CREATE DEFAULT INDEX names_primary_idx ON names WITH (logical_compaction_window = '1ms')
+
+! SELECT * FROM names AS OF 2;
+Timestamp (2) is not valid for all inputs
+
 # Reset the compaction window back to default (currently 60,000)
-> ALTER INDEX materialize.public.names_primary_idx RESET(logical_compaction_window)
+> ALTER INDEX materialize.public.names_primary_idx RESET (logical_compaction_window)
 
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=4
 {"before": {"num": 6, "name": "six"}, "after": {"num": 7, "name": "seven"}}

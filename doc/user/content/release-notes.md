@@ -56,12 +56,16 @@ Wrap your release notes at the 80 character mark.
   can be retrieved using the new [`mz_cluster_id`](/sql/functions#uuid-func) SQL
   function.
 
+- Allow setting [index parameters](/sql/alter-index/#available-parameters) when
+  creating an index via the new `WITH` clause to [`CREATE INDEX`]. In v0.4.3,
+  setting these parameters required a separate call to [`ALTER INDEX`].
+
 <span id="v0.4.3"></span>
 ## v0.4.3
 
 * Permit adjusting the logical compaction window on a per-index basis via the
   [`logical_compaction_window`](/sql/alter-index/#available-parameters)
-  parameter to the new [`ALTER INDEX`](/sql/alter-index) statement.
+  parameter to the new [`ALTER INDEX`] statement.
 
 * Add the [`uuid`](/sql/types/uuid) type to efficiently represent
   universally-unique identifiers (UUIDs).
@@ -585,6 +589,8 @@ Wrap your release notes at the 80 character mark.
 * [What is Materialize?](/overview/what-is-materialize/)
 * [Architecture overview](/overview/architecture/)
 
+[`ALTER INDEX`]: /sql/alter-index
+[`CREATE INDEX`]: /sql/create-index
 [`CREATE MATERIALIZED VIEW`]: /sql/create-materialized-view
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE VIEW`]: /sql/create-view

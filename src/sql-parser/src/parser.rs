@@ -1670,10 +1670,13 @@ impl Parser {
             }
         };
 
+        let with_options = self.parse_with_options()?;
+
         Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
             on_name,
             key_parts,
+            with_options,
             if_not_exists,
         }))
     }

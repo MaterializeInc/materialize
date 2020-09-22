@@ -465,6 +465,7 @@ pub struct CreateIndexStatement {
     /// Expressions that form part of the index key. If not included, the
     /// key_parts will be inferred from the named object.
     pub key_parts: Option<Vec<Expr>>,
+    pub with_options: Vec<SqlOption>,
     pub if_not_exists: bool,
 }
 
@@ -487,6 +488,11 @@ impl AstDisplay for CreateIndexStatement {
         if let Some(key_parts) = &self.key_parts {
             f.write_str(" (");
             f.write_node(&display::comma_separated(key_parts));
+            f.write_str(")");
+        }
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
     }
