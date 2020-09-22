@@ -32,8 +32,8 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"a": 102}}
-{"before": null, "after": {"a": 201}}
+{"before": null, "after": {"row": {"a": 102}}}
+{"before": null, "after": {"row": {"a": 201}}}
 
 > CREATE SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'

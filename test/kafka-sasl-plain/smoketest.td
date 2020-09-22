@@ -31,7 +31,7 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
-{"before": null, "after": {"a": 1}}
+{"before": null, "after": {"row": {"a": 1}}}
 
 > CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -51,7 +51,7 @@ a
 1
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
-{"before": null, "after": {"a": 2}}
+{"before": null, "after": {"row": {"a": 2}}}
 
 > SELECT * FROM data
 a
