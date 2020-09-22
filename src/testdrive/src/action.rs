@@ -292,7 +292,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         if duration.to_lowercase() == "default" {
                             sql_timeout = DEFAULT_SQL_TIMEOUT;
                         } else {
-                            sql_timeout = parse_duration::parse(&duration)
+                            sql_timeout = repr::util::parse_duration(&duration)
                                 .map_err(|e| wrap_err(e.to_string()))?;
                         }
                         continue;

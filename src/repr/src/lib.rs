@@ -28,6 +28,7 @@ mod scalar;
 
 pub mod adt;
 pub mod strconv;
+pub mod util;
 
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{datum_size, DatumDict, DatumList, Row, RowArena, RowPacker};

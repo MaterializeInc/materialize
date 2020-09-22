@@ -231,16 +231,16 @@ fn run() -> Result<(), anyhow::Error> {
     let logging_granularity = match popts.opt_str("logging-granularity").as_deref() {
         None => Some(Duration::from_secs(1)),
         Some("off") => None,
-        Some(d) => Some(parse_duration::parse(&d)?),
+        Some(d) => Some(repr::util::parse_duration(&d)?),
     };
     let logical_compaction_window = match popts.opt_str("logical-compaction-window").as_deref() {
         None => Some(Duration::from_secs(60)),
         Some("off") => None,
-        Some(d) => Some(parse_duration::parse(&d)?),
+        Some(d) => Some(repr::util::parse_duration(&d)?),
     };
     let timestamp_frequency = match popts.opt_str("timestamp-frequency").as_deref() {
         None => Duration::from_millis(10),
-        Some(d) => parse_duration::parse(&d)?,
+        Some(d) => repr::util::parse_duration(&d)?,
     };
     let persistence_max_pending_records =
         popts.opt_get_default("persistence-max-pending-records", 1000000)?;

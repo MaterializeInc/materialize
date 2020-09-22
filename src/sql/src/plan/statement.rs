@@ -480,7 +480,7 @@ fn plan_index_options(options: &[SqlOption]) -> Result<Vec<IndexOption>, anyhow:
         Some(Value::String(window)) => {
             let window = match window.as_str() {
                 "off" => None,
-                s => Some(parse_duration::parse(s)?),
+                s => Some(strconv::parse_interval(s)?.duration()?),
             };
             out.push(IndexOption::LogicalCompactionWindow(window))
         }

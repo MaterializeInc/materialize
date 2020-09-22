@@ -30,11 +30,11 @@ log = "0.4.11"
 openssl = { version = "0.10.30", features = ["vendored"] }
 openssl-sys = { version = "0.9.58", features = ["vendored"] }
 ore = { path = "../ore" }
-parse_duration = "2.1.0"
 postgres-openssl = "0.3.0"
 pgwire = { path = "../pgwire" }
 prof = { path = "../prof", features = ["auto-jemalloc"] }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
+repr = { path = "../repr" }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 rlimit = "0.4.0"
 stream-cancel = "0.6.1"

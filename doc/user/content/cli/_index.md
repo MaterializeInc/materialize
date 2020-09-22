@@ -107,21 +107,23 @@ the port that Materialize listens on from the default `6875`.
 
 ### Compaction window
 
-The `--logical-compaction-window` option specifies the duration of time for
-which Materialize is required to maintain full historical detail in its
+The `--logical-compaction-window` option specifies the default duration of time
+for which Materialize is required to maintain full historical detail in its
 [arrangements](/overview/api-components#indexes). Note that compaction happens
 lazily, so Materialize may retain more historical detail than requested, but it
 will never retain less.
 
-The value of the option is a duration string like `10ms` (10 milliseconds) or
-`1min 30s` (1 minute, 30 seconds).  The special value `off` indicates disables
-logical compaction.
+The value of the option is any valid SQL [interval](/sql/types/interval) string,
+like `10s` (10 seconds). The special value `off` indicates disables logical
+compaction. The window ends at the current time and extends backwards in time
+for the configured duration. If not explicitly configured, the default window is
+60 seconds.
 
-The logical compaction window ends at the current time and extends backwards in
-time for the configured duration. The default window is 60 seconds.
+Individual indexes can override the default logical compaction window. See the
+[`ALTER INDEX`](/sql/alter-index) statement for details.
 
-See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
-the compaction window.
+For guidance on tuning the compaction window, see the [Deployment
+section](/ops/deployment#compaction).
 
 ### TLS encryption
 
@@ -218,7 +220,6 @@ view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][s
 etc.), and then create a new node with those items.
 
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
-[parse-duration-syntax]: https://docs.rs/parse_duration/2.1.0/parse_duration/#syntax
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source
 
