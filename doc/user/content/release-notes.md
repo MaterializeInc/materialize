@@ -65,6 +65,11 @@ Wrap your release notes at the 80 character mark.
 - Restore the `-D` command-line option as the short form of the
   [`--data-directory`](/cli/#data-directory) option.
 
+- Allow setting [index parameters](/sql/alter-index/#available-parameters) when
+  creating an index via the new `WITH` clause to [`CREATE INDEX`]. In older
+  versions, setting these parameters required a separate call to [`ALTER
+  INDEX`](/sql/alter-index).
+
 {{% version-header v0.7.0 %}}
 
 - **Known issue.** The `-D` command-line option, shorthand for the
@@ -989,6 +994,8 @@ Document new timezone stuff and add a release note about it.
 * [Architecture overview](/overview/architecture/)
 
 [`bytea`]: /sql/types/bytea
+[`ALTER INDEX`]: /sql/alter-index
+[`CREATE INDEX`]: /sql/create-index
 [`CREATE MATERIALIZED VIEW`]: /sql/create-materialized-view
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE VIEW`]: /sql/create-view

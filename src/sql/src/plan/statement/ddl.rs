@@ -13,6 +13,7 @@
 //! `ALTER`, `CREATE`, and `DROP`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::convert::TryFrom;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -45,7 +46,7 @@ use crate::ast::{
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
     CreateViewStatement, DataType, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr,
     Format, Ident, IfExistsBehavior, ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName,
-    Value,
+    Value, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -54,8 +55,8 @@ use crate::normalize;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    self, plan_utils, query, AlterIndexLogicalCompactionWindow, Index, LogicalCompactionWindow,
-    Params, Plan, Sink, Source, Table, Type, TypeInner, View,
+    self, plan_utils, query, Index, IndexOption, IndexOptionName, Params, Plan, Sink, Source,
+    Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -1030,6 +1031,7 @@ pub fn plan_create_index(
         name,
         on_name,
         key_parts,
+        with_options,
         if_not_exists,
     } = &mut stmt;
     let on = scx.resolve_item(on_name.clone())?;
@@ -1114,6 +1116,8 @@ pub fn plan_create_index(
         index_name
     };
 
+    let options = plan_index_options(with_options.clone())?;
+
     // Normalize `stmt`.
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
@@ -1127,6 +1131,7 @@ pub fn plan_create_index(
             on: on.id(),
             keys,
         },
+        options,
         if_not_exists,
     })
 }
@@ -1494,11 +1499,33 @@ pub fn plan_drop_item(
     Ok(Some(catalog_entry.id()))
 }
 
+with_options! {
+    struct IndexWithOptions {
+        logical_compaction_window: String,
+    }
+}
+
 pub fn describe_alter_index_options(
     _: &StatementContext,
     _: AlterIndexOptionsStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
+}
+
+fn plan_index_options(with_opts: Vec<WithOption>) -> Result<Vec<IndexOption>, anyhow::Error> {
+    let with_opts = IndexWithOptions::try_from(with_opts)?;
+    let mut out = vec![];
+
+    match with_opts.logical_compaction_window.as_deref() {
+        None => (),
+        Some("off") => out.push(IndexOption::LogicalCompactionWindow(None)),
+        Some(s) => {
+            let window = Some(parse_duration::parse(s)?);
+            out.push(IndexOption::LogicalCompactionWindow(window))
+        }
+    };
+
+    Ok(out)
 }
 
 pub fn plan_alter_index_options(
@@ -1509,64 +1536,40 @@ pub fn plan_alter_index_options(
         options,
     }: AlterIndexOptionsStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let alter_index = match scx.resolve_item(index_name) {
-        Ok(entry) => {
-            if entry.item_type() != CatalogItemType::Index {
-                bail!("{} is a {} not a index", entry.name(), entry.item_type())
-            }
-
-            let logical_compaction_window = match options {
-                AlterIndexOptionsList::Reset(o) => {
-                    let mut options: HashSet<_> =
-                        o.iter().map(|x| normalize::ident(x.clone())).collect();
-                    // Follow Postgres and don't complain if unknown parameters
-                    // are passed into ALTER INDEX ... RESET
-                    if options.remove("logical_compaction_window") {
-                        Some(LogicalCompactionWindow::Default)
-                    } else {
-                        None
-                    }
-                }
-                AlterIndexOptionsList::Set(o) => {
-                    let mut options = normalize::options(&o);
-
-                    let logical_compaction_window = match options
-                        .remove("logical_compaction_window")
-                    {
-                        Some(Value::String(window)) => match window.as_str() {
-                            "off" => Some(LogicalCompactionWindow::Off),
-                            s => Some(LogicalCompactionWindow::Custom(parse_duration::parse(s)?)),
-                        },
-                        Some(_) => bail!("\"logical_compaction_window\" must be a string"),
-                        None => None,
-                    };
-
-                    if !options.is_empty() {
-                        bail!("unrecognized parameter: {}. Only \"logical_compaction_window\" is currently supported.",
-                              options.keys().next().expect("known to exist").quoted())
-                    }
-
-                    logical_compaction_window
-                }
-            };
-
-            if let Some(logical_compaction_window) = logical_compaction_window {
-                Some(AlterIndexLogicalCompactionWindow {
-                    index: entry.id(),
-                    logical_compaction_window,
-                })
-            } else {
-                None
-            }
-        }
+    let entry = match scx.resolve_item(index_name) {
+        Ok(index) => index,
         Err(_) if if_exists => {
-            // TODO(rkhaitan): better message indicating that the index does not exist.
-            None
+            // TODO(benesch): generate a notice indicating this index does not
+            // exist.
+            return Ok(Plan::AlterNoop {
+                object_type: ObjectType::Index,
+            });
         }
         Err(e) => return Err(e.into()),
     };
+    if entry.item_type() != CatalogItemType::Index {
+        bail!("{} is a {} not a index", entry.name(), entry.item_type())
+    }
+    let id = entry.id();
 
-    Ok(Plan::AlterIndexLogicalCompactionWindow(alter_index))
+    match options {
+        AlterIndexOptionsList::Reset(options) => {
+            let options = options
+                .into_iter()
+                .filter_map(|o| match normalize::ident(o).as_str() {
+                    "logical_compaction_window" => Some(IndexOptionName::LogicalCompactionWindow),
+                    // Follow Postgres and don't complain if unknown parameters
+                    // are passed into `ALTER INDEX ... RESET`.
+                    _ => None,
+                })
+                .collect();
+            Ok(Plan::AlterIndexResetOptions { id, options })
+        }
+        AlterIndexOptionsList::Set(options) => {
+            let options = plan_index_options(options)?;
+            Ok(Plan::AlterIndexSetOptions { id, options })
+        }
+    }
 }
 
 pub fn describe_alter_object_rename(
@@ -1599,12 +1602,12 @@ pub fn plan_alter_object_rename(
             {
                 bail!("{} is already taken by item in schema", to_item_name)
             }
-            Some(entry.id())
+            entry.id()
         }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating this
             // item does not exist.
-            None
+            return Ok(Plan::AlterNoop { object_type });
         }
         Err(err) => return Err(err.into()),
     };

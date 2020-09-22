@@ -1767,10 +1767,13 @@ impl<'a> Parser<'a> {
             }
         };
 
+        let with_options = self.parse_opt_with_options()?;
+
         Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
             on_name,
             key_parts,
+            with_options,
             if_not_exists,
         }))
     }
@@ -2171,9 +2174,7 @@ impl<'a> Parser<'a> {
                     Some(AlterIndexOptionsList::Reset(reset_options))
                 }
                 Some(SET) => {
-                    self.expect_token(&Token::LParen)?;
-                    let set_options = self.parse_comma_separated(Parser::parse_sql_option)?;
-                    self.expect_token(&Token::RParen)?;
+                    let set_options = self.parse_with_options(true)?;
 
                     Some(AlterIndexOptionsList::Set(set_options))
                 }

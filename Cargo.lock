@@ -3811,6 +3811,7 @@ dependencies = [
  "chrono",
  "datadriven",
  "dataflow-types",
+ "enum-kinds",
  "expr",
  "futures",
  "globset",
