@@ -64,7 +64,7 @@ $ set schema-v2={
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema-v1} publish=true timestamp=1
-{"before": null, "after": {"a": 1}}
+{"before": null, "after": {"row": {"a": 1}}}
 
 > CREATE MATERIALIZED SOURCE data_v1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -77,7 +77,7 @@ a
 1
 
 $ kafka-ingest format=avro topic=data schema=${schema-v2} publish=true timestamp=3
-{"before": null, "after": {"a": 2, "b": -1}}
+{"before": null, "after": {"row": {"a": 2, "b": -1}}}
 
 > CREATE MATERIALIZED SOURCE data_v2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -106,7 +106,7 @@ $ set valid-key-schema={
 
 $ kafka-ingest topic=data publish=true timestamp=5
   format=avro schema=${schema-v1} key-format=avro key-schema=${valid-key-schema}
-{"a": 1} {"before": null, "after": {"a": 1}}
+{"a": 1} {"before": null, "after": {"row": {"a": 1}}}
 
 > CREATE MATERIALIZED SOURCE data_v3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'

@@ -342,7 +342,6 @@ impl Schema {
 }
 
 /// This type is used to simplify enum variant comparison between `Schema` and `types::Value`.
-/// It may have utility as part of the public API, but defining as `pub(crate)` for now.
 ///
 /// **NOTE** This type was introduced due to a limitation of `mem::discriminant` requiring a _value_
 /// be constructed in order to get the discriminant, which makes it difficult to implement a
@@ -350,7 +349,7 @@ impl Schema {
 /// intermediate type should be especially fast, as the number of enum variants is small, which
 /// _should_ compile into a jump-table for the conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum SchemaKind {
+pub enum SchemaKind {
     // Fixed-length types
     Null,
     Boolean,
@@ -370,6 +369,28 @@ pub(crate) enum SchemaKind {
     // This can arise in resolved schemas, particularly when a union resolves to a non-union.
     // We would need to do a lookup to find the actual type.
     Unknown,
+}
+
+impl SchemaKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            SchemaKind::Null => "null",
+            SchemaKind::Boolean => "boolean",
+            SchemaKind::Int => "int",
+            SchemaKind::Long => "long",
+            SchemaKind::Float => "float",
+            SchemaKind::Double => "double",
+            SchemaKind::Bytes => "bytes",
+            SchemaKind::String => "string",
+            SchemaKind::Array => "array",
+            SchemaKind::Map => "map",
+            SchemaKind::Union => "union",
+            SchemaKind::Record => "record",
+            SchemaKind::Enum => "enum",
+            SchemaKind::Fixed => "fixed",
+            SchemaKind::Unknown => "unknown",
+        }
+    }
 }
 
 impl<'a> From<&'a SchemaPiece> for SchemaKind {
@@ -474,6 +495,9 @@ impl FullName {
                 namespace: namespace.into(),
             }
         }
+    }
+    pub fn base_name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -1271,7 +1295,7 @@ impl Schema {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct NamedSchemaPiece {
-    pub(crate) name: FullName,
+    pub name: FullName,
     pub piece: SchemaPiece,
 }
 

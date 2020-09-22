@@ -31,7 +31,7 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"a": 1}}
+{"before": null, "after": {"row": {"a": 1}}}
 
 > CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -42,8 +42,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 1
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": {"a": 1}, "after": null}
-{"before": {"a": 1}, "after": null}
+{"before": {"row": {"a": 1}}, "after": null}
+{"before": {"row": {"a": 1}}, "after": null}
 
 > SELECT count(*) FROM data
 -1
@@ -52,7 +52,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 Negative multiplicity: -1
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": {"a": 1}, "after": null}
+{"before": {"row": {"a": 1}}, "after": null}
 
 > SELECT count(*) FROM data
 -2

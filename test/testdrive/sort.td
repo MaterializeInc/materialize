@@ -37,15 +37,15 @@ $ kafka-create-topic topic=foobar
   ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=42
-{"before": null, "after": {"quote": "I have a theory that it's impossible to prove anything, but I can't prove it.", "val": 2079}}
-{"before": null, "after": {"quote": "It was a virgin forest, a place where the Hand of Man had never set foot.", "val": 12345}}
-{"before": null, "after": {"quote": "If it pours before seven, it has rained by eleven.", "val": 12345}}
-{"before": null, "after": {"quote": "All power corrupts, but we need electricity.", "val": 12345}}
-{"before": null, "after": {"quote": "I want to read my new poem about pork brains and outer space ...", "val": 6745}}
-{"before": null, "after": {"quote": "You are magnetic in your bearing.", "val": 24223}}
-{"before": null, "after": {"quote": "Yes, but every time I try to see things your way, I get a headache.", "val": 21243}}
-{"before": null, "after": {"quote": "Ring around the collar.", "val": 1735}}
-{"before": null, "after": {"quote": "New York is real.  The rest is done with mirrors.", "val": 25040}}
+{"before": null, "after": {"row":{"quote": "I have a theory that it's impossible to prove anything, but I can't prove it.", "val": 2079}}}
+{"before": null, "after": {"row":{"quote": "It was a virgin forest, a place where the Hand of Man had never set foot.", "val": 12345}}}
+{"before": null, "after": {"row":{"quote": "If it pours before seven, it has rained by eleven.", "val": 12345}}}
+{"before": null, "after": {"row":{"quote": "All power corrupts, but we need electricity.", "val": 12345}}}
+{"before": null, "after": {"row":{"quote": "I want to read my new poem about pork brains and outer space ...", "val": 6745}}}
+{"before": null, "after": {"row":{"quote": "You are magnetic in your bearing.", "val": 24223}}}
+{"before": null, "after": {"row":{"quote": "Yes, but every time I try to see things your way, I get a headache.", "val": 21243}}}
+{"before": null, "after": {"row":{"quote": "Ring around the collar.", "val": 1735}}}
+{"before": null, "after": {"row":{"quote": "New York is real.  The rest is done with mirrors.", "val": 25040}}}
 
 $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=43
 {"before": null, "after": null}

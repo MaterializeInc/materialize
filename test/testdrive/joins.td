@@ -32,9 +32,9 @@ $ set names-schema={
 $ kafka-create-topic topic=names
 
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=1
-{"before": null, "after": {"num": 1, "name": "one"}}
-{"before": null, "after": {"num": 2, "name": "two"}}
-{"before": null, "after": {"num": 3, "name": "three"}}
+{"before": null, "after": {"row":{"num": 1, "name": "one"}}}
+{"before": null, "after": {"row":{"num": 2, "name": "two"}}}
+{"before": null, "after": {"row":{"num": 3, "name": "three"}}}
 
 $ set mods-schema={
     "type": "record",
@@ -61,9 +61,9 @@ $ set mods-schema={
 $ kafka-create-topic topic=mods
 
 $ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=1
-{"before": null, "after": {"num": 0, "mod": "even"}}
-{"before": null, "after": {"num": 1, "mod": "odd"}}
-{"before": null, "after": {"num": 2, "mod": "even"}}
+{"before": null, "after": {"row":{"num": 0, "mod": "even"}}}
+{"before": null, "after": {"row":{"num": 1, "mod": "odd"}}}
+{"before": null, "after": {"row":{"num": 2, "mod": "even"}}}
 
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=2
 {"before": null, "after": null}

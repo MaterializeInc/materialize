@@ -33,8 +33,8 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"id": "valid1", "a": 2, "b": 1}}
-{"before": null, "after": {"id": "valid2", "a": 17, "b": 5}}
+{"before": null, "after": {"row":{"id": "valid1", "a": 2, "b": 1}}}
+{"before": null, "after": {"row":{"id": "valid2", "a": 17, "b": 5}}}
 
 > CREATE SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -53,7 +53,7 @@ valid1  2   2
 valid2  85  3
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
-{"before": null, "after": {"id": "bad1", "a": 7, "b": 0}}
+{"before": null, "after": {"row": {"id": "bad1", "a": 7, "b": 0}}}
 
 > SELECT * FROM multiply
 valid1  2
@@ -67,7 +67,7 @@ division by zero
 division by zero
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=3
-{"before": {"id": "bad1", "a": 7, "b": 0}, "after": null}
+{"before": {"row": {"id": "bad1", "a": 7, "b": 0}}, "after": null}
 
 > SELECT * FROM both
 valid1  2   2

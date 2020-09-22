@@ -41,8 +41,8 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}
-{"before": null, "after": {"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}}
+{"before": null, "after": {"row":{"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}}
+{"before": null, "after": {"row":{"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}}}
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 {"before": null, "after": null}
@@ -72,5 +72,5 @@ u      NO        uuid
   INTO AVRO OCF '${testdrive.temp-dir}/uuid-sink.ocf'
 
 $ avro-ocf-verify sink=materialize.public.uuid_sink_${testdrive.seed}
-{"before": null, "after": {"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}
-{"before": null, "after": {"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}}
+{"before": null, "after": {"row":{"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}}
+{"before": null, "after": {"row":{"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}}}

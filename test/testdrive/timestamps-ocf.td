@@ -44,8 +44,8 @@ $ set schema={
   }
 
 $ avro-ocf-write path=consistency.ocf schema=${consistency}
-{"source": "dummy", "partition_count": 1, "partition_id": 0, "timestamp": 0, "offset": 0}
-{"source": "${testdrive.temp-dir}/data2.ocf", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 2}
+{"source": "dummy", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 0, "offset": 0}
+{"source": "${testdrive.temp-dir}/data2.ocf", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 1, "offset": 2}
 
 $ avro-ocf-write path=data.ocf schema=${schema}
 {"a": 1, "b": 1}
@@ -71,7 +71,7 @@ a b mz_obj_no
 2  2  2
 
 $ avro-ocf-append path=consistency.ocf
-{"source": "${testdrive.temp-dir}/data.ocf", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 2}
+{"source": "${testdrive.temp-dir}/data.ocf", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 1, "offset": 2}
 
 > SELECT * FROM data_byo;
 a b  mz_obj_no
@@ -80,8 +80,8 @@ a b  mz_obj_no
 2  2  2
 
 $ avro-ocf-append path=consistency.ocf
-{"source": "${testdrive.temp-dir}/data.ocf", "partition_count": 1, "partition_id": 0, "timestamp": 2, "offset": 4}
-{"source": "${testdrive.temp-dir}/data2.ocf", "partition_count": 1, "partition_id": 0, "timestamp": 2, "offset": 4}
+{"source": "${testdrive.temp-dir}/data.ocf", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 2, "offset": 4}
+{"source": "${testdrive.temp-dir}/data2.ocf", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 2, "offset": 4}
 
 $ avro-ocf-append path=data2.ocf
 {"a": 3, "b": 3}

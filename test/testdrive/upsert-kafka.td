@@ -56,15 +56,15 @@ $ kafka-create-topic topic=avroavro
 $ kafka-create-topic topic=data-consistency
 
 $ kafka-ingest format=avro topic=data-consistency schema=${consistency}
-{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 1}
-{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 2, "offset": 2}
-{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 3, "offset": 3}
-{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 4, "offset": 4}
-{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 5, "offset": 5}
-{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 6, "offset": 6}
-{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 7, "offset": 7}
-{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 8, "offset": 8}
-{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 9, "offset": 9}
+{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 1, "offset": 1}
+{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 2, "offset": 2}
+{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 3, "offset": 3}
+{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 4, "offset": 4}
+{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 5, "offset": 5}
+{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 6, "offset": 6}
+{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 7, "offset": 7}
+{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 8, "offset": 8}
+{"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 9, "offset": 9}
 
 $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
 {"key": "fish"} {"f1": "fish", "f2": 1000}
@@ -94,8 +94,8 @@ mammalmore    moose    2
 $ kafka-create-topic topic=textavro
 
 $ kafka-ingest format=avro topic=data-consistency schema=${consistency}
-{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 2}
-{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 2, "offset": 4}
+{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 1, "offset": 2}
+{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 2, "offset": 4}
 
 $ kafka-ingest format=avro topic=textavro key-format=bytes key-terminator=: schema=${schema} publish=true
 fish: {"f1": "fish", "f2": 1000}
@@ -133,10 +133,10 @@ birdmore      geese    2
 mammal1       moose    1
 
 $ kafka-ingest format=avro topic=data-consistency schema=${consistency}
-{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 3, "offset": 5}
-{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 5, "offset": 6}
-{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 8, "offset": 7}
-{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 13, "offset": 8}
+{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 3, "offset": 5}
+{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 5, "offset": 6}
+{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 8, "offset": 7}
+{"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 13, "offset": 8}
 
 > select * from textavro
 key0          f1       f2
@@ -281,14 +281,14 @@ $ set keyschema2={
   }
 
 $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
-{"f3": "fire", "f1": "yang"} {"f1": "dog", "f2": 42}
-{"f3": null, "f1": "yin"} {"f1": "sheep", "f2": 53}
-{"f3": "water", "f1": null} {"f1":"plesiosaur", "f2": 224}
-{"f3": "earth", "f1": "dao"} {"f1": "turtle", "f2": 34}
-{"f3": null, "f1": "yin"} {"f1": "sheep", "f2": 54}
-{"f3": "earth", "f1": "dao"} {"f1": "snake", "f2": 68}
-{"f3": "water", "f1": null} {"f1": "crocodile", "f2": 7}
-{"f3": "earth", "f1":"dao"}
+{"f3": {"string": "fire"}, "f1": {"string": "yang"}} {"f1": "dog", "f2": 42}
+{"f3": null, "f1": {"string": "yin"}} {"f1": "sheep", "f2": 53}
+{"f3": {"string": "water"}, "f1": null} {"f1":"plesiosaur", "f2": 224}
+{"f3": {"string": "earth"}, "f1": {"string": "dao"}} {"f1": "turtle", "f2": 34}
+{"f3": null, "f1": {"string": "yin"}} {"f1": "sheep", "f2": 54}
+{"f3": {"string": "earth"}, "f1": {"string": "dao"}} {"f1": "snake", "f2": 68}
+{"f3": {"string": "water"}, "f1": null} {"f1": "crocodile", "f2": 7}
+{"f3": {"string": "earth"}, "f1":{"string": "dao"}}
 
 > CREATE SOURCE realtimeavroavro (f3, f4, f1, f2)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
@@ -321,14 +321,14 @@ water     <null>    crocodile    7
 
 # ensure that having deletion on a key that never existed does not break anything
 $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
-{"f3": "fire", "f1": "yin"}
-{"f3": "air", "f1":"qi"} {"f1": "pigeon", "f2": 10}
-{"f3": "air", "f1":"qi"} {"f1": "owl", "f2": 15}
-{"f3": "earth", "f1": "dao"} {"f1": "rhinoceros", "f2": 211}
-{"f3": "air", "f1":"qi"} {"f1": "chicken", "f2": 47}
-{"f3": null, "f1":"yin"}
-{"f3": null, "f1":"yin"} {"f1":"dog", "f2": 243}
-{"f3": "water", "f1": null}
+{"f3": {"string": "fire"}, "f1": {"string": "yin"}}
+{"f3": {"string": "air"}, "f1":{"string": "qi"}} {"f1": "pigeon", "f2": 10}
+{"f3": {"string": "air"}, "f1":{"string": "qi"}} {"f1": "owl", "f2": 15}
+{"f3": {"string": "earth"}, "f1": {"string": "dao"}} {"f1": "rhinoceros", "f2": 211}
+{"f3": {"string": "air"}, "f1":{"string": "qi"}} {"f1": "chicken", "f2": 47}
+{"f3": null, "f1":{"string": "yin"}}
+{"f3": null, "f1":{"string": "yin"}} {"f1":"dog", "f2": 243}
+{"f3": {"string": "water"}, "f1": null}
 
 > select * from realtimeavroavro_view
 f3         f4          f1             f2
@@ -359,14 +359,14 @@ $ set schema2={
   }
 
 $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
-{"k1": null, "k2": 2} {"f1": "date", "f2": 5}
-{"k1": "épicerie", "k2": 10} {"f1": "melon", "f2": 2}
-{"k1": "boucherie", "k2": 5} {"f1": "apple", "f2": 7}
-{"k1": "boulangerie", "k2": null} {"f1":"date", "f2": 10}
-{"k1": "épicerie", "k2": 10} {"f1": "pear", "f2": 2}
-{"k1": null, "k2": 2} {"f1": "date", "f2": null}
-{"k1": "boulangerie", "k2": null} {"f1":null, "f2": 10}
-{"k1": "boucherie", "k2": 5} {"f1": "apple", "f2": 3}
+{"k1": null, "k2": {"long": 2}} {"f1": {"string": "date"}, "f2": {"long": 5}}
+{"k1": {"string": "épicerie"}, "k2": {"long": 10}} {"f1": {"string": "melon"}, "f2": {"long": 2}}
+{"k1": {"string": "boucherie"}, "k2": {"long": 5}} {"f1": {"string": "apple"}, "f2": {"long": 7}}
+{"k1": {"string": "boulangerie"}, "k2": null} {"f1":{"string": "date"}, "f2": {"long": 10}}
+{"k1": {"string": "épicerie"}, "k2": {"long": 10}} {"f1": {"string": "pear"}, "f2": {"long": 2}}
+{"k1": null, "k2": {"long": 2}} {"f1": {"string": "date"}, "f2": null}
+{"k1": {"string": "boulangerie"}, "k2": null} {"f1":null, "f2": {"long": 10}}
+{"k1": {"string": "boucherie"}, "k2": {"long": 5}} {"f1": {"string": "apple"}, "f2": {"long": 3}}
 
 > CREATE SOURCE realtimefilteravro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
@@ -413,10 +413,10 @@ k1       k2
 # add records that match the filter
 # make sure that rows that differ on unneeded key columns are treated as separate
 $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
-{"k1": "librairie", "k2": 10} {"f1":null, "f2": 2}
-{"k1": null, "k2": null} {"f1": "date", "f2": 5}
-{"k1": "épicerie", "k2": 6} {"f1": "pear", "f2": null}
-{"k1": "bureau", "k2": 6} {"f1": "grape", "f2": 7}
+{"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":null, "f2": {"long": 2}}
+{"k1": null, "k2": null} {"f1": {"string": "date"}, "f2": {"long": 5}}
+{"k1": {"string": "épicerie"}, "k2": {"long": 6}} {"f1": {"string": "pear"}, "f2": null}
+{"k1": {"string": "bureau"}, "k2": {"long": 6}} {"f1": {"string": "grape"}, "f2": {"long": 7}}
 
 > SELECT * from filterforkey
 f1
@@ -444,8 +444,8 @@ librairie 10
 
 # update records so that they don't match the filter
 $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
-{"k1": "librairie", "k2": 10} {"f1":null, "f2": 6}
-{"k1": null, "k2": null} {"f1": "grape", "f2": 5}
+{"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":null, "f2": {"long": 6}}
+{"k1": null, "k2": null} {"f1": {"string": "grape"}, "f2": {"long": 5}}
 
 > SELECT * from filterforvalue
 f2
@@ -464,8 +464,8 @@ k1        k2
 
 # update records so that they do match the filter
 $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
-{"k1": "librairie", "k2": 10} {"f1":"melon", "f2": 2}
-{"k1": null, "k2": null} {"f1": "date", "f2": 12}
+{"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":{"string": "melon"}, "f2": {"long": 2}}
+{"k1": null, "k2": null} {"f1": {"string": "date"}, "f2": {"long": 12}}
 
 > SELECT * from filterforvalue
 f2
@@ -487,10 +487,10 @@ librairie 10
 
 # delete records
 $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
-{"k1": "boucherie", "k2": 5}
-{"k1": "épicerie", "k2": 10}
-{"k1": "boulangerie", "k2": null}
-{"k1": null, "k2": 2}
+{"k1": {"string": "boucherie"}, "k2": {"long": 5}}
+{"k1": {"string": "épicerie"}, "k2": {"long": 10}}
+{"k1": {"string": "boulangerie"}, "k2": null}
+{"k1": null, "k2": {"long": 2}}
 
 > SELECT * from filterforkey
 f1

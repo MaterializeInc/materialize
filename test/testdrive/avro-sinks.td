@@ -18,7 +18,7 @@
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
-{"before": null, "after": {"column1": 1, "b": 2, "column3": 3}}
+{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}}
 
 # Test that invented field names do not clash with named columns.
 
@@ -29,7 +29,7 @@ $ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
-{"before": null, "after": {"column1": 1, "column1_1": 2, "b": 3, "b1": 4, "b2": 5}}
+{"before": null, "after": {"row": {"column1": 1, "column1_1": 2, "b": 3, "b1": 4, "b2": 5}}}
 
 # Test a basic sink with multiple rows.
 
@@ -40,10 +40,10 @@ $ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.data_sink
-{"before": null, "after": {"a": 1, "b": 1}}
-{"before": null, "after": {"a": 1, "b": 2}}
-{"before": null, "after": {"a": 2, "b": 1}}
-{"before": null, "after": {"a": 3, "b": 1}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}}
+{"before": null, "after": {"row": {"a": 2, "b": 1}}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}}
 
 # Test date/time types.
 
@@ -56,8 +56,8 @@ $ kafka-verify format=avro sink=materialize.public.data_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.datetime_data_sink
-{"before": null, "after": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}
-{"before": null, "after": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}
+{"before": null, "after": {"row": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}
+{"before": null, "after": {"row": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
 
 > CREATE VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04')
 
@@ -66,8 +66,8 @@ $ kafka-verify format=avro sink=materialize.public.datetime_data_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.time_data_sink
-{"before": null, "after": {"time": 3723000000}}
-{"before": null, "after": {"time": 3724000000}}
+{"before": null, "after": {"row": {"time": 3723000000}}}
+{"before": null, "after": {"row": {"time": 3724000000}}}
 
 $ set schema={
     "type": "record",
@@ -130,18 +130,18 @@ $ kafka-create-topic topic=consistency
 $ kafka-create-topic topic=input
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
-{"before": null, "after": {"a": 1, "b": 1}}
-{"before": null, "after": {"a": 2, "b": 2}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
-{"before": null, "after": {"a": 3, "b": 1}}
-{"before": null, "after": {"a": 4, "b": 2}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}}
+{"before": null, "after": {"row": {"a": 4, "b": 2}}}
 
 $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
-{"status":"END","id":"1","event_count":2,"data_collections":[{"event_count": 2, "data_collection": "testdrive-input-${testdrive.seed}"}]}
+{"status":"END","id":"1","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-input-${testdrive.seed}"}]}}
 {"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
-{"status":"END","id":"2","event_count":2,"data_collections":[{"event_count": 2, "data_collection": "testdrive-input-${testdrive.seed}"}]}
+{"status":"END","id":"2","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-input-${testdrive.seed}"}]}}
 
 > CREATE MATERIALIZED SOURCE input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
@@ -163,13 +163,13 @@ a  b
   AS OF 1;
 
 $ kafka-verify format=avro sink=materialize.public.input_sink
-{"before": null, "after": {"a": 1, "b": 1}, "transaction": {"id": "1"}}
-{"before": null, "after": {"a": 2, "b": 2}, "transaction": {"id": "1"}}
-{"before": null, "after": {"a": 3, "b": 1}, "transaction": {"id": "2"}}
-{"before": null, "after": {"a": 4, "b": 2}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
 
 $ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezium
 {"id": "1", "status": "BEGIN", "event_count": null}
 {"id": "2", "status": "BEGIN", "event_count": null}
-{"id": "1", "status": "END", "event_count": 2}
-{"id": "2", "status": "END", "event_count": 2}
+{"id": "1", "status": "END", "event_count": {"long": 2}}
+{"id": "2", "status": "END", "event_count": {"long": 2}}

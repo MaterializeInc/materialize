@@ -102,9 +102,9 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"a": 1, "b": 1, "json": "null", "c": "True", "d": "False", "e": {"n1_a": 42, "n1_b": 86.5}, "f": null}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": false}}
-{"before": null, "after": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}", "c": "False", "d": "FileNotFound", "e": {"n1_a": 43, "n1_b":{"n2_a": 44, "n2_b": -1}}, "f": {"n2_a": 45, "n2_b": -2}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": false}}
-{"before": null, "after": {"a": -1, "b": 7, "json": "[1, 2, 3]", "c": "FileNotFound", "d": "True", "e": null, "f": null}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": false}}
+{"before": null, "after": {"row": {"a": 1, "b": 1, "json": "null", "c": "True", "d": "False", "e": {"nested_data_1": {"n1_a": 42, "n1_b": {"double": 86.5}}}, "f": null}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": {"boolean": false}}}
+{"before": null, "after": {"row": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}", "c": "False", "d": "FileNotFound", "e": {"nested_data_1": {"n1_a": 43, "n1_b":{"nested_data_2": {"n2_a": 44, "n2_b": -1}}}}, "f": {"nested_data_2": {"n2_a": 45, "n2_b": -2}}}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"boolean": false}}}
+{"before": null, "after": {"row": {"a": -1, "b": 7, "json": "[1, 2, 3]", "c": "FileNotFound", "d": "True", "e": null, "f": null}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
 # Create a source using an inline schema.
 
@@ -138,8 +138,8 @@ a  b  json            c            d
 
 # Check that repeated Debezium messages are skipped.
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}", "c": "False", "d": "FileNotFound", "e": null, "f": null}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": false}}
-{"before": null, "after": {"a": 42, "b": 19, "json": "[4, 5, 6]", "c": "FileNotFound", "d": "True", "e": null, "f": null}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": false}}
+{"before": null, "after": {"row": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}", "c": "False", "d": "FileNotFound", "e": null, "f": null}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"boolean": false}}}
+{"before": null, "after": {"row": {"a": 42, "b": 19, "json": "[4, 5, 6]", "c": "FileNotFound", "d": "True", "e": null, "f": null}}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
 > SELECT a, b, json, c, d, e::text, f::text FROM data_schema_inline
 a  b  json                     c            d             e                   f
@@ -275,13 +275,13 @@ $ kafka-create-topic topic=new-dbz-data
 # We don't do anything sensible yet for snapshot "true" or "last", so just test that those are ingested.
 
 $ kafka-ingest format=avro topic=new-dbz-data schema=${new-dbz-schema} timestamp=1
-{"before": null, "after": {"a": 9, "b": 10}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": "true"}}
-{"before": null, "after": {"a": 11, "b": 11}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": "last"}}
-{"before": null, "after": {"a": 14, "b": 6}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": null}}
-{"before": null, "after": {"a": 1, "b": 1}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": "false"}}
-{"before": null, "after": {"a": 2, "b": 3}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": "false"}}
-{"before": null, "after": {"a": -1, "b": 7}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": "false"}}
-{"before": null, "after": {"a": -1, "b": 7}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": "false"}}
+{"before": null, "after": {"row":{"a": 9, "b": 10}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": {"string": "true"}}}
+{"before": null, "after": {"row":{"a": 11, "b": 11}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": {"string": "last"}}}
+{"before": null, "after": {"row":{"a": 14, "b": 6}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": null}}
+{"before": null, "after": {"row":{"a": 1, "b": 1}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": 2, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"string": "false"}}}
 
 > CREATE MATERIALIZED SOURCE new_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-new-dbz-data-${testdrive.seed}'
@@ -319,12 +319,12 @@ a b
 $ kafka-create-topic topic=misordered-dbz-data
 
 $ kafka-ingest format=avro topic=misordered-dbz-data schema=${new-dbz-schema} timestamp=1
-{"before": null, "after": {"a": 1, "b": 1}, "source": {"file": "binlog", "pos": 2, "row": 0, "snapshot": "false"}}
-{"before": null, "after": {"a": 2, "b": 3}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": "false"}}
-{"before": null, "after": {"a": -1, "b": 7}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": "false"}}
-{"before": null, "after": {"a": 2, "b": 3}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": "false"}}
-{"before": null, "after": {"a": 1, "b": 1}, "source": {"file": "binlog", "pos": 2, "row": 0, "snapshot": "false"}}
-{"before": null, "after": {"a": 3, "b": 4}, "source": {"file": "binlog2", "pos": 2, "row": 0, "snapshot": "false"}}
+{"before": null, "after": {"row":{"a": 1, "b": 1}}, "source": {"file": "binlog", "pos": 2, "row": 0, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": 2, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": 2, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": 1, "b": 1}}, "source": {"file": "binlog", "pos": 2, "row": 0, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": 3, "b": 4}}, "source": {"file": "binlog2", "pos": 2, "row": 0, "snapshot": {"string": "false"}}}
 
 > CREATE MATERIALIZED SOURCE misordered_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-misordered-dbz-data-${testdrive.seed}'
@@ -420,9 +420,9 @@ $ kafka-create-topic topic=pg-dbz-data
 
 # The third record will be skipped, since `lsn` has gone backwards.
 $ kafka-ingest format=avro topic=pg-dbz-data schema=${pg-dbz-schema} timestamp=1
-{"before": null, "after": {"a": 1, "b": 1}, "source": {"lsn": 1, "snapshot": "false"}}
-{"before": null, "after": {"a": 2, "b": 3}, "source": {"lsn": 2, "snapshot": "false"}}
-{"before": null, "after": {"a": -1, "b": 7}, "source": {"lsn": 0, "snapshot": "false"}}
+{"before": null, "after": {"row":{"a": 1, "b": 1}}, "source": {"lsn": {"long": 1}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": 2, "b": 3}}, "source": {"lsn": {"long": 2}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"lsn": {"long": 0}, "snapshot": {"string": "false"}}}
 
 > CREATE MATERIALIZED SOURCE pg_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}'

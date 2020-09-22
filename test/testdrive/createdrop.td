@@ -39,10 +39,10 @@ $ kafka-create-topic topic=data
   ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
-{"before": null, "after": {"X": 1, "Y": 1}}
-{"before": null, "after": {"X": 2, "Y": 1}}
-{"before": null, "after": {"X": 3, "Y": 1}}
-{"before": null, "after": {"X": 1, "Y": 2}}
+{"before": null, "after": {"row":{"X": 1, "Y": 1}}}
+{"before": null, "after": {"row":{"X": 2, "Y": 1}}}
+{"before": null, "after": {"row":{"X": 3, "Y": 1}}}
+{"before": null, "after": {"row":{"X": 1, "Y": 2}}}
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 {"before": null, "after": null}

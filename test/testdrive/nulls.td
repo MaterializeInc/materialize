@@ -31,9 +31,9 @@ $ set foo-schema={
 $ kafka-create-topic topic=foo
 
 $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
-{"before": null, "after": {"a": 1}}
-{"before": null, "after": {"a": 2}}
-{"before": null, "after": {"a": null}}
+{"before": null, "after": {"row":{"a": {"long": 1}}}}
+{"before": null, "after": {"row":{"a": {"long": 2}}}}
+{"before": null, "after": {"row":{"a": null}}}
 
 $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=2
 {"before": null, "after": null}
