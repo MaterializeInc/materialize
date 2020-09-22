@@ -44,7 +44,7 @@ where
         .collect::<Vec<_>>();
 
     stream.unary(
-        SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
+        SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
         "CsvDecode",
         |_, _| {
             // Temporary storage, and a re-useable CSV reader.
