@@ -114,6 +114,9 @@ Putting this all together, our deployment looks like this:
 1. Start the Docker daemon for your machine, and [follow our Docker integration
    guide](/third-party/docker).
 
+   **Note for Mac Users:** We recommend running this demo with 2 CPUs + 8GB Memory.
+   With less RAM exposed, the demo may fail.
+
 1. Clone the Materialize repo:
 
     ```shell
