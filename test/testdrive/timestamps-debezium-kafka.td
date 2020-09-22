@@ -71,11 +71,11 @@ $ kafka-create-topic topic=foo
 $ kafka-create-topic topic=bar
 
 $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
-{"before": null, "after": {"a": 1, "b": 1}}
-{"before": null, "after": {"a": 2, "b": 2}}
+{"before": null, "after": {"row":{"a": 1, "b": 1}}}
+{"before": null, "after": {"row":{"a": 2, "b": 2}}}
 
 $ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
-{"before": null, "after": {"a": 10, "b": 1}}
+{"before": null, "after": {"row":{"a": 10, "b": 1}}}
 
 > CREATE MATERIALIZED SOURCE data_foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
@@ -108,9 +108,9 @@ $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschemakey}
 
 $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
-{"status":"END","id":"1","event_count":0,"data_collections":[]}
+{"status":"END","id":"1","event_count":{"long": 0},"data_collections":{"array": []}}
 {"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
-{"status":"END","id":"2","event_count":2,"data_collections":[{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}
+{"status":"END","id":"2","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}}
 
 > SELECT * FROM foo;
 b  sum
@@ -129,14 +129,14 @@ b sum sum
 1  1  10
 
 $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
-{"before": null, "after": {"a": 3, "b": 3}}
+{"before": null, "after": {"row": {"a": 3, "b": 3}}}
 
 $ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
-{"before": null, "after": {"a": 30, "b": 3}}
+{"before": null, "after": {"row": {"a": 30, "b": 3}}}
 
 $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
-{"status":"END","id":"3","event_count":2,"data_collections":[{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}
+{"status":"END","id":"3","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}}
 
 > SELECT * FROM foo;
 b  sum
@@ -156,7 +156,7 @@ b sum sum
 1  1  10
 
 $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
-{"before": null, "after": {"a": 4, "b": 4}}
+{"before": null, "after": {"row": {"a": 4, "b": 4}}}
 
 > SELECT * FROM foo;
 b  sum

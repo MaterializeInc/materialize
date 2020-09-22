@@ -62,24 +62,24 @@ snk4
 snk5
 
 $ kafka-verify format=avro sink=materialize.public.snk1
-{"before": null, "after": {"a": "jack", "b": "jill", "mz_line_no": 2}}
-{"before": null, "after": {"a": "goofus", "b": "gallant", "mz_line_no": 3}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 2}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 3}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk2
-{"before": null, "after": {"a": "jack", "b": "jill", "mz_line_no": 2}}
-{"before": null, "after": {"a": "goofus", "b": "gallant", "mz_line_no": 3}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 2}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 3}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk3
-{"before": null, "after": {"c": "jackjill"}}
-{"before": null, "after": {"c": "goofusgallant"}}
+{"before": null, "after": {"row":{"c": "jackjill"}}}
+{"before": null, "after": {"row":{"c": "goofusgallant"}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk4
-{"before": null, "after": {"c": "jackjill"}}
-{"before": null, "after": {"c": "goofusgallant"}}
+{"before": null, "after": {"row":{"c": "jackjill"}}}
+{"before": null, "after": {"row":{"c": "goofusgallant"}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk5
-{"before": null, "after": {"c": "jackjill"}}
-{"before": null, "after": {"c": "goofusgallant"}}
+{"before": null, "after": {"row":{"c": "jackjill"}}}
+{"before": null, "after": {"row":{"c": "goofusgallant"}}}
 
 # Test the case where we have non +/- 1 multiplicities
 
@@ -91,8 +91,8 @@ $ kafka-verify format=avro sink=materialize.public.snk5
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.snk6
-{"before": null, "after": {"c": true}}
-{"before": null, "after": {"c": true}}
+{"before": null, "after": {"row":{"c": true}}}
+{"before": null, "after": {"row":{"c": true}}}
 
 # Test AS OF and WITH/WITHOUT SNAPSHOT.
 > CREATE MATERIALIZED SOURCE dynamic_src
@@ -119,12 +119,12 @@ $ file-append path=test.csv
 extra,row
 
 $ kafka-verify format=avro sink=materialize.public.snk7
-{"before": null, "after": {"a": "extra", "b": "row", "mz_line_no": 4}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "mz_line_no": 4}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk8
-{"before": null, "after": {"a": "jack", "b": "jill", "mz_line_no": 2}}
-{"before": null, "after": {"a": "goofus", "b": "gallant", "mz_line_no": 3}}
-{"before": null, "after": {"a": "extra", "b": "row", "mz_line_no": 4}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 2}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 3}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "mz_line_no": 4}}}
 
 # Test that we are correctly handling WITH/WITHOUT SNAPSHOT on views with
 # empty upper frontier
@@ -143,9 +143,9 @@ $ kafka-verify format=avro sink=materialize.public.sink9
   WITH SNAPSHOT
 
 $ kafka-verify format=avro sink=materialize.public.sink10
-{"before": null, "after": {"column1": 1}}
-{"before": null, "after": {"column1": 2}}
-{"before": null, "after": {"column1": 3}}
+{"before": null, "after": {"row":{"column1": 1}}}
+{"before": null, "after": {"row":{"column1": 2}}}
+{"before": null, "after": {"row":{"column1": 3}}}
 
 > SHOW FULL SINKS
 SINKS       TYPE

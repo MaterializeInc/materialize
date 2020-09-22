@@ -69,16 +69,16 @@ $ kafka-create-topic topic=data-consistency
 $ kafka-create-topic topic=names
 
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=1
-{"before": null, "after": {"num": 1, "name": "one"}}
-{"before": {"num": 1, "name": "one"}, "after": {"num": 2, "name": "two"}}
-{"before": {"num": 2, "name": "two"}, "after": {"num": 3, "name": "three"}}
+{"before": null, "after": {"row": {"num": 1, "name": "one"}}}
+{"before": {"row": {"num": 1, "name": "one"}}, "after": {"row": {"num": 2, "name": "two"}}}
+{"before": {"row": {"num": 2, "name": "two"}}, "after": {"row": {"num": 3, "name": "three"}}}
 
 $ kafka-ingest format=avro topic=data-consistency timestamp=1 schema=${trxschemakey}
 {"id": "1"}
 
 $ kafka-ingest format=avro topic=data-consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
-{"status":"END","id":"1","event_count":3,"data_collections":[{"event_count": 3, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+{"status":"END","id":"1","event_count":{"long": 3},"data_collections":{"array": [{"event_count": 3, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
 
 > CREATE MATERIALIZED SOURCE names
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-names-${testdrive.seed}'
@@ -91,11 +91,11 @@ $ kafka-ingest format=avro topic=data-consistency timestamp=1 schema=${trxschema
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.snk1
-{"before": null, "after": {"num": 3, "name": "three"}}
+{"before": null, "after": {"row": {"num": 3, "name": "three"}}}
 
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=2
-{"before": {"num": 3, "name": "three"}, "after": {"num": 4, "name": "four"}}
-{"before": {"num": 4, "name": "four"}, "after": {"num": 5, "name": "five"}}
+{"before": {"row": {"num": 3, "name": "three"}}, "after": {"row": {"num": 4, "name": "four"}}}
+{"before": {"row": {"num": 4, "name": "four"}}, "after": {"row": {"num": 5, "name": "five"}}}
 
 $ kafka-ingest format=avro topic=data-consistency timestamp=2 schema=${trxschemakey}
 {"id": "2"}
@@ -103,9 +103,9 @@ $ kafka-ingest format=avro topic=data-consistency timestamp=2 schema=${trxschema
 
 $ kafka-ingest format=avro topic=data-consistency timestamp=2 schema=${trxschema}
 {"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
-{"status":"END","id":"2","event_count":1,"data_collections":[{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+{"status":"END","id":"2","event_count":{"long": 1},"data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
 {"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
-{"status":"END","id":"3","event_count":1,"data_collections":[{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+{"status":"END","id":"3","event_count":{"long": 1},"data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
 
 > SELECT * FROM names AS OF 2;
 num name
@@ -115,14 +115,14 @@ num name
 > ALTER INDEX materialize.public.names_primary_idx SET(logical_compaction_window='1ms')
 
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=3
-{"before": {"num": 5, "name": "five"}, "after": {"num": 6, "name": "six"}}
+{"before": {"row": {"num": 5, "name": "five"}}, "after": {"row": {"num": 6, "name": "six"}}}
 
 $ kafka-ingest format=avro topic=data-consistency timestamp=3 schema=${trxschemakey}
 {"id": "4"}
 
 $ kafka-ingest format=avro topic=data-consistency timestamp=3 schema=${trxschema}
 {"status":"BEGIN","id":"4","event_count":null,"data_collections":null}
-{"status":"END","id":"4","event_count":1,"data_collections":[{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+{"status":"END","id":"4","event_count":{"long": 1},"data_collections":{"array": [{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
 
 ! SELECT * FROM names AS OF 2;
 Timestamp (2) is not valid for all inputs
@@ -131,8 +131,8 @@ Timestamp (2) is not valid for all inputs
 > ALTER INDEX materialize.public.names_primary_idx RESET(logical_compaction_window)
 
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=4
-{"before": {"num": 6, "name": "six"}, "after": {"num": 7, "name": "seven"}}
-{"before": {"num": 7, "name": "seven"}, "after": {"num": 8, "name": "eight"}}
+{"before": {"row": {"num": 6, "name": "six"}}, "after": {"row": {"num": 7, "name": "seven"}}}
+{"before": {"row": {"num": 7, "name": "seven"}}, "after": {"row": {"num": 8, "name": "eight"}}}
 
 $ kafka-ingest format=avro topic=data-consistency timestamp=4 schema=${trxschemakey}
 {"id": "5"}
@@ -140,9 +140,9 @@ $ kafka-ingest format=avro topic=data-consistency timestamp=4 schema=${trxschema
 
 $ kafka-ingest format=avro topic=data-consistency timestamp=4 schema=${trxschema}
 {"status":"BEGIN","id":"5","event_count":null,"data_collections":null}
-{"status":"END","id":"5","event_count":1,"data_collections":[{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+{"status":"END","id":"5","event_count":{"long": 1},"data_collections":{"array": [{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
 {"status":"BEGIN","id":"6","event_count":null,"data_collections":null}
-{"status":"END","id":"6","event_count":1,"data_collections":[{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}
+{"status":"END","id":"6","event_count":{"long": 1},"data_collections":{"array": [{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
 
 > SELECT * FROM names AS OF 4;
 num name

@@ -68,11 +68,11 @@ $ avro-ocf-write path=consistency.ocf schema=${trxschema}
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
 
 $ avro-ocf-write path=foo.ocf schema=${schema}
-{"before": null, "after": {"a": 1, "b": 1}}
-{"before": null, "after": {"a": 2, "b": 2}}
+{"before": null, "after": {"row":{"a": 1, "b": 1}}}
+{"before": null, "after": {"row":{"a": 2, "b": 2}}}
 
 $ avro-ocf-write path=bar.ocf schema=${schema}
-{"before": null, "after": {"a": 10, "b": 1}}
+{"before": null, "after": {"row":{"a": 10, "b": 1}}}
 
 > CREATE MATERIALIZED SOURCE data_foo FROM AVRO OCF '${testdrive.temp-dir}/foo.ocf' WITH (consistency='${testdrive.temp-dir}/consistency.ocf', tail=true) ENVELOPE DEBEZIUM
 
@@ -95,9 +95,9 @@ At least one input has no complete timestamps yet:
 
 $ avro-ocf-append path=consistency.ocf
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
-{"status":"END","id":"1","event_count":0,"data_collections":[]}
+{"status":"END","id":"1","event_count":{"long": 0},"data_collections": {"array": []}}
 {"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
-{"status":"END","id":"2","event_count":2,"data_collections":[{"event_count": 2, "data_collection": "${testdrive.temp-dir}/foo.ocf"},{"event_count": 1, "data_collection": "${testdrive.temp-dir}/bar.ocf"}]}
+{"status":"END","id":"2","event_count":{"long": 2},"data_collections": {"array": [{"event_count": 2, "data_collection": "${testdrive.temp-dir}/foo.ocf"},{"event_count": 1, "data_collection": "${testdrive.temp-dir}/bar.ocf"}]}}
 
 > SELECT * FROM foo;
 b  sum
@@ -116,14 +116,14 @@ b sum sum
 1  1  10
 
 $ avro-ocf-append path=foo.ocf
-{"before": null, "after": {"a": 3, "b": 3}}
+{"before": null, "after": {"row":{"a": 3, "b": 3}}}
 
 $ avro-ocf-append path=bar.ocf
-{"before": null, "after": {"a": 30, "b": 3}}
+{"before": null, "after": {"row":{"a": 30, "b": 3}}}
 
 $ avro-ocf-append path=consistency.ocf
 {"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
-{"status":"END","id":"3","event_count":2,"data_collections":[{"event_count": 2, "data_collection": "${testdrive.temp-dir}/foo.ocf"},{"event_count": 1, "data_collection": "${testdrive.temp-dir}/bar.ocf"}]}
+{"status":"END","id":"3","event_count":{"long": 2},"data_collections": {"array": [{"event_count": 2, "data_collection": "${testdrive.temp-dir}/foo.ocf"},{"event_count": 1, "data_collection": "${testdrive.temp-dir}/bar.ocf"}]}}
 
 > SELECT * FROM foo;
 b  sum
@@ -143,7 +143,7 @@ b sum sum
 1  1  10
 
 $ avro-ocf-append path=foo.ocf
-{"before": null, "after": {"a": 4, "b": 4}}
+{"before": null, "after": {"row":{"a": 4, "b": 4}}}
 
 > SELECT * FROM foo;
 b  sum

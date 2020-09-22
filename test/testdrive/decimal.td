@@ -42,8 +42,8 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"a": [7, 2]}}
-{"before": null, "after": {"a": [186]}}
+{"before": null, "after": {"row":{"a": [7, 2]}}}
+{"before": null, "after": {"row":{"a": [186]}}}
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
 {"before": null, "after": null}

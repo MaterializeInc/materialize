@@ -22,9 +22,9 @@ $ set writer-schema={
   }
 
 $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
-{"a": 1, "b": null, "c": null, "d": "d"}
-{"a": 2, "b": 2, "c": "foo", "d": 4}
-{"a": 2, "b": 2, "c": 3, "d": "d"}
+{"a": {"long": 1}, "b": null, "c": null, "d": {"string": "d"}}
+{"a": {"long": 2}, "b": {"long": 2}, "c": {"string": "foo"}, "d": {"long": 4}}
+{"a": {"long": 2}, "b": {"long": 2}, "c": {"long": 3}, "d": {"string": "d"}}
 
 > CREATE MATERIALIZED SOURCE unions
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'

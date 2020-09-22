@@ -141,10 +141,10 @@ $ set reader-schema={
 $ kafka-create-topic topic=avro-data
 
 $ kafka-ingest format=avro topic=avro-data schema=${writer-schema} publish=true timestamp=1
-{ "f5": 1234, "f4": [0], "f3": 2345, "f2": "Diamonds", "f1": [0, 1, 2, 3] }
+{ "f5": 1234, "f4": {"variant1": [0]}, "f3": 2345, "f2": "Diamonds", "f1": {"variant4": [0, 1, 2, 3]} }
 
 $ kafka-ingest format=avro topic=avro-data schema=${reader-schema} publish=true timestamp=1
-{ "f0": {"f0_0": 9999, "f0_1": null}, "f1": 3456, "f2": "Jokers", "f5": [0,1,2,3,4,5,6,7,8,9] }
+{ "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]} }
 
 > CREATE MATERIALIZED SOURCE avro_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'

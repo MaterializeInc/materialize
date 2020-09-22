@@ -48,7 +48,7 @@ $ set schema={
 $ kafka-create-topic topic=data-consistency
 
 $ kafka-ingest format=avro topic=data-consistency schema=${consistency}
-{"source": "dummy", "partition_count": 1, "partition_id": 0, "timestamp": 0, "offset": 0}
+{"source": "dummy", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 0, "offset": 0}
 
 $ kafka-create-topic topic=data
 
@@ -106,8 +106,8 @@ $ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
 At least one input has no complete timestamps yet:
 
 $ kafka-ingest format=avro schema=${consistency} topic=data-consistency timestamp=1
-{"source": "testdrive-data-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 1}
-{"source": "testdrive-data2-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 4}
+{"source": "testdrive-data-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 1, "offset": 1}
+{"source": "testdrive-data2-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 1, "offset": 4}
 
 > SELECT * FROM view_byo
 b  sum
@@ -121,7 +121,7 @@ b  sum
 2  1
 
 $ kafka-ingest format=avro schema=${consistency} topic=data-consistency timestamp=2
-{"source": "testdrive-data-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 2, "offset": 4}
+{"source": "testdrive-data-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 2, "offset": 4}
 
 > SELECT * FROM view2_byo
 b  sum
@@ -133,7 +133,7 @@ b  sum
 At least one input has no complete timestamps yet:
 
 $ kafka-ingest format=avro schema=${consistency} topic=data-consistency timestamp=2
-{"source": "testdrive-data3-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 10, "offset": 0}
+{"source": "testdrive-data3-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 10, "offset": 0}
 
 > SELECT * FROM view_empty
 a a

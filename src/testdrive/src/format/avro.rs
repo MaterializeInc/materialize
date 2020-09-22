@@ -26,6 +26,7 @@ use serde_json::Value as JsonValue;
 // testdrive modules can import just this one.
 
 pub use interchange::avro::parse_schema;
+use mz_avro::schema::SchemaKind;
 pub use mz_avro::schema::{Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 pub use mz_avro::types::{DecimalValue, ToAvro, Value};
 pub use mz_avro::{from_avro_datum, to_avro_datum, Codec, Reader, Writer};
@@ -139,25 +140,60 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
         }
         (val, SchemaPiece::Union(us)) => {
             let variants = us.variants();
-            let mut last_err = format!("Union schema {:?} did not match {:?}", variants, val);
             let null_variant = variants
                 .iter()
                 .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null));
+            if let JsonValue::Null = val {
+                return if let Some(nv) = null_variant {
+                    Ok(Value::Union {
+                        index: nv,
+                        inner: Box::new(Value::Null),
+                        n_variants: variants.len(),
+                        null_variant,
+                    })
+                } else {
+                    Err("No `null` value in union schema.".to_string())
+                };
+            }
+            let items = match val {
+                JsonValue::Object(items) => items,
+                _ => return Err(format!("Union schema element must be `null` or a map from type name to value; found {:?}", val))
+            };
+            let (name, val) = if items.len() == 1 {
+                (items.keys().next().unwrap(), items.values().next().unwrap())
+            } else {
+                return Err(format!(
+                    "Expected one-element object to match union schema: {:?} vs {:?}",
+                    json, schema
+                ));
+            };
             for (i, variant) in variants.iter().enumerate() {
-                match from_json(val, schema.step(variant)) {
-                    Ok(avro) => {
-                        return Ok(Value::Union {
-                            index: i,
-
-                            inner: Box::new(avro),
-                            n_variants: variants.len(),
-                            null_variant,
-                        })
+                let name_matches = match variant {
+                    SchemaPieceOrNamed::Piece(piece) => SchemaKind::from(piece).name() == name,
+                    SchemaPieceOrNamed::Named(idx) => {
+                        let schema_name = &schema.root.lookup(*idx).name;
+                        if name.chars().any(|ch| ch == '.') {
+                            name == &schema_name.to_string()
+                        } else {
+                            name == schema_name.base_name()
+                        }
                     }
-                    Err(msg) => last_err = msg,
+                };
+                if name_matches {
+                    match from_json(val, schema.step(variant)) {
+                        Ok(avro) => {
+                            return Ok(Value::Union {
+                                index: i,
+                                inner: Box::new(avro),
+                                n_variants: variants.len(),
+                                null_variant,
+                            })
+                        }
+                        Err(msg) => return Err(msg),
+                    }
                 }
             }
-            Err(last_err)
+            Err(format!("Type not found in union: {}", name))
         }
         _ => Err(format!(
             "unable to match JSON value to schema: {:?} vs {:?}",
