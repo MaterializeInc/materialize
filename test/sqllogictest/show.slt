@@ -74,17 +74,21 @@ CREATE INDEX idx1 ON v (b)
 query TTTTTT colnames
 SHOW INDEXES FROM v
 ----
-On_name               Key_name                 Column_name Expression Null  Seq_in_index
-materialize.public.v  materialize.public.idx1  b           NULL       false 1
+On_name               Key_name                          Column_name Expression Null  Seq_in_index
+materialize.public.v  materialize.public.idx1           b           NULL       false 1
+materialize.public.v  materialize.public.v_primary_idx  a           NULL       false 1
+materialize.public.v  materialize.public.v_primary_idx  b           NULL       false 2
+materialize.public.v  materialize.public.v_primary_idx  c           NULL       false 3
 
 query TTTTTT colnames
 SHOW INDEXES FROM v WHERE Column_name = 'b'
 ----
-On_name               Key_name                 Column_name Expression Null  Seq_in_index
-materialize.public.v  materialize.public.idx1  b           NULL       false 1
+On_name               Key_name                          Column_name Expression Null  Seq_in_index
+materialize.public.v  materialize.public.idx1           b           NULL       false 1
+materialize.public.v  materialize.public.v_primary_idx  b           NULL       false 2
 
 query TTTTTT colnames
-SHOW INDEXES FROM v WHERE Column_name = 'c'
+SHOW INDEXES FROM v WHERE Column_name = 'd'
 ----
 On_name               Key_name                 Column_name Expression Null  Seq_in_index
 
@@ -149,7 +153,7 @@ public
 # SHOW VIEWS/SOURCES
 
 statement ok
-CREATE MATERIALIZED VIEW u AS SELECT 1 AS x, 2 AS y
+CREATE MATERIALIZED VIEW u AS SELECT ((1, 1), (2, 2))
 
 query T
 SHOW VIEWS
