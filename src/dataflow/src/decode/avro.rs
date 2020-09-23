@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use futures::executor::block_on;
 use log::error;
 
-use async_trait::async_trait;
 use interchange::avro::{DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
 use repr::{Diff, Row, Timestamp};
 
@@ -49,10 +49,9 @@ impl AvroDecoderState {
     }
 }
 
-#[async_trait(?Send)]
 impl DecoderState for AvroDecoderState {
-    async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
-        match self.decoder.decode(bytes, None).await {
+    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
+        match block_on(self.decoder.decode(bytes, None)) {
             Ok(diff_pair) => {
                 if let Some(after) = diff_pair.after {
                     self.events_success += 1;
@@ -70,7 +69,7 @@ impl DecoderState for AvroDecoderState {
     }
 
     /// give a session a key-value pair
-    async fn give_key_value<'a>(
+    fn give_key_value<'a>(
         &mut self,
         key: Row,
         bytes: &[u8],
@@ -78,7 +77,7 @@ impl DecoderState for AvroDecoderState {
         session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     ) {
-        match self.decoder.decode(bytes, coord).await {
+        match block_on(self.decoder.decode(bytes, coord)) {
             Ok(diff_pair) => {
                 self.events_success += 1;
                 session.give((key, diff_pair.after, time));
@@ -91,14 +90,14 @@ impl DecoderState for AvroDecoderState {
     }
 
     /// give a session a plain value
-    async fn give_value<'a>(
+    fn give_value<'a>(
         &mut self,
         bytes: &[u8],
         coord: Option<i64>,
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     ) {
-        match self.decoder.decode(bytes, coord).await {
+        match block_on(self.decoder.decode(bytes, coord)) {
             Ok(diff_pair) => {
                 self.events_success += 1;
                 if diff_pair.before.is_some() {

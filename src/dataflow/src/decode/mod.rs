@@ -10,9 +10,7 @@
 use std::iter;
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use differential_dataflow::hashable::Hashable;
-use futures::executor::block_on;
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
     channels::pushers::buffer::Session,
@@ -114,11 +112,10 @@ where
 pub type PushSession<'a, R> =
     Session<'a, Timestamp, R, PushCounter<Timestamp, R, Tee<Timestamp, R>>>;
 
-#[async_trait(?Send)]
 pub trait DecoderState {
-    async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String>;
+    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String>;
     /// give a session a key-value pair
-    async fn give_key_value<'a>(
+    fn give_key_value<'a>(
         &mut self,
         key: Row,
         bytes: &[u8],
@@ -127,7 +124,7 @@ pub trait DecoderState {
         time: Timestamp,
     );
     /// give a session a plain value
-    async fn give_value<'a>(
+    fn give_value<'a>(
         &mut self,
         bytes: &[u8],
         aux_num: Option<i64>,
@@ -165,17 +162,16 @@ impl<F: Fn(&[u8]) -> Datum> From<F> for OffsetDecoderState<F> {
     }
 }
 
-#[async_trait(?Send)]
 impl<F> DecoderState for OffsetDecoderState<F>
 where
     F: Fn(&[u8]) -> Datum + Send,
 {
-    async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
+    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
         Ok(self.row_packer.pack(&[(self.datum_func)(bytes)]))
     }
 
     /// give a session a key-value pair
-    async fn give_key_value<'a>(
+    fn give_key_value<'a>(
         &mut self,
         key: Row,
         bytes: &[u8],
@@ -191,7 +187,7 @@ where
     }
 
     /// give a session a plain value
-    async fn give_value<'a>(
+    fn give_value<'a>(
         &mut self,
         bytes: &[u8],
         line_no: Option<i64>,
@@ -235,18 +231,18 @@ where
                             error!("{}", "Encountered empty key");
                             continue;
                         }
-                        match block_on(key_decoder_state.decode_key(key)) {
+                        match key_decoder_state.decode_key(key) {
                             Ok(key) => {
                                 if payload.is_empty() {
                                     session.give((key, None, *cap.time()));
                                 } else {
-                                    block_on(value_decoder_state.give_key_value(
+                                    value_decoder_state.give_key_value(
                                         key,
                                         payload,
                                         *aux_num,
                                         &mut session,
                                         *time,
-                                    ));
+                                    );
                                 }
                             }
                             Err(err) => {
@@ -383,12 +379,12 @@ where
                 } in data.iter()
                 {
                     if !payload.is_empty() {
-                        block_on(value_decoder_state.give_value(
+                        value_decoder_state.give_value(
                             payload,
                             *aux_num,
                             &mut session,
                             *cap.time(),
-                        ));
+                        );
                     }
                 }
             });
