@@ -33,7 +33,6 @@ use std::mem;
 use std::ops;
 use std::path::Path;
 use std::str;
-use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -42,7 +41,6 @@ use itertools::izip;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use regex::Regex;
-use tokio::runtime::Handle;
 
 use coord::session::Session;
 use coord::{ExecuteResponse, TimestampConfig};
@@ -387,12 +385,12 @@ impl State {
         // Note that the coordinator must be initialized *after* launching the
         // dataflow workers, as booting the coordinator can involve sending enough
         // data to workers to fill up a `comm` channel buffer (#3280).
-        let mut coord = coord::Coordinator::new(coord::Config {
+        let coord_thread = coord::serve(coord::Config {
             switchboard,
+            cmd_rx,
             num_timely_workers: NUM_TIMELY_WORKERS,
             symbiosis_url: Some("postgres://"),
             data_directory: None,
-            executor: &Handle::current(),
             logging_granularity: None,
             timestamp: TimestampConfig {
                 frequency: Duration::from_millis(10),
@@ -400,8 +398,9 @@ impl State {
             persistence: None,
             logical_compaction_window: None,
             experimental_mode: true,
-        })?;
-        let coord_thread = thread::spawn(move || coord.serve(cmd_rx)).join_on_drop();
+        })
+        .await?
+        .join_on_drop();
 
         Ok(State {
             cmd_tx,

@@ -32,6 +32,6 @@ pub mod session;
 
 pub use crate::catalog::dump as dump_catalog;
 pub use crate::command::{Command, ExecuteResponse, Response, RowsFuture, StartupMessage};
-pub use crate::coord::{Config, Coordinator};
+pub use crate::coord::{serve, Config};
 pub use crate::persistence::PersistenceConfig;
 pub use crate::timestamp::TimestampConfig;
