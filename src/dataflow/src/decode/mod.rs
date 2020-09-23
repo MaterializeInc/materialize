@@ -456,7 +456,7 @@ where
             )
             .expect("Failed to create Avro decoder"),
             &op_name,
-            SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
+            SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
         ),
         (DataEncoding::AvroOcf { .. }, _) => {
             unreachable!("Internal error: Cannot decode Avro OCF separately from reading")
@@ -471,19 +471,19 @@ where
             stream,
             protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
             &op_name,
-            SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
+            SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
         ),
         (DataEncoding::Bytes, Envelope::None) => decode_values_inner(
             stream,
             OffsetDecoderState::from(bytes_to_datum),
             &op_name,
-            SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
+            SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
         ),
         (DataEncoding::Text, Envelope::None) => decode_values_inner(
             stream,
             OffsetDecoderState::from(text_to_datum),
             &op_name,
-            SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
+            SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
         ),
     }
 }

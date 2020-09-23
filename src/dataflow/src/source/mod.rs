@@ -139,13 +139,22 @@ where
     {
         Exchange::new(|x: &Self| x.key.hashed())
     }
-    /// A parallelization contract that hashes by values.
+    /// A parallelization contract that hashes by positions (if available)
+    /// and otherwise falls back to hashing by value. Values can be just as
+    /// skewed as keys, whereas positions are generally known to be unique or
+    /// close to unique in a source. For example, Kafka offsets are unique per-partition.
     /// Most decode logic should use this instead of `key_contract`.
-    pub fn value_contract() -> impl ParallelizationContract<Timestamp, Self>
+    pub fn position_value_contract() -> impl ParallelizationContract<Timestamp, Self>
     where
         V: Hashable<Output = u64>,
     {
-        Exchange::new(|x: &Self| x.value.hashed())
+        Exchange::new(|x: &Self| {
+            if let Some(position) = x.position {
+                position.hashed()
+            } else {
+                x.value.hashed()
+            }
+        })
     }
 }
 
