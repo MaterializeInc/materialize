@@ -253,7 +253,6 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         config.threads,
         config.process,
         switchboard.clone(),
-        Handle::current(),
     )
     .map_err(|s| anyhow!("{}", s))?;
 

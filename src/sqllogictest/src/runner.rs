@@ -382,7 +382,6 @@ impl State {
             NUM_TIMELY_WORKERS,
             process_id,
             switchboard.clone(),
-            tokio::runtime::Handle::current(),
         )
         .unwrap();
 
