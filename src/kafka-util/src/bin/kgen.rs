@@ -443,7 +443,8 @@ impl<'a> ValueGenerator<'a> {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let matches = App::new("kgen")
         .about("Put random data in Kafka")
         .arg(
@@ -555,9 +556,9 @@ fn main() -> anyhow::Result<()> {
             let schema = matches.value_of("avro-schema").unwrap();
             let ccsr =
                 ccsr::ClientConfig::new(Url::parse("http://localhost:8081").unwrap()).build();
-            let schema_id = Runtime::new()
-                .unwrap()
-                .block_on(ccsr.publish_schema(&format!("{}-value", topic), schema))?;
+            let schema_id = ccsr
+                .publish_schema(&format!("{}-value", topic), schema)
+                .await?;
             _schema_holder = Some(Schema::parse_str(schema)?);
             let schema = _schema_holder.as_ref().unwrap();
             let annotations = matches.value_of("avro-distribution").unwrap();
