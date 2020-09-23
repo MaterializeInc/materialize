@@ -20,6 +20,7 @@ use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
 use openssl::x509::extension::SubjectAlternativeName;
 use openssl::x509::{X509NameBuilder, X509};
+use tokio::runtime::Runtime;
 
 #[derive(Clone)]
 pub struct Config {
@@ -70,7 +71,8 @@ impl Config {
 }
 
 pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
-    let server = Server(materialized::serve(materialized::Config {
+    let mut runtime = Runtime::new()?;
+    let inner = runtime.block_on(materialized::serve(materialized::Config {
         logging_granularity: config.logging_granularity,
         timestamp_frequency: Duration::from_millis(10),
         persistence: None,
@@ -83,16 +85,23 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         listen_addr: None,
         tls: config.tls,
         experimental_mode: config.experimental_mode,
-    })?);
+    }))?;
+    let server = Server {
+        inner,
+        _runtime: runtime,
+    };
     let client = server.connect()?;
     Ok((server, client))
 }
 
-pub struct Server(materialized::Server);
+pub struct Server {
+    inner: materialized::Server,
+    _runtime: Runtime,
+}
 
 impl Server {
     pub fn pg_config(&self) -> postgres::Config {
-        let local_addr = self.0.local_addr();
+        let local_addr = self.inner.local_addr();
         let mut config = postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
@@ -102,7 +111,7 @@ impl Server {
     }
 
     pub fn pg_config_async(&self) -> tokio_postgres::Config {
-        let local_addr = self.0.local_addr();
+        let local_addr = self.inner.local_addr();
         let mut config = tokio_postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
