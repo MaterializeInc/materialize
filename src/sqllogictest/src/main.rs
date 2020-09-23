@@ -22,7 +22,8 @@ const USAGE: &str = r#"usage: sqllogictest [PATH...]
 Runs one or more sqllogictest files. Directories will be searched
 recursively for sqllogictest files."#;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     ore::panic::set_abort_on_panic();
 
     let args: Vec<_> = env::args().collect();
@@ -66,7 +67,7 @@ fn main() {
     }
 
     if popts.opt_present("rewrite-results") {
-        return rewrite(popts);
+        return rewrite(popts).await;
     }
 
     let json_summary_file = match popts.opt_str("json-summary-file") {
@@ -85,7 +86,7 @@ fn main() {
     let mut outcomes = Outcomes::default();
     for path in &popts.free {
         if path == "-" {
-            match sqllogictest::runner::run_stdin(verbosity) {
+            match sqllogictest::runner::run_stdin(verbosity).await {
                 Ok(o) => outcomes += o,
                 Err(err) => {
                     eprintln!("error: parsing stdin: {}", err);
@@ -96,7 +97,7 @@ fn main() {
             for entry in WalkDir::new(path) {
                 match entry {
                     Ok(entry) if entry.file_type().is_file() => {
-                        match runner::run_file(entry.path(), verbosity) {
+                        match runner::run_file(entry.path(), verbosity).await {
                             Ok(o) => {
                                 if o.any_failed() || verbosity >= 1 {
                                     println!("{}", util::indent(&o.to_string(), 4));
@@ -139,7 +140,7 @@ fn main() {
     }
 }
 
-fn rewrite(popts: getopts::Matches) {
+async fn rewrite(popts: getopts::Matches) {
     if popts.opt_present("json-summary-file") {
         eprintln!("--rewrite-results is not compatible with --json-summary-file");
         process::exit(1);
@@ -157,7 +158,7 @@ fn rewrite(popts: getopts::Matches) {
             match entry {
                 Ok(entry) => {
                     if entry.file_type().is_file() {
-                        if let Err(err) = runner::rewrite_file(entry.path(), verbosity) {
+                        if let Err(err) = runner::rewrite_file(entry.path(), verbosity).await {
                             eprintln!("error: rewriting file: {}", err);
                             bad_file = true;
                         }

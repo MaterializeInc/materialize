@@ -196,7 +196,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         SocketAddr::new(listen_addr.ip(), local_addr.port()),
     );
 
-    let switchboard = Switchboard::new(config.addresses, config.process, Handle::current());
+    let switchboard = Switchboard::new(config.addresses, config.process);
 
     // Launch task to serve connections.
     //
@@ -237,7 +237,8 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         }
     });
 
-    let dataflow_conns = switchboard.rendezvous(Duration::from_secs(30))
+    let dataflow_conns = switchboard
+        .rendezvous(Duration::from_secs(30))
         .await?
         .into_iter()
         .map(|conn| match conn {

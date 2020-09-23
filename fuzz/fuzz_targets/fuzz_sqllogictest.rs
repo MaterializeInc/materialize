@@ -10,9 +10,11 @@
 #![cfg_attr(not(test), no_main)]
 
 use libfuzzer_sys::fuzz_target;
+use tokio::runtime::Runtime;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(string) = std::str::from_utf8(data) {
-        sqllogictest::fuzz::fuzz(string)
+        let mut runtime = Runtime::new().unwrap();
+        runtime.block_on(sqllogictest::fuzz::fuzz(string))
     };
 });

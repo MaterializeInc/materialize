@@ -37,6 +37,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
+use tokio::runtime::Handle;
 use tokio_serde::formats::SymmetricalBincode as BincodeCodec;
 use tokio_util::codec::LengthDelimitedCodec;
 use uuid::Uuid;
@@ -569,9 +570,9 @@ where
 {
     let decoder = Decoder {
         inner: Some(Bincoder::new(conn.err_into(), BincodeCodec::default())),
-        switchboard: switchboard.clone(),
+        switchboard,
     };
-    DrainOnDrop::new(decoder, switchboard.executor().clone())
+    DrainOnDrop::new(decoder, Handle::current())
 }
 
 struct Decoder<C, D>
@@ -598,7 +599,7 @@ where
                 let inner = self.inner.take().unwrap();
                 let conn = inner.into_inner().into_inner();
                 let recycle = self.switchboard.recycle_connection(conn).map_err(|_| ());
-                let _ = self.switchboard.executor().clone().spawn(recycle);
+                let _ = Handle::current().spawn(recycle);
                 Poll::Ready(None)
             }
             Some(Err(err)) => Poll::Ready(Some(Err(err.into()))),
