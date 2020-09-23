@@ -225,7 +225,7 @@ where
             let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % threads]
                 .take()
                 .unwrap()
-                .request_unparks(&executor);
+                .request_unparks();
             let worker_idx = timely_worker.index();
             Worker {
                 timely_worker,

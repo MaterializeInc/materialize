@@ -43,6 +43,7 @@ use itertools::izip;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use regex::Regex;
+use tokio::runtime::Handle;
 
 use coord::session::Session;
 use coord::{ExecuteResponse, TimestampConfig};
@@ -285,7 +286,6 @@ pub(crate) struct State {
     cmd_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
     _dataflow_workers: Box<dyn Drop>,
     _coord_thread: JoinOnDropHandle<()>,
-    _runtime: tokio::runtime::Runtime,
     session: Session,
 }
 
@@ -371,11 +371,10 @@ fn format_row(
 }
 
 impl State {
-    pub fn start() -> Result<Self, anyhow::Error> {
+    pub async fn start() -> Result<Self, anyhow::Error> {
         let process_id = 0;
 
-        let (switchboard, runtime) = comm::Switchboard::local()?;
-        let executor = runtime.handle().clone();
+        let switchboard = comm::Switchboard::local()?;
 
         let (cmd_tx, cmd_rx) = futures::channel::mpsc::unbounded();
         let dataflow_workers = dataflow::serve(
@@ -383,7 +382,7 @@ impl State {
             NUM_TIMELY_WORKERS,
             process_id,
             switchboard.clone(),
-            runtime.handle().clone(),
+            tokio::runtime::Handle::current(),
         )
         .unwrap();
 
@@ -395,7 +394,7 @@ impl State {
             num_timely_workers: NUM_TIMELY_WORKERS,
             symbiosis_url: Some("postgres://"),
             data_directory: None,
-            executor: &executor,
+            executor: &Handle::current(),
             logging_granularity: None,
             timestamp: TimestampConfig {
                 frequency: Duration::from_millis(10),
@@ -410,7 +409,6 @@ impl State {
             cmd_tx,
             _dataflow_workers: Box::new(dataflow_workers),
             _coord_thread: coord_thread,
-            _runtime: runtime,
             session: Session::dummy(),
         })
     }
@@ -791,9 +789,13 @@ fn print_record(record: &Record) {
     }
 }
 
-pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_string(
+    source: &str,
+    input: &str,
+    verbosity: usize,
+) -> Result<Outcomes, anyhow::Error> {
     let mut outcomes = Outcomes::default();
-    let mut state = State::start().unwrap();
+    let mut state = State::start().await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
     println!("==> {}", source);
     for record in parser.parse_records()? {
@@ -833,19 +835,19 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcome
     Ok(outcomes)
 }
 
-pub fn run_file(filename: &Path, verbosity: usize) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_file(filename: &Path, verbosity: usize) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
-    run_string(&format!("{}", filename.display()), &input, verbosity)
+    run_string(&format!("{}", filename.display()), &input, verbosity).await
 }
 
-pub fn run_stdin(verbosity: usize) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_stdin(verbosity: usize) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     std::io::stdin().lock().read_to_string(&mut input)?;
-    run_string("<stdin>", &input, verbosity)
+    run_string("<stdin>", &input, verbosity).await
 }
 
-pub fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyhow::Error> {
+pub async fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyhow::Error> {
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
     let mut input = String::new();
@@ -853,7 +855,7 @@ pub fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyhow::Er
 
     let mut buf = RewriteBuffer::new(&input);
 
-    let mut state = State::start()?;
+    let mut state = State::start().await?;
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
     println!("==> {}", filename.display());
     for record in parser.parse_records()? {

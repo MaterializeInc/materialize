@@ -21,7 +21,6 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::io;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use crate::broadcast;
@@ -68,31 +67,24 @@ where
     channel_table: Mutex<router::RoutingTable<Uuid, protocol::Framed<C>>>,
     /// Routing for rendezvous traffic.
     rendezvous_table: Mutex<router::RoutingTable<u64, C>>,
-    /// Task executor, so that background work can be spawned.
-    executor: tokio::runtime::Handle,
 }
 
 impl Switchboard<UnixStream> {
-    /// Constructs a new `Switchboard` for a single-process cluster. A Tokio
-    /// [`Runtime`] that manages traffic for the switchboard is also returned;
-    /// this runtime must live at least as long as the switchboard for correct
-    /// operation.
+    /// Constructs a new `Switchboard` for a single-process cluster.
     ///
     /// This function is intended for test and example programs. Production code
     /// will likely want to configure its own Tokio runtime and handle its own
     /// network binding.
-    pub fn local() -> Result<(Switchboard<UnixStream>, Runtime), io::Error> {
+    pub fn local() -> Result<Switchboard<UnixStream>, io::Error> {
         let mut rng = rand::thread_rng();
         let suffix: String = (0..6)
             .map(|_| rng.sample(rand::distributions::Alphanumeric))
             .collect();
         let mut path = std::env::temp_dir();
         path.push(format!("comm.switchboard.{}", suffix));
-        let runtime = Runtime::new()?;
-        let mut listener = runtime.enter(|| UnixListener::bind(&path))?;
-        let switchboard =
-            Switchboard::new(vec![path.to_str().unwrap()], 0, runtime.handle().clone());
-        runtime.spawn({
+        let mut listener = UnixListener::bind(&path)?;
+        let switchboard = Switchboard::new(vec![path.to_str().unwrap()], 0);
+        tokio::spawn({
             let switchboard = switchboard.clone();
             async move {
                 let mut incoming = listener.incoming();
@@ -108,7 +100,7 @@ impl Switchboard<UnixStream> {
                 }
             }
         });
-        Ok((switchboard, runtime))
+        Ok(switchboard)
     }
 }
 
@@ -124,7 +116,7 @@ where
     /// The consumer of a `Switchboard` must separately arrange to listen on the
     /// local node's address and route `comm` traffic to this `Switchboard`
     /// via [`Switchboard::handle_connection`].
-    pub fn new<I>(nodes: I, id: usize, executor: tokio::runtime::Handle) -> Switchboard<C>
+    pub fn new<I>(nodes: I, id: usize) -> Switchboard<C>
     where
         I: IntoIterator,
         I::Item: Into<C::Addr>,
@@ -134,7 +126,6 @@ where
             id,
             channel_table: Mutex::default(),
             rendezvous_table: Mutex::default(),
-            executor,
         }))
     }
 
@@ -238,12 +229,6 @@ where
     ) -> impl Future<Output = Result<(), io::Error>> {
         let inner = self.0.clone();
         protocol::recv_channel_handshake(conn).map_ok(move |conn| inner.route_connection(conn))
-    }
-
-    /// Returns a reference to the [`tokio::runtime::Handle`] that this
-    /// `Switchboard` was initialized with. Useful for spawning background work.
-    pub fn executor(&self) -> &tokio::runtime::Handle {
-        &self.0.executor
     }
 
     /// Allocates a transmitter for the broadcast channel identified by `token`.

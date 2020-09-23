@@ -44,7 +44,7 @@ pub mod mpsc {
         /// is unparked, even if another thread holds the receiver.
         ///
         /// TODO(benesch): `impl !Send` once anti-traits land.
-        fn request_unparks(self, executor: &tokio::runtime::Handle) -> Self
+        fn request_unparks(self) -> Self
         where
             Self: Sized;
     }
@@ -53,10 +53,10 @@ pub mod mpsc {
     where
         T: Unpin + Send + 'static,
     {
-        fn request_unparks(self, executor: &tokio::runtime::Handle) -> Self {
+        fn request_unparks(self) -> Self {
             let (tx, rx) = unbounded();
             let fut = UnparkingForward::new(tx, self, thread::current()).map(|_| ());
-            let _ = executor.spawn(fut);
+            let _ = tokio::spawn(fut);
             rx
         }
     }
