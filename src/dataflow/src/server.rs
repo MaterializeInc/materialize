@@ -207,8 +207,10 @@ where
     let command_rxs = {
         let mut rx = switchboard.broadcast_rx(BroadcastToken).fanout();
         let command_rxs = Mutex::new((0..threads).map(|_| Some(rx.attach())).collect::<Vec<_>>());
-        tokio::spawn(rx.shuttle()
-                .map_err(|err| panic!("failure shuttling dataflow receiver commands: {}", err)));
+        tokio::spawn(
+            rx.shuttle()
+                .map_err(|err| panic!("failure shuttling dataflow receiver commands: {}", err)),
+        );
         command_rxs
     };
 
