@@ -12,10 +12,11 @@ Materialize, along with any other infrastructure the demo needs.
 For the best experience using Docker, we recommend following the guidelines
 outlined here.
 
-### Increase Docker Memory
+### Increase Docker Resources
 
 Because many of our Docker-based demos leverage a large number of pieces of
-infrastructure, we recommend running Docker with at least **8 GB** of memory.
+infrastructure, we recommend running Docker with at least **2 CPUs** and
+**8 GB** of memory.
 
 On macOS:
 
@@ -24,6 +25,8 @@ On macOS:
 1. Click **Resources**.
 
 1. Click **Advanced**.
+
+1. Move the **CPUs** slider to at least **2**.
 
 1. Move the **Memory** slider to at least **8.00 GB**.
 
