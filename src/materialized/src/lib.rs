@@ -16,7 +16,6 @@
 use std::any::Any;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
@@ -26,7 +25,6 @@ use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use stream_cancel::{StreamExt as _, Trigger, Tripwire};
 use tokio::io;
 use tokio::net::TcpListener;
-use tokio::runtime::Handle;
 
 use comm::Switchboard;
 use coord::PersistenceConfig;
@@ -262,21 +260,24 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     // dataflow workers, as booting the coordinator can involve sending enough
     // data to workers to fill up a `comm` channel buffer (#3280).
     let coord_thread = if is_primary {
-        let mut coord = coord::Coordinator::new(coord::Config {
-            switchboard,
-            num_timely_workers,
-            symbiosis_url: config.symbiosis_url.as_deref(),
-            logging_granularity: config.logging_granularity,
-            data_directory: config.data_directory.as_deref(),
-            timestamp: coord::TimestampConfig {
-                frequency: config.timestamp_frequency,
-            },
-            persistence: config.persistence,
-            logical_compaction_window: config.logical_compaction_window,
-            executor: &Handle::current(),
-            experimental_mode: config.experimental_mode,
-        })?;
-        Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
+        Some(
+            coord::serve(coord::Config {
+                switchboard,
+                cmd_rx,
+                num_timely_workers,
+                symbiosis_url: config.symbiosis_url.as_deref(),
+                logging_granularity: config.logging_granularity,
+                data_directory: config.data_directory.as_deref(),
+                timestamp: coord::TimestampConfig {
+                    frequency: config.timestamp_frequency,
+                },
+                persistence: config.persistence,
+                logical_compaction_window: config.logical_compaction_window,
+                experimental_mode: config.experimental_mode,
+            })
+            .await?
+            .join_on_drop(),
+        )
     } else {
         None
     };
