@@ -26,7 +26,7 @@ use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use stream_cancel::{StreamExt as _, Trigger, Tripwire};
 use tokio::io;
 use tokio::net::TcpListener;
-use tokio::runtime::Runtime;
+use tokio::runtime::Handle;
 
 use comm::Switchboard;
 use coord::PersistenceConfig;
@@ -159,7 +159,7 @@ impl TlsConfig {
 }
 
 /// Start a `materialized` server.
-pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
+pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     let start_time = Instant::now();
 
     // Construct shared channels for SQL command and result exchange, and
@@ -169,19 +169,6 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     // Extract timely dataflow parameters.
     let is_primary = config.process == 0;
     let num_timely_workers = config.num_timely_workers();
-
-    // Start Tokio runtime.
-    let mut runtime = tokio::runtime::Builder::new()
-        .threaded_scheduler()
-        // The default thread name exceeds the Linux limit on thread name
-        // length, so pick something shorter.
-        //
-        // TODO(benesch): use `thread_name_fn` to get unique names if that
-        // lands upstream: https://github.com/tokio-rs/tokio/pull/1921.
-        .thread_name("tokio:worker")
-        .enable_all()
-        .build()?;
-    let executor = runtime.handle().clone();
 
     // Validate TLS configuration, if present.
     let tls = match &config.tls {
@@ -199,7 +186,7 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             config.addresses[config.process].port(),
         )
     });
-    let mut listener = runtime.block_on(TcpListener::bind(&listen_addr))?;
+    let mut listener = TcpListener::bind(&listen_addr).await?;
     let local_addr = listener.local_addr()?;
     config.addresses[config.process].set_port(local_addr.port());
 
@@ -209,7 +196,7 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         SocketAddr::new(listen_addr.ip(), local_addr.port()),
     );
 
-    let switchboard = Switchboard::new(config.addresses, config.process, executor.clone());
+    let switchboard = Switchboard::new(config.addresses, config.process, Handle::current());
 
     // Launch task to serve connections.
     //
@@ -222,7 +209,7 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     // complete, so switchboard traffic can cease and the task can exit.
     let (drain_trigger, drain_tripwire) = Tripwire::new();
     let (shutdown_trigger, shutdown_tripwire) = Tripwire::new();
-    runtime.spawn({
+    tokio::spawn({
         let switchboard = switchboard.clone();
         async move {
             let incoming = &mut listener.incoming();
@@ -250,8 +237,9 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         }
     });
 
-    let dataflow_conns = runtime
-        .block_on(switchboard.rendezvous(Duration::from_secs(30)))?
+    let dataflow_conns = switchboard
+        .rendezvous(Duration::from_secs(30))
+        .await?
         .into_iter()
         .map(|conn| match conn {
             None => Ok(None),
@@ -265,7 +253,7 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         config.threads,
         config.process,
         switchboard.clone(),
-        executor.clone(),
+        Handle::current(),
     )
     .map_err(|s| anyhow!("{}", s))?;
 
@@ -286,7 +274,7 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             },
             persistence: config.persistence,
             logical_compaction_window: config.logical_compaction_window,
-            executor: &executor,
+            executor: &Handle::current(),
             experimental_mode: config.experimental_mode,
         })?;
         Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
@@ -300,7 +288,6 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         _dataflow_guard: Box::new(dataflow_guard),
         _coord_thread: coord_thread,
         _shutdown_trigger: shutdown_trigger,
-        _runtime: runtime,
     })
 }
 
@@ -312,7 +299,6 @@ pub struct Server {
     _dataflow_guard: Box<dyn Any>,
     _coord_thread: Option<JoinOnDropHandle<()>>,
     _shutdown_trigger: Trigger,
-    _runtime: Runtime,
 }
 
 impl Server {
