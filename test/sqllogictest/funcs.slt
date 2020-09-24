@@ -437,3 +437,45 @@ EXPLAIN PLAN FOR SELECT (a::bool AND b::bool) IS NULL FROM t
 | Project (#2)
 
 EOF
+
+# Test qualified function names.
+
+query I
+SELECT abs(-1)
+----
+1
+
+query I
+SELECT pg_catalog.abs(1)
+----
+1
+
+query I
+SELECT materialize.pg_catalog.abs(1)
+----
+1
+
+query error function "mz_catalog.abs" does not exist
+SELECT mz_catalog.abs(1)
+
+query error unknown database 'noexist'
+SELECT noexist.pg_catalog.abs(1)
+
+# mod is a special case for qualified function names, since it is transformed
+# away by an early pass in the planner.
+
+query I
+SELECT mod(7, 4)
+----
+3
+
+query I
+SELECT pg_catalog.mod(7, 4)
+----
+3
+
+query error function "mz_catalog.mod" does not exist
+SELECT mz_catalog.mod(7, 4)
+
+query error unknown database 'noexist'
+SELECT noexist.pg_catalog.mod(7, 4)

@@ -23,24 +23,30 @@ use sql_parser::ast::{
 };
 
 use crate::normalize;
+use crate::plan::StatementContext;
 
-pub fn transform_query<'a>(query: &'a mut Query) -> Result<(), anyhow::Error> {
-    run_transforms(|t, query| t.visit_query_mut(query), query)
+pub fn transform_query<'a>(
+    scx: &StatementContext,
+    query: &'a mut Query,
+) -> Result<(), anyhow::Error> {
+    run_transforms(scx, |t, query| t.visit_query_mut(query), query)
 }
 
-pub fn transform_expr(expr: &mut Expr) -> Result<(), anyhow::Error> {
-    run_transforms(|t, expr| t.visit_expr_mut(expr), expr)
+pub fn transform_expr(scx: &StatementContext, expr: &mut Expr) -> Result<(), anyhow::Error> {
+    run_transforms(scx, |t, expr| t.visit_expr_mut(expr), expr)
 }
 
-pub fn transform_values(expr: &mut Values) -> Result<(), anyhow::Error> {
-    run_transforms(|t, expr| t.visit_values_mut(expr), expr)
+pub fn transform_values(scx: &StatementContext, expr: &mut Values) -> Result<(), anyhow::Error> {
+    run_transforms(scx, |t, expr| t.visit_values_mut(expr), expr)
 }
 
-fn run_transforms<F, A>(mut f: F, ast: &mut A) -> Result<(), anyhow::Error>
+fn run_transforms<F, A>(scx: &StatementContext, mut f: F, ast: &mut A) -> Result<(), anyhow::Error>
 where
     F: for<'ast> FnMut(&mut dyn VisitMut<'ast>, &'ast mut A),
 {
-    f(&mut FuncRewriter, ast);
+    let mut func_rewriter = FuncRewriter::new(scx);
+    f(&mut func_rewriter, ast);
+    func_rewriter.status?;
 
     f(&mut IdentFuncRewriter, ast);
 
@@ -67,9 +73,19 @@ where
 //
 //   * Rewrites the suite of standard deviation and variance functions in a
 //     manner similar to `avg`.
-struct FuncRewriter;
+struct FuncRewriter<'a> {
+    scx: &'a StatementContext<'a>,
+    status: Result<(), anyhow::Error>,
+}
 
-impl FuncRewriter {
+impl<'a> FuncRewriter<'a> {
+    fn new(scx: &'a StatementContext<'a>) -> FuncRewriter<'a> {
+        FuncRewriter {
+            scx,
+            status: Ok(()),
+        }
+    }
+
     // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL.
     fn plan_divide(lhs: Expr, rhs: Expr) -> Expr {
         lhs.divide(Self::plan_null_if(rhs, Expr::number("0")))
@@ -87,7 +103,7 @@ impl FuncRewriter {
 
     fn plan_avg(expr: Expr, filter: Option<Box<Expr>>, distinct: bool) -> Expr {
         let sum = Self::plan_agg("sum", expr.clone(), filter.clone(), distinct)
-            .call_unary("internal_avg_promotion");
+            .call_unary(vec!["mz_internal", "mz_avg_promotion"]);
         let count = Self::plan_agg("count", expr, filter, distinct);
         Self::plan_divide(sum, count)
     }
@@ -107,7 +123,7 @@ impl FuncRewriter {
         //
         //     (sum(x²) - sum(x)² / count(x)) / count(x)
         //
-        let expr = expr.call_unary("internal_avg_promotion");
+        let expr = expr.call_unary(vec!["mz_internal", "mz_avg_promotion"]);
         let expr_squared = expr.clone().multiply(expr.clone());
         let sum_squares = Self::plan_agg("sum", expr_squared, filter.clone(), distinct);
         let sum = Self::plan_agg("sum", expr.clone(), filter.clone(), distinct);
@@ -124,7 +140,7 @@ impl FuncRewriter {
     }
 
     fn plan_stddev(expr: Expr, filter: Option<Box<Expr>>, distinct: bool, sample: bool) -> Expr {
-        Self::plan_variance(expr, filter, distinct, sample).call_unary("sqrt")
+        Self::plan_variance(expr, filter, distinct, sample).call_unary(vec!["sqrt"])
     }
 
     fn plan_null_if(left: Expr, right: Expr) -> Expr {
@@ -136,7 +152,7 @@ impl FuncRewriter {
         }
     }
 
-    fn rewrite_expr(expr: &Expr) -> Option<(Ident, Expr)> {
+    fn rewrite_expr(&mut self, expr: &Expr) -> Option<(Ident, Expr)> {
         match expr {
             Expr::Function(Function {
                 name,
@@ -145,12 +161,23 @@ impl FuncRewriter {
                 distinct,
                 over: None,
             }) => {
-                let name = normalize::function_name(name.clone()).ok()?;
+                let name = normalize::object_name(name.clone()).ok()?;
+                if let Some(database) = &name.database {
+                    // If a database name is provided, we need only verify that
+                    // the database exists, as presently functions can only
+                    // exist in ambient schemas.
+                    if let Err(e) = self.scx.catalog.resolve_database(database) {
+                        self.status = Err(e.into());
+                    }
+                }
+                if name.schema.is_some() && name.schema.as_deref() != Some("pg_catalog") {
+                    return None;
+                }
                 let filter = filter.clone();
                 let distinct = *distinct;
                 let expr = if args.len() == 1 {
                     let arg = args[0].clone();
-                    match name.as_str() {
+                    match name.item.as_str() {
                         "avg" => Self::plan_avg(arg, filter, distinct),
                         "variance" | "var_samp" => Self::plan_variance(arg, filter, distinct, true),
                         "var_pop" => Self::plan_variance(arg, filter, distinct, false),
@@ -160,7 +187,7 @@ impl FuncRewriter {
                     }
                 } else if args.len() == 2 {
                     let (lhs, rhs) = (args[0].clone(), args[1].clone());
-                    match name.as_str() {
+                    match name.item.as_str() {
                         "mod" => lhs.modulo(rhs),
                         "nullif" => Self::plan_null_if(lhs, rhs),
                         _ => return None,
@@ -168,18 +195,18 @@ impl FuncRewriter {
                 } else {
                     return None;
                 };
-                Some((Ident::new(name), expr))
+                Some((Ident::new(name.item), expr))
             }
             _ => None,
         }
     }
 }
 
-impl<'ast> VisitMut<'ast> for FuncRewriter {
+impl<'ast> VisitMut<'ast> for FuncRewriter<'_> {
     fn visit_select_item_mut(&mut self, item: &'ast mut SelectItem) {
         if let SelectItem::Expr { expr, alias: None } = item {
             visit_mut::visit_expr_mut(self, expr);
-            if let Some((alias, expr)) = Self::rewrite_expr(expr) {
+            if let Some((alias, expr)) = self.rewrite_expr(expr) {
                 *item = SelectItem::Expr {
                     expr,
                     alias: Some(alias),
@@ -192,7 +219,7 @@ impl<'ast> VisitMut<'ast> for FuncRewriter {
 
     fn visit_expr_mut(&mut self, expr: &'ast mut Expr) {
         visit_mut::visit_expr_mut(self, expr);
-        if let Some((_name, new_expr)) = Self::rewrite_expr(expr) {
+        if let Some((_name, new_expr)) = self.rewrite_expr(expr) {
             *expr = new_expr;
         }
     }
@@ -211,7 +238,7 @@ impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
                 return;
             }
             if normalize::ident(ident[0].clone()) == "current_timestamp" {
-                *expr = Expr::call_nullary("current_timestamp");
+                *expr = Expr::call_nullary(vec!["current_timestamp"]);
             }
         }
     }
@@ -305,7 +332,7 @@ impl Desugarer {
 
         // `$expr = ALL ($subquery)`
         // =>
-        // `(SELECT internal_all($expr = $binding) FROM ($subquery) AS _ ($binding))
+        // `(SELECT mz_internal.mz_all($expr = $binding) FROM ($subquery) AS _ ($binding))
         //
         // and analogously for other operators and ANY.
         if let Expr::Any { left, op, right } | Expr::All { left, op, right } = expr {
@@ -346,8 +373,8 @@ impl Desugarer {
                             },
                         )
                         .call_unary(match expr {
-                            Expr::Any { .. } => "internal_any",
-                            Expr::All { .. } => "internal_all",
+                            Expr::Any { .. } => vec!["mz_internal", "mz_any"],
+                            Expr::All { .. } => vec!["mz_internal", "mz_all"],
                             _ => unreachable!(),
                         }),
                     alias: None,

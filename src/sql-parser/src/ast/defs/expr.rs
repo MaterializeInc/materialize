@@ -437,9 +437,9 @@ impl Expr {
         self.binop(BinaryOperator::Divide, right)
     }
 
-    pub fn call(name: &str, args: Vec<Expr>) -> Expr {
+    pub fn call(name: Vec<&str>, args: Vec<Expr>) -> Expr {
         Expr::Function(Function {
-            name: ObjectName(vec![name.into()]),
+            name: ObjectName(name.into_iter().map(Into::into).collect()),
             args: FunctionArgs::Args(args),
             filter: None,
             over: None,
@@ -447,11 +447,11 @@ impl Expr {
         })
     }
 
-    pub fn call_nullary(name: &str) -> Expr {
+    pub fn call_nullary(name: Vec<&str>) -> Expr {
         Expr::call(name, vec![])
     }
 
-    pub fn call_unary(self, name: &str) -> Expr {
+    pub fn call_unary(self, name: Vec<&str>) -> Expr {
         Expr::call(name, vec![self])
     }
 

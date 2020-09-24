@@ -48,7 +48,7 @@ use crate::plan::expr::{
     AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
     ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
 };
-use crate::plan::func;
+use crate::plan::func::{self, Func};
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
@@ -67,7 +67,7 @@ pub fn plan_root_query(
     mut query: Query,
     lifetime: QueryLifetime,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
-    transform_ast::transform_query(&mut query)?;
+    transform_ast::transform_query(scx, &mut query)?;
     let qcx = QueryContext::root(scx, lifetime);
     let (mut expr, scope, mut finishing) = plan_query(&qcx, &query)?;
 
@@ -142,7 +142,7 @@ pub fn plan_insert_query(
             && offset.is_none()
             && fetch.is_none() =>
         {
-            transform_ast::transform_values(&mut values)?;
+            transform_ast::transform_values(scx, &mut values)?;
             let type_hints = Some(desc.iter_types().map(|typ| &typ.scalar_type).collect());
             let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
             let (expr, _scope) = plan_values(&qcx, &values.0, type_hints)?;
@@ -197,7 +197,7 @@ pub fn eval_as_of<'a>(
         allow_subqueries: false,
     };
 
-    transform_ast::transform_expr(&mut expr)?;
+    transform_ast::transform_expr(scx, &mut expr)?;
     let ex = plan_expr(ecx, &expr)?
         .type_as_any(ecx)?
         .lower_uncorrelated()?;
@@ -234,7 +234,7 @@ pub fn plan_index_exprs<'a>(
     };
     let mut out = vec![];
     for mut expr in exprs {
-        transform_ast::transform_expr(&mut expr)?;
+        transform_ast::transform_expr(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         out.push(expr.lower_uncorrelated()?);
     }
@@ -595,7 +595,7 @@ fn plan_view_select_intrusive(
 
     // Step 3. Gather aggregates.
     let aggregates = {
-        let mut aggregate_visitor = AggregateFuncVisitor::new();
+        let mut aggregate_visitor = AggregateFuncVisitor::new(&qcx.scx);
         for p in projection {
             aggregate_visitor.visit_select_item(p);
         }
@@ -1038,12 +1038,23 @@ fn plan_table_function(
     alias: Option<&TableAlias>,
     args: &FunctionArgs,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
-    let ident = normalize::function_name(name.clone())?;
+    let name = normalize::object_name(name.clone())?;
+
+    if name.database.is_none() && name.schema.is_none() && name.item == "values" {
+        // Produce a nice error message for the common typo
+        // `SELECT * FROM VALUES (1)`.
+        bail!("VALUES expression in FROM clause must be surrounded by parentheses");
+    }
+
+    let impls = match func::resolve(&ecx.qcx.scx, &name)? {
+        Func::Table(impls) => impls,
+        _ => bail!("{} is not a table function", name),
+    };
     let args = match args {
-        FunctionArgs::Star => bail!("{} does not accept * as an argument", ident),
+        FunctionArgs::Star => bail!("{} does not accept * as an argument", name),
         FunctionArgs::Args(args) => args,
     };
-    let tf = func::select_table_func(ecx, &*ident, args)?;
+    let tf = func::select_impl(ecx, &name, impls, args)?;
     let call = RelationExpr::CallTable {
         func: tf.func,
         exprs: tf.exprs,
@@ -1052,7 +1063,7 @@ fn plan_table_function(
         Some(PartialName {
             database: None,
             schema: None,
-            item: ident,
+            item: name.item,
         }),
         tf.column_names,
         Some(ecx.qcx.outer_scope.clone()),
@@ -1121,11 +1132,14 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
 fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
     let name = match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
-        Expr::Function(func) => match func.name.0.last() {
-            None => None,
-            Some(name) if name.as_str().starts_with("internal_") => None,
-            Some(name) => Some(normalize::column_name(name.clone())),
-        },
+        Expr::Function(func) => {
+            let name = normalize::object_name(func.name.clone()).ok()?;
+            if name.schema.as_deref() == Some("mz_internal") {
+                None
+            } else {
+                Some(name.item.into())
+            }
+        }
         Expr::Coalesce { .. } => Some("coalesce".into()),
         Expr::List { .. } => Some("list".into()),
         Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
@@ -1779,8 +1793,11 @@ pub fn plan_homogeneous_exprs(
 }
 
 fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExpr, anyhow::Error> {
-    let name = normalize::function_name(sql_func.name.clone())?;
-    assert!(func::is_aggregate_func(&name));
+    let name = normalize::object_name(sql_func.name.clone())?;
+    let impls = match func::resolve(&ecx.qcx.scx, &name)? {
+        Func::Aggregate(impls) => impls,
+        _ => unreachable!("plan_aggregate called on non-aggregate function,"),
+    };
 
     if sql_func.over.is_some() {
         unsupported!(213, "window functions");
@@ -1804,7 +1821,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         }
         FunctionArgs::Args(args) => args,
     };
-    let (mut expr, func) = func::select_aggregate_func(ecx, &name, args)?;
+    let (mut expr, func) = func::select_impl(ecx, &name, impls, args)?;
     if let Some(filter) = &sql_func.filter {
         // If a filter is present, as in
         //
@@ -1909,25 +1926,26 @@ fn plan_function<'a>(
     ecx: &ExprContext,
     sql_func: &'a Function,
 ) -> Result<ScalarExpr, anyhow::Error> {
-    let name = normalize::function_name(sql_func.name.clone())?;
-    let ident = &*name;
-
-    if func::is_aggregate_func(&name) {
-        if ecx.allow_aggregates {
+    let name = normalize::object_name(sql_func.name.clone())?;
+    let impls = match func::resolve(&ecx.qcx.scx, &name)? {
+        Func::Aggregate(_) if ecx.allow_aggregates => {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
             bail!(
                 "Internal error: encountered unplanned aggregate function: {:?}",
                 sql_func,
             )
-        } else {
+        }
+        Func::Aggregate(_) => {
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
-    } else if func::is_table_func(&name) {
-        unsupported!(
-            1546,
-            format!("table function ({}) in scalar position", ident)
-        );
-    }
+        Func::Table(_) => {
+            unsupported!(
+                1546,
+                format!("table function ({}) in scalar position", name)
+            );
+        }
+        Func::Scalar(impls) => impls,
+    };
 
     if sql_func.over.is_some() {
         unsupported!(213, "window functions");
@@ -1935,18 +1953,15 @@ fn plan_function<'a>(
     if sql_func.filter.is_some() {
         bail!(
             "FILTER specified but {}() is not an aggregate function",
-            ident
+            name
         );
     }
     let args = match &sql_func.args {
-        FunctionArgs::Star => bail!(
-            "* argument is invalid with non-aggregate function {}",
-            ident
-        ),
+        FunctionArgs::Star => bail!("* argument is invalid with non-aggregate function {}", name),
         FunctionArgs::Args(args) => args,
     };
 
-    func::select_scalar_func(ecx, ident, args)
+    func::select_impl(ecx, &name, impls, args)
 }
 
 fn plan_is_null_expr<'a>(
@@ -2155,15 +2170,17 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
 
 /// This is used to collect aggregates from within an `Expr`.
 /// See the explanation of aggregate handling at the top of the file for more details.
-struct AggregateFuncVisitor<'ast> {
+struct AggregateFuncVisitor<'a, 'ast> {
+    scx: &'a StatementContext<'a>,
     aggs: Vec<&'ast Function>,
     within_aggregate: bool,
     err: Option<anyhow::Error>,
 }
 
-impl<'ast> AggregateFuncVisitor<'ast> {
-    fn new() -> AggregateFuncVisitor<'ast> {
+impl<'a, 'ast> AggregateFuncVisitor<'a, 'ast> {
+    fn new(scx: &'a StatementContext<'a>) -> AggregateFuncVisitor<'a, 'ast> {
         AggregateFuncVisitor {
+            scx,
             aggs: Vec::new(),
             within_aggregate: false,
             err: None,
@@ -2187,10 +2204,10 @@ impl<'ast> AggregateFuncVisitor<'ast> {
     }
 }
 
-impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
+impl<'a, 'ast> Visit<'ast> for AggregateFuncVisitor<'a, 'ast> {
     fn visit_function(&mut self, func: &'ast Function) {
-        if let Ok(name) = normalize::function_name(func.name.clone()) {
-            if func::is_aggregate_func(&name) {
+        if let Ok(name) = normalize::object_name(func.name.clone()) {
+            if let Ok(Func::Aggregate(_)) = func::resolve(self.scx, &name) {
                 if self.within_aggregate {
                     self.err = Some(anyhow!("nested aggregate functions are not allowed"));
                     return;
