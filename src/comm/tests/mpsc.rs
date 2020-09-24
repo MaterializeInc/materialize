@@ -73,7 +73,7 @@ async fn test_mpsc_limited_close() -> Result<(), Box<dyn Error>> {
 /// Verifies that TCP connections are reused by repeatedly connecting the same
 /// MPSC transmitter. Without connection reuse, the test should crash with an
 /// AddrNotAvailable error because the OS will run out of outgoing TCP ports.
-#[tokio::test]
+#[tokio::test(threaded_scheduler)]
 async fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
