@@ -22,16 +22,16 @@ use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context};
 use differential_dataflow::lattice::Lattice;
-use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
+use tokio::runtime::Handle;
 
 use dataflow::source::persistence::PersistenceSender;
 use dataflow::{PersistenceMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
@@ -104,11 +104,11 @@ where
     C: comm::Connection,
 {
     pub switchboard: comm::Switchboard<C>,
+    pub cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
     pub num_timely_workers: usize,
     pub symbiosis_url: Option<&'a str>,
     pub logging_granularity: Option<Duration>,
     pub data_directory: Option<&'a Path>,
-    pub executor: &'a tokio::runtime::Handle,
     pub timestamp: TimestampConfig,
     pub persistence: Option<PersistenceConfig>,
     pub logical_compaction_window: Option<Duration>,
@@ -121,6 +121,7 @@ where
     C: comm::Connection,
 {
     switchboard: comm::Switchboard<C>,
+    cmd_rx: Option<futures::channel::mpsc::UnboundedReceiver<Command>>,
     broadcast_tx: comm::broadcast::Sender<SequencedCommand>,
     num_timely_workers: usize,
     optimizer: Optimizer,
@@ -139,7 +140,6 @@ where
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
     logging_granularity: Option<u64>,
-    executor: tokio::runtime::Handle,
     feedback_rx: Option<comm::mpsc::Receiver<WorkerFeedbackWithMeta>>,
     // Temporary place to stash Persister thread startup data between when the coordinator thread
     // is initialized and when the persister thread gets spawned.
@@ -164,24 +164,20 @@ impl<C> Coordinator<C>
 where
     C: comm::Connection,
 {
-    pub fn new(config: Config<C>) -> Result<Self, anyhow::Error> {
+    async fn new(config: Config<'_, C>) -> Result<Self, anyhow::Error> {
         let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
-        config.executor.enter(|| {
-            let res = Self::new_core(config);
-            if res.is_err() {
-                broadcast(&mut broadcast_tx, SequencedCommand::Shutdown);
-            }
-            res
-        })
+        let res = Self::new_core(config).await;
+        if res.is_err() {
+            broadcast(&mut broadcast_tx, SequencedCommand::Shutdown).await;
+        }
+        res
     }
 
-    fn new_core(config: Config<C>) -> Result<Self, anyhow::Error> {
+    async fn new_core(config: Config<'_, C>) -> Result<Self, anyhow::Error> {
         let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
 
         let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
-            Some(block_on(symbiosis::Postgres::open_and_erase(
-                symbiosis_url,
-            ))?)
+            Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
         } else {
             None
         };
@@ -196,7 +192,7 @@ where
             .logical_compaction_window
             .map(duration_to_timestamp_millis);
         let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
-        broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
+        broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx)).await;
 
         if let Some(granularity) = config.logging_granularity {
             broadcast(
@@ -208,29 +204,36 @@ where
                         .map(|src| (src.variant.clone(), src.index_id))
                         .collect(),
                 }),
-            );
+            )
+            .await;
         }
 
-        let (persister, persistence_tx, persistence_path) = if let Some(persistence_config) =
-            config.persistence
-        {
-            let (persistence_tx, persistence_rx) = config.switchboard.mpsc();
-            broadcast(
-                &mut broadcast_tx,
-                SequencedCommand::EnablePersistence(persistence_tx.clone()),
-            );
-            let path = persistence_config.path.clone();
-            (
-                Some(Persister::new(persistence_rx, persistence_config)),
-                Some(block_on(persistence_tx.connect()).expect("failed to connect persistence tx")),
-                Some(path),
-            )
-        } else {
-            (None, None, None)
-        };
+        let (persister, persistence_tx, persistence_path) =
+            if let Some(persistence_config) = config.persistence {
+                let (persistence_tx, persistence_rx) = config.switchboard.mpsc();
+                broadcast(
+                    &mut broadcast_tx,
+                    SequencedCommand::EnablePersistence(persistence_tx.clone()),
+                )
+                .await;
+                let path = persistence_config.path.clone();
+                (
+                    Some(Persister::new(persistence_rx, persistence_config)),
+                    Some(
+                        persistence_tx
+                            .connect()
+                            .await
+                            .expect("failed to connect persistence tx"),
+                    ),
+                    Some(path),
+                )
+            } else {
+                (None, None, None)
+            };
 
         let mut coord = Self {
             switchboard: config.switchboard,
+            cmd_rx: Some(config.cmd_rx),
             broadcast_tx,
             num_timely_workers: config.num_timely_workers,
             optimizer: Default::default(),
@@ -242,7 +245,6 @@ where
             logging_granularity: config
                 .logging_granularity
                 .and_then(|c| c.as_millis().try_into().ok()),
-            executor: config.executor.clone(),
             timestamp_config: config.timestamp,
             logical_compaction_window_ms,
             feedback_rx: Some(rx),
@@ -272,7 +274,7 @@ where
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    coord.maybe_begin_persistence(*id, &source.connector);
+                    coord.maybe_begin_persistence(*id, &source.connector).await;
                 }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == *id) {
@@ -289,7 +291,7 @@ where
                             .indexes
                             .insert(*id, Frontiers::new(coord.num_timely_workers, Some(1_000)));
                     } else {
-                        coord.ship_dataflow(coord.build_index_dataflow(*id));
+                        coord.ship_dataflow(coord.build_index_dataflow(*id)).await;
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -306,14 +308,15 @@ where
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connector = block_on(sink_connector::build(
+                    let connector = sink_connector::build(
                         builder.clone(),
                         sink.with_snapshot,
                         coord.determine_frontier(sink.as_of, sink.from)?,
                         *id,
-                    ))
+                    )
+                    .await
                     .with_context(|| format!("recreating sink {}", name))?;
-                    coord.handle_sink_connector_ready(*id, connector);
+                    coord.handle_sink_connector_ready(*id, connector).await;
                 }
                 _ => (), // Handled in prior loop.
             }
@@ -325,13 +328,13 @@ where
         let mut sinks_to_report = HashSet::new();
         for (id, name, item) in catalog_entries {
             // Mirror each recovered catalog entry.
-            coord.report_catalog_update(id, name.to_string(), 1);
+            coord.report_catalog_update(id, name.to_string(), 1).await;
 
             if let Ok(desc) = item.desc(&name) {
-                coord.report_column_updates(desc, id, 1);
+                coord.report_column_updates(desc, id, 1).await;
             }
             match item {
-                CatalogItem::Index(index) => coord.report_index_update(id, &index, 1),
+                CatalogItem::Index(index) => coord.report_index_update(id, &index, 1).await,
                 CatalogItem::Table(_) => {
                     tables_to_report.insert(id);
                 }
@@ -348,7 +351,9 @@ where
         }
 
         // Insert initial named objects into system tables.
-        coord.report_database_update(AMBIENT_DATABASE_ID, "AMBIENT", 1);
+        coord
+            .report_database_update(AMBIENT_DATABASE_ID, "AMBIENT", 1)
+            .await;
         let dbs: Vec<(String, i64, Vec<(String, i64, Vec<(String, GlobalId)>)>)> = coord
             .catalog
             .databases()
@@ -375,20 +380,32 @@ where
             })
             .collect();
         for (database_name, database_id, schemas) in dbs {
-            coord.report_database_update(database_id, &database_name, 1);
+            coord
+                .report_database_update(database_id, &database_name, 1)
+                .await;
 
             for (schema_name, schema_id, items) in schemas {
-                coord.report_schema_update(database_id, schema_id, &schema_name, "USER", 1);
+                coord
+                    .report_schema_update(database_id, schema_id, &schema_name, "USER", 1)
+                    .await;
 
                 for (item_name, item_id) in items {
                     if tables_to_report.remove(&item_id) {
-                        coord.report_table_update(&item_id, schema_id, &item_name, 1);
+                        coord
+                            .report_table_update(&item_id, schema_id, &item_name, 1)
+                            .await;
                     } else if sources_to_report.remove(&item_id) {
-                        coord.report_source_update(&item_id, schema_id, &item_name, 1);
+                        coord
+                            .report_source_update(&item_id, schema_id, &item_name, 1)
+                            .await;
                     } else if views_to_report.remove(&item_id) {
-                        coord.report_view_update(&item_id, schema_id, &item_name, 1);
+                        coord
+                            .report_view_update(&item_id, schema_id, &item_name, 1)
+                            .await;
                     } else if sinks_to_report.remove(&item_id) {
-                        coord.report_sink_update(&item_id, schema_id, &item_name, 1);
+                        coord
+                            .report_sink_update(&item_id, schema_id, &item_name, 1)
+                            .await;
                     }
                 }
             }
@@ -409,71 +426,87 @@ where
             })
             .collect();
         for (schema_name, schema_id, items) in ambient_schemas {
-            coord.report_schema_update(AMBIENT_DATABASE_ID, schema_id, &schema_name, "SYSTEM", 1);
+            coord
+                .report_schema_update(AMBIENT_DATABASE_ID, schema_id, &schema_name, "SYSTEM", 1)
+                .await;
 
             for (item_name, item_id) in items {
                 if tables_to_report.remove(&item_id) {
-                    coord.report_table_update(&item_id, schema_id, &item_name, 1);
+                    coord
+                        .report_table_update(&item_id, schema_id, &item_name, 1)
+                        .await;
                 } else if sources_to_report.remove(&item_id) {
-                    coord.report_source_update(&item_id, schema_id, &item_name, 1);
+                    coord
+                        .report_source_update(&item_id, schema_id, &item_name, 1)
+                        .await;
                 } else if views_to_report.remove(&item_id) {
-                    coord.report_view_update(&item_id, schema_id, &item_name, 1);
+                    coord
+                        .report_view_update(&item_id, schema_id, &item_name, 1)
+                        .await;
                 } else if sinks_to_report.remove(&item_id) {
-                    coord.report_sink_update(&item_id, schema_id, &item_name, 1);
+                    coord
+                        .report_sink_update(&item_id, schema_id, &item_name, 1)
+                        .await;
                 }
             }
         }
-        coord.report_schema_update(
-            AMBIENT_DATABASE_ID,
-            AMBIENT_SCHEMA_ID,
-            "mz_temp",
-            "system",
-            1,
-        );
+        coord
+            .report_schema_update(
+                AMBIENT_DATABASE_ID,
+                AMBIENT_SCHEMA_ID,
+                "mz_temp",
+                "system",
+                1,
+            )
+            .await;
 
         // Announce primary and foreign key relationships.
         if coord.logging_granularity.is_some() {
             for log in BUILTINS.logs() {
                 let log_id = &log.id.to_string();
-                coord.update_catalog_view(
-                    MZ_VIEW_KEYS.id,
-                    log.variant.desc().typ().keys.iter().enumerate().flat_map(
-                        move |(index, key)| {
-                            key.iter().map(move |k| {
-                                let row = Row::pack(&[
-                                    Datum::String(log_id),
-                                    Datum::Int64(*k as i64),
-                                    Datum::Int64(index as i64),
-                                ]);
-                                (row, 1)
-                            })
-                        },
-                    ),
-                );
+                coord
+                    .update_catalog_view(
+                        MZ_VIEW_KEYS.id,
+                        log.variant.desc().typ().keys.iter().enumerate().flat_map(
+                            move |(index, key)| {
+                                key.iter().map(move |k| {
+                                    let row = Row::pack(&[
+                                        Datum::String(log_id),
+                                        Datum::Int64(*k as i64),
+                                        Datum::Int64(index as i64),
+                                    ]);
+                                    (row, 1)
+                                })
+                            },
+                        ),
+                    )
+                    .await;
 
-                coord.update_catalog_view(
-                    MZ_VIEW_FOREIGN_KEYS.id,
-                    log.variant.foreign_keys().into_iter().enumerate().flat_map(
-                        move |(index, (parent, pairs))| {
-                            let parent_id = BUILTINS
-                                .logs()
-                                .find(|src| src.variant == parent)
-                                .unwrap()
-                                .id
-                                .to_string();
-                            pairs.into_iter().map(move |(c, p)| {
-                                let row = Row::pack(&[
-                                    Datum::String(&log_id),
-                                    Datum::Int64(c as i64),
-                                    Datum::String(&parent_id),
-                                    Datum::Int64(p as i64),
-                                    Datum::Int64(index as i64),
-                                ]);
-                                (row, 1)
-                            })
-                        },
-                    ),
-                );
+                coord
+                    .update_catalog_view(
+                        MZ_VIEW_FOREIGN_KEYS.id,
+                        log.variant.foreign_keys().into_iter().enumerate().flat_map(
+                            move |(index, (parent, pairs))| {
+                                let parent_id = BUILTINS
+                                    .logs()
+                                    .find(|src| src.variant == parent)
+                                    .unwrap()
+                                    .id
+                                    .to_string();
+                                pairs.into_iter().map(move |(c, p)| {
+                                    let row = Row::pack(&[
+                                        Datum::String(&log_id),
+                                        Datum::Int64(c as i64),
+                                        Datum::String(&parent_id),
+                                        Datum::Int64(p as i64),
+                                        Datum::Int64(index as i64),
+                                    ]);
+                                    (row, 1)
+                                })
+                            },
+                        ),
+                    )
+                    .await;
             }
         }
         Ok(coord)
@@ -521,14 +554,13 @@ where
         }
     }
 
-    pub fn serve(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
-        self.executor.clone().enter(|| self.serve_core(cmd_rx))
-    }
-
-    fn serve_core(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
+    async fn serve(&mut self) {
         let (internal_cmd_tx, internal_cmd_stream) = futures::channel::mpsc::unbounded();
 
-        let cmd_stream = cmd_rx
+        let cmd_stream = self
+            .cmd_rx
+            .take()
+            .unwrap()
             .map(Message::Command)
             .chain(stream::once(future::ready(Message::Shutdown)));
 
@@ -540,7 +572,7 @@ where
         let (ts_tx, ts_rx) = std::sync::mpsc::channel();
         let mut timestamper =
             Timestamper::new(&self.timestamp_config, internal_cmd_tx.clone(), ts_rx);
-        let executor = self.executor.clone();
+        let executor = Handle::current();
         let _timestamper_thread =
             thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
 
@@ -559,7 +591,7 @@ where
             cmd_stream.boxed(),
         ]);
 
-        while let Some(msg) = block_on(messages.next()) {
+        while let Some(msg) = messages.next().await {
             match msg {
                 Message::Command(Command::Startup { session, tx }) => {
                     let mut messages = vec![];
@@ -633,8 +665,14 @@ where
                     tx,
                     result,
                     params,
-                } => match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
-                    Ok((pcx, plan)) => self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan),
+                } => match future::ready(result)
+                    .and_then(|stmt| self.handle_statement(&session, stmt, &params))
+                    .await
+                {
+                    Ok((pcx, plan)) => {
+                        self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
+                            .await
+                    }
                     Err(e) => tx.send(Err(e), session),
                 },
 
@@ -650,7 +688,7 @@ where
                         // a Kafka topic) that's been created on our behalf. If
                         // we fail now, we'll leak that external state.
                         if self.catalog.try_get_by_id(id).is_some() {
-                            self.handle_sink_connector_ready(id, connector);
+                            self.handle_sink_connector_ready(id, connector).await;
                         } else {
                             // Another session dropped the sink while we were
                             // creating the connector. Report to the client that
@@ -680,7 +718,7 @@ where
                 }
 
                 Message::Command(Command::CancelRequest { conn_id }) => {
-                    self.handle_cancel(conn_id);
+                    self.handle_cancel(conn_id).await;
                 }
 
                 Message::Command(Command::DumpCatalog { tx }) => {
@@ -688,7 +726,7 @@ where
                 }
 
                 Message::Command(Command::Terminate { conn_id }) => {
-                    self.handle_terminate(conn_id);
+                    self.handle_terminate(conn_id).await;
                 }
 
                 Message::Worker(WorkerFeedbackWithMeta {
@@ -698,7 +736,7 @@ where
                     for (name, changes) in updates {
                         self.update_upper(&name, changes);
                     }
-                    self.maintenance();
+                    self.maintenance().await;
                 }
 
                 Message::Worker(WorkerFeedbackWithMeta {
@@ -731,16 +769,19 @@ where
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::AdvanceSourceTimestamp { id, update },
-                    );
+                    )
+                    .await;
                 }
                 Message::Shutdown => {
                     ts_tx.send(TimestampMessage::Shutdown).unwrap();
 
                     if let Some(persistence_tx) = &mut self.persistence_tx {
-                        block_on(persistence_tx.send(PersistenceMessage::Shutdown))
+                        persistence_tx
+                            .send(PersistenceMessage::Shutdown)
+                            .await
                             .expect("failed to send shutdown message to persistence thread");
                     }
-                    broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown);
+                    broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown).await;
                     break;
                 }
             }
@@ -764,7 +805,8 @@ where
                         SequencedCommand::AdvanceAllLocalInputs {
                             advance_to: next_ts,
                         },
-                    );
+                    )
+                    .await;
                     self.closed_up_to = next_ts;
                 }
             }
@@ -773,7 +815,7 @@ where
         // Cleanly drain any pending messages from the worker before shutting
         // down.
         drop(internal_cmd_tx);
-        while block_on(messages.next()).is_some() {}
+        while messages.next().await.is_some() {}
     }
 
     /// Updates the upper frontier of a named view.
@@ -818,7 +860,7 @@ where
     ///
     /// Primarily, this involves sequencing compaction commands, which should be
     /// issued whenever available.
-    fn maintenance(&mut self) {
+    async fn maintenance(&mut self) {
         // Take this opportunity to drain `since_update` commands.
         // Don't try to compact to an empty frontier. There may be a good reason to do this
         // in principle, but not in any current Mz use case.
@@ -832,11 +874,12 @@ where
                     &mut self.since_updates,
                     Vec::new(),
                 )),
-            );
+            )
+            .await;
         }
     }
 
-    fn handle_statement(
+    async fn handle_statement(
         &mut self,
         session: &Session,
         stmt: sql::ast::Statement,
@@ -859,8 +902,9 @@ where
         | Statement::Insert { .. } = &stmt
         {
             if let Some(ref mut postgres) = self.symbiosis {
-                let plan =
-                    block_on(postgres.execute(&pcx, &self.catalog.for_session(session), &stmt))?;
+                let plan = postgres
+                    .execute(&pcx, &self.catalog.for_session(session), &stmt)
+                    .await?;
                 return Ok((pcx, plan));
             }
         }
@@ -874,11 +918,9 @@ where
             Ok(plan) => Ok((pcx, plan)),
             Err(err) => match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                    let plan = block_on(postgres.execute(
-                        &pcx,
-                        &self.catalog.for_session(session),
-                        &stmt,
-                    ))?;
+                    let plan = postgres
+                        .execute(&pcx, &self.catalog.for_session(session), &stmt)
+                        .await?;
                     Ok((pcx, plan))
                 }
                 _ => Err(err),
@@ -923,12 +965,12 @@ where
     /// NOTE(benesch): this function makes the assumption that a connection can
     /// only have one active query at a time. This is true today, but will not
     /// be true once we have full support for portals.
-    fn handle_cancel(&mut self, conn_id: u32) {
+    async fn handle_cancel(&mut self, conn_id: u32) {
         if let Some(name) = self.active_tails.remove(&conn_id) {
             // A TAIL is known to be active, so drop the dataflow that is
             // servicing it. No need to try to cancel PEEKs in this case,
             // because if a TAIL is active, a PEEK cannot be.
-            self.drop_sinks(vec![name]);
+            self.drop_sinks(vec![name]).await;
         } else {
             // No TAIL is known to be active, so drop the PEEK that may be
             // active on this connection. This is a no-op if no PEEKs are
@@ -936,27 +978,29 @@ where
             broadcast(
                 &mut self.broadcast_tx,
                 SequencedCommand::CancelPeek { conn_id },
-            );
+            )
+            .await;
         }
     }
 
     /// Terminate any temporary objects created by the named `conn_id`
     /// stored on the Coordinator.
-    fn handle_terminate(&mut self, conn_id: u32) {
+    async fn handle_terminate(&mut self, conn_id: u32) {
         if let Some(name) = self.active_tails.remove(&conn_id) {
-            self.drop_sinks(vec![name]);
+            self.drop_sinks(vec![name]).await;
         }
 
         // Remove all temporary items created by the conn_id.
         let ops = self.catalog.drop_temp_item_ops(conn_id);
         self.catalog_transact(ops)
+            .await
             .expect("unable to drop temporary items for conn_id");
         self.catalog
             .drop_temporary_schema(conn_id)
             .expect("unable to drop temporary schema");
     }
 
-    fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {
+    async fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {
         // Update catalog entry with sink connector.
         let entry = self.catalog.get_by_id(&id);
         let name = entry.name().clone();
@@ -978,10 +1022,11 @@ where
             .expect("replacing a sink cannot fail");
 
         self.ship_dataflow(self.build_sink_dataflow(name.to_string(), id, sink.from, connector))
+            .await
     }
 
     /// Insert a single row into a given catalog view.
-    fn update_catalog_view<I>(&mut self, index_id: GlobalId, updates: I)
+    async fn update_catalog_view<I>(&mut self, index_id: GlobalId, updates: I)
     where
         I: IntoIterator<Item = (Row, isize)>,
     {
@@ -1000,15 +1045,17 @@ where
                 id: index_id,
                 updates,
             },
-        );
+        )
+        .await;
     }
 
-    fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
+    async fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
         let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
-        self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)));
+        self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)))
+            .await;
     }
 
-    fn report_database_update(&mut self, database_id: i64, name: &str, diff: isize) {
+    async fn report_database_update(&mut self, database_id: i64, name: &str, diff: isize) {
         self.update_catalog_view(
             MZ_DATABASES.id,
             iter::once((
@@ -1016,9 +1063,10 @@ where
                 diff,
             )),
         )
+        .await
     }
 
-    fn report_schema_update(
+    async fn report_schema_update(
         &mut self,
         database_id: i64,
         schema_id: i64,
@@ -1038,9 +1086,15 @@ where
                 diff,
             )),
         )
+        .await
     }
 
-    fn report_column_updates(&mut self, desc: &RelationDesc, global_id: GlobalId, diff: isize) {
+    async fn report_column_updates(
+        &mut self,
+        desc: &RelationDesc,
+        global_id: GlobalId,
+        diff: isize,
+    ) {
         for (i, (column_name, column_type)) in desc.iter().enumerate() {
             self.update_catalog_view(
                 MZ_COLUMNS.id,
@@ -1059,10 +1113,11 @@ where
                     diff,
                 )),
             )
+            .await
         }
     }
 
-    fn report_index_update(&mut self, global_id: GlobalId, index: &Index, diff: isize) {
+    async fn report_index_update(&mut self, global_id: GlobalId, index: &Index, diff: isize) {
         self.report_index_update_inner(
             global_id,
             index,
@@ -1076,12 +1131,13 @@ where
                 .collect(),
             diff,
         )
+        .await
     }
 
     // When updating the mz_indexes system table after dropping an index, it may no longer be possible
     // to generate the 'nullable' information for that index. This function allows callers to bypass
     // that computation and provide their own value, instead.
-    fn report_index_update_inner(
+    async fn report_index_update_inner(
         &mut self,
         global_id: GlobalId,
         index: &Index,
@@ -1125,10 +1181,11 @@ where
                     diff,
                 )),
             )
+            .await
         }
     }
 
-    fn report_table_update(
+    async fn report_table_update(
         &mut self,
         global_id: &GlobalId,
         schema_id: i64,
@@ -1146,9 +1203,10 @@ where
                 diff,
             )),
         )
+        .await
     }
 
-    fn report_source_update(
+    async fn report_source_update(
         &mut self,
         global_id: &GlobalId,
         schema_id: i64,
@@ -1166,9 +1224,10 @@ where
                 diff,
             )),
         )
+        .await
     }
 
-    fn report_view_update(
+    async fn report_view_update(
         &mut self,
         global_id: &GlobalId,
         schema_id: i64,
@@ -1186,9 +1245,10 @@ where
                 diff,
             )),
         )
+        .await
     }
 
-    fn report_sink_update(
+    async fn report_sink_update(
         &mut self,
         global_id: &GlobalId,
         schema_id: i64,
@@ -1206,9 +1266,10 @@ where
                 diff,
             )),
         )
+        .await
     }
 
-    fn sequence_plan(
+    async fn sequence_plan(
         &mut self,
         internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
         tx: ClientTransmitter<ExecuteResponse>,
@@ -1220,14 +1281,18 @@ where
             Plan::CreateDatabase {
                 name,
                 if_not_exists,
-            } => tx.send(self.sequence_create_database(name, if_not_exists), session),
+            } => tx.send(
+                self.sequence_create_database(name, if_not_exists).await,
+                session,
+            ),
 
             Plan::CreateSchema {
                 database_name,
                 schema_name,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_schema(database_name, schema_name, if_not_exists),
+                self.sequence_create_schema(database_name, schema_name, if_not_exists)
+                    .await,
                 session,
             ),
 
@@ -1236,7 +1301,8 @@ where
                 table,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_table(pcx, name, table, if_not_exists),
+                self.sequence_create_table(pcx, name, table, if_not_exists)
+                    .await,
                 session,
             ),
 
@@ -1246,7 +1312,8 @@ where
                 if_not_exists,
                 materialized,
             } => tx.send(
-                self.sequence_create_source(pcx, name, source, if_not_exists, materialized),
+                self.sequence_create_source(pcx, name, source, if_not_exists, materialized)
+                    .await,
                 session,
             ),
 
@@ -1256,17 +1323,20 @@ where
                 with_snapshot,
                 as_of,
                 if_not_exists,
-            } => self.sequence_create_sink(
-                pcx,
-                internal_cmd_tx.clone(),
-                tx,
-                session,
-                name,
-                sink,
-                with_snapshot,
-                as_of,
-                if_not_exists,
-            ),
+            } => {
+                self.sequence_create_sink(
+                    pcx,
+                    internal_cmd_tx.clone(),
+                    tx,
+                    session,
+                    name,
+                    sink,
+                    with_snapshot,
+                    as_of,
+                    if_not_exists,
+                )
+                .await
+            }
 
             Plan::CreateView {
                 name,
@@ -1283,7 +1353,8 @@ where
                     session.conn_id(),
                     materialize,
                     if_not_exists,
-                ),
+                )
+                .await,
                 session,
             ),
 
@@ -1292,32 +1363,39 @@ where
                 index,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_index(pcx, name, index, if_not_exists),
+                self.sequence_create_index(pcx, name, index, if_not_exists)
+                    .await,
                 session,
             ),
 
-            Plan::DropDatabase { name } => tx.send(self.sequence_drop_database(name), session),
+            Plan::DropDatabase { name } => {
+                tx.send(self.sequence_drop_database(name).await, session)
+            }
 
             Plan::DropSchema {
                 database_name,
                 schema_name,
             } => tx.send(
-                self.sequence_drop_schema(database_name, schema_name),
+                self.sequence_drop_schema(database_name, schema_name).await,
                 session,
             ),
 
-            Plan::DropItems { items, ty } => tx.send(self.sequence_drop_items(items, ty), session),
+            Plan::DropItems { items, ty } => {
+                tx.send(self.sequence_drop_items(items, ty).await, session)
+            }
 
             Plan::EmptyQuery => tx.send(Ok(ExecuteResponse::EmptyQuery), session),
 
-            Plan::ShowAllVariables => tx.send(self.sequence_show_all_variables(&session), session),
+            Plan::ShowAllVariables => {
+                tx.send(self.sequence_show_all_variables(&session).await, session)
+            }
 
             Plan::ShowVariable(name) => {
-                tx.send(self.sequence_show_variable(&session, name), session)
+                tx.send(self.sequence_show_variable(&session, name).await, session)
             }
 
             Plan::SetVariable { name, value } => tx.send(
-                self.sequence_set_variable(&mut session, name, value),
+                self.sequence_set_variable(&mut session, name, value).await,
                 session,
             ),
 
@@ -1342,7 +1420,8 @@ where
                 finishing,
                 materialize,
             } => tx.send(
-                self.sequence_peek(session.conn_id(), source, when, finishing, materialize),
+                self.sequence_peek(session.conn_id(), source, when, finishing, materialize)
+                    .await,
                 session,
             ),
 
@@ -1351,7 +1430,8 @@ where
                 ts,
                 with_snapshot,
             } => tx.send(
-                self.sequence_tail(session.conn_id(), id, with_snapshot, ts),
+                self.sequence_tail(session.conn_id(), id, with_snapshot, ts)
+                    .await,
                 session,
             ),
 
@@ -1380,18 +1460,20 @@ where
                 affected_rows,
                 kind,
             } => tx.send(
-                self.sequence_send_diffs(id, updates, affected_rows, kind),
+                self.sequence_send_diffs(id, updates, affected_rows, kind)
+                    .await,
                 session,
             ),
 
-            Plan::Insert { id, values } => tx.send(self.sequence_insert(id, values), session),
+            Plan::Insert { id, values } => tx.send(self.sequence_insert(id, values).await, session),
 
             Plan::AlterItemRename {
                 id,
                 to_name,
                 object_type,
             } => tx.send(
-                self.sequence_alter_item_rename(id, to_name, object_type),
+                self.sequence_alter_item_rename(id, to_name, object_type)
+                    .await,
                 session,
             ),
 
@@ -1402,7 +1484,7 @@ where
         }
     }
 
-    fn sequence_create_database(
+    async fn sequence_create_database(
         &mut self,
         name: String,
         if_not_exists: bool,
@@ -1414,14 +1496,14 @@ where
                 schema_name: "public".into(),
             },
         ];
-        match self.catalog_transact(ops) {
+        match self.catalog_transact(ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
             Err(err) => Err(err),
         }
     }
 
-    fn sequence_create_schema(
+    async fn sequence_create_schema(
         &mut self,
         database_name: DatabaseSpecifier,
         schema_name: String,
@@ -1431,14 +1513,14 @@ where
             database_name,
             schema_name,
         };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
             Err(err) => Err(err),
         }
     }
 
-    fn sequence_create_table(
+    async fn sequence_create_table(
         &mut self,
         pcx: PlanContext,
         name: FullName,
@@ -1456,20 +1538,24 @@ where
         index_name.item += "_primary_idx";
         let index =
             auto_generate_primary_idx(index_name.item.clone(), name.clone(), table_id, &table.desc);
-        match self.catalog_transact(vec![
-            catalog::Op::CreateItem {
-                id: table_id,
-                name,
-                item: CatalogItem::Table(table),
-            },
-            catalog::Op::CreateItem {
-                id: index_id,
-                name: index_name,
-                item: CatalogItem::Index(index),
-            },
-        ]) {
+        match self
+            .catalog_transact(vec![
+                catalog::Op::CreateItem {
+                    id: table_id,
+                    name,
+                    item: CatalogItem::Table(table),
+                },
+                catalog::Op::CreateItem {
+                    id: index_id,
+                    name: index_name,
+                    item: CatalogItem::Index(index),
+                },
+            ])
+            .await
+        {
             Ok(_) => {
-                self.ship_dataflow(self.build_index_dataflow(index_id));
+                self.ship_dataflow(self.build_index_dataflow(index_id))
+                    .await;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1477,7 +1563,7 @@ where
         }
     }
 
-    fn sequence_create_source(
+    async fn sequence_create_source(
         &mut self,
         pcx: PlanContext,
         name: FullName,
@@ -1512,13 +1598,15 @@ where
         } else {
             None
         };
-        match self.catalog_transact(ops) {
+        match self.catalog_transact(ops).await {
             Ok(()) => {
                 if let Some(index_id) = index_id {
-                    self.ship_dataflow(self.build_index_dataflow(index_id));
+                    self.ship_dataflow(self.build_index_dataflow(index_id))
+                        .await;
                 }
 
-                self.maybe_begin_persistence(source_id, &source.connector);
+                self.maybe_begin_persistence(source_id, &source.connector)
+                    .await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
@@ -1527,7 +1615,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn sequence_create_sink(
+    async fn sequence_create_sink(
         &mut self,
         pcx: PlanContext,
         mut internal_cmd_tx: futures::channel::mpsc::UnboundedSender<Message>,
@@ -1574,7 +1662,7 @@ where
                 as_of,
             }),
         };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op]).await {
             Ok(()) => (),
             Err(_) if if_not_exists => {
                 tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
@@ -1604,7 +1692,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn sequence_create_view(
+    async fn sequence_create_view(
         &mut self,
         pcx: PlanContext,
         name: FullName,
@@ -1649,10 +1737,11 @@ where
         } else {
             None
         };
-        match self.catalog_transact(ops) {
+        match self.catalog_transact(ops).await {
             Ok(()) => {
                 if let Some(index_id) = index_id {
-                    self.ship_dataflow(self.build_index_dataflow(index_id));
+                    self.ship_dataflow(self.build_index_dataflow(index_id))
+                        .await;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -1661,7 +1750,7 @@ where
         }
     }
 
-    fn sequence_create_index(
+    async fn sequence_create_index(
         &mut self,
         pcx: PlanContext,
         name: FullName,
@@ -1680,9 +1769,9 @@ where
             name,
             item: CatalogItem::Index(index),
         };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op]).await {
             Ok(()) => {
-                self.ship_dataflow(self.build_index_dataflow(id));
+                self.ship_dataflow(self.build_index_dataflow(id)).await;
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
@@ -1690,35 +1779,40 @@ where
         }
     }
 
-    fn sequence_drop_database(&mut self, name: String) -> Result<ExecuteResponse, anyhow::Error> {
+    async fn sequence_drop_database(
+        &mut self,
+        name: String,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let ops = self.catalog.drop_database_ops(name);
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
-    fn sequence_drop_schema(
+    async fn sequence_drop_schema(
         &mut self,
         database_name: DatabaseSpecifier,
         schema_name: String,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let ops = self.catalog.drop_schema_ops(database_name, schema_name);
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
-    fn sequence_drop_items(
+    async fn sequence_drop_items(
         &mut self,
         items: Vec<GlobalId>,
         ty: ObjectType,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let ops = self.catalog.drop_items_ops(&items);
-        self.catalog_transact(ops)?;
+        self.catalog_transact(ops).await?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => {
                 for id in items.iter() {
                     if let Some(persistence_tx) = &mut self.persistence_tx {
-                        block_on(persistence_tx.send(PersistenceMessage::DropSource(*id)))
+                        persistence_tx
+                            .send(PersistenceMessage::DropSource(*id))
+                            .await
                             .expect("failed to send DROP SOURCE to persistence thread");
                     }
                 }
@@ -1731,7 +1825,7 @@ where
         })
     }
 
-    fn sequence_show_all_variables(
+    async fn sequence_show_all_variables(
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, anyhow::Error> {
@@ -1751,7 +1845,7 @@ where
         ))
     }
 
-    fn sequence_show_variable(
+    async fn sequence_show_variable(
         &self,
         session: &Session,
         name: String,
@@ -1761,7 +1855,7 @@ where
         Ok(send_immediate_rows(vec![row]))
     }
 
-    fn sequence_set_variable(
+    async fn sequence_set_variable(
         &self,
         session: &mut Session,
         name: String,
@@ -1771,7 +1865,7 @@ where
         Ok(ExecuteResponse::SetVariable { name })
     }
 
-    fn sequence_peek(
+    async fn sequence_peek(
         &mut self,
         conn_id: u32,
         mut source: RelationExpr,
@@ -1855,7 +1949,7 @@ where
                 self.import_view_into_dataflow(&view_id, &source, &mut dataflow);
                 dataflow.add_index_to_build(index_id, view_id, typ.clone(), key.clone());
                 dataflow.add_index_export(index_id, view_id, typ, key);
-                self.ship_dataflow(dataflow);
+                self.ship_dataflow(dataflow).await;
             }
 
             broadcast(
@@ -1869,10 +1963,11 @@ where
                     project,
                     filter,
                 },
-            );
+            )
+            .await;
 
             if !fast_path {
-                self.drop_indexes(vec![index_id]);
+                self.drop_indexes(vec![index_id]).await;
             }
 
             let rows_rx = rows_rx
@@ -1902,7 +1997,7 @@ where
         }
     }
 
-    fn sequence_tail(
+    async fn sequence_tail(
         &mut self,
         conn_id: u32,
         source_id: GlobalId,
@@ -1931,7 +2026,8 @@ where
                 frontier,
                 strict: !with_snapshot,
             }),
-        ));
+        ))
+        .await;
         Ok(ExecuteResponse::Tailing { rx })
     }
 
@@ -2162,7 +2258,7 @@ where
         Ok(send_immediate_rows(rows))
     }
 
-    fn sequence_send_diffs(
+    async fn sequence_send_diffs(
         &mut self,
         id: GlobalId,
         updates: Vec<(Row, isize)>,
@@ -2182,7 +2278,8 @@ where
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::Insert { id, updates },
-        );
+        )
+        .await;
 
         Ok(match kind {
             MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
@@ -2191,7 +2288,7 @@ where
         })
     }
 
-    fn sequence_insert(
+    async fn sequence_insert(
         &mut self,
         id: GlobalId,
         values: expr::RelationExpr,
@@ -2216,12 +2313,13 @@ where
 
                 let affected_rows = rows.len();
                 self.sequence_send_diffs(id, rows, affected_rows, MutationKind::Insert)
+                    .await
             }
             other => bail!("INSERT statement expected values, found {:?}", other),
         }
     }
 
-    fn sequence_alter_item_rename(
+    async fn sequence_alter_item_rename(
         &mut self,
         id: Option<GlobalId>,
         to_name: String,
@@ -2233,7 +2331,7 @@ where
             None => return Ok(ExecuteResponse::AlteredObject(object_type)),
         };
         let op = catalog::Op::RenameItem { id, to_name };
-        match self.catalog_transact(vec![op]) {
+        match self.catalog_transact(vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(object_type)),
             Err(err) => Err(err),
         }
@@ -2269,7 +2367,7 @@ where
         }
     }
 
-    fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), anyhow::Error> {
+    async fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), anyhow::Error> {
         let mut sources_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
@@ -2278,14 +2376,15 @@ where
         for status in &statuses {
             match status {
                 catalog::OpStatus::CreatedDatabase { name, id } => {
-                    self.report_database_update(*id, name, 1);
+                    self.report_database_update(*id, name, 1).await;
                 }
                 catalog::OpStatus::CreatedSchema {
                     database_id,
                     schema_id,
                     schema_name,
                 } => {
-                    self.report_schema_update(*database_id, *schema_id, schema_name, "USER", 1);
+                    self.report_schema_update(*database_id, *schema_id, schema_name, "USER", 1)
+                        .await;
                 }
                 catalog::OpStatus::CreatedItem {
                     schema_id,
@@ -2297,24 +2396,27 @@ where
                         *id,
                         self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
                         1,
-                    );
+                    )
+                    .await;
 
                     if let Ok(desc) = item.desc(&name) {
-                        self.report_column_updates(desc, *id, 1);
+                        self.report_column_updates(desc, *id, 1).await;
                     }
                     match item {
-                        CatalogItem::Index(index) => self.report_index_update(*id, index, 1),
+                        CatalogItem::Index(index) => self.report_index_update(*id, index, 1).await,
                         CatalogItem::Table(_) => {
                             self.report_table_update(id, *schema_id, &name.item, 1)
+                                .await
                         }
                         CatalogItem::Source(_) => {
-                            self.report_source_update(id, *schema_id, &name.item, 1);
+                            self.report_source_update(id, *schema_id, &name.item, 1)
+                                .await;
                         }
                         CatalogItem::View(_) => {
-                            self.report_view_update(id, *schema_id, &name.item, 1);
+                            self.report_view_update(id, *schema_id, &name.item, 1).await;
                         }
                         CatalogItem::Sink(_) => {
-                            self.report_sink_update(id, *schema_id, &name.item, 1);
+                            self.report_sink_update(id, *schema_id, &name.item, 1).await;
                         }
                     }
                 }
@@ -2326,52 +2428,66 @@ where
                     item,
                 } => {
                     // Remove old name from mz_catalog_names.
-                    self.report_catalog_update(*id, from_name.to_string(), -1);
+                    self.report_catalog_update(*id, from_name.to_string(), -1)
+                        .await;
 
                     // Add new name to mz_catalog_names.
-                    self.report_catalog_update(*id, to_name.to_string(), 1);
+                    self.report_catalog_update(*id, to_name.to_string(), 1)
+                        .await;
 
                     // Remove old name and add new name to relevant mz system tables.
                     match item {
                         CatalogItem::Source(_) => {
-                            self.report_source_update(id, *schema_id, &from_name.item, -1);
-                            self.report_source_update(id, *schema_id, &to_name.item, 1);
+                            self.report_source_update(id, *schema_id, &from_name.item, -1)
+                                .await;
+                            self.report_source_update(id, *schema_id, &to_name.item, 1)
+                                .await;
                         }
                         CatalogItem::View(_) => {
-                            self.report_view_update(id, *schema_id, &from_name.item, -1);
-                            self.report_view_update(id, *schema_id, &to_name.item, 1);
+                            self.report_view_update(id, *schema_id, &from_name.item, -1)
+                                .await;
+                            self.report_view_update(id, *schema_id, &to_name.item, 1)
+                                .await;
                         }
                         CatalogItem::Sink(_) => {
-                            self.report_sink_update(id, *schema_id, &from_name.item, -1);
-                            self.report_sink_update(id, *schema_id, &to_name.item, 1);
+                            self.report_sink_update(id, *schema_id, &from_name.item, -1)
+                                .await;
+                            self.report_sink_update(id, *schema_id, &to_name.item, 1)
+                                .await;
                         }
                         CatalogItem::Table(_) => {
-                            self.report_table_update(id, *schema_id, &from_name.item, -1);
-                            self.report_table_update(id, *schema_id, &to_name.item, 1);
+                            self.report_table_update(id, *schema_id, &from_name.item, -1)
+                                .await;
+                            self.report_table_update(id, *schema_id, &to_name.item, 1)
+                                .await;
                         }
                         _ => (),
                     }
                 }
                 catalog::OpStatus::DroppedDatabase { name, id } => {
-                    self.report_database_update(*id, name, -1);
+                    self.report_database_update(*id, name, -1).await;
                 }
                 catalog::OpStatus::DroppedSchema {
                     database_id,
                     schema_id,
                     schema_name,
                 } => {
-                    self.report_schema_update(*database_id, *schema_id, schema_name, "USER", -1);
+                    self.report_schema_update(*database_id, *schema_id, schema_name, "USER", -1)
+                        .await;
                 }
                 catalog::OpStatus::DroppedIndex { entry, nullable } => match entry.item() {
                     CatalogItem::Index(index) => {
                         indexes_to_drop.push(entry.id());
-                        self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
+                        self.report_catalog_update(entry.id(), entry.name().to_string(), -1)
+                            .await;
                         self.report_index_update_inner(entry.id(), index, nullable.to_owned(), -1)
+                            .await
                     }
                     _ => unreachable!("DroppedIndex for non-index item"),
                 },
                 catalog::OpStatus::DroppedItem { schema_id, entry } => {
-                    self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
+                    self.report_catalog_update(entry.id(), entry.name().to_string(), -1)
+                        .await;
                     match entry.item() {
                         CatalogItem::Table(_) => {
                             sources_to_drop.push(entry.id());
@@ -2380,7 +2496,8 @@ where
                                 *schema_id,
                                 &entry.name().item,
                                 -1,
-                            );
+                            )
+                            .await;
                         }
                         CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
@@ -2389,7 +2506,8 @@ where
                                 *schema_id,
                                 &entry.name().item,
                                 -1,
-                            );
+                            )
+                            .await;
                         }
                         CatalogItem::View(_) => {
                             self.report_view_update(
@@ -2397,7 +2515,8 @@ where
                                 *schema_id,
                                 &entry.name().item,
                                 -1,
-                            );
+                            )
+                            .await;
                         }
                         CatalogItem::Sink(catalog::Sink {
                             connector: SinkConnectorState::Ready(connector),
@@ -2409,7 +2528,8 @@ where
                                 *schema_id,
                                 &entry.name().item,
                                 -1,
-                            );
+                            )
+                            .await;
                             match connector {
                                 SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
                                     let row = Row::pack(&[
@@ -2419,7 +2539,8 @@ where
                                     self.update_catalog_view(
                                         MZ_KAFKA_SINKS.id,
                                         iter::once((row, -1)),
-                                    );
+                                    )
+                                    .await;
                                 }
                                 SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
                                     let row = Row::pack(&[
@@ -2429,7 +2550,8 @@ where
                                     self.update_catalog_view(
                                         MZ_AVRO_OCF_SINKS.id,
                                         iter::once((row, -1)),
-                                    );
+                                    )
+                                    .await;
                                 }
                                 _ => (),
                             }
@@ -2446,7 +2568,7 @@ where
                         }
                     }
                     if let Ok(desc) = entry.desc() {
-                        self.report_column_updates(desc, entry.id(), -1);
+                        self.report_column_updates(desc, entry.id(), -1).await;
                     }
                 }
                 _ => (),
@@ -2457,29 +2579,32 @@ where
             broadcast(
                 &mut self.broadcast_tx,
                 SequencedCommand::DropSources(sources_to_drop),
-            );
+            )
+            .await;
         }
         if !sinks_to_drop.is_empty() {
             broadcast(
                 &mut self.broadcast_tx,
                 SequencedCommand::DropSinks(sinks_to_drop),
-            );
+            )
+            .await;
         }
         if !indexes_to_drop.is_empty() {
-            self.drop_indexes(indexes_to_drop);
+            self.drop_indexes(indexes_to_drop).await;
         }
 
         Ok(())
     }
 
-    fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
+    async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::DropSinks(dataflow_names),
         )
+        .await
     }
 
-    fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
+    async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
         let mut trace_keys = Vec::new();
         for id in indexes {
             if self.indexes.remove(&id).is_some() {
@@ -2491,6 +2616,7 @@ where
                 &mut self.broadcast_tx,
                 SequencedCommand::DropIndexes(trace_keys),
             )
+            .await
         }
     }
 
@@ -2649,7 +2775,7 @@ where
     /// In particular, there are requirement on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
-    fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) {
+    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) {
         // The identity for `join` is the minimum element.
         let mut since = Antichain::from_elem(Timestamp::minimum());
 
@@ -2685,14 +2811,16 @@ where
                         Datum::String(&id.to_string()),
                         Datum::String(topic.as_str()),
                     ]);
-                    self.update_catalog_view(MZ_KAFKA_SINKS.id, iter::once((row, 1)));
+                    self.update_catalog_view(MZ_KAFKA_SINKS.id, iter::once((row, 1)))
+                        .await;
                 }
                 SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
                     let row = Row::pack(&[
                         Datum::String(&id.to_string()),
                         Datum::Bytes(&path.clone().into_os_string().into_vec()),
                     ]);
-                    self.update_catalog_view(MZ_AVRO_OCF_SINKS.id, iter::once((row, 1)));
+                    self.update_catalog_view(MZ_AVRO_OCF_SINKS.id, iter::once((row, 1)))
+                        .await;
                 }
                 _ => (),
             }
@@ -2733,18 +2861,21 @@ where
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
-        );
+        )
+        .await;
     }
 
     // Tell the persister to start persisting data for `id` if that source
     // has persistence enabled and Materialize has persistence enabled.
     // This function is a no-op if the persister has already started persisting
     // this source.
-    fn maybe_begin_persistence(&mut self, id: GlobalId, source_connector: &SourceConnector) {
+    async fn maybe_begin_persistence(&mut self, id: GlobalId, source_connector: &SourceConnector) {
         if let SourceConnector::External { connector, .. } = source_connector {
             if connector.persistence_enabled() {
                 if let Some(persistence_tx) = &mut self.persistence_tx {
-                    block_on(persistence_tx.send(PersistenceMessage::AddSource(id)))
+                    persistence_tx
+                        .send(PersistenceMessage::AddSource(id))
+                        .await
                         .expect("failed to send CREATE SOURCE notification to persistence thread");
                 } else {
                     log::error!(
@@ -2766,9 +2897,27 @@ where
     }
 }
 
-fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {
+/// Begins coordinating user requests to the dataflow layer based on the
+/// provided configuration. Returns the thread that hosts the coordinator.
+///
+/// To gracefully shut down the coordinator, send a `Message::Shutdown` to the
+/// `cmd_rx` in the configuration, then join on the thread.
+pub async fn serve<C>(config: Config<'_, C>) -> Result<JoinHandle<()>, anyhow::Error>
+where
+    C: comm::Connection,
+{
+    let mut coord = Coordinator::new(config).await?;
+    // The future returned by `Coordinator::serve` does not implement `Send` as
+    // it holds various non-thread-safe state across await points. This means we
+    // can't use `tokio::spawn`, but instead have to spawn a dedicated thread to
+    // run the future.
+    let executor = Handle::current();
+    Ok(thread::spawn(move || executor.block_on(coord.serve())))
+}
+
+async fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {
     // TODO(benesch): avoid flushing after every send.
-    block_on(tx.send(cmd)).unwrap();
+    tx.send(cmd).await.unwrap();
 }
 
 /// Constructs an [`ExecuteResponse`] that that will send some rows to the

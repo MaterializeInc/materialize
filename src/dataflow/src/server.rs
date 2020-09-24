@@ -192,7 +192,6 @@ pub fn serve<C>(
     threads: usize,
     process: usize,
     switchboard: comm::Switchboard<C>,
-    executor: tokio::runtime::Handle,
 ) -> Result<WorkerGuards<()>, String>
 where
     C: comm::Connection,
@@ -208,7 +207,7 @@ where
     let command_rxs = {
         let mut rx = switchboard.broadcast_rx(BroadcastToken).fanout();
         let command_rxs = Mutex::new((0..threads).map(|_| Some(rx.attach())).collect::<Vec<_>>());
-        executor.spawn(
+        tokio::spawn(
             rx.shuttle()
                 .map_err(|err| panic!("failure shuttling dataflow receiver commands: {}", err)),
         );
@@ -220,12 +219,13 @@ where
         .map_err(|err| format!("failed to initialize networking: {}", err))?;
     let builders = builders.into_iter().map(GenericBuilder::ZeroCopy).collect();
 
+    let tokio_executor = tokio::runtime::Handle::current();
     timely::execute::execute_from(builders, Box::new(guard), move |timely_worker| {
-        executor.enter(|| {
+        tokio_executor.enter(|| {
             let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % threads]
                 .take()
                 .unwrap()
-                .request_unparks(&executor);
+                .request_unparks();
             let worker_idx = timely_worker.index();
             Worker {
                 timely_worker,
@@ -992,5 +992,5 @@ impl PendingPeek {
 /// doesn't really become slower, because you needed to instantiate these
 /// templates anyway to run tests.
 pub fn __explicit_instantiation__() {
-    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _, _, _) -> _);
+    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _, _) -> _);
 }

@@ -358,7 +358,19 @@ environment:{}",
         experimental_mode_splash();
     }
 
-    let _server = materialized::serve(materialized::Config {
+    // Start Tokio runtime.
+    let mut runtime = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        // The default thread name exceeds the Linux limit on thread name
+        // length, so pick something shorter.
+        //
+        // TODO(benesch): use `thread_name_fn` to get unique names if that
+        // lands upstream: https://github.com/tokio-rs/tokio/pull/1921.
+        .thread_name("tokio:worker")
+        .enable_all()
+        .build()?;
+
+    let _server = runtime.block_on(materialized::serve(materialized::Config {
         threads,
         process,
         addresses,
@@ -371,7 +383,7 @@ environment:{}",
         data_directory: Some(data_directory),
         symbiosis_url,
         experimental_mode,
-    })?;
+    }))?;
 
     // Block forever.
     loop {

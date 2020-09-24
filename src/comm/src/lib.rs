@@ -31,15 +31,16 @@
 //! use std::time::Duration;
 //! use tokio::net::TcpListener;
 //!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let nodes = vec![
 //!     (Ipv4Addr::new(192, 168, 1, 1), 1234),
 //!     (Ipv4Addr::new(192, 168, 1, 2), 1234),
 //! ];
 //! let node_id = 0;
-//! let mut runtime = tokio::runtime::Runtime::new()?;
-//! let switchboard = Switchboard::new(nodes, node_id, runtime.handle().clone());
-//! let mut listener = runtime.block_on(TcpListener::bind("0.0.0.0:1234"))?;
-//! runtime.spawn({
+//! let switchboard = Switchboard::new(nodes, node_id);
+//! let mut listener = TcpListener::bind("0.0.0.0:1234").await?;
+//! tokio::spawn({
 //!     let switchboard = switchboard.clone();
 //!     async move {
 //!         let mut incoming = listener.incoming();
@@ -50,10 +51,11 @@
 //! });
 //!
 //! // Wait for other nodes to become available.
-//! runtime.block_on(switchboard.rendezvous(Duration::from_secs(1)))?;
+//! switchboard.rendezvous(Duration::from_secs(1)).await?;
 //!
 //! // Allocate channels and do work.
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! In this example, the switchboard is configured for a cluster of size two,

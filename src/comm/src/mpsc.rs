@@ -17,16 +17,19 @@
 //! use futures::stream::StreamExt;
 //! use tokio::net::UnixStream;
 //!
-//! let (switchboard, mut runtime) = Switchboard::local()?;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let switchboard = Switchboard::local()?;
 //! let (tx, mut rx) = switchboard.mpsc();
-//! runtime.spawn(async move {
+//! tokio::spawn(async move {
 //!     // Do work.
 //!     let answer = 42;
 //!     tx.connect().await?.send(answer).await?;
 //!     Ok::<_, comm::Error>(())
 //! });
-//! assert_eq!(runtime.block_on(rx.next()).transpose()?, Some(42));
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! assert_eq!(rx.next().await.transpose()?, Some(42));
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Unconnected senders are quite flexible. They implement

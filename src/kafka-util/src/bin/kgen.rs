@@ -7,34 +7,33 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::convert::{TryFrom, TryInto};
+use std::ops::Add;
+use std::rc::Rc;
+use std::thread;
+use std::time::Duration;
+
 use anyhow::bail;
 use chrono::{NaiveDate, NaiveDateTime};
 use clap::{App, Arg};
-use mz_avro::{
-    schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed},
-    types::Value,
-    Schema,
+use rand::distributions::{
+    uniform::SampleUniform, Alphanumeric, Bernoulli, Uniform, WeightedIndex,
 };
-use rand::{
-    distributions::{uniform::SampleUniform, Alphanumeric, Bernoulli, Uniform, WeightedIndex},
-    prelude::{Distribution, ThreadRng},
-    thread_rng,
-};
-use rdkafka::{
-    error::KafkaError,
-    producer::{BaseRecord, DefaultProducerContext, ThreadedProducer},
-    types::RDKafkaError,
-    util::Timeout,
-    ClientConfig,
-};
+use rand::prelude::{Distribution, ThreadRng};
+use rand::thread_rng;
+use rdkafka::error::KafkaError;
+use rdkafka::producer::{BaseRecord, DefaultProducerContext, ThreadedProducer};
+use rdkafka::types::RDKafkaError;
+use rdkafka::util::Timeout;
+use rdkafka::ClientConfig;
 use serde_json::Map;
-use std::convert::{TryFrom, TryInto};
-use std::ops::Add;
-
-use std::time::Duration;
-use std::{cell::RefCell, collections::HashMap, rc::Rc, thread::sleep};
-use tokio::runtime::Runtime;
 use url::Url;
+
+use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
+use mz_avro::types::Value;
+use mz_avro::Schema;
 
 struct RandomAvroGenerator<'a> {
     // generators
@@ -443,7 +442,8 @@ impl<'a> ValueGenerator<'a> {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let matches = App::new("kgen")
         .about("Put random data in Kafka")
         .arg(
@@ -555,9 +555,9 @@ fn main() -> anyhow::Result<()> {
             let schema = matches.value_of("avro-schema").unwrap();
             let ccsr =
                 ccsr::ClientConfig::new(Url::parse("http://localhost:8081").unwrap()).build();
-            let schema_id = Runtime::new()
-                .unwrap()
-                .block_on(ccsr.publish_schema(&format!("{}-value", topic), schema))?;
+            let schema_id = ccsr
+                .publish_schema(&format!("{}-value", topic), schema)
+                .await?;
             _schema_holder = Some(Schema::parse_str(schema)?);
             let schema = _schema_holder.as_ref().unwrap();
             let annotations = matches.value_of("avro-distribution").unwrap();
@@ -607,7 +607,7 @@ fn main() -> anyhow::Result<()> {
                 Ok(()) => break,
                 Err((KafkaError::MessageProduction(RDKafkaError::QueueFull), rec2)) => {
                     rec = rec2;
-                    sleep(Duration::from_secs(1));
+                    thread::sleep(Duration::from_secs(1));
                 }
                 Err((e, _)) => {
                     return Err(e.into());

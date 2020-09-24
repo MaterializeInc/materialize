@@ -42,12 +42,15 @@
 //!     }
 //! }
 //!
-//! let (switchboard, mut runtime) = Switchboard::local()?;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let switchboard = Switchboard::local()?;
 //! let mut tx = switchboard.broadcast_tx(UniversalAnswersToken);
 //! let mut rx = switchboard.broadcast_rx(UniversalAnswersToken);
-//! runtime.block_on(tx.send(42))?;
-//! assert_eq!(runtime.block_on(rx.next()).transpose()?, Some(42));
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! tx.send(42).await?;
+//! assert_eq!(rx.next().await.transpose()?, Some(42));
+//! # Ok(())
+//! # }
 //! ```
 
 use std::fmt;

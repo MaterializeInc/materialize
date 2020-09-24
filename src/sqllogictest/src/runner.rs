@@ -33,12 +33,10 @@ use std::mem;
 use std::ops;
 use std::path::Path;
 use std::str;
-use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::BytesMut;
-use futures::executor::block_on;
 use itertools::izip;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
@@ -285,7 +283,6 @@ pub(crate) struct State {
     cmd_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
     _dataflow_workers: Box<dyn Drop>,
     _coord_thread: JoinOnDropHandle<()>,
-    _runtime: tokio::runtime::Runtime,
     session: Session,
 }
 
@@ -371,11 +368,10 @@ fn format_row(
 }
 
 impl State {
-    pub fn start() -> Result<Self, anyhow::Error> {
+    pub async fn start() -> Result<Self, anyhow::Error> {
         let process_id = 0;
 
-        let (switchboard, runtime) = comm::Switchboard::local()?;
-        let executor = runtime.handle().clone();
+        let switchboard = comm::Switchboard::local()?;
 
         let (cmd_tx, cmd_rx) = futures::channel::mpsc::unbounded();
         let dataflow_workers = dataflow::serve(
@@ -383,19 +379,18 @@ impl State {
             NUM_TIMELY_WORKERS,
             process_id,
             switchboard.clone(),
-            runtime.handle().clone(),
         )
         .unwrap();
 
         // Note that the coordinator must be initialized *after* launching the
         // dataflow workers, as booting the coordinator can involve sending enough
         // data to workers to fill up a `comm` channel buffer (#3280).
-        let mut coord = coord::Coordinator::new(coord::Config {
+        let coord_thread = coord::serve(coord::Config {
             switchboard,
+            cmd_rx,
             num_timely_workers: NUM_TIMELY_WORKERS,
             symbiosis_url: Some("postgres://"),
             data_directory: None,
-            executor: &executor,
             logging_granularity: None,
             timestamp: TimestampConfig {
                 frequency: Duration::from_millis(10),
@@ -403,19 +398,22 @@ impl State {
             persistence: None,
             logical_compaction_window: None,
             experimental_mode: true,
-        })?;
-        let coord_thread = thread::spawn(move || coord.serve(cmd_rx)).join_on_drop();
+        })
+        .await?
+        .join_on_drop();
 
         Ok(State {
             cmd_tx,
             _dataflow_workers: Box::new(dataflow_workers),
             _coord_thread: coord_thread,
-            _runtime: runtime,
             session: Session::dummy(),
         })
     }
 
-    fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, anyhow::Error> {
+    async fn run_record<'a>(
+        &mut self,
+        record: &'a Record<'a>,
+    ) -> Result<Outcome<'a>, anyhow::Error> {
         match &record {
             Record::Statement {
                 expected_error,
@@ -423,7 +421,10 @@ impl State {
                 sql,
                 location,
             } => {
-                match self.run_statement(*expected_error, *rows_affected, sql, location.clone())? {
+                match self
+                    .run_statement(*expected_error, *rows_affected, sql, location.clone())
+                    .await?
+                {
                     Outcome::Success => Ok(Outcome::Success),
                     other => {
                         if expected_error.is_some() {
@@ -444,12 +445,12 @@ impl State {
                 sql,
                 output,
                 location,
-            } => self.run_query(sql, output, location.clone()),
+            } => self.run_query(sql, output, location.clone()).await,
             _ => Ok(Outcome::Success),
         }
     }
 
-    fn run_statement<'a>(
+    async fn run_statement<'a>(
         &mut self,
         expected_error: Option<&'a str>,
         expected_rows_affected: Option<usize>,
@@ -465,7 +466,7 @@ impl State {
             return Ok(Outcome::Success);
         }
 
-        match self.run_sql(sql) {
+        match self.run_sql(sql).await {
             Ok((_desc, resp)) => {
                 if let Some(expected_error) = expected_error {
                     return Ok(Outcome::UnexpectedPlanSuccess {
@@ -508,10 +509,10 @@ impl State {
         }
     }
 
-    fn run_query<'a>(
+    async fn run_query<'a>(
         &mut self,
         sql: &'a str,
-        output: &'a Result<QueryOutput, &'a str>,
+        output: &'a Result<QueryOutput<'_>, &'a str>,
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
         // get statement
@@ -543,10 +544,10 @@ impl State {
         }
 
         // send plan, read response
-        let (desc, rows) = match self.run_sql(sql) {
+        let (desc, rows) = match self.run_sql(sql).await {
             Ok((desc, ExecuteResponse::SendingRows(rx))) => {
                 let desc = desc.expect("RelationDesc missing for query that returns rows");
-                let rows = match block_on(rx)? {
+                let rows = match rx.await? {
                     PeekResponse::Rows(rows) => Ok(rows),
                     PeekResponse::Error(e) => Err(anyhow!("{}", e)),
                     PeekResponse::Canceled => {
@@ -725,7 +726,7 @@ impl State {
         Ok(Outcome::Success)
     }
 
-    pub(crate) fn run_sql(
+    pub(crate) async fn run_sql(
         &mut self,
         sql: &str,
     ) -> Result<(Option<RelationDesc>, ExecuteResponse), anyhow::Error> {
@@ -750,7 +751,7 @@ impl State {
                     tx,
                 })
                 .expect("futures channel should not fail");
-            let resp = block_on(rx).expect("futures channel should not fail");
+            let resp = rx.await.expect("futures channel should not fail");
             resp.result?;
             self.session = resp.session;
         }
@@ -775,7 +776,7 @@ impl State {
                     tx,
                 })
                 .expect("futures channel should not fail");
-            let resp = block_on(rx).expect("futures channel should not fail");
+            let resp = rx.await.expect("futures channel should not fail");
             self.session = resp.session;
             Ok((desc, resp.result?))
         }
@@ -791,9 +792,13 @@ fn print_record(record: &Record) {
     }
 }
 
-pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_string(
+    source: &str,
+    input: &str,
+    verbosity: usize,
+) -> Result<Outcomes, anyhow::Error> {
     let mut outcomes = Outcomes::default();
-    let mut state = State::start().unwrap();
+    let mut state = State::start().await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
     println!("==> {}", source);
     for record in parser.parse_records()? {
@@ -806,6 +811,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcome
 
         let outcome = state
             .run_record(&record)
+            .await
             .map_err(|err| format!("In {}:\n{}", source, err))
             .unwrap();
 
@@ -833,19 +839,19 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcome
     Ok(outcomes)
 }
 
-pub fn run_file(filename: &Path, verbosity: usize) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_file(filename: &Path, verbosity: usize) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
-    run_string(&format!("{}", filename.display()), &input, verbosity)
+    run_string(&format!("{}", filename.display()), &input, verbosity).await
 }
 
-pub fn run_stdin(verbosity: usize) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_stdin(verbosity: usize) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     std::io::stdin().lock().read_to_string(&mut input)?;
-    run_string("<stdin>", &input, verbosity)
+    run_string("<stdin>", &input, verbosity).await
 }
 
-pub fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyhow::Error> {
+pub async fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyhow::Error> {
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
     let mut input = String::new();
@@ -853,12 +859,12 @@ pub fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyhow::Er
 
     let mut buf = RewriteBuffer::new(&input);
 
-    let mut state = State::start()?;
+    let mut state = State::start().await?;
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
     println!("==> {}", filename.display());
     for record in parser.parse_records()? {
         let record = record;
-        let outcome = state.run_record(&record)?;
+        let outcome = state.run_record(&record).await?;
 
         // If we see an output failure for a query, rewrite the expected output
         // to match the observed output.
