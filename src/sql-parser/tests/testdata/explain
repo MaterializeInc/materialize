@@ -66,3 +66,10 @@ EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 =>
 Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(ObjectName([Ident("foo")])), options: ExplainOptions { typed: true } })
+
+parse-statement
+EXPLAIN LINT SELECT 1
+----
+EXPLAIN LINT FOR SELECT 1
+=>
+Explain(ExplainStatement { stage: LintQuery, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })

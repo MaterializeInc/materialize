@@ -19,6 +19,7 @@
 use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
+use std::fmt::Write;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
@@ -1454,6 +1455,8 @@ where
                 session,
             ),
 
+            Plan::LintQuery { query } => tx.send(self.sequence_lint_query(query), session),
+
             Plan::SendDiffs {
                 id,
                 updates,
@@ -2253,8 +2256,30 @@ where
                 }
                 explanation.to_string()
             }
+            _ => panic!("unexpected"),
         };
         let rows = vec![Row::pack(&[Datum::from(&*explanation_string)])];
+        Ok(send_immediate_rows(rows))
+    }
+
+    fn sequence_lint_query(
+        &mut self,
+        query: sql::ast::Query,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
+        let lint = lint::Lint::from_query(&query)?;
+        let msgs: Vec<String> = lint
+            .messages
+            .into_iter()
+            .map(|msg| {
+                let mut s = format!("At: {}\nTry to {}\n", msg.node, msg.message);
+                if let Some(suggestion) = msg.suggestion {
+                    write!(s, "Suggestion: {}\n", suggestion).unwrap();
+                }
+                s
+            })
+            .collect();
+        let msg = msgs.join("\n");
+        let rows = vec![Row::pack(&[Datum::from(&*msg)])];
         Ok(send_immediate_rows(rows))
     }
 

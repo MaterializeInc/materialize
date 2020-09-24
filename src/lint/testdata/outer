@@ -1,0 +1,4 @@
+lint
+SELECT 1 FROM a LEFT OUTER JOIN b ON a.id = b.id
+----
+Lint { messages: [Message { message: "use an `INNER JOIN` instead of `OUTER JOIN`, and track unmatched records separately", node: "LEFT JOIN b ON a.id = b.id", suggestion: Some("JOIN b ON a.id = b.id") }] }

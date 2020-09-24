@@ -135,6 +135,7 @@ pub fn describe_statement(
                     ExplainStage::RawPlan => "Raw Plan",
                     ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
                     ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
+                    ExplainStage::LintQuery => "Lint Query",
                 },
                 ScalarType::String.nullable(false),
             )),
@@ -2108,6 +2109,9 @@ fn handle_explain(
         }
         Explainee::Query(query) => (scx.clone(), query),
     };
+    if let ExplainStage::LintQuery = stage {
+        return Ok(Plan::LintQuery { query });
+    }
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     let (mut sql_expr, desc, finishing) =

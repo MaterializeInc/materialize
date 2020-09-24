@@ -1,0 +1,4 @@
+lint
+SELECT 1 FROM a CROSS JOIN b
+----
+Lint { messages: [Message { message: "avoid use of `CROSS JOIN`", node: "CROSS JOIN b", suggestion: None }] }

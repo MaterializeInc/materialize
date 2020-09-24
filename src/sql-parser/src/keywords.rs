@@ -278,6 +278,7 @@ define_keywords!(
     LIKE_REGEX,
     LIST,
     LIMIT,
+    LINT,
     LN,
     LOCAL,
     LOCALTIME,

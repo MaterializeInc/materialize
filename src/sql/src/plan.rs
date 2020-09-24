@@ -35,7 +35,7 @@ use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SourceConnector};
 use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
 
-use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
+use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Query, Statement};
 use crate::catalog::Catalog;
 use crate::names::{DatabaseSpecifier, FullName};
 
@@ -140,6 +140,9 @@ pub enum Plan {
         row_set_finishing: Option<RowSetFinishing>,
         stage: ExplainStage,
         options: ExplainOptions,
+    },
+    LintQuery {
+        query: Query,
     },
     SendDiffs {
         id: GlobalId,

@@ -1127,6 +1127,8 @@ pub enum ExplainStage {
     DecorrelatedPlan,
     /// The expr::RelationExpr after optimization
     OptimizedPlan,
+    /// The lint results
+    LintQuery,
 }
 
 impl AstDisplay for ExplainStage {
@@ -1135,6 +1137,7 @@ impl AstDisplay for ExplainStage {
             ExplainStage::RawPlan => f.write_str("RAW PLAN"),
             ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
             ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            ExplainStage::LintQuery => f.write_str("LINT"),
         }
     }
 }

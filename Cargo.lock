@@ -487,6 +487,7 @@ dependencies = [
  "interchange",
  "itertools",
  "lazy_static",
+ "lint",
  "log",
  "mz-avro",
  "ore",
@@ -683,6 +684,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b2466559f260f48ad25fe6317b3c8dac77b5bdb5763ac7d9d6103530663bc90"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "datadriven"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10d88d4b27d39931f3de453073f3241e7ee112782765d2eb1ddd1b462dbdccb8"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]
@@ -1744,6 +1754,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae91b68aebc4ddb91978b11a1b02ddd8602a05ec19002801c5666000e05e0f83"
 
 [[package]]
+name = "lint"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "datadriven 0.2.0",
+ "sql-parser",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1799,7 +1818,7 @@ dependencies = [
  "comm",
  "compile-time-run",
  "coord",
- "datadriven",
+ "datadriven 0.3.0",
  "dataflow",
  "dataflow-types",
  "fallible-iterator",
@@ -2486,7 +2505,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
- "datadriven",
+ "datadriven 0.3.0",
  "fallible-iterator",
  "getopts",
  "postgres",
@@ -3587,7 +3606,7 @@ name = "sql-parser"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "datadriven",
+ "datadriven 0.3.0",
  "lazy_static",
  "log",
  "matches",
@@ -4463,7 +4482,7 @@ name = "walkabout"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "datadriven",
+ "datadriven 0.3.0",
  "fstrings",
  "ore",
  "quote",

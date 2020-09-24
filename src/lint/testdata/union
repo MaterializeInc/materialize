@@ -1,0 +1,4 @@
+lint
+SELECT 1 UNION SELECT 2
+----
+Lint { messages: [Message { message: "use `UNION ALL` instead of `UNION` when you do not require deduplication, or are certain that there is no duplication to remove", node: "SELECT 1 UNION SELECT 2", suggestion: Some("SELECT 1 UNION ALL SELECT 2") }] }

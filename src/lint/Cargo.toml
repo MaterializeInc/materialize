@@ -1,0 +1,13 @@
+[package]
+name = "lint"
+description = "SQL linting"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+sql-parser = { path = "../sql-parser" }
+
+[dev-dependencies]
+datadriven = "0.2"
