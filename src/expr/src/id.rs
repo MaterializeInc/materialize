@@ -65,18 +65,6 @@ pub enum GlobalId {
 }
 
 impl GlobalId {
-    /// Constructs a new global identifier in the system namespace. It is the
-    /// caller's responsibility to provide a unique `v`.
-    pub fn system(v: u64) -> GlobalId {
-        GlobalId::System(v)
-    }
-
-    /// Constructs a new global identifier in the user namespace. It is the
-    /// caller's responsiblity to provide a unique `v`.
-    pub fn user(v: u64) -> GlobalId {
-        GlobalId::User(v)
-    }
-
     /// Reports whether this ID is in the system namespace.
     pub fn is_system(&self) -> bool {
         match self {
