@@ -9,7 +9,6 @@
 
 use std::collections::HashMap;
 
-use ore::collections::CollectionExt;
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
@@ -25,13 +24,6 @@ use crate::plan::statement::StatementContext;
 
 pub fn ident(ident: Ident) -> String {
     ident.as_str().into()
-}
-
-pub fn function_name(name: ObjectName) -> Result<String, PlanError> {
-    if name.0.len() != 1 {
-        unsupported!("qualified function names");
-    }
-    Ok(ident(name.0.into_element()))
 }
 
 pub fn column_name(id: Ident) -> ColumnName {
@@ -264,6 +256,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::error::Error;
     use std::rc::Rc;
+
+    use ore::collections::CollectionExt;
 
     use super::*;
     use crate::catalog::DummyCatalog;

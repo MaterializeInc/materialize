@@ -28,6 +28,8 @@ use super::expr::{
 };
 use super::query::{self, ExprContext, QueryLifetime};
 use super::typeconv::{self, rescale_decimal, CastTo, CoerceTo};
+use super::StatementContext;
+use crate::names::PartialName;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Mirrored from [PostgreSQL's `typcategory`][typcategory].
@@ -684,7 +686,7 @@ pub enum Func {
 
 lazy_static! {
     /// Correlates a built-in function name to its implementations.
-    static ref BUILTIN_IMPLS: HashMap<&'static str, Func> = {
+    static ref PG_CATALOG_BUILTINS: HashMap<&'static str, Func> = {
         use ParamType::*;
         use ScalarType::*;
         builtins! {
@@ -756,22 +758,6 @@ lazy_static! {
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
                 })
             },
-            "internal_avg_promotion" => Scalar {
-                // Promotes a numeric type to the smallest fractional type that
-                // can represent it. This is primarily useful for the avg
-                // aggregate function, so that the avg of an integer column does
-                // not get truncated to an integer, which would be surprising to
-                // users (#549).
-                params!(Float32) => identity_op(),
-                params!(Float64) => identity_op(),
-                params!(Decimal(0, 0)) => identity_op(),
-                params!(Int32) => unary_op(|ecx, e| {
-                      super::typeconv::plan_cast(
-                          "internal.avg_promotion", ecx, e,
-                          CastTo::Explicit(ScalarType::Decimal(10, 0)),
-                      )
-                })
-            },
             "jsonb_array_length" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
             },
@@ -802,42 +788,12 @@ lazy_static! {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes,
                 params!(String) => UnaryFunc::ByteLengthString
             },
-            "list_ndims" => Scalar {
-                params!(List(Box::new(String))) => unary_op(|ecx, e| {
-                    ecx.require_experimental_mode("list_ndims")?;
-                    let d = ecx.scalar_type(&e).unwrap_list_n_dims();
-                    Ok(ScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
-                })
-            },
-            "list_length" => Scalar {
-                params!(List(Box::new(String))) => UnaryFunc::ListLength
-            },
-            "list_length_max" => Scalar {
-                params!(List(Box::new(String)), Int64) => binary_op(|ecx, lhs, rhs| {
-                    ecx.require_experimental_mode("list_length_max")?;
-                    let max_dim = ecx.scalar_type(&lhs).unwrap_list_n_dims();
-                    Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax{ max_dim }))
-                })
-            },
             "ltrim" => Scalar {
                 params!(String) => UnaryFunc::TrimLeadingWhitespace,
                 params!(String, String) => BinaryFunc::TrimLeading
             },
             "make_timestamp" => Scalar {
                 params!(Int64, Int64, Int64, Int64, Int64, Float64) => VariadicFunc::MakeTimestamp
-            },
-            "mz_logical_timestamp" => Scalar {
-                params!() => nullary_op(|ecx| {
-                    match ecx.qcx.lifetime {
-                        QueryLifetime::OneShot => {
-                            Ok(ScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp))
-                        }
-                        QueryLifetime::Static => bail!("mz_logical_timestamp cannot be used in static queries"),
-                    }
-                })
-            },
-            "mz_cluster_id" => Scalar {
-                params!() => nullary_op(mz_cluster_id)
             },
             "now" => Scalar {
                 params!() => nullary_op(|ecx| plan_current_timestamp(ecx, "now"))
@@ -921,12 +877,6 @@ lazy_static! {
                 }),
                 params!(Any) => AggregateFunc::Count
             },
-            "internal_all" => Aggregate {
-                params!(Any) => AggregateFunc::All
-            },
-            "internal_any" => Aggregate {
-                params!(Any) => AggregateFunc::Any
-            },
             "max" => Aggregate {
                 params!(Int32) => AggregateFunc::MaxInt32,
                 params!(Int64) => AggregateFunc::MaxInt64,
@@ -988,22 +938,6 @@ lazy_static! {
             },
 
             // Table functions.
-            "csv_extract" => Table {
-                params!(Int64, String) => binary_op(move |_ecx, ncols, input| {
-                    let ncols = match ncols.into_literal_int64() {
-                        None | Some(i64::MIN..=0) => {
-                            bail!("csv_extract number of columns must be a positive integer literal");
-                        },
-                        Some(ncols) => ncols,
-                    };
-                    let ncols = usize::try_from(ncols).expect("known to be greater than zero");
-                    Ok(TableFuncPlan {
-                        func: TableFunc::CsvExtract(ncols),
-                        exprs: vec![input],
-                        column_names: (1..=ncols).map(|i| Some(format!("column{}", i).into())).collect(),
-                    })
-                })
-            },
             "generate_series" => Table {
                 params!(Int32, Int32) => binary_op(move |_ecx, start, stop| {
                     Ok(TableFuncPlan {
@@ -1064,6 +998,58 @@ lazy_static! {
                         column_names: vec![Some("jsonb_object_keys".into())],
                     })
                 })
+            }
+        }
+    };
+
+    static ref MZ_CATALOG_BUILTINS: HashMap<&'static str, Func> = {
+        use ScalarType::*;
+        builtins! {
+            "csv_extract" => Table {
+                params!(Int64, String) => binary_op(move |_ecx, ncols, input| {
+                    let ncols = match ncols.into_literal_int64() {
+                        None | Some(i64::MIN..=0) => {
+                            bail!("csv_extract number of columns must be a positive integer literal");
+                        },
+                        Some(ncols) => ncols,
+                    };
+                    let ncols = usize::try_from(ncols).expect("known to be greater than zero");
+                    Ok(TableFuncPlan {
+                        func: TableFunc::CsvExtract(ncols),
+                        exprs: vec![input],
+                        column_names: (1..=ncols).map(|i| Some(format!("column{}", i).into())).collect(),
+                    })
+                })
+            },
+            "list_ndims" => Scalar {
+                params!(List(Box::new(String))) => unary_op(|ecx, e| {
+                    ecx.require_experimental_mode("list_ndims")?;
+                    let d = ecx.scalar_type(&e).unwrap_list_n_dims();
+                    Ok(ScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
+                })
+            },
+            "list_length" => Scalar {
+                params!(List(Box::new(String))) => UnaryFunc::ListLength
+            },
+            "list_length_max" => Scalar {
+                params!(List(Box::new(String)), Int64) => binary_op(|ecx, lhs, rhs| {
+                    ecx.require_experimental_mode("list_length_max")?;
+                    let max_dim = ecx.scalar_type(&lhs).unwrap_list_n_dims();
+                    Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax{ max_dim }))
+                })
+            },
+            "mz_logical_timestamp" => Scalar {
+                params!() => nullary_op(|ecx| {
+                    match ecx.qcx.lifetime {
+                        QueryLifetime::OneShot => {
+                            Ok(ScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp))
+                        }
+                        QueryLifetime::Static => bail!("mz_logical_timestamp cannot be used in static queries"),
+                    }
+                })
+            },
+            "mz_cluster_id" => Scalar {
+                params!() => nullary_op(mz_cluster_id)
             },
             "regexp_extract" => Table {
                 params!(String, String) => binary_op(move |_ecx, regex, haystack| {
@@ -1093,6 +1079,36 @@ lazy_static! {
                         exprs: vec![n],
                         column_names: vec![]
                     })
+                })
+            }
+        }
+    };
+
+
+    static ref MZ_INTERNAL_BUILTINS: HashMap<&'static str, Func> = {
+        use ParamType::*;
+        use ScalarType::*;
+        builtins! {
+            "mz_all" => Aggregate {
+                params!(Any) => AggregateFunc::All
+            },
+            "mz_any" => Aggregate {
+                params!(Any) => AggregateFunc::Any
+            },
+            "mz_avg_promotion" => Scalar {
+                // Promotes a numeric type to the smallest fractional type that
+                // can represent it. This is primarily useful for the avg
+                // aggregate function, so that the avg of an integer column does
+                // not get truncated to an integer, which would be surprising to
+                // users (#549).
+                params!(Float32) => identity_op(),
+                params!(Float64) => identity_op(),
+                params!(Decimal(0, 0)) => identity_op(),
+                params!(Int32) => unary_op(|ecx, e| {
+                      super::typeconv::plan_cast(
+                          "internal.avg_promotion", ecx, e,
+                          CastTo::Explicit(ScalarType::Decimal(10, 0)),
+                      )
                 })
             }
         }
@@ -1132,18 +1148,43 @@ fn func_err_string(ident: &str, types: &[Option<ScalarType>], hint: String) -> S
     )
 }
 
-pub fn resolve(ident: &str) -> Result<&'static Func, anyhow::Error> {
-    match BUILTIN_IMPLS.get(ident) {
-        Some(func) => Ok(func),
-        None => bail!("function \"{}\" does not exist", ident),
+/// Resolves the name to a set of function implementations.
+///
+/// If the name does not specify a known built-in function, returns an error.
+pub fn resolve(scx: &StatementContext, name: &PartialName) -> Result<&'static Func, anyhow::Error> {
+    // NOTE(benesch): In theory, the catalog should be in charge of resolving
+    // function names. In practice, it is much easier to do our own hardcoded
+    // resolution here while all functions are builtins. This decision will
+    // need to be revisited when either:
+    //   * we support configuring the search path from its default, or
+    //   * we support user-defined functions.
+
+    if let Some(database) = &name.database {
+        // If a database name is provided, we need only verify that the
+        // database exists, as presently functions can only exist in ambient
+        // schemas.
+        let _ = scx.catalog.resolve_database(database)?;
     }
+    let search_path = match name.schema.as_deref() {
+        Some("pg_catalog") => vec![&*PG_CATALOG_BUILTINS],
+        Some("mz_catalog") => vec![&*MZ_CATALOG_BUILTINS],
+        Some("mz_internal") => vec![&*MZ_INTERNAL_BUILTINS],
+        Some(_) => vec![],
+        None => vec![&*MZ_CATALOG_BUILTINS, &*PG_CATALOG_BUILTINS],
+    };
+    for builtins in search_path {
+        if let Some(func) = builtins.get(&*name.item) {
+            return Ok(func);
+        }
+    }
+    bail!("function \"{}\" does not exist", name)
 }
 
 /// Selects the correct function implementation from a list of implementations
 /// given the provided arguments.
 pub fn select_impl<R>(
     ecx: &ExprContext,
-    ident: &str,
+    name: &PartialName,
     impls: &[FuncImpl<R>],
     args: &[Expr],
 ) -> Result<R, anyhow::Error> {
@@ -1153,6 +1194,7 @@ pub fn select_impl<R>(
         cexprs.push(cexpr);
     }
 
+    let ident = &name.to_string();
     ArgImplementationMatcher::select_implementation(ident, func_err_string, ecx, impls, cexprs)
 }
 
