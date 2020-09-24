@@ -62,6 +62,8 @@ pub enum GlobalId {
     System(u64),
     /// User namespace.
     User(u64),
+    /// Transient namespace.
+    Transient(u64),
 }
 
 impl GlobalId {
@@ -69,15 +71,23 @@ impl GlobalId {
     pub fn is_system(&self) -> bool {
         match self {
             GlobalId::System(_) => true,
-            GlobalId::User(_) => false,
+            _ => false,
         }
     }
 
     /// Reports whether this ID is in the user namespace.
     pub fn is_user(&self) -> bool {
         match self {
-            GlobalId::System(_) => false,
             GlobalId::User(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Reports whether this ID is in the transient namespace.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            GlobalId::Transient(_) => true,
+            _ => false,
         }
     }
 }
@@ -93,6 +103,7 @@ impl FromStr for GlobalId {
         match s.chars().next().unwrap() {
             's' => Ok(GlobalId::System(val)),
             'u' => Ok(GlobalId::User(val)),
+            't' => Ok(GlobalId::Transient(val)),
             _ => Err(anyhow!("couldn't parse id {}", s)),
         }
     }
@@ -103,6 +114,7 @@ impl fmt::Display for GlobalId {
         match self {
             GlobalId::System(id) => write!(f, "s{}", id),
             GlobalId::User(id) => write!(f, "u{}", id),
+            GlobalId::Transient(id) => write!(f, "t{}", id),
         }
     }
 }

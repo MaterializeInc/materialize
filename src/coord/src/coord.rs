@@ -157,6 +157,7 @@ where
     /// Whether we need to advance local inputs (i.e., did someone observe a timestamp).
     /// TODO(justin): this is a hack, and does not work right with TAIL.
     need_advance: bool,
+    transient_id_counter: u64,
 }
 
 impl<C> Coordinator<C>
@@ -252,6 +253,7 @@ where
             read_lower_bound: 1,
             last_op_was_read: false,
             need_advance: true,
+            transient_id_counter: 1,
         };
 
         let catalog_entries: Vec<_> = coord
@@ -1830,7 +1832,7 @@ where
                 if let Some(index_id) = self.catalog.default_index_for(*id) {
                     (true, index_id)
                 } else if materialize {
-                    (false, self.catalog.allocate_id()?)
+                    (false, self.allocate_transient_id()?)
                 } else {
                     bail!(
                         "{} is not materialized",
@@ -1838,7 +1840,7 @@ where
                     )
                 }
             } else {
-                (false, self.catalog.allocate_id()?)
+                (false, self.allocate_transient_id()?)
             };
 
             if !fast_path {
@@ -1847,7 +1849,7 @@ where
                 // peek completes.
                 let typ = source.as_ref().typ();
                 let key: Vec<_> = (0..typ.arity()).map(ScalarExpr::Column).collect();
-                let view_id = self.catalog.allocate_id()?;
+                let view_id = self.allocate_transient_id()?;
                 let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
                 dataflow.set_as_of(Antichain::from_elem(timestamp));
                 self.import_view_into_dataflow(&view_id, &source, &mut dataflow);
@@ -2752,6 +2754,15 @@ where
                 }
             }
         }
+    }
+
+    fn allocate_transient_id(&mut self) -> Result<GlobalId, anyhow::Error> {
+        let id = self.transient_id_counter;
+        if id == u64::max_value() {
+            bail!("id counter overflows i64");
+        }
+        self.transient_id_counter += 1;
+        Ok(GlobalId::Transient(id))
     }
 }
 
