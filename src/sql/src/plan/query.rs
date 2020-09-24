@@ -48,7 +48,7 @@ use crate::plan::expr::{
     AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
     ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
 };
-use crate::plan::func;
+use crate::plan::func::{self, Func};
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
@@ -1039,11 +1039,22 @@ fn plan_table_function(
     args: &FunctionArgs,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let ident = normalize::function_name(name.clone())?;
+
+    if ident == "values" {
+        // Produce a nice error message for the common typo
+        // `SELECT * FROM VALUES (1)`.
+        bail!("VALUES expression in FROM clause must be surrounded by parentheses");
+    }
+
+    let impls = match func::resolve(&*ident)? {
+        Func::Table(impls) => impls,
+        _ => bail!("{} is not a table function", ident),
+    };
     let args = match args {
         FunctionArgs::Star => bail!("{} does not accept * as an argument", ident),
         FunctionArgs::Args(args) => args,
     };
-    let tf = func::select_table_func(ecx, &*ident, args)?;
+    let tf = func::select_impl(ecx, &*ident, impls, args)?;
     let call = RelationExpr::CallTable {
         func: tf.func,
         exprs: tf.exprs,
@@ -1780,7 +1791,10 @@ pub fn plan_homogeneous_exprs(
 
 fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExpr, anyhow::Error> {
     let name = normalize::function_name(sql_func.name.clone())?;
-    assert!(func::is_aggregate_func(&name));
+    let impls = match func::resolve(&name)? {
+        Func::Aggregate(impls) => impls,
+        _ => unreachable!("plan_aggregate called on non-aggregate function,"),
+    };
 
     if sql_func.over.is_some() {
         unsupported!(213, "window functions");
@@ -1804,7 +1818,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         }
         FunctionArgs::Args(args) => args,
     };
-    let (mut expr, func) = func::select_aggregate_func(ecx, &name, args)?;
+    let (mut expr, func) = func::select_impl(ecx, &name, impls, args)?;
     if let Some(filter) = &sql_func.filter {
         // If a filter is present, as in
         //
@@ -1911,23 +1925,25 @@ fn plan_function<'a>(
 ) -> Result<ScalarExpr, anyhow::Error> {
     let name = normalize::function_name(sql_func.name.clone())?;
     let ident = &*name;
-
-    if func::is_aggregate_func(&name) {
-        if ecx.allow_aggregates {
+    let impls = match func::resolve(ident)? {
+        Func::Aggregate(_) if ecx.allow_aggregates => {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
             bail!(
                 "Internal error: encountered unplanned aggregate function: {:?}",
                 sql_func,
             )
-        } else {
+        }
+        Func::Aggregate(_) => {
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
-    } else if func::is_table_func(&name) {
-        unsupported!(
-            1546,
-            format!("table function ({}) in scalar position", ident)
-        );
-    }
+        Func::Table(_) => {
+            unsupported!(
+                1546,
+                format!("table function ({}) in scalar position", ident)
+            );
+        }
+        Func::Scalar(impls) => impls,
+    };
 
     if sql_func.over.is_some() {
         unsupported!(213, "window functions");
@@ -1946,7 +1962,7 @@ fn plan_function<'a>(
         FunctionArgs::Args(args) => args,
     };
 
-    func::select_scalar_func(ecx, ident, args)
+    func::select_impl(ecx, ident, impls, args)
 }
 
 fn plan_is_null_expr<'a>(
@@ -2190,7 +2206,7 @@ impl<'ast> AggregateFuncVisitor<'ast> {
 impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     fn visit_function(&mut self, func: &'ast Function) {
         if let Ok(name) = normalize::function_name(func.name.clone()) {
-            if func::is_aggregate_func(&name) {
+            if let Ok(Func::Aggregate(_)) = func::resolve(&name) {
                 if self.within_aggregate {
                     self.err = Some(anyhow!("nested aggregate functions are not allowed"));
                     return;
