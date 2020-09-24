@@ -19,6 +19,7 @@ use futures::executor::block_on;
 use futures::sink::SinkExt;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
@@ -267,7 +268,28 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         let mut attempts = 0;
         while attempts < consumer_count {
             let mut partition_queue = self.partition_consumers.pop_front().unwrap();
-            let message = partition_queue.get_next_message();
+            let message = match partition_queue.get_next_message() {
+                Err(e) => {
+                    let pid = partition_queue.pid();
+                    let last_offset = consistency_info
+                        .partition_metadata
+                        .get(&PartitionId::Kafka(pid))
+                        .unwrap()
+                        .offset;
+
+                    error!(
+                        "kafka error consuming from source: {} topic: {}: partition: {} last processed offset: {} : {}",
+                        self.source_name,
+                        self.topic_name,
+                        pid,
+                        last_offset.offset,
+                        e
+                    );
+                    None
+                }
+                Ok(m) => m,
+            };
+
             if let Some(message) = message {
                 let partition = match message.partition {
                     PartitionId::Kafka(pid) => pid,
@@ -689,24 +711,26 @@ impl PartitionConsumer {
 
     /// Returns the next message to process for this partition (if any).
     /// Either reads from the buffer or polls from the consumer
-    fn get_next_message(&mut self) -> Option<SourceMessage<Vec<u8>>> {
+    fn get_next_message(&mut self) -> Result<Option<SourceMessage<Vec<u8>>>, KafkaError> {
         if let Some(message) = self.buffer.take() {
             assert_eq!(message.partition, PartitionId::Kafka(self.pid));
-            Some(message)
+            Ok(Some(message))
         } else {
             match self.partition_queue.poll(Duration::from_millis(0)) {
                 Some(Ok(msg)) => {
                     let result = SourceMessage::from(&msg);
                     assert_eq!(result.partition, PartitionId::Kafka(self.pid));
-                    Some(result)
+                    Ok(Some(result))
                 }
-                Some(Err(err)) => {
-                    error!("kafka error: {}", err);
-                    None
-                }
-                _ => None,
+                Some(Err(err)) => Err(err),
+                _ => Ok(None),
             }
         }
+    }
+
+    /// Return the partition id for this PartitionConsumer
+    fn pid(&self) -> i32 {
+        self.pid
     }
 }
 
