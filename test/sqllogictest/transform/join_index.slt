@@ -104,7 +104,7 @@ where foo.a = bar.a
 | ArrangeBy (#0)
 
 %2 =
-| Get materialize.public.baz (u11)
+| Get materialize.public.baz (u9)
 | ArrangeBy (#0)
 
 %3 =

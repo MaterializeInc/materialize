@@ -223,7 +223,7 @@ EXPLAIN PLAN FOR SELECT
 FROM x
 ----
 %0 =
-| Get materialize.public.x (u5)
+| Get materialize.public.x (u3)
 | Map (#0 != #1), (#0 = #1), (#0 >= #1), (#0 <= #1), (#0 < #1), (#0 > #1), !((#2 @> {}))
 | Project (#4..#9, #3, #10)
 
@@ -239,7 +239,7 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 %0 =
-| Get materialize.public.y (u7)
+| Get materialize.public.y (u5)
 | Project (#0)
 
 EOF
@@ -251,7 +251,7 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 %0 =
-| Get materialize.public.y (u7)
+| Get materialize.public.y (u5)
 | Map (!(#1) || null)
 | Project (#2)
 
@@ -265,7 +265,7 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 %0 =
-| Get materialize.public.y (u7)
+| Get materialize.public.y (u5)
 | Map (#1 && null)
 | Project (#2)
 
@@ -278,7 +278,7 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 %0 =
-| Get materialize.public.y (u7)
+| Get materialize.public.y (u5)
 | Map (#1 || null)
 | Project (#2)
 
@@ -291,7 +291,7 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 %0 =
-| Get materialize.public.y (u7)
+| Get materialize.public.y (u5)
 | Map (!(#1) && null)
 | Project (#2)
 
