@@ -56,6 +56,14 @@ Wrap your release notes at the 80 character mark.
   can be retrieved using the new [`mz_cluster_id`](/sql/functions#uuid-func) SQL
   function.
 
+- Permit qualifying function names in SQL queries with the name of the schema
+  and optionally the database to which the function belongs, as in
+  `pg_catalog.abs(-1)` {{% gh 4293 %}}.
+
+  While presently all built-in functions belong to the system `mz_catalog` or
+  `pg_catalog` schemas, this support improves compatibility with various
+  PostgreSQL tools that generate SQL queries with qualified function references.
+
 <span id="v0.4.3"></span>
 ## v0.4.3
 
