@@ -638,6 +638,8 @@ pub enum ScalarType {
         /// to right.
         fields: Vec<(ColumnName, ScalarType)>,
     },
+    /// A PostgreSQL object identifier.
+    Oid,
 }
 
 impl<'a> ScalarType {
@@ -726,7 +728,8 @@ impl PartialEq for ScalarType {
             | (Bytes, Bytes)
             | (String, String)
             | (Uuid, Uuid)
-            | (Jsonb, Jsonb) => true,
+            | (Jsonb, Jsonb)
+            | (Oid, Oid) => true,
 
             (List(a), List(b)) => a.eq(b),
             (Record { fields: fields_a }, Record { fields: fields_b }) => fields_a.eq(fields_b),
@@ -747,7 +750,8 @@ impl PartialEq for ScalarType {
             | (Jsonb, _)
             | (Uuid, _)
             | (List(_), _)
-            | (Record { .. }, _) => false,
+            | (Record { .. }, _)
+            | (Oid, _) => false,
         }
     }
 }
@@ -784,6 +788,7 @@ impl Hash for ScalarType {
                 fields.hash(state);
             }
             Uuid => state.write_u8(16),
+            Oid => state.write_u8(16),
         }
     }
 }
@@ -818,6 +823,7 @@ impl fmt::Display for ScalarType {
                 write_delimited(f, ", ", fields, |f, (n, t)| write!(f, "{}: {}", n, t))?;
                 f.write_str(")")
             }
+            Oid => f.write_str("oid"),
         }
     }
 }

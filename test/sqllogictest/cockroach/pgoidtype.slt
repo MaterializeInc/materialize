@@ -17,9 +17,6 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-# not supported yet
-halt
-
 mode cockroach
 
 query OO
@@ -31,6 +28,9 @@ query O
 SELECT 3::OID::INT::OID
 ----
 3
+
+# The rest of this file is not yet supported.
+halt
 
 query OOOOOO
 SELECT 1::OID, 1::REGCLASS, 1::REGNAMESPACE, 1::REGPROC, 1::REGPROCEDURE, 1::REGTYPE

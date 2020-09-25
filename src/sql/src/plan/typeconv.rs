@@ -198,6 +198,7 @@ lazy_static! {
 
             //INT32
             (Int32, Explicit(Bool)) => CastInt32ToBool,
+            (Int32, Explicit(Oid)) => CastOp::F(noop_cast),
             (Int32, Implicit(Int64)) => CastInt32ToInt64,
             (Int32, Implicit(Float32)) => CastInt32ToFloat32,
             (Int32, Implicit(Float64)) => CastInt32ToFloat64,
@@ -219,6 +220,10 @@ lazy_static! {
             (Int64, Implicit(Float64)) => CastInt64ToFloat64,
             (Int64, Explicit(String)) => CastInt64ToString,
             (Int64, JsonbAny) => CastOp::F(to_jsonb_any_f64_cast),
+
+            // OID
+            (Oid, Explicit(Int32)) => CastOp::F(noop_cast),
+            (Int32, Explicit(String)) => CastInt32ToString,
 
             // FLOAT32
             (Float32, Explicit(Int64)) => CastFloat32ToInt64,
@@ -317,6 +322,7 @@ lazy_static! {
             (String, Explicit(Bool)) => CastStringToBool,
             (String, Explicit(Int32)) => CastStringToInt32,
             (String, Explicit(Int64)) => CastStringToInt64,
+            (String, Explicit(Oid)) => CastStringToInt32,
             (String, Explicit(Float32)) => CastStringToFloat32,
             (String, Explicit(Float64)) => CastStringToFloat64,
             (String, Explicit(Decimal(0,0))) => CastOp::F(|_ecx, e, to_type| {

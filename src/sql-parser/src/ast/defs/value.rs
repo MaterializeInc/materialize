@@ -228,6 +228,8 @@ pub enum DataType {
     List(Box<DataType>),
     /// Binary JSON
     Jsonb,
+    /// Object ID
+    Oid,
 }
 
 impl AstDisplay for DataType {
@@ -290,6 +292,7 @@ impl AstDisplay for DataType {
                 f.write_str(" list");
             }
             DataType::Jsonb => f.write_str("jsonb"),
+            DataType::Oid => f.write_str("oid"),
         }
     }
 }

@@ -64,6 +64,8 @@ Wrap your release notes at the 80 character mark.
   `pg_catalog` schemas, this support improves compatibility with various
   PostgreSQL tools that generate SQL queries with qualified function references.
 
+- Add support for the [`oid`] type to represent PostgreSQL object IDs.
+
 <span id="v0.4.3"></span>
 ## v0.4.3
 

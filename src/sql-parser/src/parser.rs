@@ -2131,6 +2131,7 @@ impl Parser {
                 "SMALLINT" => DataType::SmallInt,
                 "INT" | "INTEGER" | "INT4" => DataType::Int,
                 "INT8" | "BIGINT" => DataType::BigInt,
+                "OID" => DataType::Oid,
                 "VARCHAR" => DataType::Varchar(self.parse_optional_precision()?),
                 "CHAR" | "CHARACTER" => {
                     if self.parse_keyword("VARYING") {

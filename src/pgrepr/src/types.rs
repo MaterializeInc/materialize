@@ -47,6 +47,8 @@ pub enum Type {
     TimestampTz,
     /// A universally unique identifier.
     Uuid,
+    /// An object identifier.
+    Oid,
 }
 
 lazy_static! {
@@ -105,6 +107,7 @@ impl Type {
             Type::Uuid => &postgres_types::Type::UUID,
             Type::List(_) => &LIST,
             Type::Record(_) => &postgres_types::Type::RECORD,
+            Type::Oid => &postgres_types::Type::OID,
         }
     }
 
@@ -141,6 +144,7 @@ impl Type {
             Type::Uuid => 16,
             Type::List(_) => -1,
             Type::Record(_) => -1,
+            Type::Oid => 4,
         }
     }
 }
@@ -167,6 +171,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Record { fields } => {
                 Type::Record(fields.iter().map(|(_name, ty)| Type::from(ty)).collect())
             }
+            ScalarType::Oid => Type::Oid,
         }
     }
 }

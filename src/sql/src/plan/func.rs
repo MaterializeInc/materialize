@@ -75,7 +75,8 @@ impl TypeCategory {
             | ScalarType::Float32
             | ScalarType::Float64
             | ScalarType::Int32
-            | ScalarType::Int64 => Self::Numeric,
+            | ScalarType::Int64
+            | ScalarType::Oid => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::String => Self::String,
             ScalarType::Record { .. } => Self::Pseudo,
