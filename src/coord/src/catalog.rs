@@ -81,6 +81,9 @@ pub struct Catalog {
     nonce: u64,
     experimental_mode: bool,
     cluster_id: Uuid,
+    /// Used to assign a PostgreSQL object ID (OID) to each object in the catalog.
+    /// https://www.postgresql.org/message-id/2108.972178856@sss.pgh.pa.us
+    oid_counter: u32,
 }
 
 #[derive(Debug)]
@@ -100,19 +103,14 @@ impl ConnCatalog<'_> {
 #[derive(Debug, Serialize)]
 pub struct Database {
     pub id: i64,
+    pub oid: u32,
     pub schemas: BTreeMap<String, Schema>,
-}
-
-lazy_static! {
-    static ref EMPTY_DATABASE: Database = Database {
-        id: 0,
-        schemas: BTreeMap::new(),
-    };
 }
 
 #[derive(Debug, Serialize)]
 pub struct Schema {
     pub id: i64,
+    pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
 }
 
@@ -121,6 +119,7 @@ pub struct CatalogEntry {
     item: CatalogItem,
     used_by: Vec<GlobalId>,
     id: GlobalId,
+    oid: u32,
     name: FullName,
 }
 
@@ -320,6 +319,11 @@ impl CatalogEntry {
         self.id
     }
 
+    /// Returns the OID of this catalog entry.
+    pub fn oid(&self) -> u32 {
+        self.oid
+    }
+
     /// Returns the name of this catalog entry.
     pub fn name(&self) -> &FullName {
         &self.name
@@ -349,15 +353,22 @@ impl Catalog {
             nonce: rand::random(),
             experimental_mode,
             cluster_id,
+            oid_counter: 16384,
         };
-        catalog.create_temporary_schema(SYSTEM_CONN_ID);
+        catalog
+            .create_temporary_schema(SYSTEM_CONN_ID)
+            .map_err(|_| Error::new(ErrorKind::OidExhaustion))?;
 
         let databases = catalog.storage().load_databases()?;
         for (id, name) in databases {
+            let oid = catalog
+                .allocate_oid()
+                .map_err(|_| Error::new(ErrorKind::OidExhaustion))?;
             catalog.by_name.insert(
                 name,
                 Database {
                     id,
+                    oid,
                     schemas: BTreeMap::new(),
                 },
             );
@@ -365,6 +376,9 @@ impl Catalog {
 
         let schemas = catalog.storage().load_schemas()?;
         for (id, database_name, schema_name) in schemas {
+            let oid = catalog
+                .allocate_oid()
+                .map_err(|_| Error::new(ErrorKind::OidExhaustion))?;
             let schemas = match database_name {
                 Some(database_name) => {
                     &mut catalog
@@ -379,6 +393,7 @@ impl Catalog {
                 schema_name,
                 Schema {
                     id,
+                    oid,
                     items: BTreeMap::new(),
                 },
             );
@@ -534,6 +549,15 @@ impl Catalog {
         self.storage().allocate_id()
     }
 
+    pub fn allocate_oid(&mut self) -> Result<u32, anyhow::Error> {
+        let oid = self.oid_counter;
+        if oid == u32::max_value() {
+            bail!("oid counter overflows u32");
+        }
+        self.oid_counter += 1;
+        Ok(oid)
+    }
+
     pub fn resolve_schema(
         &self,
         current_database: &DatabaseSpecifier,
@@ -654,14 +678,17 @@ impl Catalog {
 
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
-    pub fn create_temporary_schema(&mut self, conn_id: u32) {
+    pub fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), anyhow::Error> {
+        let oid = self.allocate_oid()?;
         self.temporary_schemas.insert(
             conn_id,
             Schema {
                 id: -1,
+                oid,
                 items: BTreeMap::new(),
             },
         );
+        Ok(())
     }
 
     fn item_exists_in_temp_schemas(&mut self, conn_id: u32, item_name: &str) -> bool {
@@ -743,10 +770,12 @@ impl Catalog {
             info!("create {} {} ({})", item.type_string(), name, id);
         }
 
+        let oid = self.allocate_oid().expect("exhausted OIDs");
         let entry = CatalogEntry {
             item: item.clone(),
             name: name.clone(),
             id,
+            oid,
             used_by: Vec::new(),
         };
         for u in entry.uses() {
@@ -1092,10 +1121,12 @@ impl Catalog {
             .map(|action| match action {
                 Action::CreateDatabase { id, name } => {
                     info!("create database {}", name);
+                    let oid = self.allocate_oid().expect("exhausted OIDs");
                     self.by_name.insert(
                         name.clone(),
                         Database {
                             id,
+                            oid,
                             schemas: BTreeMap::new(),
                         },
                     );
@@ -1108,11 +1139,13 @@ impl Catalog {
                     schema_name,
                 } => {
                     info!("create schema {}.{}", database_name, schema_name);
+                    let oid = self.allocate_oid().expect("exhausted OIDs");
                     let db = self.by_name.get_mut(&database_name).unwrap();
                     db.schemas.insert(
                         schema_name.clone(),
                         Schema {
                             id,
+                            oid,
                             items: BTreeMap::new(),
                         },
                     );

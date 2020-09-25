@@ -63,8 +63,8 @@ use transform::Optimizer;
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
     BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
-    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS,
-    MZ_VIEW_KEYS,
+    MZ_KAFKA_SINKS, MZ_OBJECTS, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS,
+    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{
     self, Catalog, CatalogItem, Index, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
@@ -208,12 +208,19 @@ where
         let catalog_entries: Vec<_> = self
             .catalog
             .iter()
-            .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
+            .map(|entry| {
+                (
+                    entry.id(),
+                    entry.oid(),
+                    entry.name().clone(),
+                    entry.item().clone(),
+                )
+            })
             .collect();
 
         // Sources and indexes may be depended upon by other catalog items,
         // insert them first.
-        for (id, _, item) in &catalog_entries {
+        for (id, _, _, item) in &catalog_entries {
             match item {
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
@@ -244,7 +251,7 @@ where
             }
         }
 
-        for (id, name, item) in &catalog_entries {
+        for (id, _, name, item) in &catalog_entries {
             match item {
                 CatalogItem::Table(_) | CatalogItem::View(_) => (),
                 CatalogItem::Sink(sink) => {
@@ -272,9 +279,10 @@ where
         let mut sources_to_report = HashSet::new();
         let mut views_to_report = HashSet::new();
         let mut sinks_to_report = HashSet::new();
-        for (id, name, item) in catalog_entries {
+        for (id, oid, name, item) in catalog_entries {
             // Mirror each recovered catalog entry.
             self.report_catalog_update(id, name.to_string(), 1).await;
+            self.report_oid_update(oid, None, None, Some(id), 1).await;
 
             if let Ok(desc) = item.desc(&name) {
                 self.report_column_updates(desc, id, 1).await;
@@ -297,6 +305,9 @@ where
         }
 
         // Insert initial named objects into system tables.
+        let oid = self.catalog.allocate_oid()?;
+        self.report_oid_update(oid, Some(AMBIENT_DATABASE_ID), None, None, 1)
+            .await;
         self.report_database_update(AMBIENT_DATABASE_ID, "AMBIENT", 1)
             .await;
         let dbs: Vec<(String, i64, Vec<(String, i64, Vec<(String, GlobalId)>)>)> = self
@@ -325,10 +336,16 @@ where
             })
             .collect();
         for (database_name, database_id, schemas) in dbs {
+            let oid = self.catalog.allocate_oid()?;
+            self.report_oid_update(oid, Some(database_id), None, None, 1)
+                .await;
             self.report_database_update(database_id, &database_name, 1)
                 .await;
 
             for (schema_name, schema_id, items) in schemas {
+                let oid = self.catalog.allocate_oid()?;
+                self.report_oid_update(oid, None, Some(schema_id), None, 1)
+                    .await;
                 self.report_schema_update(database_id, schema_id, &schema_name, "USER", 1)
                     .await;
 
@@ -365,6 +382,9 @@ where
             })
             .collect();
         for (schema_name, schema_id, items) in ambient_schemas {
+            let oid = self.catalog.allocate_oid()?;
+            self.report_oid_update(oid, None, Some(schema_id), None, 1)
+                .await;
             self.report_schema_update(AMBIENT_DATABASE_ID, schema_id, &schema_name, "SYSTEM", 1)
                 .await;
 
@@ -384,6 +404,9 @@ where
                 }
             }
         }
+        let oid = self.catalog.allocate_oid()?;
+        self.report_oid_update(oid, None, Some(AMBIENT_SCHEMA_ID), None, 1)
+            .await;
         self.report_schema_update(
             AMBIENT_DATABASE_ID,
             AMBIENT_SCHEMA_ID,
@@ -491,7 +514,13 @@ where
                     {
                         messages.push(StartupMessage::UnknownSessionDatabase);
                     }
-                    self.catalog.create_temporary_schema(session.conn_id());
+                    if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+                        let _ = tx.send(Response {
+                            result: Err(e),
+                            session,
+                        });
+                        return;
+                    }
                     ClientTransmitter::new(tx).send(Ok(messages), session)
                 }
                 Message::Command(Command::Execute {
@@ -936,6 +965,40 @@ where
             },
         )
         .await;
+    }
+
+    async fn report_oid_update(
+        &mut self,
+        oid: u32,
+        database_id: Option<i64>,
+        schema_id: Option<i64>,
+        id: Option<GlobalId>,
+        diff: isize,
+    ) {
+        let database_id = match database_id {
+            Some(id) => Datum::Int64(id),
+            None => Datum::Null,
+        };
+        let schema_id = match schema_id {
+            Some(id) => Datum::Int64(id),
+            None => Datum::Null,
+        };
+        let row = match id {
+            Some(id) => Row::pack(&[
+                Datum::Int32(oid as i32),
+                database_id,
+                schema_id,
+                Datum::String(&id.to_string()),
+            ]),
+            None => Row::pack(&[
+                Datum::Int32(oid as i32),
+                database_id,
+                schema_id,
+                Datum::Null,
+            ]),
+        };
+        self.update_catalog_view(MZ_OBJECTS.id, iter::once((row, diff)))
+            .await;
     }
 
     async fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
@@ -2265,6 +2328,8 @@ where
         for status in &statuses {
             match status {
                 catalog::OpStatus::CreatedDatabase { name, id } => {
+                    let oid = self.catalog.allocate_oid()?;
+                    self.report_oid_update(oid, Some(*id), None, None, 1).await;
                     self.report_database_update(*id, name, 1).await;
                 }
                 catalog::OpStatus::CreatedSchema {
@@ -2272,6 +2337,9 @@ where
                     schema_id,
                     schema_name,
                 } => {
+                    let oid = self.catalog.allocate_oid()?;
+                    self.report_oid_update(oid, None, Some(*schema_id), None, 1)
+                        .await;
                     self.report_schema_update(*database_id, *schema_id, schema_name, "USER", 1)
                         .await;
                 }
@@ -2281,6 +2349,8 @@ where
                     name,
                     item,
                 } => {
+                    let oid = self.catalog.allocate_oid()?;
+                    self.report_oid_update(oid, None, None, Some(*id), 1).await;
                     self.report_catalog_update(
                         *id,
                         self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
