@@ -30,7 +30,7 @@ use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
-use crate::catalog::builtin::{Builtin, BUILTINS};
+use crate::catalog::builtin::{Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA};
 use crate::catalog::error::{Error, ErrorKind};
 use crate::session::Session;
 
@@ -46,8 +46,6 @@ const SYSTEM_CONN_ID: u32 = 0;
 
 pub const AMBIENT_DATABASE_ID: i64 = -1;
 pub const AMBIENT_SCHEMA_ID: i64 = -1;
-pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
-pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -389,7 +387,7 @@ impl Catalog {
         for builtin in BUILTINS.values() {
             let name = FullName {
                 database: DatabaseSpecifier::Ambient,
-                schema: MZ_CATALOG_SCHEMA.into(),
+                schema: builtin.schema().into(),
                 item: builtin.name().into(),
             };
             match builtin {
