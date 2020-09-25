@@ -351,6 +351,8 @@ fn format_row(
                 str::from_utf8(&buf).unwrap().to_owned()
             }
 
+            (Type::Oid, ScalarType::Int32) => format!("{}", d.unwrap_int32()),
+
             other => panic!("Don't know how to format {:?}", other),
         }
     });

@@ -326,6 +326,7 @@ define_keywords!(
     OLD,
     ON,
     ONLY,
+    OID,
     OPEN,
     OPTIMIZED,
     OR,

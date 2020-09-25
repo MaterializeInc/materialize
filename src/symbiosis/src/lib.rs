@@ -366,7 +366,7 @@ fn push_column(
             let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(i32::from);
             row.push(i.into());
         }
-        DataType::Int => {
+        DataType::Int | DataType::Oid => {
             let i = get_column_inner::<i32>(postgres_row, i, nullable)?;
             row.push(i.into());
         }

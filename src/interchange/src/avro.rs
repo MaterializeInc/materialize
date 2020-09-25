@@ -1548,7 +1548,7 @@ fn build_schema(columns: &[(ColumnName, ColumnType)], include_transaction: bool)
     for (name, typ) in columns.iter() {
         let mut field_type = match &typ.scalar_type {
             ScalarType::Bool => json!("boolean"),
-            ScalarType::Int32 => json!("int"),
+            ScalarType::Int32 | ScalarType::Oid => json!("int"),
             ScalarType::Int64 => json!("long"),
             ScalarType::Float32 => json!("float"),
             ScalarType::Float64 => json!("double"),
@@ -1914,7 +1914,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
         } else {
             let mut val = match &typ.scalar_type {
                 ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
-                ScalarType::Int32 => Value::Int(datum.unwrap_int32()),
+                ScalarType::Int32 | ScalarType::Oid => Value::Int(datum.unwrap_int32()),
                 ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
                 ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
                 ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
@@ -2199,7 +2199,7 @@ pub mod cdc_v2 {
         for (name, typ) in columns.iter() {
             let mut field_type = match &typ.scalar_type {
                 ScalarType::Bool => json!("boolean"),
-                ScalarType::Int32 => json!("int"),
+                ScalarType::Int32 | ScalarType::Oid => json!("int"),
                 ScalarType::Int64 => json!("long"),
                 ScalarType::Float32 => json!("float"),
                 ScalarType::Float64 => json!("double"),
