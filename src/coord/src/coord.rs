@@ -121,7 +121,6 @@ where
     C: comm::Connection,
 {
     switchboard: comm::Switchboard<C>,
-    cmd_rx: Option<futures::channel::mpsc::UnboundedReceiver<Command>>,
     broadcast_tx: comm::broadcast::Sender<SequencedCommand>,
     num_timely_workers: usize,
     optimizer: Optimizer,
@@ -140,10 +139,6 @@ where
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
     logging_granularity: Option<u64>,
-    feedback_rx: Option<comm::mpsc::Receiver<WorkerFeedbackWithMeta>>,
-    // Temporary place to stash Persister thread startup data between when the coordinator thread
-    // is initialized and when the persister thread gets spawned.
-    persister: Option<Persister>,
     // Channel to communicate source status updates and shutdown notifications to the persister
     // thread.
     persistence_tx: Option<PersistenceSender>,
@@ -164,354 +159,6 @@ impl<C> Coordinator<C>
 where
     C: comm::Connection,
 {
-    async fn new(config: Config<'_, C>) -> Result<Self, anyhow::Error> {
-        let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
-        let res = Self::new_core(config).await;
-        if res.is_err() {
-            broadcast(&mut broadcast_tx, SequencedCommand::Shutdown).await;
-        }
-        res
-    }
-
-    async fn new_core(config: Config<'_, C>) -> Result<Self, anyhow::Error> {
-        let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
-
-        let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
-            Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
-        } else {
-            None
-        };
-
-        let catalog_path = config.data_directory.map(|d| d.join("catalog"));
-        let catalog = Catalog::open(catalog::Config {
-            path: catalog_path.as_deref(),
-            experimental_mode: Some(config.experimental_mode),
-            enable_logging: config.logging_granularity.is_some(),
-        })?;
-        let logical_compaction_window_ms = config
-            .logical_compaction_window
-            .map(duration_to_timestamp_millis);
-        let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
-        broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx)).await;
-
-        if let Some(granularity) = config.logging_granularity {
-            broadcast(
-                &mut broadcast_tx,
-                SequencedCommand::EnableLogging(LoggingConfig {
-                    granularity_ns: granularity.as_nanos(),
-                    active_logs: BUILTINS
-                        .logs()
-                        .map(|src| (src.variant.clone(), src.index_id))
-                        .collect(),
-                }),
-            )
-            .await;
-        }
-
-        let (persister, persistence_tx, persistence_path) =
-            if let Some(persistence_config) = config.persistence {
-                let (persistence_tx, persistence_rx) = config.switchboard.mpsc();
-                broadcast(
-                    &mut broadcast_tx,
-                    SequencedCommand::EnablePersistence(persistence_tx.clone()),
-                )
-                .await;
-                let path = persistence_config.path.clone();
-                (
-                    Some(Persister::new(persistence_rx, persistence_config)),
-                    Some(
-                        persistence_tx
-                            .connect()
-                            .await
-                            .expect("failed to connect persistence tx"),
-                    ),
-                    Some(path),
-                )
-            } else {
-                (None, None, None)
-            };
-
-        let mut coord = Self {
-            switchboard: config.switchboard,
-            cmd_rx: Some(config.cmd_rx),
-            broadcast_tx,
-            num_timely_workers: config.num_timely_workers,
-            optimizer: Default::default(),
-            catalog,
-            symbiosis,
-            indexes: ArrangementFrontiers::default(),
-            since_updates: Vec::new(),
-            active_tails: HashMap::new(),
-            logging_granularity: config
-                .logging_granularity
-                .and_then(|c| c.as_millis().try_into().ok()),
-            timestamp_config: config.timestamp,
-            logical_compaction_window_ms,
-            feedback_rx: Some(rx),
-            persister,
-            persistence_tx,
-            persistence_path,
-            closed_up_to: 1,
-            read_lower_bound: 1,
-            last_op_was_read: false,
-            need_advance: true,
-            transient_id_counter: 1,
-        };
-
-        let catalog_entries: Vec<_> = coord
-            .catalog
-            .iter()
-            .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
-            .collect();
-
-        // Sources and indexes may be depended upon by other catalog items,
-        // insert them first.
-        for (id, _, item) in &catalog_entries {
-            match item {
-                //currently catalog item rebuild assumes that sinks and
-                //indexes are always built individually and does not store information
-                //about how it was built. If we start building multiple sinks and/or indexes
-                //using a single dataflow, we have to make sure the rebuild process re-runs
-                //the same multiple-build dataflow.
-                CatalogItem::Source(source) => {
-                    coord.maybe_begin_persistence(*id, &source.connector).await;
-                }
-                CatalogItem::Index(_) => {
-                    if BUILTINS.logs().any(|log| log.index_id == *id) {
-                        // Indexes on logging views are special, as they are
-                        // already installed in the dataflow plane via
-                        // `SequencedCommand::EnableLogging`. Just teach the
-                        // coordinator of their existence, without creating a
-                        // dataflow for the index.
-                        //
-                        // TODO(benesch): why is this hardcoded to 1000?
-                        // Should it not be the same logical compaction window
-                        // that everything else uses?
-                        coord
-                            .indexes
-                            .insert(*id, Frontiers::new(coord.num_timely_workers, Some(1_000)));
-                    } else {
-                        coord.ship_dataflow(coord.build_index_dataflow(*id)).await;
-                    }
-                }
-                _ => (), // Handled in next loop.
-            }
-        }
-
-        for (id, name, item) in &catalog_entries {
-            match item {
-                CatalogItem::Table(_) | CatalogItem::View(_) => (),
-                CatalogItem::Sink(sink) => {
-                    let builder = match &sink.connector {
-                        SinkConnectorState::Pending(builder) => builder,
-                        SinkConnectorState::Ready(_) => {
-                            panic!("sink already initialized during catalog boot")
-                        }
-                    };
-                    let connector = sink_connector::build(
-                        builder.clone(),
-                        sink.with_snapshot,
-                        coord.determine_frontier(sink.as_of, sink.from)?,
-                        *id,
-                    )
-                    .await
-                    .with_context(|| format!("recreating sink {}", name))?;
-                    coord.handle_sink_connector_ready(*id, connector).await;
-                }
-                _ => (), // Handled in prior loop.
-            }
-        }
-
-        let mut tables_to_report = HashSet::new();
-        let mut sources_to_report = HashSet::new();
-        let mut views_to_report = HashSet::new();
-        let mut sinks_to_report = HashSet::new();
-        for (id, name, item) in catalog_entries {
-            // Mirror each recovered catalog entry.
-            coord.report_catalog_update(id, name.to_string(), 1).await;
-
-            if let Ok(desc) = item.desc(&name) {
-                coord.report_column_updates(desc, id, 1).await;
-            }
-            match item {
-                CatalogItem::Index(index) => coord.report_index_update(id, &index, 1).await,
-                CatalogItem::Table(_) => {
-                    tables_to_report.insert(id);
-                }
-                CatalogItem::Source(_) => {
-                    sources_to_report.insert(id);
-                }
-                CatalogItem::View(_) => {
-                    views_to_report.insert(id);
-                }
-                CatalogItem::Sink(_) => {
-                    sinks_to_report.insert(id);
-                }
-            }
-        }
-
-        // Insert initial named objects into system tables.
-        coord
-            .report_database_update(AMBIENT_DATABASE_ID, "AMBIENT", 1)
-            .await;
-        let dbs: Vec<(String, i64, Vec<(String, i64, Vec<(String, GlobalId)>)>)> = coord
-            .catalog
-            .databases()
-            .map(|(name, database)| {
-                (
-                    name.to_string(),
-                    database.id,
-                    database
-                        .schemas
-                        .iter()
-                        .map(|(schema_name, schema)| {
-                            (
-                                schema_name.to_string(),
-                                schema.id,
-                                schema
-                                    .items
-                                    .iter()
-                                    .map(|(name, id)| (name.clone(), *id))
-                                    .collect(),
-                            )
-                        })
-                        .collect(),
-                )
-            })
-            .collect();
-        for (database_name, database_id, schemas) in dbs {
-            coord
-                .report_database_update(database_id, &database_name, 1)
-                .await;
-
-            for (schema_name, schema_id, items) in schemas {
-                coord
-                    .report_schema_update(database_id, schema_id, &schema_name, "USER", 1)
-                    .await;
-
-                for (item_name, item_id) in items {
-                    if tables_to_report.remove(&item_id) {
-                        coord
-                            .report_table_update(&item_id, schema_id, &item_name, 1)
-                            .await;
-                    } else if sources_to_report.remove(&item_id) {
-                        coord
-                            .report_source_update(&item_id, schema_id, &item_name, 1)
-                            .await;
-                    } else if views_to_report.remove(&item_id) {
-                        coord
-                            .report_view_update(&item_id, schema_id, &item_name, 1)
-                            .await;
-                    } else if sinks_to_report.remove(&item_id) {
-                        coord
-                            .report_sink_update(&item_id, schema_id, &item_name, 1)
-                            .await;
-                    }
-                }
-            }
-        }
-        let ambient_schemas: Vec<(String, i64, Vec<(String, GlobalId)>)> = coord
-            .catalog
-            .ambient_schemas()
-            .map(|(schema_name, schema)| {
-                (
-                    schema_name.to_string(),
-                    schema.id,
-                    schema
-                        .items
-                        .iter()
-                        .map(|(name, id)| (name.clone(), *id))
-                        .collect(),
-                )
-            })
-            .collect();
-        for (schema_name, schema_id, items) in ambient_schemas {
-            coord
-                .report_schema_update(AMBIENT_DATABASE_ID, schema_id, &schema_name, "SYSTEM", 1)
-                .await;
-
-            for (item_name, item_id) in items {
-                if tables_to_report.remove(&item_id) {
-                    coord
-                        .report_table_update(&item_id, schema_id, &item_name, 1)
-                        .await;
-                } else if sources_to_report.remove(&item_id) {
-                    coord
-                        .report_source_update(&item_id, schema_id, &item_name, 1)
-                        .await;
-                } else if views_to_report.remove(&item_id) {
-                    coord
-                        .report_view_update(&item_id, schema_id, &item_name, 1)
-                        .await;
-                } else if sinks_to_report.remove(&item_id) {
-                    coord
-                        .report_sink_update(&item_id, schema_id, &item_name, 1)
-                        .await;
-                }
-            }
-        }
-        coord
-            .report_schema_update(
-                AMBIENT_DATABASE_ID,
-                AMBIENT_SCHEMA_ID,
-                "mz_temp",
-                "system",
-                1,
-            )
-            .await;
-
-        // Announce primary and foreign key relationships.
-        if coord.logging_granularity.is_some() {
-            for log in BUILTINS.logs() {
-                let log_id = &log.id.to_string();
-                coord
-                    .update_catalog_view(
-                        MZ_VIEW_KEYS.id,
-                        log.variant.desc().typ().keys.iter().enumerate().flat_map(
-                            move |(index, key)| {
-                                key.iter().map(move |k| {
-                                    let row = Row::pack(&[
-                                        Datum::String(log_id),
-                                        Datum::Int64(*k as i64),
-                                        Datum::Int64(index as i64),
-                                    ]);
-                                    (row, 1)
-                                })
-                            },
-                        ),
-                    )
-                    .await;
-
-                coord
-                    .update_catalog_view(
-                        MZ_VIEW_FOREIGN_KEYS.id,
-                        log.variant.foreign_keys().into_iter().enumerate().flat_map(
-                            move |(index, (parent, pairs))| {
-                                let parent_id = BUILTINS
-                                    .logs()
-                                    .find(|src| src.variant == parent)
-                                    .unwrap()
-                                    .id
-                                    .to_string();
-                                pairs.into_iter().map(move |(c, p)| {
-                                    let row = Row::pack(&[
-                                        Datum::String(&log_id),
-                                        Datum::Int64(c as i64),
-                                        Datum::String(&parent_id),
-                                        Datum::Int64(p as i64),
-                                        Datum::Int64(index as i64),
-                                    ]);
-                                    (row, 1)
-                                })
-                            },
-                        ),
-                    )
-                    .await;
-            }
-        }
-        Ok(coord)
-    }
-
     /// Assign a timestamp for a read.
     fn get_read_ts(&mut self) -> Timestamp {
         let ts = self.get_ts();
@@ -554,17 +201,265 @@ where
         }
     }
 
-    async fn serve(&mut self) {
+    /// Initializes coordinator state based on the contained catalog. Must be
+    /// called after creating the coordinator and before calling the
+    /// `Coordinator::serve` method.
+    async fn bootstrap(&mut self) -> Result<(), anyhow::Error> {
+        let catalog_entries: Vec<_> = self
+            .catalog
+            .iter()
+            .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
+            .collect();
+
+        // Sources and indexes may be depended upon by other catalog items,
+        // insert them first.
+        for (id, _, item) in &catalog_entries {
+            match item {
+                //currently catalog item rebuild assumes that sinks and
+                //indexes are always built individually and does not store information
+                //about how it was built. If we start building multiple sinks and/or indexes
+                //using a single dataflow, we have to make sure the rebuild process re-runs
+                //the same multiple-build dataflow.
+                CatalogItem::Source(source) => {
+                    self.maybe_begin_persistence(*id, &source.connector).await;
+                }
+                CatalogItem::Index(_) => {
+                    if BUILTINS.logs().any(|log| log.index_id == *id) {
+                        // Indexes on logging views are special, as they are
+                        // already installed in the dataflow plane via
+                        // `SequencedCommand::EnableLogging`. Just teach the
+                        // coordinator of their existence, without creating a
+                        // dataflow for the index.
+                        //
+                        // TODO(benesch): why is this hardcoded to 1000?
+                        // Should it not be the same logical compaction window
+                        // that everything else uses?
+                        self.indexes
+                            .insert(*id, Frontiers::new(self.num_timely_workers, Some(1_000)));
+                    } else {
+                        self.ship_dataflow(self.build_index_dataflow(*id)).await;
+                    }
+                }
+                _ => (), // Handled in next loop.
+            }
+        }
+
+        for (id, name, item) in &catalog_entries {
+            match item {
+                CatalogItem::Table(_) | CatalogItem::View(_) => (),
+                CatalogItem::Sink(sink) => {
+                    let builder = match &sink.connector {
+                        SinkConnectorState::Pending(builder) => builder,
+                        SinkConnectorState::Ready(_) => {
+                            panic!("sink already initialized during catalog boot")
+                        }
+                    };
+                    let connector = sink_connector::build(
+                        builder.clone(),
+                        sink.with_snapshot,
+                        self.determine_frontier(sink.as_of, sink.from)?,
+                        *id,
+                    )
+                    .await
+                    .with_context(|| format!("recreating sink {}", name))?;
+                    self.handle_sink_connector_ready(*id, connector).await;
+                }
+                _ => (), // Handled in prior loop.
+            }
+        }
+
+        let mut tables_to_report = HashSet::new();
+        let mut sources_to_report = HashSet::new();
+        let mut views_to_report = HashSet::new();
+        let mut sinks_to_report = HashSet::new();
+        for (id, name, item) in catalog_entries {
+            // Mirror each recovered catalog entry.
+            self.report_catalog_update(id, name.to_string(), 1).await;
+
+            if let Ok(desc) = item.desc(&name) {
+                self.report_column_updates(desc, id, 1).await;
+            }
+            match item {
+                CatalogItem::Index(index) => self.report_index_update(id, &index, 1).await,
+                CatalogItem::Table(_) => {
+                    tables_to_report.insert(id);
+                }
+                CatalogItem::Source(_) => {
+                    sources_to_report.insert(id);
+                }
+                CatalogItem::View(_) => {
+                    views_to_report.insert(id);
+                }
+                CatalogItem::Sink(_) => {
+                    sinks_to_report.insert(id);
+                }
+            }
+        }
+
+        // Insert initial named objects into system tables.
+        self.report_database_update(AMBIENT_DATABASE_ID, "AMBIENT", 1)
+            .await;
+        let dbs: Vec<(String, i64, Vec<(String, i64, Vec<(String, GlobalId)>)>)> = self
+            .catalog
+            .databases()
+            .map(|(name, database)| {
+                (
+                    name.to_string(),
+                    database.id,
+                    database
+                        .schemas
+                        .iter()
+                        .map(|(schema_name, schema)| {
+                            (
+                                schema_name.to_string(),
+                                schema.id,
+                                schema
+                                    .items
+                                    .iter()
+                                    .map(|(name, id)| (name.clone(), *id))
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        for (database_name, database_id, schemas) in dbs {
+            self.report_database_update(database_id, &database_name, 1)
+                .await;
+
+            for (schema_name, schema_id, items) in schemas {
+                self.report_schema_update(database_id, schema_id, &schema_name, "USER", 1)
+                    .await;
+
+                for (item_name, item_id) in items {
+                    if tables_to_report.remove(&item_id) {
+                        self.report_table_update(&item_id, schema_id, &item_name, 1)
+                            .await;
+                    } else if sources_to_report.remove(&item_id) {
+                        self.report_source_update(&item_id, schema_id, &item_name, 1)
+                            .await;
+                    } else if views_to_report.remove(&item_id) {
+                        self.report_view_update(&item_id, schema_id, &item_name, 1)
+                            .await;
+                    } else if sinks_to_report.remove(&item_id) {
+                        self.report_sink_update(&item_id, schema_id, &item_name, 1)
+                            .await;
+                    }
+                }
+            }
+        }
+        let ambient_schemas: Vec<(String, i64, Vec<(String, GlobalId)>)> = self
+            .catalog
+            .ambient_schemas()
+            .map(|(schema_name, schema)| {
+                (
+                    schema_name.to_string(),
+                    schema.id,
+                    schema
+                        .items
+                        .iter()
+                        .map(|(name, id)| (name.clone(), *id))
+                        .collect(),
+                )
+            })
+            .collect();
+        for (schema_name, schema_id, items) in ambient_schemas {
+            self.report_schema_update(AMBIENT_DATABASE_ID, schema_id, &schema_name, "SYSTEM", 1)
+                .await;
+
+            for (item_name, item_id) in items {
+                if tables_to_report.remove(&item_id) {
+                    self.report_table_update(&item_id, schema_id, &item_name, 1)
+                        .await;
+                } else if sources_to_report.remove(&item_id) {
+                    self.report_source_update(&item_id, schema_id, &item_name, 1)
+                        .await;
+                } else if views_to_report.remove(&item_id) {
+                    self.report_view_update(&item_id, schema_id, &item_name, 1)
+                        .await;
+                } else if sinks_to_report.remove(&item_id) {
+                    self.report_sink_update(&item_id, schema_id, &item_name, 1)
+                        .await;
+                }
+            }
+        }
+        self.report_schema_update(
+            AMBIENT_DATABASE_ID,
+            AMBIENT_SCHEMA_ID,
+            "mz_temp",
+            "system",
+            1,
+        )
+        .await;
+
+        // Announce primary and foreign key relationships.
+        if self.logging_granularity.is_some() {
+            for log in BUILTINS.logs() {
+                let log_id = &log.id.to_string();
+                self.update_catalog_view(
+                    MZ_VIEW_KEYS.id,
+                    log.variant.desc().typ().keys.iter().enumerate().flat_map(
+                        move |(index, key)| {
+                            key.iter().map(move |k| {
+                                let row = Row::pack(&[
+                                    Datum::String(log_id),
+                                    Datum::Int64(*k as i64),
+                                    Datum::Int64(index as i64),
+                                ]);
+                                (row, 1)
+                            })
+                        },
+                    ),
+                )
+                .await;
+
+                self.update_catalog_view(
+                    MZ_VIEW_FOREIGN_KEYS.id,
+                    log.variant.foreign_keys().into_iter().enumerate().flat_map(
+                        move |(index, (parent, pairs))| {
+                            let parent_id = BUILTINS
+                                .logs()
+                                .find(|src| src.variant == parent)
+                                .unwrap()
+                                .id
+                                .to_string();
+                            pairs.into_iter().map(move |(c, p)| {
+                                let row = Row::pack(&[
+                                    Datum::String(&log_id),
+                                    Datum::Int64(c as i64),
+                                    Datum::String(&parent_id),
+                                    Datum::Int64(p as i64),
+                                    Datum::Int64(index as i64),
+                                ]);
+                                (row, 1)
+                            })
+                        },
+                    ),
+                )
+                .await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Serves the coordinator, receiving commands from users over `cmd_rx`
+    /// and feedback from dataflow workers over `feedback_rx`.
+    ///
+    /// You must call `bootstrap` before calling this method.
+    async fn serve(
+        mut self,
+        cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
+        feedback_rx: comm::mpsc::Receiver<WorkerFeedbackWithMeta>,
+    ) {
         let (internal_cmd_tx, internal_cmd_stream) = futures::channel::mpsc::unbounded();
 
-        let cmd_stream = self
-            .cmd_rx
-            .take()
-            .unwrap()
+        let cmd_stream = cmd_rx
             .map(Message::Command)
             .chain(stream::once(future::ready(Message::Shutdown)));
 
-        let feedback_stream = self.feedback_rx.take().unwrap().map(|r| match r {
+        let feedback_stream = feedback_rx.map(|r| match r {
             Ok(m) => Message::Worker(m),
             Err(e) => panic!("coordinator feedback receiver failed: {}", e),
         });
@@ -575,12 +470,6 @@ where
         let executor = Handle::current();
         let _timestamper_thread =
             thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
-
-        let persister = self.persister.take();
-
-        if let Some(mut persister) = persister {
-            tokio::spawn(async move { persister.run().await });
-        }
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
@@ -2902,17 +2791,129 @@ where
 ///
 /// To gracefully shut down the coordinator, send a `Message::Shutdown` to the
 /// `cmd_rx` in the configuration, then join on the thread.
-pub async fn serve<C>(config: Config<'_, C>) -> Result<JoinHandle<()>, anyhow::Error>
+pub async fn serve<C>(
+    Config {
+        switchboard,
+        cmd_rx,
+        num_timely_workers,
+        symbiosis_url,
+        logging_granularity,
+        data_directory,
+        timestamp: timestamp_config,
+        persistence: persistence_config,
+        logical_compaction_window,
+        experimental_mode,
+    }: Config<'_, C>,
+) -> Result<JoinHandle<()>, anyhow::Error>
 where
     C: comm::Connection,
 {
-    let mut coord = Coordinator::new(config).await?;
+    let mut broadcast_tx = switchboard.broadcast_tx(dataflow::BroadcastToken);
+
+    // First, configure the dataflow workers as directed by our configuration.
+    // These operations must all be infallible.
+
+    let (feedback_tx, feedback_rx) = switchboard.mpsc_limited(num_timely_workers);
+    broadcast(
+        &mut broadcast_tx,
+        SequencedCommand::EnableFeedback(feedback_tx),
+    )
+    .await;
+
+    if let Some(granularity) = logging_granularity {
+        broadcast(
+            &mut broadcast_tx,
+            SequencedCommand::EnableLogging(LoggingConfig {
+                granularity_ns: granularity.as_nanos(),
+                active_logs: BUILTINS
+                    .logs()
+                    .map(|src| (src.variant.clone(), src.index_id))
+                    .collect(),
+            }),
+        )
+        .await;
+    }
+
+    let persistence_tx = if let Some(persistence_config) = &persistence_config {
+        let (persistence_tx, persistence_rx) = switchboard.mpsc();
+        broadcast(
+            &mut broadcast_tx,
+            SequencedCommand::EnablePersistence(persistence_tx.clone()),
+        )
+        .await;
+        let persistence_tx = persistence_tx
+            .connect()
+            .await
+            .expect("failed to connect persistence tx");
+
+        let mut persister = Persister::new(persistence_rx, persistence_config.clone());
+        tokio::spawn(async move { persister.run().await });
+
+        Some(persistence_tx)
+    } else {
+        None
+    };
+
+    // Then perform fallible operations, like opening the catalog. If these
+    // fail, we are careful to tell the dataflow layer to shutdown.
+    let coord = async {
+        let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
+            Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
+        } else {
+            None
+        };
+
+        let catalog_path = data_directory.map(|d| d.join("catalog"));
+        let catalog = Catalog::open(catalog::Config {
+            path: catalog_path.as_deref(),
+            experimental_mode: Some(experimental_mode),
+            enable_logging: logging_granularity.is_some(),
+        })?;
+
+        let mut coord = Coordinator {
+            broadcast_tx: switchboard.broadcast_tx(dataflow::BroadcastToken),
+            switchboard: switchboard.clone(),
+            num_timely_workers,
+            optimizer: Default::default(),
+            catalog,
+            symbiosis,
+            indexes: ArrangementFrontiers::default(),
+            since_updates: Vec::new(),
+            active_tails: HashMap::new(),
+            logging_granularity: logging_granularity.and_then(|c| c.as_millis().try_into().ok()),
+            timestamp_config,
+            logical_compaction_window_ms: logical_compaction_window
+                .map(duration_to_timestamp_millis),
+            persistence_tx,
+            persistence_path: persistence_config.map(|pc| pc.path),
+            closed_up_to: 1,
+            read_lower_bound: 1,
+            last_op_was_read: false,
+            need_advance: true,
+            transient_id_counter: 1,
+        };
+        coord.bootstrap().await?;
+        Ok(coord)
+    };
+    let coord = match coord.await {
+        Ok(coord) => coord,
+        Err(e) => {
+            broadcast(&mut broadcast_tx, SequencedCommand::Shutdown).await;
+            return Err(e);
+        }
+    };
+
+    // From this point on, this function must not fail! If you add a new
+    // fallible operation, ensure it is in the async block above.
+
     // The future returned by `Coordinator::serve` does not implement `Send` as
     // it holds various non-thread-safe state across await points. This means we
     // can't use `tokio::spawn`, but instead have to spawn a dedicated thread to
     // run the future.
-    let executor = Handle::current();
-    Ok(thread::spawn(move || executor.block_on(coord.serve())))
+    Ok(thread::spawn({
+        let executor = Handle::current();
+        move || executor.block_on(coord.serve(cmd_rx, feedback_rx))
+    }))
 }
 
 async fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {
