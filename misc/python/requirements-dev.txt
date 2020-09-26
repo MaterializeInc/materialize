@@ -2,3 +2,6 @@ black==19.10b0
 mypy==0.770
 pdoc3==0.8.1
 pytest==5.4.2
+
+# these requirements are used only in internal scripts, not for general use of materialize tools
+requests>=2.24.0,<2.25.0
