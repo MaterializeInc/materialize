@@ -42,7 +42,7 @@ def speaker(prefix: str, for_progress: bool = False) -> Callable[..., None]:
     Example::
 
         >>> say = speaker("mz")
-        >>> say("hello")
+        >>> say("hello")  # doctest: +SKIP
         mz> hello
     """
 
