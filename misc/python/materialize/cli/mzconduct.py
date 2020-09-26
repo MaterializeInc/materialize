@@ -80,6 +80,7 @@ def up(composition: str, workflow: Optional[str], services: Iterable[str],) -> N
 
     With the --workflow flag, perform all the steps in the workflow together.
     """
+    ui.warn_docker_resource_limits()
     comp = Composition.find(composition)
     if workflow is not None:
         say(f"Executing {comp.name} -> {workflow}")
@@ -100,6 +101,7 @@ def run(composition: str, workflow: Optional[str], services: Iterable[str],) -> 
 
     With the --workflow flag, perform all the steps in the workflow together.
     """
+    ui.warn_docker_resource_limits()
     comp = Composition.find(composition)
     if workflow is not None:
         say(f"Executing {comp.name} -> {workflow}")
