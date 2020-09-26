@@ -15,7 +15,9 @@ import os
 import shlex
 import sys
 import time
-from typing import Any, Callable, Generator, Iterable, Optional
+from typing import Any, Callable, Generator, Iterable, Optional, NamedTuple, Union
+
+from materialize import docker
 
 
 class Verbosity:
@@ -112,3 +114,58 @@ def env_is_truthy(env_var: str) -> bool:
     if env is not None:
         return env not in ("", "0", "no")
     return False
+
+
+def warn_docker_resource_limits() -> None:
+    """Check docker for recommended resource limits
+    """
+    warn = speaker("WARN:")
+
+    limits = docker.resource_limits()
+    if limits.mem_total < docker.RECOMMENDED_MIN_MEM:
+        actual = SiNumber.of(limits.mem_total)
+        desired = SiNumber.of(docker.RECOMMENDED_MIN_MEM)
+        warn(
+            f"Docker only has {actual} memory, "
+            f"less than {desired} can cause demos to fail in unexpected ways.\n"
+            "    See https://materialize.io/docs/third-party/docker/\n"
+        )
+    if limits.ncpus < docker.RECOMMENDED_MIN_CPUS:
+        warn(
+            f"Docker only has access to {limits.ncpus}, "
+            f"fewer than {docker.RECOMMENDED_MIN_CPUS} can cause demos to fail in unexpected ways.\n"
+            "    See https://materialize.io/docs/third-party/docker/\n"
+        )
+
+
+class SiNumber(NamedTuple):
+    """A human-readable number, constructed by the .of method
+
+    ::
+
+        >>> str(SiNumber.of(16795869184, "B"))
+        '15.6 GiB'
+    """
+
+    val: float
+    suffix: str
+    kind: str
+
+    def __str__(self) -> str:
+        return f"{self.val:.1f} {self.suffix}{self.kind}"
+
+    @staticmethod
+    def of(val: Union[int, float], suffix: str = "B") -> "SiNumber":
+        """Construct a human readable number by continuously dividing until it fits in an SI prefix
+
+        Args:
+            val: the number to convert
+            suffix: What kind of number it is (e.g. "B" for bytes)
+        """
+
+        suffixes = ["", "Ki", "Mi", "Gi", "Ti"]
+        index = 0
+        while val > 1024:
+            val /= 1024
+            index += 1
+        return SiNumber(val, suffixes[index], suffix)
