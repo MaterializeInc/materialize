@@ -301,3 +301,12 @@ Parse error:
 SELECT LIST[1][1:1, ]
                     ^
 Expected an expression, found: ]
+
+parse-scalar
+ARRAY[]::int[1 + 1]
+----
+error:
+Parse error:
+ARRAY[]::int[1 + 1]
+               ^
+Expected ], found: +

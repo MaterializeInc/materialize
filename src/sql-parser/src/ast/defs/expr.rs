@@ -128,6 +128,8 @@ pub enum Expr {
         op: BinaryOperator,
         right: Box<Query>,
     },
+    /// `ARRAY[<expr>*]`
+    Array(Vec<Expr>),
     /// `LIST[<expr>*]`
     List(Vec<Expr>),
     /// `<expr>[<expr>]`
@@ -329,6 +331,17 @@ impl AstDisplay for Expr {
                 f.write_str(" ALL (");
                 f.write_node(&right);
                 f.write_str(")");
+            }
+            Expr::Array(exprs) => {
+                let mut exprs = exprs.iter().peekable();
+                f.write_str("ARRAY[");
+                while let Some(expr) = exprs.next() {
+                    f.write_node(expr);
+                    if exprs.peek().is_some() {
+                        f.write_str(", ");
+                    }
+                }
+                f.write_str("]");
             }
             Expr::List(exprs) => {
                 let mut exprs = exprs.iter().peekable();

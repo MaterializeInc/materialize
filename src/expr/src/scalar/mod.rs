@@ -8,10 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashSet;
+use std::fmt;
 use std::mem;
 
 use serde::{Deserialize, Serialize};
 
+use repr::adt::array::InvalidArrayError;
 use repr::adt::datetime::DateTimeUnits;
 use repr::adt::regex::Regex;
 use repr::strconv::ParseError;
@@ -564,6 +566,7 @@ pub enum EvalError {
         max_dim: usize,
         val: i64,
     },
+    InvalidArray(InvalidArrayError),
     InvalidEncodingName(String),
     InvalidByteSequence {
         byte_sequence: String,
@@ -578,8 +581,8 @@ pub enum EvalError {
     Parse(ParseError),
 }
 
-impl std::fmt::Display for EvalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Display for EvalError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             EvalError::DivisionByZero => f.write_str("division by zero"),
             EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
@@ -591,6 +594,7 @@ impl std::fmt::Display for EvalError {
                 "invalid dimension: {}; must use value within [1, {}]",
                 val, max_dim
             ),
+            EvalError::InvalidArray(e) => e.fmt(f),
             EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
             EvalError::InvalidByteSequence {
                 byte_sequence,
@@ -620,6 +624,12 @@ impl std::error::Error for EvalError {}
 impl From<ParseError> for EvalError {
     fn from(e: ParseError) -> EvalError {
         EvalError::Parse(e)
+    }
+}
+
+impl From<InvalidArrayError> for EvalError {
+    fn from(e: InvalidArrayError) -> EvalError {
+        EvalError::InvalidArray(e)
     }
 }
 

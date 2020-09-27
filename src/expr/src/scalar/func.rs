@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
+use repr::adt::array::ArrayDimension;
 use repr::adt::datetime::DateTimeUnits;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::interval::Interval;
@@ -2918,6 +2919,36 @@ fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> D
     }
 }
 
+fn array_create_multidim<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut dims = vec![ArrayDimension {
+        lower_bound: 1,
+        length: datums.len(),
+    }];
+    if let Some(d) = datums.first() {
+        dims.extend(d.unwrap_array().dims());
+    };
+    let elements = datums
+        .iter()
+        .flat_map(|d| d.unwrap_array().elements().iter());
+    let datum = temp_storage.try_make_datum(move |packer| packer.push_array(&dims, elements))?;
+    Ok(datum)
+}
+
+fn array_create_scalar<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let dims = &[ArrayDimension {
+        lower_bound: 1,
+        length: datums.len(),
+    }];
+    let datum = temp_storage.try_make_datum(|packer| packer.push_array(dims, datums))?;
+    Ok(datum)
+}
+
 fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     temp_storage.make_datum(|packer| packer.push_list(datums))
 }
@@ -2960,6 +2991,18 @@ where
                 }
             })
         }
+        Array(elem_type) => strconv::format_array(
+            buf,
+            &d.unwrap_array().dims().into_iter().collect::<Vec<_>>(),
+            &d.unwrap_array().elements(),
+            |buf, d| {
+                if d.is_null() {
+                    buf.write_null()
+                } else {
+                    stringify_datum(buf.nonnull_buffer(), d, elem_type)
+                }
+            },
+        ),
         List(elem_type) => strconv::format_list(buf, &d.unwrap_list(), |buf, d| {
             if d.is_null() {
                 buf.write_null()
@@ -3172,8 +3215,12 @@ pub enum VariadicFunc {
     Replace,
     JsonbBuildArray,
     JsonbBuildObject,
+    ArrayCreate {
+        // We need to know the element type to type empty arrays.
+        elem_type: ScalarType,
+    },
     ListCreate {
-        // we need to know this to type exprs with empty lists
+        // We need to know the element type to type empty lists.
         elem_type: ScalarType,
     },
     RecordCreate {
@@ -3210,6 +3257,10 @@ impl VariadicFunc {
             VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
             VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
+            VariadicFunc::ArrayCreate {
+                elem_type: ScalarType::Array(_),
+            } => eager!(array_create_multidim, temp_storage),
+            VariadicFunc::ArrayCreate { .. } => eager!(array_create_scalar, temp_storage),
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
                 Ok(eager!(list_create, temp_storage))
             }
@@ -3237,6 +3288,16 @@ impl VariadicFunc {
             Substr => ScalarType::String.nullable(true),
             Replace => ScalarType::String.nullable(true),
             JsonbBuildArray | JsonbBuildObject => ScalarType::Jsonb.nullable(true),
+            ArrayCreate { elem_type } => {
+                debug_assert!(
+                    input_types.iter().all(|t| t.scalar_type == *elem_type),
+                    "Args to ArrayCreate should have types that are compatible with the elem_type"
+                );
+                match elem_type {
+                    ScalarType::Array(_) => elem_type.clone().nullable(false),
+                    _ => ScalarType::Array(Box::new(elem_type.clone())).nullable(false),
+                }
+            }
             ListCreate { elem_type } => {
                 debug_assert!(
                     input_types.iter().all(|t| t.scalar_type == *elem_type),
@@ -3265,7 +3326,8 @@ impl VariadicFunc {
             | VariadicFunc::JsonbBuildArray
             | VariadicFunc::JsonbBuildObject
             | VariadicFunc::ListCreate { .. }
-            | VariadicFunc::RecordCreate { .. } => false,
+            | VariadicFunc::RecordCreate { .. }
+            | VariadicFunc::ArrayCreate { .. } => false,
             _ => true,
         }
     }
@@ -3281,6 +3343,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Replace => f.write_str("replace"),
             VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
+            VariadicFunc::ArrayCreate { .. } => f.write_str("array_create"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
             VariadicFunc::ListSlice => f.write_str("list_slice"),

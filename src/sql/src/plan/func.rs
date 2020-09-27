@@ -40,6 +40,7 @@ use crate::names::PartialName;
 /// [typcategory]:
 /// https://www.postgresql.org/docs/9.6/catalog-pg-type.html#CATALOG-TYPCATEGORY-TABLE
 pub enum TypeCategory {
+    Array,
     Bool,
     DateTime,
     Numeric,
@@ -63,6 +64,7 @@ impl TypeCategory {
     /// ```
     fn from_type(typ: &ScalarType) -> Self {
         match typ {
+            ScalarType::Array(_) => Self::Array,
             ScalarType::Bool => Self::Bool,
             ScalarType::Bytes | ScalarType::Jsonb | ScalarType::Uuid | ScalarType::List(_) => {
                 Self::UserDefined
@@ -104,7 +106,7 @@ impl TypeCategory {
             Self::Numeric => Some(ScalarType::Float64),
             Self::String => Some(ScalarType::String),
             Self::Timespan => Some(ScalarType::Interval),
-            Self::Pseudo | Self::UserDefined => None,
+            Self::Array | Self::Pseudo | Self::UserDefined => None,
         }
     }
 }

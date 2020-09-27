@@ -22,6 +22,7 @@ use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use postgres::config::SslMode;
 use postgres::error::SqlState;
 use postgres::types::Type;
+use postgres_array::{Array, Dimension};
 use postgres_openssl::MakeTlsConnector;
 use tokio::runtime::Runtime;
 
@@ -391,6 +392,32 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             Err(e) => assert!(e.to_string().contains("certificate verify failed")),
         }
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_arrays() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+
+    let row = client.query_one("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]", &[])?;
+    let array: Array<Option<i32>> = row.get(0);
+    assert_eq!(
+        array.dimensions(),
+        &[
+            Dimension {
+                len: 3,
+                lower_bound: 1,
+            },
+            Dimension {
+                len: 1,
+                lower_bound: 1,
+            }
+        ]
+    );
+    assert_eq!(array.into_inner(), &[Some(1), None, Some(2)],);
 
     Ok(())
 }
