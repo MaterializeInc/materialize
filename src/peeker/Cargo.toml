@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-chrono = "0.4.15"
+chrono = "0.4.18"
 env_logger = "0.7.1"
 getopts = "0.2"
 hyper = "0.13"
