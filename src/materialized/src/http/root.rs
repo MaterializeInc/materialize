@@ -14,7 +14,6 @@ use std::future::Future;
 use askama::Template;
 use futures::future;
 use hyper::{Body, Method, Request, Response, StatusCode};
-use include_dir::{include_dir, Dir};
 
 use crate::http::{util, Server};
 
@@ -25,8 +24,6 @@ struct HomeTemplate<'a> {
     build_time: &'a str,
     build_sha: &'static str,
 }
-
-const STATIC_DIR: Dir = include_dir!("src/http/static");
 
 impl Server {
     pub fn handle_home(
@@ -40,19 +37,45 @@ impl Server {
         }))
     }
 
+    #[allow(clippy::manual_async_fn)] // clippy bug: https://github.com/rust-lang/rust-clippy/issues/5765
     pub fn handle_static(
         &self,
         req: Request<Body>,
     ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        if req.method() == Method::GET {
-            let path = req.uri().path();
-            let path = path.strip_prefix("/").unwrap_or(path);
-            future::ok(match STATIC_DIR.get_file(path) {
-                Some(file) => Response::new(Body::from(file.contents())),
-                None => util::error_response(StatusCode::NOT_FOUND, "not found"),
-            })
-        } else {
-            future::ok(util::error_response(StatusCode::FORBIDDEN, "bad request"))
+        async move {
+            if req.method() == Method::GET {
+                let path = req.uri().path();
+                let path = path.strip_prefix("/").unwrap_or(path);
+                match get_static_file(path).await {
+                    Some(body) => Ok(Response::new(body)),
+                    None => Ok(util::error_response(StatusCode::NOT_FOUND, "not found")),
+                }
+            } else {
+                Ok(util::error_response(StatusCode::FORBIDDEN, "bad request"))
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "dev-web"))]
+const STATIC_DIR: include_dir::Dir = include_dir::include_dir!("src/http/static");
+
+#[cfg(not(feature = "dev-web"))]
+async fn get_static_file(path: &str) -> Option<Body> {
+    STATIC_DIR.get_file(path).map(|f| Body::from(f.contents()))
+}
+
+#[cfg(feature = "dev-web")]
+async fn get_static_file(path: &str) -> Option<Body> {
+    #[cfg(not(debug_assertions))]
+    compile_error!("cannot enable insecure `dev-web` feature in release mode");
+
+    let path = format!("{}/src/http/static/{}", env!("CARGO_MANIFEST_DIR"), path);
+    match tokio::fs::read(&path).await {
+        Ok(contents) => Some(Body::from(contents)),
+        Err(e) => {
+            log::debug!("dev-web failed to load static file: {}: {}", path, e);
+            None
         }
     }
 }
