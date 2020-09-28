@@ -25,6 +25,7 @@ pub(crate) enum ErrorKind {
         detail: String,
     },
     IdExhaustion,
+    OidExhaustion,
     Sql(SqlCatalogError),
     DatabaseAlreadyExists(String),
     SchemaAlreadyExists(String),
@@ -74,6 +75,7 @@ impl std::error::Error for Error {
         match &self.kind {
             ErrorKind::Corruption { .. }
             | ErrorKind::IdExhaustion
+            | ErrorKind::OidExhaustion
             | ErrorKind::DatabaseAlreadyExists(_)
             | ErrorKind::SchemaAlreadyExists(_)
             | ErrorKind::ItemAlreadyExists(_)
@@ -98,6 +100,7 @@ impl fmt::Display for Error {
         match &self.kind {
             ErrorKind::Corruption { detail } => write!(f, "corrupt catalog: {}", detail),
             ErrorKind::IdExhaustion => write!(f, "id counter overflows i64"),
+            ErrorKind::OidExhaustion => write!(f, "oid counter overflows u32"),
             ErrorKind::Sql(e) => write!(f, "{}", e),
             ErrorKind::DatabaseAlreadyExists(name) => {
                 write!(f, "database '{}' already exists", name)

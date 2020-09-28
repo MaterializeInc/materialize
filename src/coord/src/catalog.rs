@@ -47,6 +47,10 @@ const SYSTEM_CONN_ID: u32 = 0;
 pub const AMBIENT_DATABASE_ID: i64 = -1;
 pub const AMBIENT_SCHEMA_ID: i64 = -1;
 
+// TODO@jldlaughlin: Better assignment strategy for system type OIDs.
+// https://github.com/MaterializeInc/materialize/pull/4316#discussion_r496238962
+pub const FIRST_USER_OID: u32 = 20_000;
+
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
 /// For each object, it keeps track of both forward and reverse dependencies:
@@ -81,6 +85,8 @@ pub struct Catalog {
     nonce: u64,
     experimental_mode: bool,
     cluster_id: Uuid,
+    /// Used to assign a PostgreSQL object ID (OID) to each object in the catalog.
+    oid_counter: u32,
 }
 
 #[derive(Debug)]
@@ -100,19 +106,16 @@ impl ConnCatalog<'_> {
 #[derive(Debug, Serialize)]
 pub struct Database {
     pub id: i64,
+    #[serde(skip)]
+    pub oid: u32,
     pub schemas: BTreeMap<String, Schema>,
-}
-
-lazy_static! {
-    static ref EMPTY_DATABASE: Database = Database {
-        id: 0,
-        schemas: BTreeMap::new(),
-    };
 }
 
 #[derive(Debug, Serialize)]
 pub struct Schema {
     pub id: i64,
+    #[serde(skip)]
+    pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
 }
 
@@ -121,6 +124,7 @@ pub struct CatalogEntry {
     item: CatalogItem,
     used_by: Vec<GlobalId>,
     id: GlobalId,
+    oid: u32,
     name: FullName,
 }
 
@@ -320,6 +324,11 @@ impl CatalogEntry {
         self.id
     }
 
+    /// Returns the OID of this catalog entry.
+    pub fn oid(&self) -> u32 {
+        self.oid
+    }
+
     /// Returns the name of this catalog entry.
     pub fn name(&self) -> &FullName {
         &self.name
@@ -349,15 +358,18 @@ impl Catalog {
             nonce: rand::random(),
             experimental_mode,
             cluster_id,
+            oid_counter: FIRST_USER_OID,
         };
-        catalog.create_temporary_schema(SYSTEM_CONN_ID);
+        catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
 
         let databases = catalog.storage().load_databases()?;
         for (id, name) in databases {
+            let oid = catalog.allocate_oid()?;
             catalog.by_name.insert(
                 name,
                 Database {
                     id,
+                    oid,
                     schemas: BTreeMap::new(),
                 },
             );
@@ -365,6 +377,7 @@ impl Catalog {
 
         let schemas = catalog.storage().load_schemas()?;
         for (id, database_name, schema_name) in schemas {
+            let oid = catalog.allocate_oid()?;
             let schemas = match database_name {
                 Some(database_name) => {
                     &mut catalog
@@ -379,6 +392,7 @@ impl Catalog {
                 schema_name,
                 Schema {
                     id,
+                    oid,
                     items: BTreeMap::new(),
                 },
             );
@@ -393,8 +407,10 @@ impl Catalog {
             match builtin {
                 Builtin::Log(log) if config.enable_logging => {
                     let index_name = format!("{}_primary_idx", log.name);
+                    let oid = catalog.allocate_oid()?;
                     catalog.insert_item(
                         log.id,
+                        oid,
                         name.clone(),
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
@@ -403,8 +419,10 @@ impl Catalog {
                             desc: log.variant.desc(),
                         }),
                     );
+                    let oid = catalog.allocate_oid()?;
                     catalog.insert_item(
                         log.index_id,
+                        oid,
                         FullName {
                             database: DatabaseSpecifier::Ambient,
                             schema: MZ_CATALOG_SCHEMA.into(),
@@ -433,8 +451,10 @@ impl Catalog {
                     let index_name = format!("{}_primary_idx", table.name);
                     let index_sql =
                         super::coord::index_sql(index_name.clone(), name.clone(), &table.desc, &[]);
+                    let oid = catalog.allocate_oid()?;
                     catalog.insert_item(
                         table.id,
+                        oid,
                         name.clone(),
                         CatalogItem::Table(Table {
                             create_sql: "TODO".to_string(),
@@ -442,8 +462,10 @@ impl Catalog {
                             desc: table.desc.clone(),
                         }),
                     );
+                    let oid = catalog.allocate_oid()?;
                     catalog.insert_item(
                         table.index_id,
+                        oid,
                         FullName {
                             database: DatabaseSpecifier::Ambient,
                             schema: MZ_CATALOG_SCHEMA.into(),
@@ -472,7 +494,8 @@ impl Catalog {
                                 view.name, e
                             )
                         });
-                    catalog.insert_item(view.id, name, item);
+                    let oid = catalog.allocate_oid()?;
+                    catalog.insert_item(view.id, oid, name, item);
                 }
 
                 _ => (),
@@ -502,7 +525,8 @@ impl Catalog {
                     }))
                 }
             };
-            catalog.insert_item(id, name, item);
+            let oid = catalog.allocate_oid()?;
+            catalog.insert_item(id, oid, name, item);
         }
 
         Ok(catalog)
@@ -532,6 +556,15 @@ impl Catalog {
 
     pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().allocate_id()
+    }
+
+    pub fn allocate_oid(&mut self) -> Result<u32, Error> {
+        let oid = self.oid_counter;
+        if oid == u32::max_value() {
+            return Err(Error::new(ErrorKind::OidExhaustion));
+        }
+        self.oid_counter += 1;
+        Ok(oid)
     }
 
     pub fn resolve_schema(
@@ -654,14 +687,17 @@ impl Catalog {
 
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
-    pub fn create_temporary_schema(&mut self, conn_id: u32) {
+    pub fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
+        let oid = self.allocate_oid()?;
         self.temporary_schemas.insert(
             conn_id,
             Schema {
                 id: -1,
+                oid,
                 items: BTreeMap::new(),
             },
         );
+        Ok(())
     }
 
     fn item_exists_in_temp_schemas(&mut self, conn_id: u32, item_name: &str) -> bool {
@@ -738,7 +774,13 @@ impl Catalog {
         }
     }
 
-    pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) -> OpStatus {
+    pub fn insert_item(
+        &mut self,
+        id: GlobalId,
+        oid: u32,
+        name: FullName,
+        item: CatalogItem,
+    ) -> OpStatus {
         if !item.is_placeholder() {
             info!("create {} {} ({})", item.type_string(), name, id);
         }
@@ -747,6 +789,7 @@ impl Catalog {
             item: item.clone(),
             name: name.clone(),
             id,
+            oid,
             used_by: Vec::new(),
         };
         for u in entry.uses() {
@@ -783,6 +826,7 @@ impl Catalog {
         OpStatus::CreatedItem {
             schema_id,
             id,
+            oid,
             name,
             item,
         }
@@ -867,6 +911,7 @@ impl Catalog {
         for op in ops.iter() {
             if let Op::CreateItem {
                 id,
+                oid: _,
                 name,
                 item:
                     CatalogItem::View(View {
@@ -895,15 +940,18 @@ impl Catalog {
         enum Action {
             CreateDatabase {
                 id: i64,
+                oid: u32,
                 name: String,
             },
             CreateSchema {
                 id: i64,
+                oid: u32,
                 database_name: String,
                 schema_name: String,
             },
             CreateItem {
                 id: GlobalId,
+                oid: u32,
                 name: FullName,
                 item: CatalogItem,
             },
@@ -936,13 +984,15 @@ impl Catalog {
         let mut tx = storage.transaction()?;
         for op in ops {
             actions.extend(match op {
-                Op::CreateDatabase { name } => vec![Action::CreateDatabase {
+                Op::CreateDatabase { name, oid } => vec![Action::CreateDatabase {
                     id: tx.insert_database(&name)?,
+                    oid,
                     name,
                 }],
                 Op::CreateSchema {
                     database_name,
                     schema_name,
+                    oid,
                 } => {
                     if schema_name.starts_with("mz_") || schema_name.starts_with("pg_") {
                         return Err(Error::new(ErrorKind::UnacceptableSchemaName(schema_name)));
@@ -955,11 +1005,17 @@ impl Catalog {
                     };
                     vec![Action::CreateSchema {
                         id: tx.insert_schema(database_id, &schema_name)?,
+                        oid,
                         database_name,
                         schema_name,
                     }]
                 }
-                Op::CreateItem { id, name, item } => {
+                Op::CreateItem {
+                    id,
+                    oid,
+                    name,
+                    item,
+                } => {
                     if item.is_temporary() {
                         if name.database != DatabaseSpecifier::Ambient
                             || name.schema != MZ_TEMP_SCHEMA
@@ -988,7 +1044,12 @@ impl Catalog {
                         tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
                     }
 
-                    vec![Action::CreateItem { id, name, item }]
+                    vec![Action::CreateItem {
+                        id,
+                        oid,
+                        name,
+                        item,
+                    }]
                 }
                 Op::DropDatabase { name } => {
                     tx.remove_database(&name)?;
@@ -1090,20 +1151,22 @@ impl Catalog {
         Ok(actions
             .into_iter()
             .map(|action| match action {
-                Action::CreateDatabase { id, name } => {
+                Action::CreateDatabase { id, oid, name } => {
                     info!("create database {}", name);
                     self.by_name.insert(
                         name.clone(),
                         Database {
                             id,
+                            oid,
                             schemas: BTreeMap::new(),
                         },
                     );
-                    OpStatus::CreatedDatabase { name, id }
+                    OpStatus::CreatedDatabase { name, id, oid }
                 }
 
                 Action::CreateSchema {
                     id,
+                    oid,
                     database_name,
                     schema_name,
                 } => {
@@ -1113,6 +1176,7 @@ impl Catalog {
                         schema_name.clone(),
                         Schema {
                             id,
+                            oid,
                             items: BTreeMap::new(),
                         },
                     );
@@ -1120,13 +1184,23 @@ impl Catalog {
                         database_id: db.id,
                         schema_id: id,
                         schema_name,
+                        oid,
                     }
                 }
 
-                Action::CreateItem { id, name, item } => self.insert_item(id, name, item),
+                Action::CreateItem {
+                    id,
+                    oid,
+                    name,
+                    item,
+                } => self.insert_item(id, oid, name, item),
 
-                Action::DropDatabase { name } => match self.by_name.remove(&name).map(|db| db.id) {
-                    Some(id) => OpStatus::DroppedDatabase { name, id },
+                Action::DropDatabase { name } => match self.by_name.remove(&name) {
+                    Some(db) => OpStatus::DroppedDatabase {
+                        name,
+                        id: db.id,
+                        oid: db.oid,
+                    },
                     None => OpStatus::NoOp,
                 },
 
@@ -1140,6 +1214,7 @@ impl Catalog {
                             database_id: db.id,
                             schema_id: schema.id,
                             schema_name,
+                            oid: schema.oid,
                         },
                         None => OpStatus::NoOp,
                     }
@@ -1224,12 +1299,14 @@ impl Catalog {
                     entry.name = to_name.clone();
                     entry.item = item.clone();
                     schema.items.insert(entry.name.item.clone(), id);
+                    let oid = entry.oid();
                     self.by_id.insert(id, entry);
 
                     match from_name {
                         Some(from_name) => OpStatus::UpdatedItem {
                             schema_id,
                             id,
+                            oid,
                             from_name,
                             to_name,
                             item,
@@ -1442,13 +1519,16 @@ impl IdHumanizer for Catalog {
 pub enum Op {
     CreateDatabase {
         name: String,
+        oid: u32,
     },
     CreateSchema {
         database_name: DatabaseSpecifier,
         schema_name: String,
+        oid: u32,
     },
     CreateItem {
         id: GlobalId,
+        oid: u32,
         name: FullName,
         item: CatalogItem,
     },
@@ -1474,26 +1554,31 @@ pub enum OpStatus {
     CreatedDatabase {
         name: String,
         id: i64,
+        oid: u32,
     },
     CreatedSchema {
         database_id: i64,
         schema_id: i64,
         schema_name: String,
+        oid: u32,
     },
     CreatedItem {
         schema_id: i64,
         id: GlobalId,
+        oid: u32,
         name: FullName,
         item: CatalogItem,
     },
     DroppedDatabase {
         name: String,
         id: i64,
+        oid: u32,
     },
     DroppedSchema {
         database_id: i64,
         schema_id: i64,
         schema_name: String,
+        oid: u32,
     },
     DroppedIndex {
         entry: CatalogEntry,
@@ -1506,6 +1591,7 @@ pub enum OpStatus {
     UpdatedItem {
         schema_id: i64,
         id: GlobalId,
+        oid: u32,
         from_name: FullName,
         to_name: FullName,
         item: CatalogItem,

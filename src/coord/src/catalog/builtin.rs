@@ -275,6 +275,7 @@ lazy_static! {
         name: "mz_databases",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
+            .with_column("oid", ScalarType::Int32.nullable(false))
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("database", ScalarType::String.nullable(false)),
         id: GlobalId::System(2011),
@@ -284,6 +285,7 @@ lazy_static! {
         name: "mz_schemas",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
+            .with_column("oid", ScalarType::Int32.nullable(false))
             .with_column("database_id", ScalarType::Int64.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("schema", ScalarType::String.nullable(false))
@@ -307,6 +309,7 @@ lazy_static! {
         name: "mz_indexes",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
+            .with_column("oid", ScalarType::Int32.nullable(false))
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("on_global_id", ScalarType::String.nullable(false))
             .with_column("field_number", ScalarType::Int64.nullable(true))
@@ -320,6 +323,7 @@ lazy_static! {
         name: "mz_tables",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
+            .with_column("oid", ScalarType::Int32.nullable(false))
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("tables", ScalarType::String.nullable(false)),
@@ -330,6 +334,7 @@ lazy_static! {
         name: "mz_sources",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
+            .with_column("oid", ScalarType::Int32.nullable(false))
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("sources", ScalarType::String.nullable(false)),
@@ -340,6 +345,7 @@ lazy_static! {
         name: "mz_sinks",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
+            .with_column("oid", ScalarType::Int32.nullable(false))
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("sinks", ScalarType::String.nullable(false)),
@@ -350,6 +356,7 @@ lazy_static! {
         name: "mz_views",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
+            .with_column("oid", ScalarType::Int32.nullable(false))
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("views", ScalarType::String.nullable(false)),
