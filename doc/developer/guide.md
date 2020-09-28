@@ -174,6 +174,31 @@ mode with [tables](https://materialize.io/docs/sql/create-table). But we're
 stuck with symbiosis mode until tables support `UPDATE` and `DELETE`—at the time
 of writing they only support [`INSERT`](https://materialize.io/docs/sql/insert).
 
+## Web UI
+
+Materialize embeds a web UI, which it serves from port 6875. If you're running
+Materialize locally, you can view the web UI at http://localhost:6875.
+
+Developing the web UI can be painful, as by default the HTML, CSS, and JS source
+code for the UI gets baked into the binary, and so making a change requires a
+full rebuild of the binary.
+
+To speed up the development cycle, you can enable the `dev-web` feature like so:
+
+```shell
+cd src/materialized
+cargo run -- --features=dev-web --dev -w1
+```
+
+In this mode, every request for a static file will reload the file from disk.
+Changes to standalone CSS and JS files will be reflected immediately upon
+reload, without requiring a recompile!
+
+Note that `dev-web` can only hot-reload the the files in
+`src/materialized/src/static`. The HTML templates in
+`src/materialized/src/templates` use a compile-time templating library called
+[`askama`], and so changes to those templates necessarily require a recompile.
+
 ## Testing
 
 Materialize's testing philosophy is sufficiently complex that it warrants its
@@ -217,6 +242,7 @@ As mentioned before, because the MaterializeInc organization requires two-factor
 authentication (2FA), to clone these repositories you'll need to use either SSH
 or [configure a personal access token for use with HTTPS][github-https].
 
+[askama]: https://github.com/djc/askama
 [mtrlz-setup]: https://github.com/MaterializeInc/mtrlz-setup
 [rust-sasl]: https://github.com/MaterializeInc/rust-sasl
 [rust-krb5-src]: https://github.com/MaterializeInc/rust-krb5-src

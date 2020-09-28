@@ -4,54 +4,11 @@
 
 {% block head %}
 <link href="https://cdn.jsdelivr.net/npm/d3-flame-graph@3.1.1/dist/d3-flamegraph.css" rel="stylesheet">
-<style>
-    body {
-        font-family: verdana, sans-serif;
-        padding-bottom: 22px;
-    }
-
-    h1 {
-        font-size: 18px;
-        margin: 0;
-    }
-
-    button, form {
-        display: inline;
-    }
-
-    .separator {
-      display: inline-block;
-      width: 60px;
-    }
-
-    #wrapper {
-        margin: 0 auto;
-        width: 960px;
-    }
-
-    #header {
-        border-bottom: 1px solid #ccc;
-        display: flex;
-        justify-content: space-between;
-        margin-bottom: 20px;
-        padding-bottom: 10px;
-    }
-
-    #details {
-        background: #fff;
-        border-top: 1px solid #ccc;
-        bottom: 0;
-        font-size: 12px;
-        line-height: 12px;
-        height: 12px;
-        padding: 5px;
-        position: fixed;
-        width: 950px;
-    }
-</style>
+<link href="/css/flamegraph.css" rel="stylesheet">
 
 <script src="https://cdn.jsdelivr.net/npm/d3@5.16.0/dist/d3.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3-flame-graph@3.1.1/dist/d3-flamegraph.js"></script>
+<script src="/js/flamegraph.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -75,55 +32,6 @@
 </div>
 
 <script>
-    function toHumanBytes(n) {
-        const tokens = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
-        let iTok = 0;
-        while (Math.abs(n) >= 1024 && iTok < tokens.length - 1) {
-            n /= 1024;
-            ++iTok;
-        }
-        return n.toFixed(2) + " " + tokens[iTok];
-    }
-
-    const chart = flamegraph()
-        .width(960)
-        .setDetailsElement(document.getElementById("details"))
-        .onClick(d => history.pushState({ id: d.id }, "", `#${d.id}`))
-{% if display_bytes %}
-        .setLabelHandler(function (d) {
-            return d.data.name + ' (' + d3.format('.3f')(100 * (d.x1 - d.x0), 3) + '%, ' + toHumanBytes(d.value) + ' )';
-        })
-{% endif %}
-        ;
-
-
-
-    d3.select(window)
-      .on("hashchange", () => {
-          const id = parseInt(location.hash.substring(1), 10);
-          if (!isNaN(id)) {
-              const elem = chart.findById(id);
-              if (elem)
-                  chart.zoomTo(elem);
-          }
-      });
-
-    d3.select("#chart")
-        .datum({{ data_json|safe }})
-        .call(chart);
-
-    d3.select("#clear-button")
-        .on("click", () => {
-            d3.select("#search-form").node().reset();
-            chart.clear();
-        });
-
-    d3.select("#reset-zoom-button")
-        .on("click", () => chart.resetZoom());
-
-    d3.select("#search-form").on("submit", () => d3.event.preventDefault());
-    d3.select("#search-input").on("keyup", function () {
-      chart.search(this.value);
-    });
+renderFlamegraph({{ data_json|safe }}, {{ display_bytes|json }});
 </script>
 {% endblock %}
