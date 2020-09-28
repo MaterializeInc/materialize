@@ -48,7 +48,7 @@ database
 ----
 materialize
 
-> SELECT * FROM mz_catalog.mz_databases
+> SELECT id, database FROM mz_catalog.mz_databases
 id          database
 -----------------------
 -1          AMBIENT
@@ -62,7 +62,7 @@ database
 d
 materialize
 
-> SELECT * FROM mz_catalog.mz_databases WHERE id != -1
+> SELECT id, database FROM mz_catalog.mz_databases WHERE id != -1
 id          database
 -----------------------
 1           materialize
@@ -121,7 +121,7 @@ Expected end of statement, found: RESTRICT
 database
 ----
 materialize
-> SELECT * FROM mz_catalog.mz_databases
+> SELECT id, database FROM mz_catalog.mz_databases
 id          database
 -----------------------
 -1          AMBIENT
@@ -187,7 +187,7 @@ database
 d
 d2
 materialize
-> SELECT * FROM mz_catalog.mz_databases
+> SELECT id, database FROM mz_catalog.mz_databases
 id          database
 -----------------------
 -1          AMBIENT
