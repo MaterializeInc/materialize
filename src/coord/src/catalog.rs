@@ -102,6 +102,7 @@ impl ConnCatalog<'_> {
 #[derive(Debug, Serialize)]
 pub struct Database {
     pub id: i64,
+    #[serde(skip)]
     pub oid: u32,
     pub schemas: BTreeMap<String, Schema>,
 }
@@ -109,6 +110,7 @@ pub struct Database {
 #[derive(Debug, Serialize)]
 pub struct Schema {
     pub id: i64,
+    #[serde(skip)]
     pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
 }
