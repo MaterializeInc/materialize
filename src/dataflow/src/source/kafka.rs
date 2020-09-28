@@ -31,15 +31,13 @@ use dataflow_types::{
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{debug, error, info, log_enabled, warn};
-use repr::Timestamp;
+use repr::{PersistedRecord, PersistedRecordIter, Timestamp};
 
 use crate::server::{
     PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
     TimestampMetadataUpdates,
 };
-use crate::source::persistence::{
-    PersistenceSender, Record, RecordFileMetadata, RecordIter, WorkerPersistenceData,
-};
+use crate::source::persistence::{PersistenceSender, RecordFileMetadata, WorkerPersistenceData};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
@@ -377,7 +375,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             });
 
             Some(
-                RecordIter { data, offset: 0 }
+                PersistedRecordIter::new(data)
                     .map(|r| (r.key, r.value, r.timestamp, r.offset))
                     .collect(),
             )
@@ -408,7 +406,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             let persistence_data = PersistenceMessage::Data(WorkerPersistenceData {
                 source_id: self.source_global_id,
                 partition_id,
-                record: Record {
+                record: PersistedRecord {
                     predecessor: predecessor.map(|p| p.offset),
                     offset: message.offset.offset,
                     timestamp,

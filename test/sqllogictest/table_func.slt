@@ -280,3 +280,17 @@ SELECT abs(generate_series) FROM generate_series(-1, 2), repeat(generate_series)
 ----
 2
 2
+
+# internal_read_persisted_data error cases.
+
+statement error unknown catalog item 'foo'
+SELECT * FROM internal_read_persisted_data('foo')
+
+statement error source passed to internal_read_persisted_data must be literal string
+SELECT (SELECT * FROM internal_read_persisted_data(generate_series::TEXT)) FROM generate_series(1,2)
+
+statement ok
+CREATE TABLE bad_table (a INT)
+
+statement error bad_table is a table, but internal_read_persisted_data requires a source
+SELECT * FROM internal_read_persisted_data('bad_table')
