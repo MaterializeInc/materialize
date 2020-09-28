@@ -2825,6 +2825,42 @@ fn text_concat_variadic<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) ->
     Datum::String(temp_storage.push_string(buf))
 }
 
+fn pad_leading<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let string = datums[0].unwrap_str();
+
+    let len = match usize::try_from(datums[1].unwrap_int64()) {
+        Ok(len) => len,
+        Err(_) => {
+            return Err(EvalError::InvalidParameterValue(
+                "length must be positive".to_owned(),
+            ))
+        }
+    };
+
+    let pad_string = if datums.len() == 3 {
+        datums[2].unwrap_str()
+    } else {
+        " "
+    };
+
+    let mut buf: String;
+    if len < string.len() {
+        buf = string[0..len].to_string();
+    } else {
+        buf = pad_string
+            .chars()
+            .cycle()
+            .take(len - string.len())
+            .collect();
+        buf.push_str(string);
+    }
+
+    Ok(Datum::String(temp_storage.push_string(buf)))
+}
+
 fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let string: &'a str = datums[0].unwrap_str();
     let mut chars = string.chars();
@@ -3168,6 +3204,7 @@ pub enum VariadicFunc {
     Coalesce,
     Concat,
     MakeTimestamp,
+    PadLeading,
     Substr,
     Replace,
     JsonbBuildArray,
@@ -3206,6 +3243,7 @@ impl VariadicFunc {
             VariadicFunc::Coalesce => coalesce(datums, temp_storage, exprs),
             VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
             VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
+            VariadicFunc::PadLeading => Ok(eager!(pad_leading, temp_storage)?),
             VariadicFunc::Substr => Ok(eager!(substr)),
             VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
@@ -3234,6 +3272,7 @@ impl VariadicFunc {
             }
             Concat => ScalarType::String.nullable(true),
             MakeTimestamp => ScalarType::Timestamp.nullable(true),
+            PadLeading => ScalarType::String.nullable(true),
             Substr => ScalarType::String.nullable(true),
             Replace => ScalarType::String.nullable(true),
             JsonbBuildArray | JsonbBuildObject => ScalarType::Jsonb.nullable(true),
@@ -3277,6 +3316,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
             VariadicFunc::Concat => f.write_str("concat"),
             VariadicFunc::MakeTimestamp => f.write_str("makets"),
+            VariadicFunc::PadLeading => f.write_str("lpad"),
             VariadicFunc::Substr => f.write_str("substr"),
             VariadicFunc::Replace => f.write_str("replace"),
             VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
