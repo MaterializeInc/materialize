@@ -1,3 +1,0 @@
-awscli==1.18.43
-humanize==2.3.0
-requests==2.23.0
