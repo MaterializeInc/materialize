@@ -70,8 +70,6 @@ pub type RowsFuture = Pin<Box<dyn Future<Output = Result<PeekResponse, comm::Err
 pub enum StartupMessage {
     /// The database specified in the initial session does not exist.
     UnknownSessionDatabase,
-    /// OID counter overflows u32.
-    OidExhaustion,
 }
 
 /// The response to [`Command::Execute]`.

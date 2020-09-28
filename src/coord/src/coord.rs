@@ -524,12 +524,12 @@ where
                     {
                         messages.push(StartupMessage::UnknownSessionDatabase);
                     }
-                    if self
-                        .catalog
-                        .create_temporary_schema(session.conn_id())
-                        .is_err()
-                    {
-                        messages.push(StartupMessage::OidExhaustion)
+                    if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+                        let _ = tx.send(Response {
+                            result: Err(anyhow::Error::from(e)),
+                            session,
+                        });
+                        return;
                     }
                     ClientTransmitter::new(tx).send(Ok(messages), session)
                 }

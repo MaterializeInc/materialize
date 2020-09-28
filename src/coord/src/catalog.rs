@@ -47,6 +47,10 @@ const SYSTEM_CONN_ID: u32 = 0;
 pub const AMBIENT_DATABASE_ID: i64 = -1;
 pub const AMBIENT_SCHEMA_ID: i64 = -1;
 
+// TODO@jldlaughlin: Better assignment strategy for system type OIDs.
+// https://github.com/MaterializeInc/materialize/pull/4316#discussion_r496238962
+pub const FIRST_USER_OID: u32 = 20_000;
+
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
 /// For each object, it keeps track of both forward and reverse dependencies:
@@ -354,8 +358,7 @@ impl Catalog {
             nonce: rand::random(),
             experimental_mode,
             cluster_id,
-            /// https://www.postgresql.org/message-id/2108.972178856@sss.pgh.pa.us
-            oid_counter: 16384,
+            oid_counter: FIRST_USER_OID,
         };
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
 

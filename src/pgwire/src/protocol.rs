@@ -237,14 +237,6 @@ where
                                     .into(),
                             ),
                         },
-                        StartupMessage::OidExhaustion => BackendMessage::ErrorResponse {
-                            severity: ErrorSeverity::Fatal,
-                            code: SqlState::ADMIN_SHUTDOWN,
-                            message: "All possible OIDs have been allocated to existing \
-                                      objects, unable to start."
-                                .into(),
-                            detail: None,
-                        },
                     })
                     .collect();
                 (notices, session)
