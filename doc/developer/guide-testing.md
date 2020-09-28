@@ -151,7 +151,7 @@ your user. On macOS:
 ```shell
 $ brew install postgresql
 $ brew services start postgresql
-$ createdb $(id -u)  # Yes, this is a shell command, not a SQL command.
+$ createdb $(whoami)  # Yes, this is a shell command, not a SQL command.
 ```
 
 You might reasonably wonder why PostgreSQL is necessary for running
