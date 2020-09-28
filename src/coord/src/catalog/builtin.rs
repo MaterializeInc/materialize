@@ -297,7 +297,6 @@ lazy_static! {
         name: "mz_columns",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("oid", ScalarType::Int32.nullable(false))
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("field_number", ScalarType::Int64.nullable(false))
             .with_column("field", ScalarType::String.nullable(false))

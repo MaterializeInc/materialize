@@ -1043,12 +1043,10 @@ where
         diff: isize,
     ) -> Result<(), anyhow::Error> {
         for (i, (column_name, column_type)) in desc.iter().enumerate() {
-            let oid = self.catalog.allocate_oid()?;
             self.update_catalog_view(
                 MZ_COLUMNS.id,
                 iter::once((
                     Row::pack(&[
-                        Datum::Int32(oid as i32),
                         Datum::String(&global_id.to_string()),
                         Datum::Int64(i as i64),
                         Datum::String(

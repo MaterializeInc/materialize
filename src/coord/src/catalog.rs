@@ -818,7 +818,7 @@ impl Catalog {
             .expect("catalog out of sync");
         let schema_id = schema.id;
         schema.items.insert(entry.name.item.clone(), entry.id);
-        self.by_id.insert(entry.id, entry.clone());
+        self.by_id.insert(entry.id, entry);
 
         OpStatus::CreatedItem {
             schema_id,
