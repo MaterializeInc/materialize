@@ -66,6 +66,9 @@ Wrap your release notes at the 80 character mark.
 
 - Add support for the [`oid`] type to represent PostgreSQL object IDs.
 
+- Add the [`lpad`](/sql/functions/#string-func) function, which prepends
+  characters to fill a string to a given length.
+
 <span id="v0.4.3"></span>
 ## v0.4.3
 

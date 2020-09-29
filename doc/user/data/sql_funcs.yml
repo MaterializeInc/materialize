@@ -125,6 +125,14 @@
     description: Number of code points in `s` after encoding
     url: length
 
+  - signature: 'lpad(s: str, len: int) -> str'
+    description: "Prepend `s` with spaces up to length `len`,
+      or right truncate if `len` is less than the length of `s`."
+
+  - signature: 'lpad(s: str, len: int, p: str) -> str'
+    description: "Prepend `s` with characters pulled from `p` up to length `len`,
+      or right truncate if `len` is less than the length of `s`."
+
   - signature: 'ltrim(s: str) -> str'
     description: Trim all spaces from the left side of `s`.
 

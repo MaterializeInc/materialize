@@ -845,6 +845,10 @@ lazy_static! {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes,
                 params!(String) => UnaryFunc::ByteLengthString
             },
+            "lpad" => Scalar {
+                params!(String, Int64) => VariadicFunc::PadLeading,
+                params!(String, Int64, String) => VariadicFunc::PadLeading
+            },
             "ltrim" => Scalar {
                 params!(String) => UnaryFunc::TrimLeadingWhitespace,
                 params!(String, String) => BinaryFunc::TrimLeading

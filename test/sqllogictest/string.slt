@@ -639,3 +639,97 @@ SELECT split_part('one', 'two')
 
 query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT split_part(1, 2, 3)
+
+### lpad ###
+query T
+SELECT lpad('str', 42, 'pad')
+----
+padpadpadpadpadpadpadpadpadpadpadpadpadstr
+
+query T
+SELECT lpad('str', 4, 'pad')
+----
+pstr
+
+query T
+SELECT lpad('str', 5, 'pad')
+----
+pastr
+
+query T
+SELECT REPLACE(lpad('str', 5), ' ', '_')
+----
+__str
+
+query T
+SELECT lpad('str', 7, 'pad')
+----
+padpstr
+
+query T
+SELECT lpad('str', 3, 'pad')
+----
+str
+
+query T
+SELECT lpad('str', 2, 'pad')
+----
+st
+
+query T
+SELECT lpad('str', 1, 'pad')
+----
+s
+
+statement error
+SELECT lpad('str', -1, 'pad')
+
+query T
+SELECT lpad('str', 0, 'pad')
+----
+(empty)
+
+query T
+SELECT lpad('str', NULL, 'pad')
+----
+NULL
+
+query T
+SELECT lpad(NULL, 10, 'pad')
+----
+NULL
+
+query T
+SELECT lpad(NULL, 10, NULL)
+----
+NULL
+
+query T
+SELECT lpad('str', 10, NULL)
+----
+NULL
+
+query T
+SELECT lpad('str', 10, '')
+----
+str
+
+query T
+SELECT lpad('', 10, '')
+----
+(empty)
+
+query T
+SELECT lpad('', 10, 'pad')
+----
+padpadpadp
+
+query T
+SELECT lpad('đẹp', 1, 'pad')
+----
+đ
+
+query T
+SELECT lpad('str', 5, 'đẹp')
+----
+đẹstr
