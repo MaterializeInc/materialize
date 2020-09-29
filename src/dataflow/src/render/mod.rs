@@ -435,7 +435,7 @@ where
                         if let Some(tok) = extra_token {
                             self.additional_tokens
                                 .entry(src_id)
-                                .or_insert(vec![])
+                                .or_insert_with(Vec::new)
                                 .push(Rc::new(tok));
                         }
 
@@ -566,7 +566,7 @@ where
             self.set_trace(idx_id, &get_expr, &idx.keys, (ok_arranged, err_arranged));
             self.additional_tokens
                 .entry(idx_id)
-                .or_insert(vec![])
+                .or_insert_with(Vec::new)
                 .push(Rc::new((
                     ok_button.press_on_drop(),
                     err_button.press_on_drop(),

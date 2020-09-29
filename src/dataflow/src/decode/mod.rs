@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{any::Any, cell::RefCell, collections::VecDeque, iter, rc::Rc};
+use std::{any::Any, cell::RefCell, collections::VecDeque, iter, rc::Rc, time::Duration};
 
 use anyhow::anyhow;
-use differential_dataflow::hashable::Hashable;
+use differential_dataflow::{capture::YieldingIter, hashable::Hashable};
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use timely::{
@@ -451,14 +451,13 @@ fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     impl<T> Iterator for VdIterator<T> {
         type Item = T;
         fn next(&mut self) -> Option<T> {
-            // XXX yield after 10ms ?
             self.0.borrow_mut().pop_front()
         }
     }
     let (token, stream) =
-        differential_dataflow::capture::source::build(stream.scope().clone(), move |ac| {
+        differential_dataflow::capture::source::build(stream.scope(), move |ac| {
             *activator.borrow_mut() = Some(ac);
-            VdIterator(channel)
+            YieldingIter::new_from(VdIterator(channel), Duration::from_millis(10))
         });
     (stream, Some(token))
 }
