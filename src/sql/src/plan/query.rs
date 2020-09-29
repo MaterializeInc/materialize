@@ -2265,7 +2265,7 @@ pub struct QueryContext<'a> {
 }
 
 impl<'a> QueryContext<'a> {
-    fn root(scx: &'a StatementContext, lifetime: QueryLifetime) -> QueryContext<'a> {
+    pub fn root(scx: &'a StatementContext, lifetime: QueryLifetime) -> QueryContext<'a> {
         QueryContext {
             scx,
             lifetime,

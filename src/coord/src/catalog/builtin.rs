@@ -556,7 +556,9 @@ pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_namespace AS SELECT
-schema AS nspname
+oid,
+schema AS nspname,
+NULL::oid AS nspowner
 FROM mz_catalog.mz_schemas",
     id: GlobalId::System(3012),
 };
