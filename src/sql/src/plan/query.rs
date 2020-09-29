@@ -1570,6 +1570,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 CoercibleScalarExpr::Parameter(*n)
             }
         }
+        Expr::Array(_) => unsupported!("arrays"),
         Expr::List(exprs) => {
             let mut out = vec![];
             for e in exprs {
@@ -2136,12 +2137,13 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::
         DataType::Uuid => ScalarType::Uuid,
         DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
         DataType::Oid => ScalarType::Oid,
-        other @ DataType::Binary(..)
-        | other @ DataType::Blob(_)
-        | other @ DataType::Clob(_)
-        | other @ DataType::Regclass
-        | other @ DataType::TimeTz
-        | other @ DataType::Varbinary(_) => bail!("Unexpected SQL type: {:?}", other),
+        DataType::Array(_)
+        | DataType::Binary(..)
+        | DataType::Blob(_)
+        | DataType::Clob(_)
+        | DataType::Regclass
+        | DataType::TimeTz
+        | DataType::Varbinary(_) => bail!("Unexpected SQL type: {:?}", data_type),
     })
 }
 

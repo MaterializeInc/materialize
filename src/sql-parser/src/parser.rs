@@ -306,6 +306,7 @@ impl Parser {
                     self.prev_token();
                     Ok(Expr::Value(self.parse_value()?))
                 }
+                "ARRAY" => self.parse_array(),
                 "LIST" => self.parse_list(),
                 "CASE" => self.parse_case_expr(),
                 "CAST" => self.parse_cast_expr(),
@@ -2064,7 +2065,18 @@ impl Parser {
         }
     }
 
+    fn parse_array(&mut self) -> Result<Expr, ParserError> {
+        Ok(Expr::Array(self.parse_sequence(Self::parse_array)?))
+    }
+
     fn parse_list(&mut self) -> Result<Expr, ParserError> {
+        Ok(Expr::List(self.parse_sequence(Self::parse_list)?))
+    }
+
+    fn parse_sequence<F>(&mut self, mut f: F) -> Result<Vec<Expr>, ParserError>
+    where
+        F: FnMut(&mut Self) -> Result<Expr, ParserError>,
+    {
         self.expect_token(&Token::LBracket)?;
         let mut exprs = vec![];
         loop {
@@ -2072,7 +2084,7 @@ impl Parser {
                 break;
             }
             let expr = if let Some(Token::LBracket) = self.peek_token() {
-                self.parse_list()?
+                f(self)?
             } else {
                 self.parse_expr()?
             };
@@ -2082,7 +2094,7 @@ impl Parser {
             }
         }
         self.expect_token(&Token::RBracket)?;
-        Ok(Expr::List(exprs))
+        Ok(exprs)
     }
 
     fn parse_number_value(&mut self) -> Result<Value, ParserError> {
@@ -2187,6 +2199,16 @@ impl Parser {
                 Some(Token::Word(k)) if &k.keyword == "LIST" => {
                     self.next_token();
                     data_type = DataType::List(Box::new(data_type));
+                }
+                Some(Token::LBracket) => {
+                    // Handle array suffixes. Note that `int[]`, `int[][][]`,
+                    // and `int[2][2]` all parse to the same "int array" type.
+                    self.next_token();
+                    let _ = self.maybe_parse(|parser| parser.parse_number_value());
+                    self.expect_token(&Token::RBracket)?;
+                    if !matches!(data_type, DataType::Array(_)) {
+                        data_type = DataType::Array(Box::new(data_type));
+                    }
                 }
                 _ => break,
             }
