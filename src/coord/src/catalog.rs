@@ -449,8 +449,13 @@ impl Catalog {
 
                 Builtin::Table(table) => {
                     let index_name = format!("{}_primary_idx", table.name);
-                    let index_sql =
-                        super::coord::index_sql(index_name.clone(), name.clone(), &table.desc, &[]);
+                    let index_columns = table.desc.typ().default_key();
+                    let index_sql = super::coord::index_sql(
+                        index_name.clone(),
+                        name.clone(),
+                        &table.desc,
+                        &index_columns,
+                    );
                     let oid = catalog.allocate_oid()?;
                     catalog.insert_item(
                         table.id,
@@ -473,7 +478,10 @@ impl Catalog {
                         },
                         CatalogItem::Index(Index {
                             on: table.id,
-                            keys: vec![],
+                            keys: index_columns
+                                .iter()
+                                .map(|i| ScalarExpr::Column(*i))
+                                .collect(),
                             create_sql: index_sql,
                             plan_cx: PlanContext::default(),
                         }),
