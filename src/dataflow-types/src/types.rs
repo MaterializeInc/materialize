@@ -454,6 +454,7 @@ pub enum Envelope {
     None,
     Debezium(DebeziumDeduplicationStrategy),
     Upsert(DataEncoding),
+    CdcV2,
 }
 
 impl Envelope {
@@ -462,6 +463,7 @@ impl Envelope {
             Envelope::None => avro::EnvelopeType::None,
             Envelope::Debezium { .. } => avro::EnvelopeType::Debezium,
             Envelope::Upsert(_) => avro::EnvelopeType::Upsert,
+            Envelope::CdcV2 => avro::EnvelopeType::CdcV2,
         }
     }
 }
