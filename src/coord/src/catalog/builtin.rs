@@ -568,26 +568,36 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     name: "pg_class",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_class AS SELECT
-oid,
+concatenated.oid,
 relname,
+schema,
 NULL::oid as relowner
 FROM
   (
-    SELECT oid, tables AS relname
+    SELECT oid, tables AS relname, schema_id
     FROM mz_catalog.mz_tables
-    UNION SELECT oid, sources AS relname
+    UNION SELECT oid, sources AS relname, schema_id
     FROM mz_catalog.mz_sources
-    UNION SELECT oid, sinks AS relname
+    UNION SELECT oid, sinks AS relname, schema_id
     FROM mz_catalog.mz_sinks
-    UNION SELECT oid, views AS relname
+    UNION SELECT oid, views AS relname, schema_id
     FROM mz_catalog.mz_views
-    UNION (SELECT oid, name AS relname
-           FROM mz_catalog.mz_indexes
-           JOIN mz_catalog.mz_catalog_names
-           ON mz_catalog.mz_indexes.global_id = mz_catalog.mz_catalog_names.global_id
-           GROUP BY oid, name)
-  )
-ORDER BY oid ASC",
+    UNION (SELECT oid, relname, schema_id
+           FROM
+             (
+                SELECT mz_catalog.mz_indexes.oid AS oid, mz_catalog.mz_tables.tables AS relname, mz_catalog.mz_tables.schema_id
+                FROM mz_catalog.mz_indexes
+                JOIN mz_catalog.mz_tables ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_tables.global_id
+                UNION SELECT mz_catalog.mz_indexes.oid AS oid, mz_catalog.mz_sources.sources AS relname, mz_catalog.mz_sources.schema_id
+                FROM mz_catalog.mz_indexes
+                JOIN mz_catalog.mz_sources ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_sources.global_id
+                UNION SELECT mz_catalog.mz_indexes.oid, mz_catalog.mz_views.views AS relname, mz_catalog.mz_views.schema_id
+                FROM mz_catalog.mz_indexes
+                JOIN mz_catalog.mz_views ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_views.global_id
+           )
+           GROUP BY oid, relname, schema_id)
+  ) as concatenated
+JOIN mz_catalog.mz_schemas ON concatenated.schema_id = mz_catalog.mz_schemas.schema_id",
     id: GlobalId::System(3013),
 };
 
