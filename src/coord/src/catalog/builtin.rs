@@ -551,7 +551,7 @@ JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = frontier_s
     id: GlobalId::System(3011),
 };
 
-// TODO(benesch): add `oid`, `nspowner`, and `nspacl` columns.
+// TODO(benesch): add `nspowner`, and `nspacl` columns.
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
@@ -561,6 +561,34 @@ schema AS nspname,
 NULL::oid AS nspowner
 FROM mz_catalog.mz_schemas",
     id: GlobalId::System(3012),
+};
+
+// TODO(jldlaughlin): add other fields - https://www.postgresql.org/docs/12/catalog-pg-class.html
+pub const PG_CLASS: BuiltinView = BuiltinView {
+    name: "pg_class",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_class AS SELECT
+oid,
+relname,
+NULL::oid as relowner
+FROM
+  (
+    SELECT oid, tables AS relname
+    FROM mz_catalog.mz_tables
+    UNION SELECT oid, sources AS relname
+    FROM mz_catalog.mz_sources
+    UNION SELECT oid, sinks AS relname
+    FROM mz_catalog.mz_sinks
+    UNION SELECT oid, views AS relname
+    FROM mz_catalog.mz_views
+    UNION (SELECT oid, name AS relname
+           FROM mz_catalog.mz_indexes
+           JOIN mz_catalog.mz_catalog_names
+           ON mz_catalog.mz_indexes.global_id = mz_catalog.mz_catalog_names.global_id
+           GROUP BY oid, name)
+  )
+ORDER BY oid ASC",
+    id: GlobalId::System(3013),
 };
 
 lazy_static! {
@@ -605,6 +633,7 @@ lazy_static! {
             Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
             Builtin::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
             Builtin::View(&PG_NAMESPACE),
+            Builtin::View(&PG_CLASS),
         ];
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
