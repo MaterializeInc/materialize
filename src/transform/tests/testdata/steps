@@ -1,0 +1,49 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [bool bool])
+----
+ok
+
+steps
+(union
+  [(filter (get x) [#0])
+   (filter (get x) [#0])])
+----
+----
+%0 =
+| Get x (u0)
+| Filter #0
+
+%1 =
+| Get x (u0)
+| Filter #0
+
+%2 =
+| Union %0 %1
+
+====
+No change: JoinElision, InlineLet, FoldConstants, SplitPredicates, Filter, Map, ProjectionExtraction, Project, Join, JoinElision, EmptyMap, JoinElision, FoldConstants, Filter, Map, FoldConstants, DeMorgans, UndistributeAnd, SplitPredicates, Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, Join, Filter, Project, Map, Union, EmptyMap, JoinElision, ReduceElision, InlineLet, UpdateLet, ProjectionExtraction, ProjectionLifting, LiteralLifting, NonNullRequirements, ColumnKnowledge, ReductionPushdown, RedundantJoin, TopKElision, NegatePredicate, Demand], limit: 100 }, FoldConstants, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, Filter, Demand, LiteralLifting], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
+====
+Final:
+%0 =
+| Get x (u0)
+| Filter #0
+
+%1 =
+| Get x (u0)
+| Filter #0
+
+%2 =
+| Union %0 %1
+
+====
+----
+----

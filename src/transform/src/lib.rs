@@ -153,7 +153,8 @@ impl Transform for Fixpoint {
 /// the optimizations.
 #[derive(Debug)]
 pub struct Optimizer {
-    transforms: Vec<Box<dyn crate::Transform + Send>>,
+    /// The list of transforms to apply to an input relation.
+    pub transforms: Vec<Box<dyn crate::Transform + Send>>,
 }
 
 impl Optimizer {
