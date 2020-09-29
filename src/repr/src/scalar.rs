@@ -394,6 +394,13 @@ impl<'a> Datum<'a> {
                     (Datum::String(_), _) => false,
                     (Datum::Uuid(_), ScalarType::Uuid) => true,
                     (Datum::Uuid(_), _) => false,
+                    (Datum::Array(array), ScalarType::Array(t)) => {
+                        array.elements.iter().all(|e| match e {
+                            Datum::Null => true,
+                            Datum::Array(_) => is_instance_of_scalar(e, scalar_type),
+                            _ => is_instance_of_scalar(e, t),
+                        })
+                    }
                     (Datum::Array(_), _) => false,
                     (Datum::List(list), ScalarType::List(t)) => list
                         .iter()
@@ -673,6 +680,12 @@ pub enum ScalarType {
     Jsonb,
     /// The type of [`Datum::Uuid`].
     Uuid,
+    /// The type of [`Datum::Array`].
+    ///
+    /// Elements within the array are of the specified type. It is illegal for
+    /// the element type to be itself an array type. Array elements may always
+    /// be [`Datum::Null`].
+    Array(Box<ScalarType>),
     /// The type of [`Datum::List`].
     ///
     /// Elements within the list are of the specified type. List elements may
@@ -777,7 +790,7 @@ impl PartialEq for ScalarType {
             | (Jsonb, Jsonb)
             | (Oid, Oid) => true,
 
-            (List(a), List(b)) => a.eq(b),
+            (List(a), List(b)) | (Array(a), Array(b)) => a.eq(b),
             (Record { fields: fields_a }, Record { fields: fields_b }) => fields_a.eq(fields_b),
 
             (Bool, _)
@@ -795,6 +808,7 @@ impl PartialEq for ScalarType {
             | (String, _)
             | (Jsonb, _)
             | (Uuid, _)
+            | (Array(_), _)
             | (List(_), _)
             | (Record { .. }, _)
             | (Oid, _) => false,
@@ -825,16 +839,20 @@ impl Hash for ScalarType {
             Bytes => state.write_u8(11),
             String => state.write_u8(12),
             Jsonb => state.write_u8(13),
-            List(t) => {
+            Array(t) => {
                 state.write_u8(14);
                 t.hash(state);
             }
-            Record { fields } => {
+            List(t) => {
                 state.write_u8(15);
+                t.hash(state);
+            }
+            Record { fields } => {
+                state.write_u8(16);
                 fields.hash(state);
             }
             Uuid => state.write_u8(16),
-            Oid => state.write_u8(16),
+            Oid => state.write_u8(17),
         }
     }
 }
@@ -863,6 +881,7 @@ impl fmt::Display for ScalarType {
             String => f.write_str("string"),
             Jsonb => f.write_str("jsonb"),
             Uuid => f.write_str("uuid"),
+            Array(t) => write!(f, "{}[]", t),
             List(t) => write!(f, "{} list", t),
             Record { fields } => {
                 f.write_str("record(")?;

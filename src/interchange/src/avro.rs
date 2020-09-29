@@ -1618,6 +1618,7 @@ fn build_schema(columns: &[(ColumnName, ColumnType)], include_transaction: bool)
                 "type": "string",
                 "logicalType": "uuid",
             }),
+            ScalarType::Array(_t) => unimplemented!("array types"),
             ScalarType::List(_t) => unimplemented!("list types"),
             ScalarType::Record { .. } => unimplemented!("record types"),
         };
@@ -1979,6 +1980,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
                 ScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
+                ScalarType::Array(_t) => unimplemented!("array types"),
                 ScalarType::List(_t) => unimplemented!("list types"),
                 ScalarType::Record { .. } => unimplemented!("record types"),
             };
@@ -2267,6 +2269,7 @@ pub mod cdc_v2 {
                     "type": "string",
                     "logicalType": "uuid",
                 }),
+                ScalarType::Array(_t) => unimplemented!("array types"),
                 ScalarType::List(_t) => unimplemented!("list types"),
                 ScalarType::Record { .. } => unimplemented!("record types"),
             };

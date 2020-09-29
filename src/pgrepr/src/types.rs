@@ -31,6 +31,8 @@ pub enum Type {
     Interval,
     /// A binary JSON blob.
     Jsonb,
+    /// A variable-length multidimensional array of values.
+    Array(Box<Type>),
     /// A sequence of homogeneous values.
     List(Box<Type>),
     /// An arbitrary precision number.
@@ -105,6 +107,26 @@ impl Type {
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
             Type::Uuid => &postgres_types::Type::UUID,
+            Type::Array(t) => match &**t {
+                Type::Bool => &postgres_types::Type::BOOL_ARRAY,
+                Type::Bytea => &postgres_types::Type::BYTEA_ARRAY,
+                Type::Date => &postgres_types::Type::DATE_ARRAY,
+                Type::Float4 => &postgres_types::Type::FLOAT4_ARRAY,
+                Type::Float8 => &postgres_types::Type::FLOAT8_ARRAY,
+                Type::Int4 => &postgres_types::Type::INT4_ARRAY,
+                Type::Int8 => &postgres_types::Type::INT8_ARRAY,
+                Type::Interval => &postgres_types::Type::INTERVAL_ARRAY,
+                Type::Jsonb => &postgres_types::Type::JSONB_ARRAY,
+                Type::Numeric => &postgres_types::Type::NUMERIC_ARRAY,
+                Type::Text => &postgres_types::Type::TEXT_ARRAY,
+                Type::Time => &postgres_types::Type::TIME_ARRAY,
+                Type::Timestamp => &postgres_types::Type::TIMESTAMP_ARRAY,
+                Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
+                Type::Uuid => &postgres_types::Type::UUID_ARRAY,
+                Type::List(_) | Type::Array(_) => unreachable!(),
+                Type::Record(_) => &postgres_types::Type::RECORD_ARRAY,
+                Type::Oid => &postgres_types::Type::OID_ARRAY,
+            },
             Type::List(_) => &LIST,
             Type::Record(_) => &postgres_types::Type::RECORD,
             Type::Oid => &postgres_types::Type::OID,
@@ -142,6 +164,7 @@ impl Type {
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
             Type::Uuid => 16,
+            Type::Array(_) => -1,
             Type::List(_) => -1,
             Type::Record(_) => -1,
             Type::Oid => 4,
@@ -167,6 +190,7 @@ impl From<&ScalarType> for Type {
             ScalarType::String => Type::Text,
             ScalarType::Jsonb => Type::Jsonb,
             ScalarType::Uuid => Type::Uuid,
+            ScalarType::Array(t) => Type::Array(Box::new(From::from(&**t))),
             ScalarType::List(t) => Type::List(Box::new(From::from(&**t))),
             ScalarType::Record { fields } => {
                 Type::Record(fields.iter().map(|(_name, ty)| Type::from(ty)).collect())

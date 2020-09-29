@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 use ore::fmt::FormatBuffer;
 
+use crate::adt::array::ArrayDimension;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::decimal::Decimal;
 use crate::adt::interval::Interval;
@@ -593,6 +594,45 @@ where
         }
     }
     Ok(elems)
+}
+
+pub fn format_array<F, T>(
+    buf: &mut F,
+    dims: &[ArrayDimension],
+    elems: impl IntoIterator<Item = T>,
+    mut format_elem: impl FnMut(ListElementWriter<F>, T) -> Nestable,
+) -> Nestable
+where
+    F: FormatBuffer,
+{
+    format_array_inner(buf, dims, &mut elems.into_iter(), &mut format_elem);
+    Nestable::Yes
+}
+
+pub fn format_array_inner<F, T>(
+    buf: &mut F,
+    dims: &[ArrayDimension],
+    elems: &mut impl Iterator<Item = T>,
+    format_elem: &mut impl FnMut(ListElementWriter<F>, T) -> Nestable,
+) where
+    F: FormatBuffer,
+{
+    buf.write_char('{');
+    for j in 0..dims[0].length {
+        if j > 0 {
+            buf.write_char(',');
+        }
+        if dims.len() == 1 {
+            let start = buf.len();
+            let elem = elems.next().unwrap();
+            if let Nestable::MayNeedEscaping = format_elem(ListElementWriter(buf), elem) {
+                escape_elem::<_, ListElementEscaper>(buf, start);
+            }
+        } else {
+            format_array_inner(buf, &dims[1..], elems, format_elem);
+        }
+    }
+    buf.write_char('}');
 }
 
 pub fn format_list<F, T>(

@@ -524,6 +524,56 @@ pub fn plan_coerce<'a>(
         }
         (LiteralString(s), JsonbAny) => ScalarExpr::literal(Datum::String(&s), ScalarType::Jsonb),
 
+        (LiteralArray(exprs), coerce_to) => {
+            // NOTE(benesch): this logic needs to be double-checked to ensure it
+            // matches what PostgreSQL does. It also duplicates the logic for
+            // coercing lists. Multidimensional array coercion in particular is
+            // really sketchy.
+            //
+            // This is not an immediate concern, since constructing arrays
+            // literals is presently experimental. Arrays exist primarily to
+            // facilitate compatibility with various pg_catalog views that
+            // contain arrays; `ARRAY` literals are meant mainly for integration
+            // tests at the moment.
+            let coerce_elem_to = match &coerce_to {
+                Plain(ScalarType::Array(typ)) => Plain((**typ).clone()),
+                Plain(_) => {
+                    let typ = exprs
+                        .iter()
+                        .find_map(|e| ecx.column_type(e).map(|t| t.scalar_type));
+                    CoerceTo::Plain(typ.unwrap_or(ScalarType::String))
+                }
+                JsonbAny => bail!("cannot coerce array literal to jsonb type"),
+            };
+            let mut out = vec![];
+            for e in exprs {
+                out.push(plan_coerce(ecx, e, coerce_elem_to.clone())?);
+            }
+            let typ = if !out.is_empty() {
+                ecx.scalar_type(&out[0])
+            } else if let Plain(ScalarType::Array(ty)) = coerce_to {
+                *ty
+            } else {
+                bail!("unable to infer type for empty array")
+            };
+            for (i, e) in out.iter().enumerate() {
+                let t = ecx.scalar_type(&e);
+                if t != typ {
+                    bail!(
+                        "Cannot create array with mixed types. \
+                        Element 1 has type {} but element {} has type {}",
+                        typ,
+                        i + 1,
+                        t,
+                    )
+                }
+            }
+            ScalarExpr::CallVariadic {
+                func: VariadicFunc::ArrayCreate { elem_type: typ },
+                exprs: out,
+            }
+        }
+
         (LiteralList(exprs), coerce_to) => {
             let coerce_elem_to = match &coerce_to {
                 Plain(ScalarType::List(typ)) => Plain((**typ).clone()),

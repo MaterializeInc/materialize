@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -19,6 +19,7 @@ use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
 use ore::fmt::FormatBuffer;
+use repr::adt::array::ArrayDimension;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::jsonb::JsonbRef;
 use repr::strconv::{self, Nestable};
@@ -50,6 +51,13 @@ pub enum Value {
     Int8(i64),
     /// A binary JSON blob.
     Jsonb(Jsonb),
+    /// A variable-length, multi-dimensional array of values.
+    Array {
+        /// The dimensions of the array.
+        dims: Vec<ArrayDimension>,
+        /// The elements of the array.
+        elements: Vec<Option<Value>>,
+    },
     /// A sequence of homogeneous values.
     List(Vec<Option<Value>>),
     /// An arbitrary precision number.
@@ -98,6 +106,14 @@ impl Value {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
             }
             (Datum::Uuid(u), ScalarType::Uuid) => Some(Value::Uuid(u)),
+            (Datum::Array(array), ScalarType::Array(elem_type)) => Some(Value::Array {
+                dims: array.dims().into_iter().collect(),
+                elements: array
+                    .elements()
+                    .iter()
+                    .map(|elem| Value::from_datum(elem, elem_type))
+                    .collect(),
+            }),
             (Datum::List(list), ScalarType::List(elem_type)) => Some(Value::List(
                 list.iter()
                     .map(|elem| Value::from_datum(elem, elem_type))
@@ -149,6 +165,11 @@ impl Value {
                 ScalarType::Jsonb,
             ),
             Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
+            Value::Array { .. } => {
+                // This situation is handled gracefully by Value::decode; if we
+                // wind up here it's a programming error.
+                unreachable!("into_datum cannot be called on Value::Array");
+            }
             Value::List(elems) => {
                 let elem_pg_type = match typ {
                     Type::List(t) => &*t,
@@ -168,7 +189,7 @@ impl Value {
             Value::Record(_) => {
                 // This situation is handled gracefully by Value::decode; if we
                 // wind up here it's a programming error.
-                panic!("into_datum cannot be called on Value::Record");
+                unreachable!("into_datum cannot be called on Value::Record");
             }
         }
     }
@@ -206,6 +227,7 @@ impl Value {
             Value::Text(s) => strconv::format_string(buf, s),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js.0.as_ref()),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
+            Value::Array { dims, elements } => encode_array(buf, dims, elements),
             Value::List(elems) => encode_list(buf, elems),
             Value::Record(elems) => encode_record(buf, elems),
         }
@@ -230,18 +252,32 @@ impl Value {
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
             Value::Jsonb(js) => js.to_sql(&PgType::JSONB, buf),
             Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
+            Value::Array { dims, elements } => {
+                let ndims = pg_len("number of array dimensions", dims.len())?;
+                let has_null = elements.iter().any(|e| e.is_none());
+                let elem_type = match ty {
+                    Type::Array(elem_type) => elem_type,
+                    _ => unreachable!(),
+                };
+                buf.put_i32(ndims);
+                buf.put_i32(has_null.into());
+                buf.put_u32(elem_type.oid());
+                for dim in dims {
+                    buf.put_i32(pg_len("array dimension length", dim.length)?);
+                    buf.put_i32(pg_len("array dimension lower bound", dim.lower_bound)?);
+                }
+                for elem in elements {
+                    encode_element(buf, elem.as_ref(), elem_type)?;
+                }
+                Ok(postgres_types::IsNull::No)
+            }
             Value::List(_) => {
                 // for now just use text encoding
                 self.encode_text(buf);
                 Ok(postgres_types::IsNull::No)
             }
             Value::Record(fields) => {
-                let nfields = i32::try_from(fields.len()).map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        "number of record fields does not fit into an i32",
-                    )
-                })?;
+                let nfields = pg_len("record field length", fields.len())?;
                 buf.put_i32(nfields);
                 let field_types = match ty {
                     Type::Record(fields) => fields,
@@ -249,22 +285,7 @@ impl Value {
                 };
                 for (f, ty) in fields.iter().zip(field_types) {
                     buf.put_u32(ty.oid());
-                    match f {
-                        None => buf.put_i32(-1),
-                        Some(f) => {
-                            let base = buf.len();
-                            buf.put_i32(0);
-                            f.encode_binary(ty, buf)?;
-                            let len = buf.len() - base - 4;
-                            let len = i32::try_from(len).map_err(|_| {
-                                io::Error::new(
-                                    io::ErrorKind::Other,
-                                    "length of encoded record field does not fit into an i32",
-                                )
-                            })?;
-                            buf[base..base + 4].copy_from_slice(&len.to_be_bytes());
-                        }
-                    }
+                    encode_element(buf, f.as_ref(), ty)?;
                 }
                 Ok(postgres_types::IsNull::No)
             }
@@ -309,6 +330,11 @@ impl Value {
             Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
             Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
             Type::Uuid => Value::Uuid(Uuid::parse_str(raw)?),
+            Type::Array(_) => {
+                return Err(Box::new(DecodeError::new(
+                    "input of array types is not implemented",
+                )))
+            }
             Type::List(elem_type) => Value::List(decode_list(&elem_type, raw)?),
             Type::Record(_) => {
                 return Err(Box::new(DecodeError::new(
@@ -337,6 +363,9 @@ impl Value {
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
+            Type::Array(_) => Err(Box::new(DecodeError::new(
+                "input of array types is not implemented",
+            ))),
             Type::List(_) => {
                 // just using the text encoding for now
                 Value::decode_text(ty, raw)
@@ -367,6 +396,16 @@ impl fmt::Display for DecodeError {
 }
 
 impl Error for DecodeError {}
+
+fn encode_array<F>(buf: &mut F, dims: &[ArrayDimension], elems: &[Option<Value>]) -> Nestable
+where
+    F: FormatBuffer,
+{
+    strconv::format_array(buf, dims, elems, |buf, elem| match elem {
+        None => buf.write_null(),
+        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+    })
+}
 
 fn encode_list<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
 where
@@ -399,6 +438,29 @@ where
     })
 }
 
+fn encode_element(buf: &mut BytesMut, elem: Option<&Value>, ty: &Type) -> Result<(), io::Error> {
+    match elem {
+        None => buf.put_i32(-1),
+        Some(elem) => {
+            let base = buf.len();
+            buf.put_i32(0);
+            elem.encode_binary(ty, buf)?;
+            let len = pg_len("encoded element", buf.len() - base - 4)?;
+            buf[base..base + 4].copy_from_slice(&len.to_be_bytes());
+        }
+    }
+    Ok(())
+}
+
+fn pg_len(what: &str, len: usize) -> Result<i32, io::Error> {
+    len.try_into().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("{} does not fit into an i32", what),
+        )
+    })
+}
+
 /// Constructs a null datum of the specified type.
 pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
     let ty = match ty {
@@ -418,6 +480,10 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,
         Type::Uuid => ScalarType::Uuid,
+        Type::Array(t) => {
+            let (_, elem_type) = null_datum(t);
+            ScalarType::Array(Box::new(elem_type))
+        }
         Type::List(t) => {
             let (_, elem_type) = null_datum(t);
             ScalarType::List(Box::new(elem_type))
