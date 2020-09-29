@@ -46,8 +46,7 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-<span id="v0.5.0"></span>
-## v0.5.0 (Unreleased)
+{{% version-header v0.5.0 %}}
 
 - Support [`CREATE TABLE`](/sql/create-table), [`DROP TABLE`](/sql/drop-table),
   [`INSERT`](/sql/insert) and [`SHOW CREATE TABLE`](/sql/show-create-table).
@@ -64,30 +63,28 @@ Wrap your release notes at the 80 character mark.
   `pg_catalog` schemas, this support improves compatibility with various
   PostgreSQL tools that generate SQL queries with qualified function references.
 
-- Add support for the [`oid`] type to represent PostgreSQL object IDs.
+- Add support for the [`oid`](/sql/types/oid) type to represent PostgreSQL object IDs.
 
 - Add the [`lpad`](/sql/functions/#string-func) function, which prepends
   characters to fill a string to a given length.
 
-<span id="v0.4.3"></span>
-## v0.4.3
+{{% version-header v0.4.3 %}}
 
-* Permit adjusting the logical compaction window on a per-index basis via the
+- Permit adjusting the logical compaction window on a per-index basis via the
   [`logical_compaction_window`](/sql/alter-index/#available-parameters)
   parameter to the new [`ALTER INDEX`](/sql/alter-index) statement.
 
-* Add the [`uuid`](/sql/types/uuid) type to efficiently represent
+- Add the [`uuid`](/sql/types/uuid) type to efficiently represent
   universally-unique identifiers (UUIDs).
 
-* Report the `integer_datetime` parameter as `on` to ensure that [PgJDBC]
+- Report the `integer_datetime` parameter as `on` to ensure that [PgJDBC]
   correctly decodes date and time values returned by prepared statements
   {{% gh 4117 %}}.
 
-* Fix a bug in the query optimizer that could result in incorrect plans for
+- Fix a bug in the query optimizer that could result in incorrect plans for
   queries involving `UNION` operators and literals {{% gh 4195 %}}.
 
-<span id="v0.4.2"></span>
-## v0.4.2
+{{% version-header v0.4.2 %}}
 
 - Remove the `max_timestamp_batch_size` [`WITH`
   option](/sql/create-source/avro-kafka/#with-options) from sources. Materialize
@@ -123,8 +120,7 @@ Wrap your release notes at the 80 character mark.
 - Add the `mz_records_per_dataflow_global` [metric](/ops/monitoring) to expose
   the number of active records in each dataflow {{% gh 4036 %}}.
 
-<span id="v0.4.1"></span>
-## v0.4.1
+{{% version-header v0.4.1 %}}
 
 - **Known regression.** Specifying multiple Kafka broker addresses in
   [Kafka sources](/sql/create-source/avro-kafka/), as in
@@ -201,8 +197,7 @@ Wrap your release notes at the 80 character mark.
     {{% gh 3625 %}}.
 
 
-<span id="v0.4.0"></span>
-## v0.4.0
+{{% version-header v0.4.0 %}}
 
 - Rename the `--threads` command-line option to [`--workers`](/cli/#worker-threads),
   since it controls only the number of dataflow workers that Materialize will
@@ -297,8 +292,7 @@ Wrap your release notes at the 80 character mark.
     selected for output, as in `SELECT rel.a FROM rel ORDER BY rel.b`
     {{% gh 3645 %}}.
 
-<span id="v0.3.1"></span>
-## v0.3.1
+{{% version-header v0.3.1 %}}
 
 - Improve the ingestion speed of Kafka sources with multiple partitions by
   sharding responsibility for each partition across the available worker
@@ -368,8 +362,7 @@ Wrap your release notes at the 80 character mark.
 
 - Expose [monitoring metrics](/monitoring/) for Kafka sinks {{% gh 3336 %}}.
 
-<span id="v0.3.0"></span>
-## v0.3.0
+{{% version-header v0.3.0 %}}
 
 - Support [temporary views](/sql/create-view/#temporary-views).
 
@@ -417,8 +410,7 @@ Wrap your release notes at the 80 character mark.
 - Add a new command-line option, [`-vv`](/cli/#command-line-flags), that prints
   some build information in addition to the version.
 
-<span id="v0.2.2"></span>
-## v0.2.2
+{{% version-header v0.2.2 %}}
 
 - Introduce an "upsert" envelope for sources that follow the Kafka key–value
   convention for representing inserts, upserts, and deletes. See the [Upsert
@@ -474,8 +466,7 @@ Wrap your release notes at the 80 character mark.
   `SELECT a, b, "from" AS table`, which would result in a confusing error about
   the unknown column `"from"`. {{% gh 2893 %}}
 
-<span id="v0.2.1"></span>
-## v0.2.1
+{{% version-header v0.2.1 %}}
 
 - Allow query parameters (`$1`, `$2`, etc) to appear in
   [`EXPLAIN`](/sql/explain) statements.
@@ -498,8 +489,7 @@ Wrap your release notes at the 80 character mark.
 - Support reading from Kinesis streams with multiple shards. For details, about
   Kinesis sources, see [CREATE SOURCE: JSON over Kinesis](/sql/create-source/json-kinesis).
 
-<span id="v0.2.0"></span>
-## v0.2.0
+{{% version-header v0.2.0 %}}
 
 - Require the `-w` / `--threads` command-line option. Consult the [CLI
   documentation](/cli/#worker-threads) to determine the correct value for your
@@ -543,8 +533,7 @@ Wrap your release notes at the 80 character mark.
   - Add `EXPLAIN <stage> PLAN FOR ...` to display the plan at various
     stages of the planning process.
 
-<span id="v0.1.3"></span>
-## v0.1.3
+{{% version-header v0.1.3 %}}
 
 - Support [Amazon Kinesis Data Stream sources](/sql/create-source/json-kinesis/).
 
@@ -558,8 +547,7 @@ Wrap your release notes at the 80 character mark.
 - In the event of a crash, print the stack trace to the log file, if logging to
   a file is enabled, as well as the standard error stream.
 
-<span id="v0.1.2"></span>
-## v0.1.2
+{{% version-header v0.1.2 %}}
 
 - Change [`SHOW CREATE SOURCE`] to render the full SQL statement used to create
   the source, in the style of [`SHOW CREATE VIEW`], rather than displaying a URL
@@ -581,8 +569,7 @@ Wrap your release notes at the 80 character mark.
 
 - Improve CSV parsing speed by 5-6x.
 
-<span id="v0.1.1"></span>
-## v0.1.1
+{{% version-header v0.1.1 %}}
 
 * Specifying the message name in a Protobuf-formatted source no longer requires
   a leading period.
@@ -592,8 +579,7 @@ Wrap your release notes at the 80 character mark.
   you would have to create a source, and then create a materialized view that
   selected all of the source's content.
 
-<span id="v0.1.0"></span>
-## v0.1.0
+{{% version-header v0.1.0 %}}
 
 * [What is Materialize?](/overview/what-is-materialize/)
 * [Architecture overview](/overview/architecture/)
