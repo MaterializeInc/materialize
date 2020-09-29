@@ -551,7 +551,7 @@ JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = frontier_s
     id: GlobalId::System(3011),
 };
 
-// TODO(benesch): add `oid`, `nspowner`, and `nspacl` columns.
+// TODO(benesch): add `nspowner`, and `nspacl` columns.
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
@@ -561,6 +561,44 @@ schema AS nspname,
 NULL::oid AS nspowner
 FROM mz_catalog.mz_schemas",
     id: GlobalId::System(3012),
+};
+
+// TODO(jldlaughlin): add other fields - https://www.postgresql.org/docs/12/catalog-pg-class.html
+pub const PG_CLASS: BuiltinView = BuiltinView {
+    name: "pg_class",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_class AS SELECT
+concatenated.oid,
+relname,
+schema as relnamespace,
+NULL::oid as relowner
+FROM
+  (
+    SELECT oid, tables AS relname, schema_id
+    FROM mz_catalog.mz_tables
+    UNION SELECT oid, sources AS relname, schema_id
+    FROM mz_catalog.mz_sources
+    UNION SELECT oid, sinks AS relname, schema_id
+    FROM mz_catalog.mz_sinks
+    UNION SELECT oid, views AS relname, schema_id
+    FROM mz_catalog.mz_views
+    UNION (SELECT oid, relname, schema_id
+           FROM
+             (
+                SELECT mz_catalog.mz_indexes.oid AS oid, mz_catalog.mz_tables.tables AS relname, mz_catalog.mz_tables.schema_id
+                FROM mz_catalog.mz_indexes
+                JOIN mz_catalog.mz_tables ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_tables.global_id
+                UNION SELECT mz_catalog.mz_indexes.oid AS oid, mz_catalog.mz_sources.sources AS relname, mz_catalog.mz_sources.schema_id
+                FROM mz_catalog.mz_indexes
+                JOIN mz_catalog.mz_sources ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_sources.global_id
+                UNION SELECT mz_catalog.mz_indexes.oid, mz_catalog.mz_views.views AS relname, mz_catalog.mz_views.schema_id
+                FROM mz_catalog.mz_indexes
+                JOIN mz_catalog.mz_views ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_views.global_id
+           )
+           GROUP BY oid, relname, schema_id)
+  ) as concatenated
+JOIN mz_catalog.mz_schemas ON concatenated.schema_id = mz_catalog.mz_schemas.schema_id",
+    id: GlobalId::System(3013),
 };
 
 lazy_static! {
@@ -605,6 +643,7 @@ lazy_static! {
             Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
             Builtin::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
             Builtin::View(&PG_NAMESPACE),
+            Builtin::View(&PG_CLASS),
         ];
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
