@@ -17,6 +17,7 @@
 //!
 //! [PostgreSQL ADTs]: https://github.com/postgres/postgres/tree/master/src/backend/utils/adt
 
+pub mod array;
 pub mod datetime;
 pub mod decimal;
 pub mod interval;
