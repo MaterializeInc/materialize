@@ -70,18 +70,18 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.4.3 %}}
 
-* Permit adjusting the logical compaction window on a per-index basis via the
+- Permit adjusting the logical compaction window on a per-index basis via the
   [`logical_compaction_window`](/sql/alter-index/#available-parameters)
   parameter to the new [`ALTER INDEX`](/sql/alter-index) statement.
 
-* Add the [`uuid`](/sql/types/uuid) type to efficiently represent
+- Add the [`uuid`](/sql/types/uuid) type to efficiently represent
   universally-unique identifiers (UUIDs).
 
-* Report the `integer_datetime` parameter as `on` to ensure that [PgJDBC]
+- Report the `integer_datetime` parameter as `on` to ensure that [PgJDBC]
   correctly decodes date and time values returned by prepared statements
   {{% gh 4117 %}}.
 
-* Fix a bug in the query optimizer that could result in incorrect plans for
+- Fix a bug in the query optimizer that could result in incorrect plans for
   queries involving `UNION` operators and literals {{% gh 4195 %}}.
 
 {{% version-header v0.4.2 %}}
