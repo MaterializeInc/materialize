@@ -9,6 +9,7 @@
 
 use std::borrow::Borrow;
 use std::cell::RefCell;
+use std::convert::TryInto;
 use std::fmt;
 use std::mem::{size_of, transmute};
 
@@ -18,6 +19,9 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
+use crate::adt::array::{
+    Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
+};
 use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
 use crate::Datum;
@@ -173,6 +177,7 @@ enum Tag {
     Bytes,
     String,
     Uuid,
+    Array,
     List,
     Dict,
     JsonNull,
@@ -297,6 +302,19 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             b.copy_from_slice(read_untagged_bytes(data, offset));
             Datum::Uuid(Uuid::from_bytes(b))
         }
+        Tag::Array => {
+            // See the comment in `Row::push_array` for details on the encoding
+            // of arrays.
+            let ndims = read_copy::<u8>(data, offset);
+            let dims_size = usize::from(ndims) * size_of::<usize>() * 2;
+            let dims = &data[*offset..*offset + dims_size];
+            *offset += dims_size;
+            let data = read_untagged_bytes(data, offset);
+            Datum::Array(Array {
+                dims: ArrayDimensions { data: dims },
+                elements: DatumList { data },
+            })
+        }
         Tag::List => {
             let bytes = read_untagged_bytes(data, offset);
             Datum::List(DatumList { data: bytes })
@@ -313,14 +331,13 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
 // --------------------------------------------------------------------------------
 // writing data
 
-fn assert_is_copy<T: Copy>(_t: T) {}
+fn assert_is_copy<T: Copy>() {}
 
 // See https://github.com/rust-lang/rust/issues/43408 for why this can't be a function
 macro_rules! push_copy {
     ($data:expr, $t:expr, $T:ty) => {
-        let t: $T = $t;
-        assert_is_copy(t);
-        $data.extend_from_slice(&unsafe { transmute::<_, [u8; size_of::<$T>()]>(t) })
+        assert_is_copy::<$T>();
+        $data.extend_from_slice(&unsafe { transmute::<$T, [u8; size_of::<$T>()]>($t) })
     };
 }
 
@@ -391,6 +408,14 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
             data.push(Tag::Uuid as u8);
             push_untagged_bytes(data, u.as_bytes());
         }
+        Datum::Array(array) => {
+            // See the comment in `Row::push_array` for details on the encoding
+            // of arrays.
+            data.push(Tag::Array as u8);
+            data.push(array.dims.ndims());
+            data.extend_from_slice(array.dims.data);
+            push_untagged_bytes(data, &array.elements.data);
+        }
         Datum::List(list) => {
             data.push(Tag::List as u8);
             push_untagged_bytes(data, &list.data);
@@ -425,6 +450,9 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Bytes(bytes) => 1 + size_of::<usize>() + bytes.len(),
         Datum::String(string) => 1 + size_of::<usize>() + string.as_bytes().len(),
         Datum::Uuid(_) => 1 + size_of::<Uuid>(),
+        Datum::Array(array) => {
+            1 + size_of::<u8>() + array.dims.data.len() + array.elements.data.len()
+        }
         Datum::List(list) => 1 + size_of::<usize>() + list.data.len(),
         Datum::Dict(dict) => 1 + size_of::<usize>() + dict.data.len(),
         Datum::JsonNull => 1,
@@ -832,6 +860,72 @@ impl RowPacker {
         res
     }
 
+    /// Convenience function to construct an array from an iter of `Datum`s.
+    ///
+    /// Returns an error if the number of elements in `iter` does not match
+    /// the cardinality of the array as described by `dims`, or if the
+    /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`]. If an error
+    /// occurs, the packer's state will be unchanged.
+    pub fn push_array<'a, I, D>(
+        &mut self,
+        dims: &[ArrayDimension],
+        iter: I,
+    ) -> Result<(), InvalidArrayError>
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        // Arrays are encoded as follows.
+        //
+        // u8      ndims
+        // usize   dim_0 lower bound
+        // usize   dim_0 length
+        // ...
+        // usize   dim_n lower bound
+        // usize   dim_n length
+        // usize   element data size in bytes
+        // u8      element data, where elements are encoded in row-major order
+
+        if dims.len() > usize::from(MAX_ARRAY_DIMENSIONS) {
+            return Err(InvalidArrayError::TooManyDimensions(dims.len()));
+        }
+
+        let start = self.data.len();
+        self.data.push(Tag::Array as u8);
+
+        // Write dimension information.
+        self.data
+            .push(dims.len().try_into().expect("ndims verified to fit in u8"));
+        for dim in dims {
+            push_copy!(&mut self.data, dim.lower_bound, usize);
+            push_copy!(&mut self.data, dim.length, usize);
+        }
+
+        // Write elements.
+        let off = self.data.len();
+        push_copy!(&mut self.data, 0, usize); // dummy length fixed up below
+        let mut nelements = 0;
+        for datum in iter {
+            self.push(*datum.borrow());
+            nelements += 1;
+        }
+        let len = self.data.len() - off - size_of::<usize>();
+        self.data[off..off + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
+
+        // Check that the number of elements written matches the dimension
+        // information.
+        let cardinality = dims.iter().map(|d| d.length).product();
+        if nelements != cardinality {
+            self.data.truncate(start);
+            return Err(InvalidArrayError::WrongCardinality {
+                actual: nelements,
+                expected: cardinality,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Convenience function to push a `DatumList` from an iter of `Datum`s
     ///
     /// See [`push_dict_with`] if you need to be able to handle errors
@@ -945,6 +1039,16 @@ impl RowArena {
         f(&mut packer);
         self.push_row(packer.finish()).unpack_first()
     }
+
+    /// Like [`Row::make_datum`], but the provided closure can return an error.
+    pub fn try_make_datum<'a, F, E>(&'a self, f: F) -> Result<Datum<'a>, E>
+    where
+        F: FnOnce(&mut RowPacker) -> Result<(), E>,
+    {
+        let mut packer = RowPacker::new();
+        f(&mut packer)?;
+        Ok(self.push_row(packer.finish()).unpack_first())
+    }
 }
 
 impl Default for RowPacker {
@@ -1038,6 +1142,132 @@ mod tests {
             Datum::String(""),
             Datum::String("العَرَبِيَّة"),
         ]);
+    }
+
+    #[test]
+    fn test_array() {
+        // Construct an array using `Row::push_array` and verify that it unpacks
+        // correctly.
+        const DIM: ArrayDimension = ArrayDimension {
+            lower_bound: 2,
+            length: 2,
+        };
+        let mut packer = RowPacker::new();
+        packer
+            .push_array(&[DIM], vec![Datum::Int32(1), Datum::Int32(2)])
+            .unwrap();
+        let row = packer.finish();
+        let arr1 = row.unpack_first().unwrap_array();
+        assert_eq!(arr1.dims().into_iter().collect::<Vec<_>>(), vec![DIM]);
+        assert_eq!(
+            arr1.elements().into_iter().collect::<Vec<_>>(),
+            vec![Datum::Int32(1), Datum::Int32(2)]
+        );
+
+        // Pack a previously-constructed `Datum::Array` and verify that it
+        // unpacks correctly.
+        let row = Row::pack(&[Datum::Array(arr1)]);
+        let arr2 = row.unpack_first().unwrap_array();
+        assert_eq!(arr1, arr2);
+    }
+
+    #[test]
+    fn test_multidimensional_array() {
+        let datums = vec![
+            Datum::Int32(1),
+            Datum::Int32(2),
+            Datum::Int32(3),
+            Datum::Int32(4),
+            Datum::Int32(5),
+            Datum::Int32(6),
+            Datum::Int32(7),
+            Datum::Int32(8),
+        ];
+
+        let mut packer = RowPacker::new();
+        packer
+            .push_array(
+                &[
+                    ArrayDimension {
+                        lower_bound: 1,
+                        length: 1,
+                    },
+                    ArrayDimension {
+                        lower_bound: 1,
+                        length: 4,
+                    },
+                    ArrayDimension {
+                        lower_bound: 1,
+                        length: 2,
+                    },
+                ],
+                &datums,
+            )
+            .unwrap();
+        let row = packer.finish();
+        let array = row.unpack_first().unwrap_array();
+        assert_eq!(array.elements().into_iter().collect::<Vec<_>>(), datums);
+    }
+
+    #[test]
+    fn test_array_max_dimensions() {
+        let mut packer = RowPacker::new();
+        let max_dims = usize::from(MAX_ARRAY_DIMENSIONS);
+
+        // An array with one too many dimensions should be rejected.
+        let res = packer.push_array(
+            &vec![
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: 1
+                };
+                max_dims + 1
+            ],
+            vec![Datum::Int32(4)],
+        );
+        assert_eq!(res, Err(InvalidArrayError::TooManyDimensions(max_dims + 1)));
+        assert!(packer.data.is_empty());
+
+        // An array with exactly the maximum allowable dimensions should be
+        // accepted.
+        packer
+            .push_array(
+                &vec![
+                    ArrayDimension {
+                        lower_bound: 1,
+                        length: 1
+                    };
+                    max_dims
+                ],
+                vec![Datum::Int32(4)],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_array_wrong_cardinality() {
+        let mut packer = RowPacker::new();
+        let res = packer.push_array(
+            &[
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: 2,
+                },
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: 3,
+                },
+            ],
+            vec![Datum::Int32(1), Datum::Int32(2)],
+        );
+        assert_eq!(
+            res,
+            Err(InvalidArrayError::WrongCardinality {
+                actual: 2,
+                expected: 6,
+            })
+        );
+        assert!(packer.data.is_empty());
     }
 
     #[test]

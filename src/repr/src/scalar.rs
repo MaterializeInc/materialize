@@ -16,6 +16,7 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::adt::array::Array;
 use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
 use crate::{ColumnName, ColumnType, DatumDict, DatumList};
@@ -54,7 +55,14 @@ pub enum Datum<'a> {
     Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(&'a str),
+    /// A variable-length multidimensional array of datums.
+    ///
+    /// Unlike [`Datum::List`], arrays are like tensors and are not permitted to
+    /// be ragged.
+    Array(Array<'a>),
     /// A sequence of `Datum`s.
+    ///
+    /// Unlike [`Datum::Array`], lists are permitted to be ragged.
     List(DatumList<'a>),
     /// A mapping from string keys to `Datum`s.
     Dict(DatumDict<'a>),
@@ -276,6 +284,18 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the array value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::Array`].
+    pub fn unwrap_array(&self) -> Array<'a> {
+        match self {
+            Datum::Array(array) => *array,
+            _ => panic!("Datum::unwrap_array called on {:?}", self),
+        }
+    }
+
     /// Unwraps the list value within this datum.
     ///
     /// # Panics
@@ -355,6 +375,7 @@ impl<'a> Datum<'a> {
                     (Datum::String(_), _) => false,
                     (Datum::Uuid(_), ScalarType::Uuid) => true,
                     (Datum::Uuid(_), _) => false,
+                    (Datum::Array(_), _) => false,
                     (Datum::List(list), ScalarType::List(t)) => list
                         .iter()
                         .all(|e| e.is_null() || is_instance_of_scalar(e, t)),
@@ -558,6 +579,11 @@ impl fmt::Display for Datum<'_> {
                 f.write_str("\"")
             }
             Datum::Uuid(u) => write!(f, "{}", u),
+            Datum::Array(array) => {
+                f.write_str("{")?;
+                write_delimited(f, ", ", &array.elements, |f, e| write!(f, "{}", e))?;
+                f.write_str("}")
+            }
             Datum::List(list) => {
                 f.write_str("[")?;
                 write_delimited(f, ", ", list, |f, e| write!(f, "{}", e))?;
