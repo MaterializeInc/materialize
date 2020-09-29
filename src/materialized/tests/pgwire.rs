@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
+use ore::collections::CollectionExt;
 use pgrepr::{Numeric, Record};
 use repr::adt::decimal::Significand;
 
@@ -22,6 +23,8 @@ use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use postgres::config::SslMode;
 use postgres::error::SqlState;
 use postgres::types::Type;
+use postgres::SimpleQueryMessage;
+use postgres_array::{Array, Dimension};
 use postgres_openssl::MakeTlsConnector;
 use tokio::runtime::Runtime;
 
@@ -390,6 +393,42 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             Ok(_) => panic!("expected connection to fail"),
             Err(e) => assert!(e.to_string().contains("certificate verify failed")),
         }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_arrays() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (_server, mut client) = util::start_server(util::Config::default().experimental_mode())?;
+
+    let row = client.query_one("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]", &[])?;
+    let array: Array<Option<i32>> = row.get(0);
+    assert_eq!(
+        array.dimensions(),
+        &[
+            Dimension {
+                len: 3,
+                lower_bound: 1,
+            },
+            Dimension {
+                len: 1,
+                lower_bound: 1,
+            }
+        ]
+    );
+    assert_eq!(array.into_inner(), &[Some(1), None, Some(2)]);
+
+    let message = client
+        .simple_query("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]")?
+        .into_first();
+    match message {
+        SimpleQueryMessage::Row(row) => {
+            assert_eq!(row.get(0).unwrap(), "{{1},{NULL},{2}}");
+        }
+        _ => panic!("unexpected simple query message"),
     }
 
     Ok(())
