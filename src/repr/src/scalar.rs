@@ -329,6 +329,7 @@ impl<'a> Datum<'a> {
                     (Datum::True, ScalarType::Bool) => true,
                     (Datum::True, _) => false,
                     (Datum::Int32(_), ScalarType::Int32) => true,
+                    (Datum::Int32(_), ScalarType::Oid) => true,
                     (Datum::Int32(_), _) => false,
                     (Datum::Int64(_), ScalarType::Int64) => true,
                     (Datum::Int64(_), _) => false,
