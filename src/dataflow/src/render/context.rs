@@ -81,8 +81,10 @@ where
     pub as_of_frontier: Antichain<repr::Timestamp>,
     /// The source tokens for all sources that have been built in this context.
     pub source_tokens: HashMap<GlobalId, Rc<Option<SourceToken>>>,
-    /// The index tokens for all indexes that have been built in this context.
-    pub index_tokens: HashMap<GlobalId, Rc<dyn Any>>,
+    /// Any other tokens that need to be dropped when an object is dropped.
+    pub additional_tokens: HashMap<GlobalId, Vec<Rc<dyn Any>>>,
+    /// Tokens for CDCv2 capture sources that have been built in this context.
+    pub cdc_tokens: HashMap<GlobalId, Rc<dyn Any>>,
     /// Dataflow local collections.
     pub collections: HashMap<P, (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
     /// Dataflow local arrangements.
@@ -120,10 +122,11 @@ where
             dataflow_id,
             as_of_frontier,
             source_tokens: HashMap::new(),
-            index_tokens: HashMap::new(),
+            additional_tokens: HashMap::new(),
             collections: HashMap::new(),
             local: HashMap::new(),
             trace: HashMap::new(),
+            cdc_tokens: HashMap::new(),
         }
     }
 

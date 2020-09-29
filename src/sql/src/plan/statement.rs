@@ -1713,6 +1713,18 @@ fn handle_create_source(
             }
             _ => unsupported!("upsert envelope for non-Kafka sources"),
         },
+        sql_parser::ast::Envelope::CdcV2 => {
+            if let Connector::AvroOcf { .. } = connector {
+                // TODO[btv] - there is no fundamental reason not to support this eventually,
+                // but OCF goes through a separate pipeline that it hasn't been implemented for.
+                unsupported!("CDC over OCF")
+            }
+            match format {
+                Some(Format::Avro(_)) => {}
+                _ => unsupported!("non-Avro-encoded CDC"),
+            }
+            dataflow_types::Envelope::CdcV2
+        }
     };
 
     if let dataflow_types::Envelope::Upsert(key_encoding) = &envelope {

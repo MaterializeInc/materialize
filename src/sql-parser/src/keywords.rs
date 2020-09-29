@@ -104,6 +104,7 @@ define_keywords!(
     CASCADED,
     CASE,
     CAST,
+    CDC,
     CEIL,
     CEILING,
     CENTURY,
