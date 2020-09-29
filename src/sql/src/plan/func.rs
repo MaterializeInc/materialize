@@ -10,9 +10,11 @@
 //! TBD: Currently, `sql::func` handles matching arguments to their respective
 //! built-in functions (for most built-in functions, at least).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
+use std::rc::Rc;
 
 use anyhow::bail;
 use itertools::Itertools;
@@ -20,14 +22,15 @@ use lazy_static::lazy_static;
 
 use crate::catalog::CatalogItemType;
 use ore::collections::CollectionExt;
-use repr::{ColumnName, Datum, ScalarType};
+use repr::{ColumnName, Datum, RelationType, ScalarType};
 use sql_parser::ast::{BinaryOperator, Expr, Ident, ObjectName, UnaryOperator};
 
 use super::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
     VariadicFunc,
 };
-use super::query::{self, ExprContext, QueryLifetime};
+use super::query::{self, ExprContext, QueryContext, QueryLifetime};
+use super::scope::Scope;
 use super::typeconv::{self, rescale_decimal, CastTo, CoerceTo};
 use super::StatementContext;
 use crate::names::PartialName;
@@ -168,6 +171,58 @@ where
     F: Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
 {
     Operation(Box::new(f))
+}
+
+// Constructs a definition for a built-in out of a static SQL expression.
+//
+// The SQL expression should use the standard parameter syntax (`$1`, `$2`, ...)
+// to refer to the inputs to the function. For example, a built-in function
+// that takes two arguments and concatenates them with an arrow in between
+// could be defined like so:
+//
+//     sql_op!("$1 || '<->' || $2")
+//
+// The number of parameters in the SQL expression must exactly match the number
+// of parameters in the built-in's declaration. There is no support for
+// variadic functions.
+macro_rules! sql_op {
+    ($l:literal) => {{
+        lazy_static! {
+            static ref EXPR: Expr = sql_parser::parser::parse_expr($l.into())
+                .expect("static function definition failed to parse");
+        }
+        Operation(Box::new(move |ecx, args| {
+            // Reconstruct an expression context where the parameter types are
+            // bound to the types of the expressions in `args`.
+            let mut scx = ecx.qcx.scx.clone();
+            scx.param_types = Rc::new(RefCell::new(
+                args.iter()
+                    .enumerate()
+                    .map(|(i, e)| (i + 1, ecx.scalar_type(e)))
+                    .collect(),
+            ));
+            let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
+            let ecx = ExprContext {
+                qcx: &qcx,
+                name: "static function definition",
+                scope: &Scope::empty(None),
+                relation_type: &RelationType::empty(),
+                allow_aggregates: false,
+                allow_subqueries: true,
+            };
+
+            // Plan the expression.
+            let mut expr = query::plan_expr(&ecx, &*EXPR)?.type_as_any(&ecx)?;
+
+            // Replace the parameters with the actual arguments.
+            expr.visit_mut(&mut |e| match e {
+                ScalarExpr::Parameter(i) => *e = args[*i - 1].clone(),
+                _ => (),
+            });
+
+            Ok(expr)
+        }))
+    }};
 }
 
 impl From<UnaryFunc> for Operation<ScalarExpr> {
@@ -799,6 +854,9 @@ lazy_static! {
             },
             "now" => Scalar {
                 params!() => nullary_op(|ecx| plan_current_timestamp(ecx, "now"))
+            },
+            "pg_get_userbyid" => Scalar {
+                params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'")
             },
             "replace" => Scalar {
                 params!(String, String, String) => VariadicFunc::Replace
