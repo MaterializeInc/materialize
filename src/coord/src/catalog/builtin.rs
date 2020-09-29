@@ -570,7 +570,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_class AS SELECT
 concatenated.oid,
 relname,
-schema,
+schema as relnamespace,
 NULL::oid as relowner
 FROM
   (
