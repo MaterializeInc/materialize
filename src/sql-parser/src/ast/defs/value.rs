@@ -224,6 +224,8 @@ pub enum DataType {
     Text,
     /// Bytea
     Bytea,
+    /// Array
+    Array(Box<DataType>),
     /// List
     List(Box<DataType>),
     /// Binary JSON
@@ -287,6 +289,10 @@ impl AstDisplay for DataType {
             DataType::Regclass => f.write_str("regclass"),
             DataType::Text => f.write_str("text"),
             DataType::Bytea => f.write_str("bytea"),
+            DataType::Array(ty) => {
+                f.write_node(&ty);
+                f.write_str("[]");
+            }
             DataType::List(ty) => {
                 f.write_node(&ty);
                 f.write_str(" list");
