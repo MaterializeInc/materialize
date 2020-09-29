@@ -10,22 +10,15 @@
 use getopts::Options;
 use parse_duration::parse;
 
-//use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs::File;
-//use std::hash::{Hash, Hasher};
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::io::SeekFrom;
 use std::{thread, time};
 
 use test_util::kafka;
-
-extern crate futures;
-extern crate json;
-extern crate rdkafka;
-extern crate reqwest;
 
 fn parse_entry(parsed_object: &mut json::JsonValue) -> (String, Option<String>) {
     assert!(parsed_object.is_object());
@@ -58,12 +51,6 @@ fn parse_line(line: &str) -> Result<Vec<(String, Option<String>)>, String> {
     }
     Ok(results)
 }
-/*
-fn calculate_hash<T: Hash>(t: &T) -> u64 {
-    let mut s = DefaultHasher::new();
-    t.hash(&mut s);
-    s.finish()
-}*/
 
 async fn run_stream() -> Result<(), anyhow::Error> {
     let args: Vec<_> = env::args().collect();
@@ -113,19 +100,12 @@ async fn run_stream() -> Result<(), anyhow::Error> {
         "disable-topic-create",
         "add this flag to disable topic creation",
     );
-    /*opts.optflag("", "byo", "enable byo consistency");
-    opts.optopt(
-        "",
-        "consistency-name",
-        "name of consistency topic to write to (default TOPIC_NAME-consistency topic)",
-        "STRING",
-    );*/
     opts.optflag(
         "e",
         "exit-at-end",
         "automatically exit when the end of the file is reached",
     );
-    let usage_details = opts.usage("usage: mbtaupsert [options] FILE");
+    let usage_details = opts.usage("usage: mbta_to_mtrlz [options] FILE");
     let opts = opts.parse(&args[1..])?;
 
     if opts.opt_present("h") {
@@ -249,7 +229,7 @@ async fn run_stream() -> Result<(), anyhow::Error> {
         &opts
             .opt_str("kafka-addr")
             .unwrap_or_else(|| "localhost:9092".to_string()),
-        "materialize.mbtaupsert",
+        "materialize.mbta_to_mtrlz",
         &[],
     )?;
 
@@ -279,21 +259,6 @@ async fn run_stream() -> Result<(), anyhow::Error> {
                 .await?;
         }
     }
-
-    // byo stuff commented out
-    /*let consistency_name = opts
-        .opt_str("c")
-        .unwrap_or(format!("{}-data-consistency", topic_name));
-    if byo && !opts.opt_present("disable-topic-create") {
-        k_client.create_topic(&consistency_name,
-            1,
-            replication,
-            &vec![
-                ("cleanup.policy", "delete"),
-                ("retention.ms", "-1"),
-            ], None).await?;
-    }
-    let mut timestamp = 0; */
 
     let exit_at_end = opts.opt_present("exit-at-end");
 

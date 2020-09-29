@@ -5,8 +5,8 @@ within Materialize.
 
 ## File sources
 
-Any file in `workspace` will be mounted to the Materialize docker container at
-`/workdir/workspace`.
+Any file in `play/mbta` will be mounted to the Materialize docker container at
+`/workdir`, so any file in workspace will be found at `/workdir/workspace`.
 
 ### Static metadata
 

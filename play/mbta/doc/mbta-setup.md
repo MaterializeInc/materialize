@@ -6,11 +6,11 @@ The Boston public transit system goes to sleep at around midnight local time and
 generally does not wake up until 5-6 am, so there may be no data in the stream
 when the system has closed for the night.
 
-To make sure that the demo works properly, avoid changing things in
+To reduce the chance of things breaking, avoid changing things in
 [workspace](../workspace).
 
-All the setup assumes you are running commands from [mbtaupsert directory](../)
-(<materialize root directory>/demo/mbtaupsert).
+All the setup assumes you are running commands from [mbta directory](../)
+(<materialize root directory>/play/mbta).
 
 ## One time setup
 
@@ -18,19 +18,53 @@ Get an API key from https://api-v3.mbta.com/ . This will enable you to send 1000
 
 ## Automatic setup (Docker)
 
-To automatically start the demo using Docker, run
-`API_KEY=<insert_api_key_here> ../../bin/mzconduct run mbtaupsert -w start-live-data`.
+To start working with the streams automatically using Docker, run
+`API_KEY=<insert_api_key_here> ../../bin/mzconduct run mbta -w start-live-data`.
 
 By default, the streams that get fired up correspond to the ones in
-[demo/all-frequent-routes-config-weekend](../demo/all-frequent-routes-config-weekend),
+[examples/all-frequent-routes-config-weekend.csv](../examples/all-frequent-routes-config-weekend.csv),
 but if you want to use a different set of streams, [create an alternate config
-file](../demo/README.md) and then set the environment variable
-`CONFIG_FILE_PATH=/workdir/configs/<name_of_config_file>`
+file](#config-file-creation) in the `examples` directory and then set the
+environment variable `CONFIG_FILE_PATH=/workdir/examples/<name_of_config_file>`
 
 If you look in [mzcompose.yml](../mzcompose.yml), there are some other
 environment variables that can be set to customize the setup.
 
-To tear down the demo, run `../../bin/mzconduct down mbtaupsert`.
+To tear everything down, run `../../bin/mzconduct down mbta`.
+
+### Config file creation
+
+The config file should be in CSV format with no spaces in between. For each MBTA stream,
+create a row with the following six fields in order:
+1. Name of kafka topic to ingest into. Optional. Defaults to
+   `mbta-$api-$filter_type-$filter_id` if there is a filter and `mbta-$api` if
+   there is not. You can assign multiple MBTA streams to go into the same Kafka
+   topic. It is recommended to assign multiple MBTA streams to the same Kafka
+   topic when they come from the same API.
+
+2. The top level API of the stream.
+
+3. Type of id to filter on. Optional. If this is specified, the field
+   "Id to filter on" should also be specified.
+
+4. Id to filter on.
+
+5. Number of partitions that the kafka topic should have. Optional. Defaults to 1.
+
+6. Heartbeat frequency. In other words, the frequency at which the `mbta_to_mtrlz`
+   code should check the file for new data if it has caught up to the end of the
+   file. Optional. Defaults to 250ms. Specifying this is mostly just for
+   avoiding unnecessary usage of CPU cycles for slow-moving topics.
+
+Here's a mapping of example apis you want to create a stream for, together with
+how it should be specified in the config file:
+* `/trips/?filter[route]=Green-E` to a 5-partition Kafka topic, and only check
+  it every 30 seconds because this is an infrequently updated stream:
+  `,trips,route,Green-E,5,30s`
+* `/trips/?alerts` to a Kafka topic named `alerts-live`: `alerts-live,alerts,,,,`
+
+List of the live streams is here:
+https://api-v3.mbta.com/docs/swagger/index.html
 
 ### Automatic Archiving
 
@@ -38,8 +72,8 @@ The Docker container comes with the ability to automatically archive the files
 containing the data pulled from the MBTA streams at shutdown in case you want to
 replay the data or give the data to someone else so they can replay the stream.
 By default, Docker waits 10 seconds for the container to stop before killing it.
-If you need more time to ensure that archiving completes, find the Docker
-container corresponding to the demo with `docker ps | mbtaupsert_mbta-demo`.
+If you need more time to ensure that archiving completes, find the
+`mbtaupsert_mbta-demo` Docker container with `docker ps | grep mbtaupsert_mbta-demo`.
 Then run `docker stop <container_id> -t 30`. The `30` can be replaced with
 however many seconds you think it will take to archive all the data. You can
 tear down the rest of the containers using the command above.
@@ -48,14 +82,14 @@ Archives can be found at `workspace-<current_date_and_time>.tar.gz` file
 [in the `archive` directory](../archive).
 
 To replay an archive, run
-`API_KEY=<insert_api_key_here> ARCHIVE_PATH=<insert_path_archive> ../../bin/mzconduct run mbtaupsert -w replay`. Do not uncompress the archive.
+`API_KEY=<insert_api_key_here> ARCHIVE_PATH=<insert_path_archive> ../../bin/mzconduct run mbta -w replay`. Do not uncompress the archive.
 
 ## Automatic setup (Bash)
 
-First run `cargo build --release` in order to build the mbtaupsert binary.
+First run `cargo build --release` in order to build the mbta_to_mtrlz binary.
 
-To start and tear down a bunch of streams at once, create a config file like
-[this one](/demo/predictions-config).
+To start and tear down a bunch of streams at once, [create a config
+file](#config-file-creation) or use one in (../examples).
 
 Then run `ci/mbta-demo-cmd.sh start <path_to_config_file> <api_key> <kafka_address>`.
 This should start up live kafka streams for every stream you specified in the
@@ -78,7 +112,7 @@ complete before running the teardown script.
 and teardown. Notably, the `workspace/steady-pid.log` and `workspace/curl-pid.log` store
 the process ids of the background processes keeping all your streams alive. If you lose one
 of these two files somehow and want to tear down the processes, use:
-* `pkill mbtaupsert` to kill all the code pushing streams into Kafka.
+* `pkill mbta_to_mtrlz` to kill the code pushing streams into Kafka.
 * `ps -f|grep mbta-demo-cmd` to find the pids for the connection maintenance threads.
 * `pkill curl` to kill all the curl commands downloading the streams. Note that
    you should kill the connection maintenance threads before killing the curl commands because
@@ -123,7 +157,7 @@ To manually connect to a single MBTA stream and load it into Kafka:
   cargo run -- -f path_to_stream_file.log -t topic_name
   ```
 
-  See the [mbtaupsert package documentation](../mbtaupsert-doc.md) for more
+  See the [mbta_to_mtrlz package documentation](../mbta_to_mtrlz-doc.md) for more
   details on other options you can run with.
 
   You can use `kafka-console-consumer` to verify the correctness of your stream like this:

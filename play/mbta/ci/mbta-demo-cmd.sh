@@ -11,10 +11,12 @@
 #
 # mbta-demo-cmd.sh — runs the mbta demo
 
-mbtaupsert="$(whereis mbtaupsert| awk '{print $NF}')"
+set -euo pipefail
 
-if [ -z "$mbtaupsert" ]; then
-  mbtaupsert=../../target/release/mbtaupsert
+mbta_to_mtrlz="$(whereis mbta_to_mtrlz| awk '{print $NF}')"
+
+if [ -z "$mbta_to_mtrlz" ]; then
+  mbta_to_mtrlz=../../target/release/mbta_to_mtrlz
 fi;
 
 function archive() {
@@ -106,15 +108,16 @@ function cleanup_log_files() {
 
 # create an indefinitely running connection to an mbta event stream
 function create_connection() {
+  # disable set -e because set -e prevents reconnecting if the stream goes down
+  # for any reason.
+  set +o errexit
+
   line_num=$1
   api_key=$2
   filename=$3
   stream_type=$4
   filter_type=$5
   filter_on=$6
-
-  echo "Cleaning up temp file $filename"
-  rm -f "$filename"
 
   url="https://api-v3.mbta.com/$stream_type"
   if [ -n "$filter_type" ]; then
@@ -126,7 +129,7 @@ function create_connection() {
     curl -sN -H 'accept: text/event-stream' -H "x-api-key:$api_key" \
       "$url" >> "$filename" &
     mypid=$!
-    echo "$line_num,$curl_num,$!" >> workspace/curl-pid.log
+    echo "$line_num,$curl_num,$mypid" >> workspace/curl-pid.log
     wait $mypid
     (( curl_num+=1 ))
   done
@@ -134,17 +137,21 @@ function create_connection() {
 
 # Create a kafka topic out of each stream
 function start_stream_convert() {
-  api_key=$1
-  kafka_addr=$2
-  filename=$3
+  exit_at_end=$1
+  filename=$2
+  kafka_addr=$3
+
+  if [ -z "$kafka_addr" ]; then
+    kafka_addr=localhost:9092
+  fi
 
   options=( --kafka-addr "$kafka_addr" -c "$filename" )
 
-  if [ "$api_key" == "None" ]; then
+  if [ "$exit_at_end" -eq 1 ]; then
     options+=( --exit-at-end )
   fi
 
-  $mbtaupsert "${options[@]}" &
+  $mbta_to_mtrlz "${options[@]}" &
 
   echo "$!" >> workspace/steady-pid.log
 }
@@ -153,15 +160,11 @@ function start_stream_convert() {
 function start_streams_from_config_file() {
   config_file=$1
   api_key=$2
-  kafka_addr=$3
-
-  if [ -z "$kafka_addr" ]; then
-    kafka_addr=localhost:9092
-  fi
 
   while true ; do date +%s >> workspace/current_time ; sleep 1; done &
   echo "$!" >> workspace/steady-pid.log
 
+  if [ "$api_key" != "None" ] ; then
   IFS=','
   line_num=0
   while read -r topic_name stream_type filter_type filter_on partitions _
@@ -190,19 +193,18 @@ function start_streams_from_config_file() {
 
     filename="workspace/$file_id.log"
 
-    if [ "$api_key" != "None" ] ; then
-      create_connection $line_num "$api_key" "$filename" "$stream_type" "$filter_type" "$filter_on" &
-      echo "$!" >> workspace/steady-pid.log
-    fi
+    create_connection $line_num "$api_key" "$filename" "$stream_type" "$filter_type" "$filter_on" &
+    echo "$!" >> workspace/steady-pid.log
 
     (( line_num+=1 ))
   done < "$config_file"
+  fi
 
   #The first thing the stream sends is a snapshot of the current state of the
   #system. If we start reading from the stream too quickly, the snapshot can be
   #incomplete.
   sleep 5
-  start_stream_convert "$api_key" $kafka_addr "$config_file"
+  start_stream_convert 0 "$config_file" $kafka_addr
 }
 
 function pause() {
@@ -262,6 +264,7 @@ case "$1" in
       echo "usage: $0 start <config-file> <api-key> [kafka-addr]"
       exit 1
     fi
+    cleanup_log_files;
     refresh_metadata;
     start_streams_from_config_file "$2" "$3" "$4";
     ;;
@@ -279,6 +282,7 @@ case "$1" in
     if [[ -z "$api_key" ]]; then
       api_key=$(cat /run/secrets/mbta_api_key)
     fi
+    cleanup_log_files;
     refresh_metadata;
     start_streams_from_config_file "$2" "$api_key" "$kafka_addr";
     trap "pause; exit " SIGTERM
@@ -293,8 +297,9 @@ case "$1" in
       echo ""
       exit 1
     fi
+    cleanup_log_files;
     unpack_archive "$3"
-    start_streams_from_config_file "$2" None "$4";
+    start_stream_convert 1 "$2" "$4";
     wait_for_stream_conversion;
     ;;
   archive)

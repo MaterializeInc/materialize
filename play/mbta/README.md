@@ -1,10 +1,13 @@
-# Real time application demo using the MBTA API
+# Real time application demo using the MBTA V3 API
 
-## What is the MBTA API?
+> Note: This is still a work in progress. You may try it out, but it may or may
+> not break.
+
+## What is the MBTA V3 API?
 
 Massachusetts Bay Transportation Authority manages public transit in the Boston
-area. It has a bunch of live JSON server-sent event source streams whose format
-are roughly like this:
+area. Its [V3 API](https://www.mbta.com/developers/v3-api) consists of a bunch
+of live JSON server-sent event source streams whose format are roughly like this:
 
 ```
 event:reset
@@ -21,16 +24,16 @@ event: remove
 
 ## What will I be able to do in this demo?
 
-You will be able to issue SQL queries and maintain views on the live state of
-the Boston-area public transit system.
-[doc/mbta-predictions.md](/doc/mbta-predictions.md) contains some inspiration to
-get you started. It tells you:
-* How to reproduce the MBTA countdown clock.
-* How to find the quickest way from stop A to stop B.
+If you create sources in Materialize with `ENVELOPE UPSERT`, you will be able to
+issue SQL queries and maintain views on the live state of the Boston-area public
+transit system.
 
 In addition, you can run SQL queries and maintain views on the history of the
 state of the Boston-area public transit system from the time you started running
-the demo onwards by omitting the `ENVELOPE UPSERT` when creating a source.
+the demo onwards by creating sources in Materialize with `ENVELOPE NONE`.
+
+More details coming soon! For now, check out
+[doc/mbta-setup.md](doc/mbta-setup.md) for how to get started.
 
 ## What does this code do?
 
@@ -70,4 +73,4 @@ Technically, this code is not MBTA stream-specific. With a few lines of changes,
 it should be able to take any stream of json objects, parse out the desired key,
 and then produce a key-value Kafka topic out of it.
 
-Look in [doc/mbtaupsert-doc.md](doc/mbtaupsert-doc.md) for more information.
+Look in [doc/mbta_to_mtrlz-doc.md](doc/mbta_to_mtrlz-doc.md) for more information.

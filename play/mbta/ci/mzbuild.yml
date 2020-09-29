@@ -10,4 +10,4 @@
 name: mbta-demo
 pre-image:
   type: cargo-build
-  bin: mbtaupsert
+  bin: mbta_to_mtrlz
