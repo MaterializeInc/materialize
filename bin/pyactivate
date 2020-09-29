@@ -42,20 +42,16 @@ def main(args: List[str]) -> int:
     logger.debug("root_dir={} py_dir={}".format(root_dir, py_dir))
 
     dev = False
-    ci = False
     if len(args) > 0 and args[0] == "--dev":
         del args[0]
         dev = True
-    if "CI" in os.environ and os.environ["CI"]:
-        dev = True
-        ci = True
 
     # If we're not in the CI builder container, activate a virtualenv with the
     # necessary dependencies.
     if os.environ.get("MZ_DEV_CI_BUILDER", False):
         python = "python3"
     else:
-        python = str(activate_venv(py_dir, dev, ci))
+        python = str(activate_venv(py_dir, dev))
     logger.debug("python={}".format(python))
 
     # Reinvoke with the interpreter from the virtualenv.
@@ -64,7 +60,7 @@ def main(args: List[str]) -> int:
     os.execvp(python, [python, *args])
 
 
-def activate_venv(py_dir: Path, dev: bool = False, ci: bool = False) -> Path:
+def activate_venv(py_dir: Path, dev: bool = False) -> Path:
     """Bootstrap and activate a virtualenv at py_dir/venv"""
     venv_dir = py_dir / "venv"
     stamp_path = venv_dir / "dep_stamp"
@@ -104,8 +100,6 @@ def activate_venv(py_dir: Path, dev: bool = False, ci: bool = False) -> Path:
     acquire_deps(venv_dir)
     if dev:
         acquire_deps(venv_dir, "dev")
-    if ci:
-        acquire_deps(venv_dir, "ci")
 
     return python
 

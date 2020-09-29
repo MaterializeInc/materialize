@@ -16,4 +16,4 @@
 
 set -euo pipefail
 
-exec bin/ci-builder run stable bin/pyactivate -m ci.test.mkpipeline "$@"
+exec bin/ci-builder run stable bin/pyactivate --dev -m ci.test.mkpipeline "$@"

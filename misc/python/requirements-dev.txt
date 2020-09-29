@@ -1,4 +1,7 @@
+awscli==1.18.43
 black==19.10b0
+humanize==2.3.0
 mypy==0.770
 pdoc3==0.8.1
 pytest==5.4.2
+requests==2.23.0
