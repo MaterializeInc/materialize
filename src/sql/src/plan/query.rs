@@ -1570,7 +1570,14 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 CoercibleScalarExpr::Parameter(*n)
             }
         }
-        Expr::Array(_) => unsupported!("arrays"),
+        Expr::Array(exprs) => {
+            ecx.qcx.scx.require_experimental_mode("ARRAY")?;
+            let mut out = vec![];
+            for e in exprs {
+                out.push(plan_expr(ecx, e)?);
+            }
+            CoercibleScalarExpr::LiteralArray(out)
+        }
         Expr::List(exprs) => {
             let mut out = vec![];
             for e in exprs {
@@ -2135,10 +2142,10 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::
         DataType::Bytea => ScalarType::Bytes,
         DataType::Jsonb => ScalarType::Jsonb,
         DataType::Uuid => ScalarType::Uuid,
+        DataType::Array(elem_type) => ScalarType::Array(Box::new(scalar_type_from_sql(elem_type)?)),
         DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
         DataType::Oid => ScalarType::Oid,
-        DataType::Array(_)
-        | DataType::Binary(..)
+        DataType::Binary(..)
         | DataType::Blob(_)
         | DataType::Clob(_)
         | DataType::Regclass
@@ -2164,6 +2171,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
         pgrepr::Type::Text => Ok(ScalarType::String),
         pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
         pgrepr::Type::Uuid => Ok(ScalarType::Uuid),
+        pgrepr::Type::Array(t) => Ok(ScalarType::Array(Box::new(scalar_type_from_pg(t)?))),
         pgrepr::Type::List(l) => Ok(ScalarType::List(Box::new(scalar_type_from_pg(l)?))),
         pgrepr::Type::Record(_) => {
             bail!("internal error: can't convert from pg record to materialize record")

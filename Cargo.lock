@@ -1824,6 +1824,7 @@ dependencies = [
  "pgwire",
  "postgres",
  "postgres-openssl",
+ "postgres_array",
  "predicates",
  "prof",
  "prometheus",
@@ -2655,6 +2656,18 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "postgres_array"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e45e166dedb061744a082a6009459840c038660382f1b6ab82bf7a4cdfc7e42a"
+dependencies = [
+ "bytes",
+ "fallible-iterator",
+ "postgres-protocol",
+ "postgres-types",
 ]
 
 [[package]]
