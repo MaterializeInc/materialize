@@ -81,7 +81,6 @@ impl JoinImplementation {
             ..
         } = relation
         {
-
             // Common information of broad utility.
             // TODO: Figure out how to package this up for everyone who uses it.
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();

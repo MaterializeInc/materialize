@@ -93,8 +93,10 @@ impl FilterEqualLiteral {
                         HashMap::new();
                     // gather predicates of the form CallBinary{Binaryfunc::Eq,
                     // Column, Literal}
-                    // TODO (wangandi): materialize#616 relax the requirement
-                    // `Column` to be any arbitrary ScalarExpr
+                    // TODO (wangandi): relax the requirement `Column` to be any
+                    // arbitrary `ScalarExpr`. Currently blocked by
+                    // `ColumnKnowledge` not having been extended to
+                    // `PredicateKnowledge` yet. (See PR #3044)
                     for predicate in predicates.iter() {
                         if let ScalarExpr::CallBinary {
                             func: BinaryFunc::Eq,
