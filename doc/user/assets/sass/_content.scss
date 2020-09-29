@@ -234,4 +234,14 @@ a {
     margin: 16px 0 0 0;
     padding: 16px;
   }
+
+  .release-date {
+    font-style: italic;
+  }
+
+  .release-date + ul,
+  .release-date + ol {
+    margin-top: 10px;
+    padding-left: 20px;
+  }
 }
