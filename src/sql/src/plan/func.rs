@@ -92,7 +92,9 @@ impl TypeCategory {
     fn from_param(param: &ParamType) -> Self {
         match param {
             ParamType::Plain(t) => Self::from_type(t),
-            ParamType::Any | ParamType::StringAny | ParamType::JsonbAny => Self::Pseudo,
+            ParamType::Any | ParamType::ArrayAny | ParamType::StringAny | ParamType::JsonbAny => {
+                Self::Pseudo
+            }
         }
     }
 
@@ -315,6 +317,8 @@ pub enum ParamType {
     /// A pseudotype permitting any type, but requires it to be cast to a
     /// [`ScalarType::Jsonb`], or an element within a `Jsonb`.
     JsonbAny,
+    /// A psuedotype permitting any array type.
+    ArrayAny,
 }
 
 impl ParamType {
@@ -323,6 +327,8 @@ impl ParamType {
         match (self, t) {
             (ParamType::Plain(s), o) => *s == o.desaturate(),
             (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => true,
+            (ParamType::ArrayAny, ScalarType::Array(_)) => true,
+            (ParamType::ArrayAny, _) => false,
         }
     }
 
@@ -331,6 +337,7 @@ impl ParamType {
         let cast_to = match self {
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::Any | ParamType::JsonbAny | ParamType::StringAny => return true,
+            ParamType::ArrayAny => return false,
         };
 
         typeconv::get_cast(from_type, &cast_to).is_some()
@@ -341,6 +348,8 @@ impl ParamType {
         match (self, c) {
             (ParamType::Plain(_), c) => TypeCategory::from_param(&self) == *c,
             (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => true,
+            (ParamType::ArrayAny, TypeCategory::Array) => true,
+            (ParamType::ArrayAny, _) => false,
         }
     }
 
@@ -369,7 +378,10 @@ impl PartialEq<ScalarType> for ParamType {
         match (self, other) {
             (ParamType::Plain(s), o) => *s == o.desaturate(),
             // Pseudotypes do not equal concrete types.
-            (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => false,
+            (ParamType::Any, _)
+            | (ParamType::ArrayAny, _)
+            | (ParamType::StringAny, _)
+            | (ParamType::JsonbAny, _) => false,
         }
     }
 }
@@ -680,10 +692,17 @@ impl<'a> ArgImplementationMatcher<'a> {
         arg: CoercibleScalarExpr,
         typ: &ParamType,
     ) -> Result<ScalarExpr, anyhow::Error> {
+        // TODO(sean): this function needs to take a global view of the
+        // arguments to properly handle polymorphic types. For example, a
+        // function that takes (ArrayAny, ArrayAny) needs to coerce both
+        // arguments to the *same* array type. For now, we only have functions
+        // that take a single ArrayAny as input, so we simply coerce to
+        // Array(String) for ArrayAny parameters.
         use ScalarType::*;
         let coerce_to = match typ {
             ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
             ParamType::Any => CoerceTo::Plain(String),
+            ParamType::ArrayAny => CoerceTo::Plain(Array(Box::new(String))),
             ParamType::JsonbAny => CoerceTo::JsonbAny,
             ParamType::StringAny => CoerceTo::Plain(String),
         };
@@ -694,6 +713,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             ParamType::Plain(List(..)) if matches!(arg_type, List(..)) => return Ok(arg),
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::Any => return Ok(arg),
+            ParamType::ArrayAny => CastTo::Explicit(Array(Box::new(String))),
             ParamType::JsonbAny => CastTo::JsonbAny,
             ParamType::StringAny => CastTo::Explicit(String),
         };
@@ -756,6 +776,10 @@ lazy_static! {
                 params!(Decimal(0, 0)) => UnaryFunc::AbsDecimal,
                 params!(Float32) => UnaryFunc::AbsFloat32,
                 params!(Float64) => UnaryFunc::AbsFloat64
+            },
+            "array_to_string" => Scalar {
+                params!(ArrayAny, String) => variadic_op(array_to_string),
+                params!(ArrayAny, String, String) => variadic_op(array_to_string)
             },
             "ascii" => Scalar {
                 params!(String) => UnaryFunc::Ascii
@@ -1217,6 +1241,17 @@ fn mz_cluster_id(ecx: &ExprContext) -> Result<ScalarExpr, anyhow::Error> {
         Datum::from(ecx.qcx.scx.catalog.cluster_id()),
         ScalarType::Uuid,
     ))
+}
+
+fn array_to_string(ecx: &ExprContext, exprs: Vec<ScalarExpr>) -> Result<ScalarExpr, anyhow::Error> {
+    let elem_type = match ecx.scalar_type(&exprs[0]) {
+        ScalarType::Array(elem_type) => *elem_type,
+        _ => unreachable!("array_to_string is guaranteed to receive array as first argument"),
+    };
+    Ok(ScalarExpr::CallVariadic {
+        func: VariadicFunc::ArrayToString { elem_type },
+        exprs,
+    })
 }
 
 fn stringify_opt_scalartype(t: &Option<ScalarType>) -> String {
