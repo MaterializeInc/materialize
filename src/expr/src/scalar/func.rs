@@ -3011,6 +3011,37 @@ fn array_create_scalar<'a>(
     Ok(datum)
 }
 
+fn array_to_string<'a>(
+    datums: &[Datum<'a>],
+    elem_type: &ScalarType,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    if datums[0].is_null() || datums[1].is_null() {
+        return Ok(Datum::Null);
+    }
+    let array = datums[0].unwrap_array();
+    let delimiter = datums[1].unwrap_str();
+    let null_str = match datums.get(2) {
+        None | Some(Datum::Null) => None,
+        Some(d) => Some(d.unwrap_str()),
+    };
+
+    let mut out = String::new();
+    for elem in array.elements().iter() {
+        if elem.is_null() {
+            if let Some(null_str) = null_str {
+                out.push_str(null_str);
+                out.push_str(delimiter);
+            }
+        } else {
+            stringify_datum(&mut out, elem, elem_type);
+            out.push_str(delimiter);
+        }
+    }
+    out.truncate(out.len() - delimiter.len()); // lop off last delimiter
+    Ok(Datum::String(temp_storage.push_string(out)))
+}
+
 fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     temp_storage.make_datum(|packer| packer.push_list(datums))
 }
@@ -3282,6 +3313,9 @@ pub enum VariadicFunc {
         // We need to know the element type to type empty arrays.
         elem_type: ScalarType,
     },
+    ArrayToString {
+        elem_type: ScalarType,
+    },
     ListCreate {
         // We need to know the element type to type empty lists.
         elem_type: ScalarType,
@@ -3325,6 +3359,9 @@ impl VariadicFunc {
                 elem_type: ScalarType::Array(_),
             } => eager!(array_create_multidim, temp_storage),
             VariadicFunc::ArrayCreate { .. } => eager!(array_create_scalar, temp_storage),
+            VariadicFunc::ArrayToString { elem_type } => {
+                eager!(array_to_string, elem_type, temp_storage)
+            }
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
                 Ok(eager!(list_create, temp_storage))
             }
@@ -3363,6 +3400,7 @@ impl VariadicFunc {
                     _ => ScalarType::Array(Box::new(elem_type.clone())).nullable(false),
                 }
             }
+            ArrayToString { .. } => ScalarType::String.nullable(true),
             ListCreate { elem_type } => {
                 debug_assert!(
                     input_types.iter().all(|t| t.scalar_type == *elem_type),
@@ -3392,7 +3430,8 @@ impl VariadicFunc {
             | VariadicFunc::JsonbBuildObject
             | VariadicFunc::ListCreate { .. }
             | VariadicFunc::RecordCreate { .. }
-            | VariadicFunc::ArrayCreate { .. } => false,
+            | VariadicFunc::ArrayCreate { .. }
+            | VariadicFunc::ArrayToString { .. } => false,
             _ => true,
         }
     }
@@ -3410,6 +3449,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ArrayCreate { .. } => f.write_str("array_create"),
+            VariadicFunc::ArrayToString { .. } => f.write_str("array_to_string"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
             VariadicFunc::ListSlice => f.write_str("list_slice"),
