@@ -2835,7 +2835,7 @@ fn pad_leading<'a>(
         Ok(len) => len,
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
-                "length must be positive".to_owned(),
+                "length must be nonnegative".to_owned(),
             ))
         }
     };
@@ -2846,15 +2846,16 @@ fn pad_leading<'a>(
         " "
     };
 
-    let mut buf: String;
-    if len < string.len() {
-        buf = string[0..len].to_string();
+    let (end_char, end_char_byte_offset) = string
+        .chars()
+        .take(len)
+        .fold((0, 0), |acc, char| (acc.0 + 1, acc.1 + char.len_utf8()));
+
+    let mut buf = String::with_capacity(len);
+    if len == end_char {
+        buf.push_str(&string[0..end_char_byte_offset]);
     } else {
-        buf = pad_string
-            .chars()
-            .cycle()
-            .take(len - string.len())
-            .collect();
+        buf.extend(pad_string.chars().cycle().take(len - end_char));
         buf.push_str(string);
     }
 
