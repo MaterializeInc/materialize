@@ -690,6 +690,11 @@ SELECT lpad('str', 0, 'pad')
 (empty)
 
 query T
+SELECT lpad('str', NULL, 'pad')
+----
+NULL
+
+query T
 SELECT lpad(NULL, 10, 'pad')
 ----
 NULL
