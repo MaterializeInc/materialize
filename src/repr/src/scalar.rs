@@ -106,6 +106,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::False`] or [`Datum::True`].
+    #[track_caller]
     pub fn unwrap_bool(&self) -> bool {
         match self {
             Datum::False => false,
@@ -119,6 +120,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Int32`].
+    #[track_caller]
     pub fn unwrap_int32(&self) -> i32 {
         match self {
             Datum::Int32(i) => *i,
@@ -131,6 +133,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Int64`].
+    #[track_caller]
     pub fn unwrap_int64(&self) -> i64 {
         match self {
             Datum::Int64(i) => *i,
@@ -138,6 +141,7 @@ impl<'a> Datum<'a> {
         }
     }
 
+    #[track_caller]
     pub fn unwrap_ordered_float32(&self) -> OrderedFloat<f32> {
         match self {
             Datum::Float32(f) => *f,
@@ -145,6 +149,7 @@ impl<'a> Datum<'a> {
         }
     }
 
+    #[track_caller]
     pub fn unwrap_ordered_float64(&self) -> OrderedFloat<f64> {
         match self {
             Datum::Float64(f) => *f,
@@ -157,6 +162,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Float32`].
+    #[track_caller]
     pub fn unwrap_float32(&self) -> f32 {
         match self {
             Datum::Float32(f) => f.into_inner(),
@@ -169,6 +175,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Float64`].
+    #[track_caller]
     pub fn unwrap_float64(&self) -> f64 {
         match self {
             Datum::Float64(f) => f.into_inner(),
@@ -181,6 +188,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Date`].
+    #[track_caller]
     pub fn unwrap_date(&self) -> chrono::NaiveDate {
         match self {
             Datum::Date(d) => *d,
@@ -193,6 +201,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Time`].
+    #[track_caller]
     pub fn unwrap_time(&self) -> chrono::NaiveTime {
         match self {
             Datum::Time(t) => *t,
@@ -205,6 +214,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Timestamp`].
+    #[track_caller]
     pub fn unwrap_timestamp(&self) -> chrono::NaiveDateTime {
         match self {
             Datum::Timestamp(ts) => *ts,
@@ -217,6 +227,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::TimestampTz`].
+    #[track_caller]
     pub fn unwrap_timestamptz(&self) -> chrono::DateTime<Utc> {
         match self {
             Datum::TimestampTz(ts) => *ts,
@@ -229,6 +240,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Interval`].
+    #[track_caller]
     pub fn unwrap_interval(&self) -> Interval {
         match self {
             Datum::Interval(iv) => *iv,
@@ -241,6 +253,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Decimal`].
+    #[track_caller]
     pub fn unwrap_decimal(&self) -> Significand {
         match self {
             Datum::Decimal(d) => *d,
@@ -253,6 +266,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::String`].
+    #[track_caller]
     pub fn unwrap_str(&self) -> &'a str {
         match self {
             Datum::String(s) => s,
@@ -265,6 +279,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Bytes`].
+    #[track_caller]
     pub fn unwrap_bytes(&self) -> &'a [u8] {
         match self {
             Datum::Bytes(b) => b,
@@ -277,6 +292,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Uuid`].
+    #[track_caller]
     pub fn unwrap_uuid(&self) -> Uuid {
         match self {
             Datum::Uuid(u) => *u,
@@ -289,6 +305,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Array`].
+    #[track_caller]
     pub fn unwrap_array(&self) -> Array<'a> {
         match self {
             Datum::Array(array) => *array,
@@ -301,6 +318,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::List`].
+    #[track_caller]
     pub fn unwrap_list(&self) -> DatumList<'a> {
         match self {
             Datum::List(list) => *list,
@@ -313,6 +331,7 @@ impl<'a> Datum<'a> {
     /// # Panics
     ///
     /// Panics if the datum is not [`Datum::Dict`].
+    #[track_caller]
     pub fn unwrap_dict(&self) -> DatumDict<'a> {
         match self {
             Datum::Dict(dict) => *dict,
