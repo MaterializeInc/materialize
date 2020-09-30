@@ -10,14 +10,14 @@
 > SHOW COLUMNS FROM pg_namespace
 Field    Nullable  Type
 --------------------------
-oid      NO        int4
+oid      NO        oid
 nspname  NO        text
 nspowner YES       oid
 
 > SHOW COLUMNS FROM pg_class
 Field        Nullable  Type
 --------------------------
-oid          NO        int4
+oid          NO        oid
 relname      NO        text
-relnamespace NO        text
+relnamespace NO        oid
 relowner     YES       oid

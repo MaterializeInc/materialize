@@ -236,6 +236,7 @@ mz_addresses_with_unit_length
 mz_dataflow_names
 mz_dataflow_operator_dataflows
 mz_materialization_frontiers
+mz_objects
 mz_perf_arrangement_records
 mz_perf_dependency_frontiers
 mz_perf_peek_durations_aggregates
@@ -244,6 +245,7 @@ mz_perf_peek_durations_core
 mz_records_per_dataflow
 mz_records_per_dataflow_global
 mz_records_per_dataflow_operator
+mz_relations
 
 > SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active
