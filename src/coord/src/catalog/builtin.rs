@@ -593,36 +593,12 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     name: "pg_class",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_class AS SELECT
-concatenated.oid,
-relname,
-schema as relnamespace,
-NULL::oid as relowner
-FROM
-  (
-    SELECT oid, tables AS relname, schema_id
-    FROM mz_catalog.mz_tables
-    UNION SELECT oid, sources AS relname, schema_id
-    FROM mz_catalog.mz_sources
-    UNION SELECT oid, sinks AS relname, schema_id
-    FROM mz_catalog.mz_sinks
-    UNION SELECT oid, views AS relname, schema_id
-    FROM mz_catalog.mz_views
-    UNION (SELECT oid, relname, schema_id
-           FROM
-             (
-                SELECT mz_catalog.mz_indexes.oid AS oid, mz_catalog.mz_tables.tables AS relname, mz_catalog.mz_tables.schema_id
-                FROM mz_catalog.mz_indexes
-                JOIN mz_catalog.mz_tables ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_tables.global_id
-                UNION SELECT mz_catalog.mz_indexes.oid AS oid, mz_catalog.mz_sources.sources AS relname, mz_catalog.mz_sources.schema_id
-                FROM mz_catalog.mz_indexes
-                JOIN mz_catalog.mz_sources ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_sources.global_id
-                UNION SELECT mz_catalog.mz_indexes.oid, mz_catalog.mz_views.views AS relname, mz_catalog.mz_views.schema_id
-                FROM mz_catalog.mz_indexes
-                JOIN mz_catalog.mz_views ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_views.global_id
-           )
-           GROUP BY oid, relname, schema_id)
-  ) as concatenated
-JOIN mz_catalog.mz_schemas ON concatenated.schema_id = mz_catalog.mz_schemas.schema_id",
+    mz_objects.oid,
+    name AS relname,
+    mz_schemas.oid AS relnamespace,
+    NULL::oid AS relowner
+FROM mz_catalog.mz_objects
+JOIN mz_catalog.mz_schemas ON mz_schemas.schema_id = mz_objects.schema_id",
     id: GlobalId::System(3015),
 };
 
