@@ -27,6 +27,7 @@ mod catalog;
 mod metrics;
 mod prof;
 mod root;
+mod sql;
 mod util;
 
 const METHODS: &[&[u8]] = &[
@@ -99,6 +100,7 @@ impl Server {
             (&Method::GET, "/status") => self.handle_status(req).boxed(),
             (&Method::GET, "/prof") => self.handle_prof(req).boxed(),
             (&Method::POST, "/prof") => self.handle_prof(req).boxed(),
+            (&Method::POST, "/sql") => self.handle_sql(req).boxed(),
             (&Method::GET, "/internal/catalog") => self.handle_internal_catalog(req).boxed(),
             _ => self.handle_static(req).boxed(),
         });
