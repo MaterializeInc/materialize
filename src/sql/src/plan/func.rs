@@ -337,7 +337,7 @@ impl ParamType {
         let cast_to = match self {
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::Any | ParamType::JsonbAny | ParamType::StringAny => return true,
-            ParamType::ArrayAny => return false,
+            ParamType::ArrayAny => return matches!(from_type, ScalarType::Array(_)),
         };
 
         typeconv::get_cast(from_type, &cast_to).is_some()
@@ -884,6 +884,14 @@ lazy_static! {
             },
             "now" => Scalar {
                 params!() => nullary_op(|ecx| plan_current_timestamp(ecx, "now"))
+            },
+            "obj_description" => Scalar {
+                params!(Oid, String) => binary_op(|_ecx, _oid, _catalog| {
+                    // This function is meant to return the comment on a
+                    // database object, but we don't presently support comments,
+                    // so stubbed out out to always return NULL.
+                    Ok(ScalarExpr::literal_null(ScalarType::String))
+                })
             },
             "pg_get_userbyid" => Scalar {
                 params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'")
