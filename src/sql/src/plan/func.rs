@@ -799,9 +799,17 @@ lazy_static! {
             },
             "current_schemas" => Scalar {
                 params!(Bool) => unary_op(|ecx, e| {
-                    let include_system_schemas = e.into_literal_bool().unwrap();
-                    let datums = ecx.qcx.scx.catalog.search_path(include_system_schemas).iter().map(|s| Datum::String(s)).collect();
-                    ScalarExpr::literal_array(datums, ScalarType::Array(Box::new(ScalarType::String)))
+                    let with_sys = ScalarExpr::literal_1d_array(
+                        ecx.qcx.scx.catalog.search_path(true).iter().map(|s| Datum::String(s)).collect(),
+                        ScalarType::String)?;
+                    let without_sys = ScalarExpr::literal_1d_array(
+                        ecx.qcx.scx.catalog.search_path(false).iter().map(|s| Datum::String(s)).collect(),
+                        ScalarType::String)?;
+                    Ok(ScalarExpr::If {
+                        cond: Box::new(e),
+                        then: Box::new(with_sys),
+                        els: Box::new(without_sys),
+                    })
                 })
             },
             "current_timestamp" => Scalar {

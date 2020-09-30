@@ -826,11 +826,16 @@ impl ScalarExpr {
         ScalarExpr::literal(Datum::Null, scalar_type)
     }
 
-    pub fn literal_array(
+    pub fn literal_1d_array(
         datums: Vec<Datum>,
-        scalar_type: ScalarType,
+        element_scalar_type: ScalarType,
     ) -> Result<ScalarExpr, anyhow::Error> {
-        let nullable = datums.iter().any(|d| d.is_null());
+        let scalar_type = match element_scalar_type {
+            ScalarType::Array(_) => {
+                return Err(anyhow::anyhow!("cannot build array from array type"))
+            }
+            typ => ScalarType::Array(Box::new(typ)).nullable(false),
+        };
 
         let mut packer = RowPacker::new();
         packer.push_array(
@@ -842,7 +847,7 @@ impl ScalarExpr {
         )?;
         let row = packer.finish();
 
-        Ok(ScalarExpr::Literal(row, scalar_type.nullable(nullable)))
+        Ok(ScalarExpr::Literal(row, scalar_type))
     }
 
     pub fn call_unary(self, func: UnaryFunc) -> Self {
@@ -1016,25 +1021,6 @@ impl ScalarExpr {
                 None
             } else {
                 Some(datum.unwrap_str().to_owned())
-            }
-        })
-    }
-
-    /// Attempts to simplify this expression to a literal bool.
-    ///
-    /// Returns `None` if this expression cannot be simplified, e.g. because it
-    /// contains non-literal values.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this expression does not have type [`ScalarType::Bool`].
-    pub fn into_literal_bool(self) -> Option<bool> {
-        self.simplify_to_literal().and_then(|row| {
-            let datum = row.unpack_first();
-            if datum.is_null() {
-                None
-            } else {
-                Some(datum.unwrap_bool().to_owned())
             }
         })
     }

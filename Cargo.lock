@@ -3982,6 +3982,7 @@ dependencies = [
  "ore",
  "parse_duration",
  "pgrepr",
+ "postgres_array",
  "predicates",
  "protobuf",
  "protoc",
