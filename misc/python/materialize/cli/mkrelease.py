@@ -93,8 +93,8 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
     matching = git.first_remote_matching("MaterializeInc/materialize")
     if tag:
         if matching is not None:
-            say("")
-            say(f"To finish the release run: git push {matching} {the_tag}")
+            if ui.confirm(f"\nWould you like me to run: git push {matching} {the_tag}"):
+                spawn.runv(["git", "push", matching, the_tag])
         else:
             say("")
             say(
