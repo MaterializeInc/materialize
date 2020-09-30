@@ -160,7 +160,7 @@ impl AstDisplay for Envelope {
                 }
             }
             Self::CdcV2 => {
-                f.write_str("CDC");
+                f.write_str("MATERIALIZE");
             }
         }
     }
