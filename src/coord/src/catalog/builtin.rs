@@ -576,14 +576,14 @@ UNION
     id: GlobalId::System(3013),
 };
 
-// TODO(benesch): add `nspowner`, and `nspacl` columns.
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_namespace AS SELECT
 oid,
 schema AS nspname,
-NULL::oid AS nspowner
+NULL::oid AS nspowner,
+NULL::text[] AS nspacl
 FROM mz_catalog.mz_schemas",
     id: GlobalId::System(3014),
 };

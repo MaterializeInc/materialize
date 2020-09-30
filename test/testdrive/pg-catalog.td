@@ -13,6 +13,7 @@ Field    Nullable  Type
 oid      NO        oid
 nspname  NO        text
 nspowner YES       oid
+nspacl   YES       _text
 
 > SHOW COLUMNS FROM pg_class
 Field        Nullable  Type
