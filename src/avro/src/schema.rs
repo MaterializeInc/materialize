@@ -339,6 +339,9 @@ impl Schema {
     pub fn lookup(&self, idx: usize) -> &NamedSchemaPiece {
         &self.named[idx]
     }
+    pub fn try_lookup_name(&self, name: &FullName) -> Option<&NamedSchemaPiece> {
+        self.indices.get(name).map(|&idx| &self.named[idx])
+    }
 }
 
 /// This type is used to simplify enum variant comparison between `Schema` and `types::Value`.

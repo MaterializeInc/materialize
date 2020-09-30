@@ -111,12 +111,14 @@ use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::operators::consolidate::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
-use timely::communication::Allocate;
+
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
+
+use timely::communication::Allocate;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
@@ -422,7 +424,7 @@ where
 
                         // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                         // a hypothetical future avro_extract, protobuf_extract, etc.
-                        let stream = decode_values(
+                        let (stream, extra_token) = decode_values(
                             &ok_source,
                             encoding,
                             &self.debug_name,
@@ -430,14 +432,21 @@ where
                             &mut src.operators,
                             fast_forwarded,
                         );
+                        if let Some(tok) = extra_token {
+                            self.additional_tokens
+                                .entry(src_id)
+                                .or_insert_with(Vec::new)
+                                .push(Rc::new(tok));
+                        }
 
                         (stream, capability)
                     };
 
                     let mut collection = match envelope {
-                        Envelope::None => stream.as_collection(),
-                        Envelope::Debezium(_) => {
-                            // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
+                        Envelope::None | Envelope::CdcV2 => stream.as_collection(),
+                        Envelope::Debezium(_) =>
+                        // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
+                        {
                             stream.as_collection().explode({
                                 let mut row_packer = repr::RowPacker::new();
                                 move |row| {
@@ -555,10 +564,14 @@ where
             let err_arranged = err_arranged.enter(region);
             let get_expr = RelationExpr::global_get(idx.on_id, typ.clone());
             self.set_trace(idx_id, &get_expr, &idx.keys, (ok_arranged, err_arranged));
-            self.index_tokens.insert(
-                idx_id,
-                Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
-            );
+            self.additional_tokens
+                .entry(idx_id)
+                .or_insert_with(Vec::new)
+                .push(Rc::new((
+                    ok_button.press_on_drop(),
+                    err_button.press_on_drop(),
+                    token,
+                )));
         } else {
             panic!(
                 "import of index {} failed while building dataflow {}",
@@ -622,9 +635,9 @@ where
     ) {
         // put together tokens that belong to the export
         let mut needed_source_tokens = Vec::new();
-        let mut needed_index_tokens = Vec::new();
+        let mut needed_additional_tokens = Vec::new();
         for import_id in import_ids {
-            if let Some(index_token) = self.index_tokens.get(&import_id) {
+            if let Some(addls) = self.additional_tokens.get(&import_id) {
                 // if let Some(logger) = &mut materialized_logging {
                 //     // Log the dependency.
                 //     logger.log(MaterializedEvent::DataflowDependency {
@@ -632,12 +645,13 @@ where
                 //         source: import_id,
                 //     });
                 // }
-                needed_index_tokens.push(index_token.clone());
-            } else if let Some(source_token) = self.source_tokens.get(&import_id) {
+                needed_additional_tokens.extend_from_slice(addls);
+            }
+            if let Some(source_token) = self.source_tokens.get(&import_id) {
                 needed_source_tokens.push(source_token.clone());
             }
         }
-        let tokens = Rc::new((needed_source_tokens, needed_index_tokens));
+        let tokens = Rc::new((needed_source_tokens, needed_additional_tokens));
         let get_expr = RelationExpr::global_get(idx.on_id, typ.clone());
         match self.arrangement(&get_expr, &idx.keys) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
@@ -667,12 +681,13 @@ where
     ) {
         // put together tokens that belong to the export
         let mut needed_source_tokens = Vec::new();
-        let mut needed_index_tokens = Vec::new();
+        let mut needed_additional_tokens = Vec::new();
         let mut needed_sink_tokens = Vec::new();
         for import_id in import_ids {
-            if let Some(index_token) = self.index_tokens.get(&import_id) {
-                needed_index_tokens.push(index_token.clone());
-            } else if let Some(source_token) = self.source_tokens.get(&import_id) {
+            if let Some(addls) = self.additional_tokens.get(&import_id) {
+                needed_additional_tokens.extend_from_slice(addls);
+            }
+            if let Some(source_token) = self.source_tokens.get(&import_id) {
                 needed_source_tokens.push(source_token.clone());
             }
         }
@@ -713,7 +728,7 @@ where
         let tokens = Rc::new((
             needed_sink_tokens,
             needed_source_tokens,
-            needed_index_tokens,
+            needed_additional_tokens,
         ));
         render_state
             .dataflow_tokens

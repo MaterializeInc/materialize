@@ -133,6 +133,7 @@ pub enum Envelope {
     None,
     Debezium,
     Upsert(Option<Format>),
+    CdcV2,
 }
 
 impl Default for Envelope {
@@ -157,6 +158,9 @@ impl AstDisplay for Envelope {
                     f.write_str(" FORMAT ");
                     f.write_node(format);
                 }
+            }
+            Self::CdcV2 => {
+                f.write_str("MATERIALIZE");
             }
         }
     }

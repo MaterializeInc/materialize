@@ -68,7 +68,11 @@ Wrap your release notes at the 80 character mark.
 - Add the [`lpad`](/sql/functions/#string-func) function, which prepends
   characters to fill a string to a given length.
 
+- Add `ENVELOPE MATERIALIZE`, which implements the [new CDC protocol](https://materialize.io/change-data-capture-part-1/).
+
 {{% version-header v0.4.3 %}}
+<span id="v0.4.3"></span>
+## v0.4.3
 
 - Permit adjusting the logical compaction window on a per-index basis via the
   [`logical_compaction_window`](/sql/alter-index/#available-parameters)

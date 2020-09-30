@@ -89,7 +89,7 @@ pub struct SourceConfig<'a, G> {
     pub persistence_tx: Option<PersistenceSender>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Debug, Deserialize)]
 /// A record produced by a source
 pub struct SourceOutput<K, V>
 where

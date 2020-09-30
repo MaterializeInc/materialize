@@ -1713,6 +1713,19 @@ fn handle_create_source(
             }
             _ => unsupported!("upsert envelope for non-Kafka sources"),
         },
+        sql_parser::ast::Envelope::CdcV2 => {
+            scx.require_experimental_mode("ENVELOPE MATERIALIZE")?;
+            if let Connector::AvroOcf { .. } = connector {
+                // TODO[btv] - there is no fundamental reason not to support this eventually,
+                // but OCF goes through a separate pipeline that it hasn't been implemented for.
+                unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")
+            }
+            match format {
+                Some(Format::Avro(_)) => {}
+                _ => unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
+            }
+            dataflow_types::Envelope::CdcV2
+        }
     };
 
     if let dataflow_types::Envelope::Upsert(key_encoding) = &envelope {

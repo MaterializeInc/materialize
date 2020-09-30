@@ -7,23 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::iter;
+use std::{any::Any, cell::RefCell, collections::VecDeque, iter, rc::Rc, time::Duration};
 
 use anyhow::anyhow;
-use differential_dataflow::hashable::Hashable;
-use timely::dataflow::{
-    channels::pact::{Exchange, ParallelizationContract},
-    channels::pushers::buffer::Session,
-    channels::pushers::Counter as PushCounter,
-    channels::pushers::Tee,
-    operators::{map::Map, Operator},
-    Scope, Stream,
+use differential_dataflow::{capture::YieldingIter, hashable::Hashable};
+use futures::executor::block_on;
+use mz_avro::{AvroDeserializer, GeneralDeserializer};
+use timely::{
+    dataflow::{
+        channels::pact::{Exchange, ParallelizationContract},
+        channels::pushers::buffer::Session,
+        channels::pushers::Counter as PushCounter,
+        channels::pushers::Tee,
+        operators::{map::Map, Operator},
+        Scope, Stream,
+    },
+    scheduling::SyncActivator,
 };
 
 use ::mz_avro::{types::Value, Schema};
 use dataflow_types::LinearOperator;
 use dataflow_types::{DataEncoding, Envelope, RegexEncoding};
-use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair};
+use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState, DiffPair};
 use log::error;
 use repr::Datum;
 use repr::{Diff, Row, RowPacker, Timestamp};
@@ -89,6 +94,7 @@ where
                     }
                 }
                 Envelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
+                Envelope::CdcV2 => unreachable!("CDC envelope is not supported for AvroOCF"),
             }
             .unwrap_or_else(|e| {
                 // TODO(#489): Handle this in a better way,
@@ -393,6 +399,71 @@ where
     })
 }
 
+fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
+    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+    schema: &str,
+    registry: Option<ccsr::ClientConfig>,
+) -> (Stream<G, (Row, Timestamp, Diff)>, Option<Box<dyn Any>>) {
+    let mut resolver = ConfluentAvroResolver::new(schema, registry).unwrap(); // We will have already checked validity of the schema by now, so this can't fail.
+    let channel = Rc::new(RefCell::new(VecDeque::new()));
+    let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
+    let mut vector = Vec::new();
+    stream.sink(
+        SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+        "CDCv2-Decode",
+        {
+            let channel = channel.clone();
+            let activator = activator.clone();
+            move |input| {
+                input.for_each(|_time, data| {
+                    data.swap(&mut vector);
+                    for data in vector.drain(..) {
+                        let (mut data, schema) = match block_on(resolver.resolve(&data.value)) {
+                            Ok(ok) => ok,
+                            Err(e) => {
+                                error!("Failed to get schema info for CDCv2 record: {}", e);
+                                continue;
+                            }
+                        };
+                        let d = GeneralDeserializer {
+                            schema: schema.top_node(),
+                        };
+                        let dec = interchange::avro::cdc_v2::Decoder;
+                        let message = match d.deserialize(&mut data, dec) {
+                            Ok(ok) => ok,
+                            Err(e) => {
+                                error!("Failed to deserialize avro message: {}", e);
+                                continue;
+                            }
+                        };
+                        channel.borrow_mut().push_back(message);
+                    }
+                });
+                if let Some(activator) = activator.borrow_mut().as_mut() {
+                    activator.activate().unwrap()
+                }
+            }
+        },
+    );
+    struct VdIterator<T>(Rc<RefCell<VecDeque<T>>>);
+    impl<T> Iterator for VdIterator<T> {
+        type Item = T;
+        fn next(&mut self) -> Option<T> {
+            self.0.borrow_mut().pop_front()
+        }
+    }
+    let (token, stream) =
+        differential_dataflow::capture::source::build(stream.scope(), move |ac| {
+            *activator.borrow_mut() = Some(ac);
+            YieldingIter::new_from(VdIterator(channel), Duration::from_millis(10))
+        });
+    (stream, Some(token))
+}
+
+/// Decode a stream of values from a stream of bytes.
+/// Returns the corresponding stream of Row/Timestamp/Diff tuples,
+/// and, optionally, a token that can be dropped to stop the decoding operator
+/// (if it isn't automatically stopped by the upstream operator stopping)
 pub fn decode_values<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     encoding: DataEncoding,
@@ -403,7 +474,7 @@ pub fn decode_values<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     fast_forwarded: bool,
-) -> Stream<G, (Row, Timestamp, Diff)>
+) -> (Stream<G, (Row, Timestamp, Diff)>, Option<Box<dyn Any>>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -413,8 +484,15 @@ where
         (_, Envelope::Upsert(_)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
         }
-        (DataEncoding::Csv(enc), Envelope::None) => {
-            csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators)
+        (DataEncoding::Csv(enc), Envelope::None) => (
+            csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators),
+            None,
+        ),
+        (DataEncoding::Avro(enc), Envelope::CdcV2) => {
+            decode_cdcv2(stream, &enc.value_schema, enc.schema_registry_config)
+        }
+        (_, Envelope::CdcV2) => {
+            unreachable!("Internal error: CDCv2 is not supported yet on non-Avro sources.")
         }
         (DataEncoding::Avro(enc), Envelope::Debezium(_)) => {
             // can't get this from the above match arm because:
@@ -423,6 +501,26 @@ where
                 Envelope::Debezium(ds) => *ds,
                 _ => unreachable!(),
             };
+            (
+                decode_values_inner(
+                    stream,
+                    avro::AvroDecoderState::new(
+                        &enc.value_schema,
+                        enc.schema_registry_config,
+                        envelope.get_avro_envelope_type(),
+                        fast_forwarded,
+                        debug_name.to_string(),
+                        worker_index,
+                        Some(dedup_strat),
+                    )
+                    .expect("Failed to create Avro decoder"),
+                    &op_name,
+                    SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
+                ),
+                None,
+            )
+        }
+        (DataEncoding::Avro(enc), envelope) => (
             decode_values_inner(
                 stream,
                 avro::AvroDecoderState::new(
@@ -432,27 +530,13 @@ where
                     fast_forwarded,
                     debug_name.to_string(),
                     worker_index,
-                    Some(dedup_strat),
+                    None,
                 )
                 .expect("Failed to create Avro decoder"),
                 &op_name,
-                SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
-            )
-        }
-        (DataEncoding::Avro(enc), envelope) => decode_values_inner(
-            stream,
-            avro::AvroDecoderState::new(
-                &enc.value_schema,
-                enc.schema_registry_config,
-                envelope.get_avro_envelope_type(),
-                fast_forwarded,
-                debug_name.to_string(),
-                worker_index,
-                None,
-            )
-            .expect("Failed to create Avro decoder"),
-            &op_name,
-            SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+                SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+            ),
+            None,
         ),
         (DataEncoding::AvroOcf { .. }, _) => {
             unreachable!("Internal error: Cannot decode Avro OCF separately from reading")
@@ -461,25 +545,34 @@ where
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
         (DataEncoding::Regex(RegexEncoding { regex }), Envelope::None) => {
-            regex_fn(stream, regex, debug_name)
+            (regex_fn(stream, regex, debug_name), None)
         }
-        (DataEncoding::Protobuf(enc), Envelope::None) => decode_values_inner(
-            stream,
-            protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
-            &op_name,
-            SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+        (DataEncoding::Protobuf(enc), Envelope::None) => (
+            decode_values_inner(
+                stream,
+                protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
+                &op_name,
+                SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+            ),
+            None,
         ),
-        (DataEncoding::Bytes, Envelope::None) => decode_values_inner(
-            stream,
-            OffsetDecoderState::from(bytes_to_datum),
-            &op_name,
-            SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+        (DataEncoding::Bytes, Envelope::None) => (
+            decode_values_inner(
+                stream,
+                OffsetDecoderState::from(bytes_to_datum),
+                &op_name,
+                SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+            ),
+            None,
         ),
-        (DataEncoding::Text, Envelope::None) => decode_values_inner(
-            stream,
-            OffsetDecoderState::from(text_to_datum),
-            &op_name,
-            SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+        (DataEncoding::Text, Envelope::None) => (
+            decode_values_inner(
+                stream,
+                OffsetDecoderState::from(text_to_datum),
+                &op_name,
+                SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+            ),
+            None,
         ),
     }
 }

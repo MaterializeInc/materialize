@@ -285,6 +285,7 @@ define_keywords!(
     LOCATION,
     LOWER,
     MATCH,
+    MATERIALIZE,
     MATERIALIZED,
     MAX,
     MEMBER,

@@ -109,6 +109,7 @@ pub enum EnvelopeType {
     None,
     Debezium,
     Upsert,
+    CdcV2,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -757,7 +758,7 @@ pub fn validate_value_schema(
                                         bail!("Source schema 'before' and 'after' fields should be the same named record.");
                                     }
                                     match schema.lookup(*before_name).piece {
-                                        SchemaPiece::Record { .. } => before_piece,
+                                        SchemaPiece::Record { .. } => node.step(before_piece),
                                         _ => bail!("Source schema 'before' and 'after' fields should contain a record."),
                                     }
                                 }
@@ -780,14 +781,15 @@ pub fn validate_value_schema(
             }
         }
         EnvelopeType::Upsert => match node.inner {
-            SchemaPiece::Record { .. } => &schema.top,
+            SchemaPiece::Record { .. } => schema.top_node(),
             _ => bail!("upsert schema can only be record, got: {:?}", schema.top),
         },
-        EnvelopeType::None => &schema.top,
+        EnvelopeType::CdcV2 => cdc_v2::extract_data_columns(&schema)?,
+        EnvelopeType::None => schema.top_node(),
     };
 
     // The diff envelope is sane. Convert the actual record schema for the row.
-    validate_schema_1(node.step(row_schema))
+    validate_schema_1(row_schema)
 }
 
 fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
@@ -2057,11 +2059,13 @@ impl SchemaCache {
 /// Logic for the Avro representation of the CDCv2 protocol.
 pub mod cdc_v2 {
 
+    use mz_avro::schema::{FullName, SchemaNode};
     use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
     use serde_json::json;
 
     use super::RowWrapper;
 
+    use anyhow::anyhow;
     use avro_derive::AvroDecodeable;
     use differential_dataflow::capture::{Message, Progress};
     use mz_avro::schema::Schema;
@@ -2073,6 +2077,19 @@ pub mod cdc_v2 {
         StatefulAvroDecodeable,
     };
     use std::{cell::RefCell, rc::Rc};
+
+    pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode<'a>> {
+        let data_name = FullName::from_parts("data", Some("com.materialize.cdc"), "");
+        let data_schema = &schema
+            .try_lookup_name(&data_name)
+            .ok_or_else(|| anyhow!("record not found: {}", data_name))?
+            .piece;
+        Ok(SchemaNode {
+            root: &schema,
+            inner: data_schema,
+            name: None,
+        })
+    }
 
     /// Collected state to encode update batches and progress statements.
     #[derive(Debug)]
@@ -2151,7 +2168,7 @@ pub mod cdc_v2 {
     struct MyUpdate {
         #[state_expr(self._STATE.0.clone(), self._STATE.1.clone())]
         data: RowWrapper,
-        timestamp: Timestamp,
+        time: Timestamp,
         diff: Diff,
     }
     #[derive(AvroDecodeable)]
@@ -2192,7 +2209,7 @@ pub mod cdc_v2 {
                             packer.clone(),
                             buf.clone(),
                         ))
-                        .map_decoder(|update| Ok((update.data.0, update.timestamp, update.diff)))
+                        .map_decoder(|update| Ok((update.data.0, update.time, update.diff)))
                     });
                     let updates = deserializer.deserialize(r, d)?;
                     Ok(Message::Updates(updates))
