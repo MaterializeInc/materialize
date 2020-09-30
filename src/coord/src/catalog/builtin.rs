@@ -552,6 +552,16 @@ JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = frontier_s
     id: GlobalId::System(3011),
 };
 
+pub const MZ_RELATIONS: BuiltinView = BuiltinView {
+    name: "mz_relations",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_relations (global_id, oid, schema_id, name, type) AS
+      SELECT global_id, oid, schema_id, tables, 'table' FROM mz_catalog.mz_tables
+UNION SELECT global_id, oid, schema_id, sources, 'source' FROM mz_catalog.mz_sources
+UNION SELECT global_id, oid, schema_id, views, 'view' FROM mz_catalog.mz_views",
+    id: GlobalId::System(3012),
+};
+
 // TODO(benesch): add `nspowner`, and `nspacl` columns.
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     name: "pg_namespace",
@@ -561,7 +571,7 @@ oid,
 schema AS nspname,
 NULL::oid AS nspowner
 FROM mz_catalog.mz_schemas",
-    id: GlobalId::System(3012),
+    id: GlobalId::System(3013),
 };
 
 // TODO(jldlaughlin): add other fields - https://www.postgresql.org/docs/12/catalog-pg-class.html
@@ -599,7 +609,7 @@ FROM
            GROUP BY oid, relname, schema_id)
   ) as concatenated
 JOIN mz_catalog.mz_schemas ON concatenated.schema_id = mz_catalog.mz_schemas.schema_id",
-    id: GlobalId::System(3013),
+    id: GlobalId::System(3014),
 };
 
 lazy_static! {
@@ -643,6 +653,7 @@ lazy_static! {
             Builtin::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
             Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
             Builtin::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
+            Builtin::View(&MZ_RELATIONS),
             Builtin::View(&PG_NAMESPACE),
             Builtin::View(&PG_CLASS),
         ];
