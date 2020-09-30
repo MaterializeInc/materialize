@@ -28,7 +28,10 @@ say = ui.speaker("")
 @click.command()
 @click.argument("version")
 @click.option(
-    "-b", "--create-branch", default=None, help="Create a branch and check it out",
+    "-b",
+    "--create-branch",
+    default=None,
+    help="Create a branch and check it out",
 )
 @click.option("-c", "--checkout", default=None, help="Commit or branch to check out")
 @click.option("--tag/--no-tag", default=True, help="")
@@ -102,8 +105,34 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
             )
     else:
         branch = git.rev_parse("HEAD", abbrev=True)
-        say("")
-        say(f"Create a PR with your branch: '{branch}'")
+        push_default = spawn.capture(
+            ["git", "config", "remote.pushDefault"], unicode=True
+        ).strip()
+        if push_default == matching:
+            say("")
+            say(
+                "Your git pushdefault is MaterializeInc/materialize, consider setting it to your remote."
+            )
+            say("")
+            say(f"Create a PR with your branch: '{branch}'")
+        else:
+            cmd = ["git", "push", push_default, branch]
+            if ui.confirm("\nWould you like me to run: {}".format(" ".join(cmd))):
+                spawn.runv(cmd)
+                if spawn.check_succeeds(["gh", "--help"]):
+                    cmd = [
+                        "gh",
+                        "pr",
+                        "create",
+                        "--base",
+                        "main",
+                        "--fill",
+                    ]
+                    if ui.confirm(
+                        "Would you like me to initialize a PR "
+                        "(will open a browser for finalization)"
+                    ):
+                        spawn.runv(cmd)
 
 
 def change_line(fname: str, line_start: str, replacement: str) -> None:

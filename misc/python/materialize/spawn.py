@@ -63,7 +63,13 @@ def runv(
         stdout = subprocess.PIPE
         stderr = subprocess.PIPE
     return subprocess.run(
-        args, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, check=True, env=env,
+        args,
+        cwd=cwd,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=stderr,
+        check=True,
+        env=env,
     )
 
 
@@ -125,3 +131,12 @@ def capture(
     return subprocess.check_output(  # type: ignore
         args, cwd=cwd, stdin=stdin, universal_newlines=unicode, stderr=stderr
     )
+
+
+def check_succeeds(command: Sequence[Union[Path, str]]) -> bool:
+    """Return True if the command runs without error"""
+    try:
+        capture(command, stderr_too=True)
+    except subprocess.CalledProcessError:
+        return False
+    return True
