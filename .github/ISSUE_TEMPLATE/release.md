@@ -44,18 +44,21 @@ production readiness.
   v0.2.3 would be called v0.2.3-rc1. Use that to run the `bin/mkrelease`
   script:
 
-  ```shell
-  tag=v<VERSION>-rc<N>
-  bin/mkrelease -b rel-$tag $tag
-  git push origin $tag
+  ```console
+  $ tag=v<VERSION>-rc<N>
+  $ bin/mkrelease -b rel-$tag $tag
+  Would you like me to run: git push mz $tag? [y/N]
   ```
 
 - [ ] *After* you have pushed that tag, on `main`, do the same thing for the
   dev version, without creating a tag:
 
-  ```shell
-  next=v<NEXT_VERSION>-dev
-  bin/mkrelease --no-tag -b prepare-$next $next
+  ```console
+  $ next=v<NEXT_VERSION>-dev
+  $ bin/mkrelease --no-tag -b prepare-$next $next
+  Would you like me to run: git push me prepare-$next? [y/N]
+  ...
+  Would you like me to initiate a PR (will open browser for finalization)?
   ```
 
   This must be done after the tag has been pushed, or Git will delete the tag
