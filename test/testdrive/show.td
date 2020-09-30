@@ -242,6 +242,7 @@ mz_addresses_with_unit_length     SYSTEM false
 mz_dataflow_names                 SYSTEM false
 mz_dataflow_operator_dataflows    SYSTEM false
 mz_materialization_frontiers      SYSTEM false
+mz_objects                        SYSTEM false
 mz_perf_arrangement_records       SYSTEM false
 mz_perf_dependency_frontiers      SYSTEM false
 mz_perf_peek_durations_aggregates SYSTEM false
@@ -250,6 +251,7 @@ mz_perf_peek_durations_core       SYSTEM false
 mz_records_per_dataflow           SYSTEM false
 mz_records_per_dataflow_global    SYSTEM false
 mz_records_per_dataflow_operator  SYSTEM false
+mz_relations                      SYSTEM false
 
 # test that information in shows correctly responds to materialization and unmaterialization of views
 
