@@ -288,7 +288,10 @@ where
                 self.report_column_updates(desc, id, 1).await?;
             }
             match item {
-                CatalogItem::Index(index) => self.report_index_update(oid, id, &index, 1).await,
+                CatalogItem::Index(index) => {
+                    self.report_index_update(oid, id, &index, &name.item, 1)
+                        .await
+                }
                 CatalogItem::Table(_) => {
                     tables_to_report.insert(id, oid);
                 }
@@ -1070,12 +1073,14 @@ where
         oid: u32,
         global_id: GlobalId,
         index: &Index,
+        name: &str,
         diff: isize,
     ) {
         self.report_index_update_inner(
             oid,
             global_id,
             index,
+            name,
             index
                 .keys
                 .iter()
@@ -1097,6 +1102,7 @@ where
         oid: u32,
         global_id: GlobalId,
         index: &Index,
+        name: &str,
         nullable: Vec<bool>,
         diff: isize,
     ) {
@@ -1134,6 +1140,7 @@ where
                         expression,
                         Datum::from(nullable),
                         Datum::Int64(seq_in_index),
+                        Datum::String(name),
                     ]),
                     diff,
                 )),
@@ -2409,7 +2416,8 @@ where
                     }
                     match item {
                         CatalogItem::Index(index) => {
-                            self.report_index_update(*oid, *id, &index, 1).await
+                            self.report_index_update(*oid, *id, &index, &name.item, 1)
+                                .await
                         }
                         CatalogItem::Table(_) => {
                             self.report_table_update(*oid, id, *schema_id, &name.item, 1)
@@ -2471,7 +2479,12 @@ where
                             self.report_table_update(*oid, id, *schema_id, &to_name.item, 1)
                                 .await;
                         }
-                        _ => (),
+                        CatalogItem::Index(index) => {
+                            self.report_index_update(*oid, *id, &index, &from_name.item, -1)
+                                .await;
+                            self.report_index_update(*oid, *id, &index, &to_name.item, 1)
+                                .await;
+                        }
                     }
                 }
                 catalog::OpStatus::DroppedDatabase { name, id, oid } => {
@@ -2502,6 +2515,7 @@ where
                             entry.oid(),
                             entry.id(),
                             index,
+                            &entry.name().item,
                             nullable.to_owned(),
                             -1,
                         )
