@@ -15,7 +15,7 @@ $ set schema=[
     "items": {
       "type": "record",
       "name": "update",
-      "namespace": "com.materialize.cdc_v2",
+      "namespace": "com.materialize.cdc",
       "fields": [
         {
           "name": "data",
@@ -51,7 +51,7 @@ $ set schema=[
   {
     "type": "record",
     "name": "progress",
-    "namespace": "com.materialize.cdc_v2",
+    "namespace": "com.materialize.cdc",
     "fields": [
       {
         "name": "lower",
@@ -106,8 +106,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   ENVELOPE MATERIALIZE
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
-{"com.materialize.cdc_v2.progress":{"lower":[0],"upper":[3],"counts":[]}}
-{"com.materialize.cdc_v2.progress":{"lower":[3],"upper":[10],"counts":[{"time":4,"count":1},{"time":5,"count":2}, {"time": 6, "count": 1}]}}
+{"com.materialize.cdc.progress":{"lower":[0],"upper":[3],"counts":[]}}
+{"com.materialize.cdc.progress":{"lower":[3],"upper":[10],"counts":[{"time":4,"count":1},{"time":5,"count":2}, {"time": 6, "count": 1}]}}
 
 > SELECT * FROM data_schema_inline
 id price
