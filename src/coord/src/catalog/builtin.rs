@@ -315,7 +315,8 @@ lazy_static! {
             .with_column("field_number", ScalarType::Int64.nullable(true))
             .with_column("expression", ScalarType::String.nullable(true))
             .with_column("nullable", ScalarType::Bool.nullable(false))
-            .with_column("seq_in_index", ScalarType::Int64.nullable(false)),
+            .with_column("seq_in_index", ScalarType::Int64.nullable(false))
+            .with_column("indexes", ScalarType::String.nullable(false)),
         id: GlobalId::System(2017),
         index_id: GlobalId::System(2018),
     };
