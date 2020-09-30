@@ -103,7 +103,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE MATERIALIZED SOURCE data_schema_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE CDC
+  ENVELOPE MATERIALIZE
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
 {"com.materialize.cdc_v2.progress":{"lower":[0],"upper":[3],"counts":[]}}

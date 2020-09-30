@@ -408,41 +408,39 @@ fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     let channel = Rc::new(RefCell::new(VecDeque::new()));
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
-    let stream = stream.unary::<(), _, _, _>(
+    stream.sink(
         SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
         "CDCv2-Decode",
         {
             let channel = channel.clone();
             let activator = activator.clone();
-            move |_, _| {
-                move |input, _output| {
-                    input.for_each(|_time, data| {
-                        data.swap(&mut vector);
-                        for data in vector.drain(..) {
-                            let (mut data, schema) = match block_on(resolver.resolve(&data.value)) {
-                                Ok(ok) => ok,
-                                Err(e) => {
-                                    error!("Failed to get schema info for CDCv2 record: {}", e);
-                                    continue;
-                                }
-                            };
-                            let d = GeneralDeserializer {
-                                schema: schema.top_node(),
-                            };
-                            let dec = interchange::avro::cdc_v2::Decoder;
-                            let message = match d.deserialize(&mut data, dec) {
-                                Ok(ok) => ok,
-                                Err(e) => {
-                                    error!("Failed to deserialize avro message: {}", e);
-                                    continue;
-                                }
-                            };
-                            channel.borrow_mut().push_back(message);
-                        }
-                    });
-                    if let Some(activator) = activator.borrow_mut().as_mut() {
-                        activator.activate().unwrap()
+            move |input| {
+                input.for_each(|_time, data| {
+                    data.swap(&mut vector);
+                    for data in vector.drain(..) {
+                        let (mut data, schema) = match block_on(resolver.resolve(&data.value)) {
+                            Ok(ok) => ok,
+                            Err(e) => {
+                                error!("Failed to get schema info for CDCv2 record: {}", e);
+                                continue;
+                            }
+                        };
+                        let d = GeneralDeserializer {
+                            schema: schema.top_node(),
+                        };
+                        let dec = interchange::avro::cdc_v2::Decoder;
+                        let message = match d.deserialize(&mut data, dec) {
+                            Ok(ok) => ok,
+                            Err(e) => {
+                                error!("Failed to deserialize avro message: {}", e);
+                                continue;
+                            }
+                        };
+                        channel.borrow_mut().push_back(message);
                     }
+                });
+                if let Some(activator) = activator.borrow_mut().as_mut() {
+                    activator.activate().unwrap()
                 }
             }
         },

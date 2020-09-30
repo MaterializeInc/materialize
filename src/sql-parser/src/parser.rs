@@ -1490,12 +1490,12 @@ impl Parser {
                 None
             };
             Envelope::Upsert(format)
-        } else if self.parse_keyword("CDC") {
+        } else if self.parse_keyword("MATERIALIZE") {
             Envelope::CdcV2
         } else {
             return self.expected(
                 self.peek_range(),
-                "NONE, DEBEZIUM, or UPSERT",
+                "NONE, DEBEZIUM, UPSERT, or MATERIALIZE",
                 self.peek_token(),
             );
         };
