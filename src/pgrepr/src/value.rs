@@ -89,6 +89,7 @@ impl Value {
             (Datum::True, ScalarType::Bool) => Some(Value::Bool(true)),
             (Datum::False, ScalarType::Bool) => Some(Value::Bool(false)),
             (Datum::Int32(i), ScalarType::Int32) => Some(Value::Int4(i)),
+            (Datum::Int32(i), ScalarType::Oid) => Some(Value::Int4(i)),
             (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
