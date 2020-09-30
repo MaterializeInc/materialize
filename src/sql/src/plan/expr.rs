@@ -832,12 +832,14 @@ impl ScalarExpr {
     ) -> Result<ScalarExpr, anyhow::Error> {
         let nullable = datums.iter().any(|d| d.is_null());
 
-        let dims = &[ArrayDimension {
-            lower_bound: 1,
-            length: datums.len(),
-        }];
         let mut packer = RowPacker::new();
-        packer.push_array(dims, datums)?;
+        packer.push_array(
+            &[ArrayDimension {
+                lower_bound: 1,
+                length: datums.len(),
+            }],
+            datums,
+        )?;
         let row = packer.finish();
 
         Ok(ScalarExpr::Literal(row, scalar_type.nullable(nullable)))
