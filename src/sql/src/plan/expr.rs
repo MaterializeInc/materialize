@@ -30,6 +30,7 @@ use crate::plan::Params;
 pub use expr::{
     AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc,
 };
+use repr::adt::array::ArrayDimension;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Just like expr::RelationExpr, except where otherwise noted below.
@@ -825,6 +826,23 @@ impl ScalarExpr {
         ScalarExpr::literal(Datum::Null, scalar_type)
     }
 
+    pub fn literal_array(
+        datums: Vec<Datum>,
+        scalar_type: ScalarType,
+    ) -> Result<ScalarExpr, anyhow::Error> {
+        let nullable = datums.iter().any(|d| d.is_null());
+
+        let dims = &[ArrayDimension {
+            lower_bound: 1,
+            length: datums.len(),
+        }];
+        let mut packer = RowPacker::new();
+        packer.push_array(dims, datums)?;
+        let row = packer.finish();
+
+        Ok(ScalarExpr::Literal(row, scalar_type.nullable(nullable)))
+    }
+
     pub fn call_unary(self, func: UnaryFunc) -> Self {
         ScalarExpr::CallUnary {
             func,
@@ -996,6 +1014,25 @@ impl ScalarExpr {
                 None
             } else {
                 Some(datum.unwrap_str().to_owned())
+            }
+        })
+    }
+
+    /// Attempts to simplify this expression to a literal bool.
+    ///
+    /// Returns `None` if this expression cannot be simplified, e.g. because it
+    /// contains non-literal values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this expression does not have type [`ScalarType::Bool`].
+    pub fn into_literal_bool(self) -> Option<bool> {
+        self.simplify_to_literal().and_then(|row| {
+            let datum = row.unpack_first();
+            if datum.is_null() {
+                None
+            } else {
+                Some(datum.unwrap_bool().to_owned())
             }
         })
     }

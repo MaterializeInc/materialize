@@ -357,6 +357,9 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
             match *ty {
                 Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
                 Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
+                Type::TEXT_ARRAY => row
+                    .get::<_, Option<Vec<String>>>(i)
+                    .map(|a| format!("{{{ }}}", a.join(","))),
                 Type::BYTEA => row.get::<_, Option<Vec<u8>>>(i).map(|x| {
                     let s = x.into_iter().map(ascii::escape_default).flatten().collect();
                     String::from_utf8(s).unwrap()

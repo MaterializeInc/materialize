@@ -797,6 +797,13 @@ lazy_static! {
             "convert_from" => Scalar {
                 params!(Bytes, String) => BinaryFunc::ConvertFrom
             },
+            "current_schemas" => Scalar {
+                params!(Bool) => unary_op(|ecx, e| {
+                    let include_system_schemas = e.into_literal_bool().unwrap();
+                    let datums = ecx.qcx.scx.catalog.search_path(include_system_schemas).iter().map(|s| Datum::String(s)).collect();
+                    ScalarExpr::literal_array(datums, ScalarType::Array(Box::new(ScalarType::String)))
+                })
+            },
             "current_timestamp" => Scalar {
                 params!() => nullary_op(|ecx| plan_current_timestamp(ecx, "current_timestamp"))
             },
