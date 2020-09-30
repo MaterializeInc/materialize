@@ -14,3 +14,6 @@
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(global_id) FROM mz_indexes WHERE global_id LIKE 's%'
 76
+
+> SELECT oid FROM mz_tables ORDER BY oid ASC LIMIT 1
+20031
