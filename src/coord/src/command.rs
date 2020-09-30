@@ -55,6 +55,18 @@ pub enum Command {
 
     /// Remove temporary objects created by a given connection.
     Terminate { conn_id: u32 },
+
+    /// Execute a statement as the system user that is not tied to a session.
+    ///
+    /// This will execute in a pseudo session that is not able to create any
+    /// temporary resources that would normally need to be cleaned up by Terminate.
+    NoSessionExecute {
+        stmt: Statement,
+        params: sql::plan::Params,
+        tx: futures::channel::oneshot::Sender<
+            anyhow::Result<(Option<repr::RelationDesc>, ExecuteResponse)>,
+        >,
+    },
 }
 
 #[derive(Debug)]

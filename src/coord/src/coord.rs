@@ -586,6 +586,35 @@ where
                         }
                     }
                 }
+                Message::Command(Command::NoSessionExecute { stmt, params, tx }) => {
+                    let res = async {
+                        let stmt = sql::pure::purify(stmt).await?;
+                        let catalog = self.catalog.for_system_session();
+                        let (desc, _) = sql::plan::describe(&catalog, stmt.clone(), &[])?;
+                        let pcx = PlanContext::default();
+                        let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
+                        // At time of writing this comment, Peeks use the connection id only for
+                        // logging, so it is safe to reuse the system id, which is the conn_id from
+                        // for_system_session().
+                        let conn_id = catalog.conn_id();
+                        let response = match plan {
+                            Plan::Peek {
+                                source,
+                                when,
+                                finishing,
+                                materialize,
+                            } => {
+                                self.sequence_peek(conn_id, source, when, finishing, materialize)
+                                    .await?
+                            }
+
+                            _ => bail!("unsupported plan"),
+                        };
+                        Ok((desc, response))
+                    }
+                    .await;
+                    let _ = tx.send(res);
+                }
 
                 Message::StatementReady {
                     session,

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Memory{% endblock %}
+
+{% block head %}
+<link href="/css/memory.css" rel="stylesheet">
+
+<script src="https://unpkg.com/react@16/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@16/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+<script src="https://unpkg.com/@hpcc-js/wasm/dist/index.min.js"></script>
+<script src="/js/memory.js" type="text/babel"></script>
+{% endblock %}
+
+{% block content %}
+<div id="content"></div>
+{% endblock %}
