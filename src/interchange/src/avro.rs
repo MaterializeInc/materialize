@@ -2079,7 +2079,7 @@ pub mod cdc_v2 {
     use std::{cell::RefCell, rc::Rc};
 
     pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode<'a>> {
-        let data_name = FullName::from_parts("data", Some("com.materialize.cdc_v2"), "");
+        let data_name = FullName::from_parts("data", Some("com.materialize.cdc"), "");
         let data_schema = &schema
             .try_lookup_name(&data_name)
             .ok_or_else(|| anyhow!("record not found: {}", data_name))?
