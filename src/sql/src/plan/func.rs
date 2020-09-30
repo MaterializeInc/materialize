@@ -337,7 +337,7 @@ impl ParamType {
         let cast_to = match self {
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::Any | ParamType::JsonbAny | ParamType::StringAny => return true,
-            ParamType::ArrayAny => return false,
+            ParamType::ArrayAny => return matches!(from_type, ScalarType::Array(_)),
         };
 
         typeconv::get_cast(from_type, &cast_to).is_some()
