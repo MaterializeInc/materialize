@@ -821,6 +821,21 @@ lazy_static! {
             "convert_from" => Scalar {
                 params!(Bytes, String) => BinaryFunc::ConvertFrom
             },
+            "current_schemas" => Scalar {
+                params!(Bool) => unary_op(|ecx, e| {
+                    let with_sys = ScalarExpr::literal_1d_array(
+                        ecx.qcx.scx.catalog.search_path(true).iter().map(|s| Datum::String(s)).collect(),
+                        ScalarType::String)?;
+                    let without_sys = ScalarExpr::literal_1d_array(
+                        ecx.qcx.scx.catalog.search_path(false).iter().map(|s| Datum::String(s)).collect(),
+                        ScalarType::String)?;
+                    Ok(ScalarExpr::If {
+                        cond: Box::new(e),
+                        then: Box::new(with_sys),
+                        els: Box::new(without_sys),
+                    })
+                })
+            },
             "current_timestamp" => Scalar {
                 params!() => nullary_op(|ecx| plan_current_timestamp(ecx, "current_timestamp"))
             },
