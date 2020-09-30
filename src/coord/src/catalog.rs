@@ -30,7 +30,9 @@ use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
-use crate::catalog::builtin::{Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA};
+use crate::catalog::builtin::{
+    Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+};
 use crate::catalog::error::{Error, ErrorKind};
 use crate::session::Session;
 
@@ -1666,6 +1668,22 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.cluster_id
     }
 
+    fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
+        if include_system_schemas {
+            self.search_path.to_vec()
+        } else {
+            self.search_path
+                .iter()
+                .filter(|s| {
+                    (**s != PG_CATALOG_SCHEMA)
+                        && (**s != MZ_CATALOG_SCHEMA)
+                        && (**s != MZ_TEMP_SCHEMA)
+                })
+                .cloned()
+                .collect()
+        }
+    }
+
     fn default_database(&self) -> &str {
         &self.database
     }
@@ -1721,13 +1739,12 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn experimental_mode(&self) -> bool {
-        self.catalog.experimental_mode
-    }
-
     fn is_queryable(&self, id: GlobalId) -> bool {
         let (_, complete) = self.catalog.nearest_indexes(&[id]);
         complete
+    }
+    fn experimental_mode(&self) -> bool {
+        self.catalog.experimental_mode
     }
 
     fn is_materialized(&self, id: GlobalId) -> bool {

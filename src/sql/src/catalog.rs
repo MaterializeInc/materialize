@@ -62,6 +62,9 @@ pub trait Catalog: fmt::Debug {
     /// Returns a persistent UUID for the the catalog.
     fn cluster_id(&self) -> Uuid;
 
+    /// Returns the search path used by the catalog.
+    fn search_path(&self, include_system_schemas: bool) -> Vec<&str>;
+
     /// Returns the database to use if one is not explicitly specified.
     fn default_database(&self) -> &str;
 
@@ -264,6 +267,10 @@ impl Catalog for DummyCatalog {
 
     fn cluster_id(&self) -> Uuid {
         Uuid::from_u128(0)
+    }
+
+    fn search_path(&self, _: bool) -> Vec<&str> {
+        vec!["dummy"]
     }
 
     fn default_database(&self) -> &str {

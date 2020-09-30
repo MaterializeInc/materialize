@@ -30,6 +30,7 @@ use crate::plan::Params;
 pub use expr::{
     AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc,
 };
+use repr::adt::array::ArrayDimension;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Just like expr::RelationExpr, except where otherwise noted below.
@@ -823,6 +824,30 @@ impl ScalarExpr {
 
     pub fn literal_null(scalar_type: ScalarType) -> ScalarExpr {
         ScalarExpr::literal(Datum::Null, scalar_type)
+    }
+
+    pub fn literal_1d_array(
+        datums: Vec<Datum>,
+        element_scalar_type: ScalarType,
+    ) -> Result<ScalarExpr, anyhow::Error> {
+        let scalar_type = match element_scalar_type {
+            ScalarType::Array(_) => {
+                return Err(anyhow::anyhow!("cannot build array from array type"))
+            }
+            typ => ScalarType::Array(Box::new(typ)).nullable(false),
+        };
+
+        let mut packer = RowPacker::new();
+        packer.push_array(
+            &[ArrayDimension {
+                lower_bound: 1,
+                length: datums.len(),
+            }],
+            datums,
+        )?;
+        let row = packer.finish();
+
+        Ok(ScalarExpr::Literal(row, scalar_type))
     }
 
     pub fn call_unary(self, func: UnaryFunc) -> Self {

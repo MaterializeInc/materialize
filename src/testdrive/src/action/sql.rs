@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use md5::{Digest, Md5};
+use postgres_array::Array;
 use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
 use tokio_postgres::types::Type;
@@ -357,6 +358,9 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
             match *ty {
                 Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
                 Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
+                Type::TEXT_ARRAY => row
+                    .get::<_, Option<Array<String>>>(i)
+                    .map(|a| a.to_string()),
                 Type::BYTEA => row.get::<_, Option<Vec<u8>>>(i).map(|x| {
                     let s = x.into_iter().map(ascii::escape_default).flatten().collect();
                     String::from_utf8(s).unwrap()
