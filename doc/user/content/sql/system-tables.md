@@ -10,6 +10,11 @@ menu:
 Like PostgreSQL's `pg_catalog`, Materialize provides a handful of system tables
 containing up-to-date metadata for a given Materialize instance.
 
+{{< warning >}}
+The system tables are not part of Materialize's stable interface.
+Backwards-incompatible changes to these tables may be made at any time.
+{{< /warning >}}
+
 ## Details
 
 Materialize stores system tables in the `mz_catalog` schema. This schema does not belong

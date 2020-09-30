@@ -3,10 +3,11 @@
     <th>Version</th>
     <th>Release date</th>
     <th>Binary tarball links</th>
+    <th>Supported</th>
   </thead>
 
   <tbody>
-    {{range $_, $version := .Site.Params.Versions}}
+    {{range $i, $version := .Site.Params.Versions}}
       <tr>
         <td>
           <strong><a href="../release-notes/#{{$version.name}}">{{$version.name}}</a></strong>
@@ -17,6 +18,7 @@
           /
           <a href="https://downloads.mtrlz.dev/materialized-{{$version.name}}-x86_64-apple-darwin.tar.gz">macOS</a>
         </td>
+        <td style="text-align: center"><span class="symbol">{{if lt $i 2}}✓{{end}}</span></td>
     {{end}}
   </tbody>
 </table>
