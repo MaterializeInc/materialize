@@ -95,7 +95,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
 }
 
 pub struct Server {
-    inner: materialized::Server,
+    pub inner: materialized::Server,
     _runtime: Runtime,
 }
 
