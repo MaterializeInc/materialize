@@ -19,16 +19,22 @@ use crate::parser::BuiltinCommand;
 pub struct CreateTopicAction {
     topic_prefix: String,
     partitions: i32,
+    compression: String,
 }
 
 pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, String> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let partitions = cmd.args.opt_parse("partitions")?.unwrap_or(1);
+    let compression = cmd
+        .args
+        .opt_string("compression")
+        .unwrap_or_else(|| "producer".into());
     cmd.args.done()?;
 
     Ok(CreateTopicAction {
         topic_prefix,
         partitions,
+        compression,
     })
 }
 
@@ -146,7 +152,8 @@ impl Action for CreateTopicAction {
             // deletion by Kafka's garbage collector. E.g., the timestamp
             // "1" is interpreted as January 1, 1970 00:00:01, which is
             // breaches the default 7-day retention policy.
-            .set("retention.ms", "-1");
+            .set("retention.ms", "-1")
+            .set("compression.type", &self.compression);
         kafka_util::admin::create_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
             .await
             .map_err(|e| e.to_string())?;
