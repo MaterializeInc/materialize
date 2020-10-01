@@ -52,7 +52,7 @@ async fn run() -> Result<()> {
     let mz_config = config.mz_config();
 
     log::info!(
-        "starting up message_count={} mzd={}:{} kafka={} preserve_source={} start_time={} seed={}",
+        "starting up message_count={} mzd={}:{} kafka={} preserve_source={} start_time={} seed={} enable_persistence={}",
         config.message_count,
         config.materialized_host,
         config.materialized_port,
@@ -60,6 +60,7 @@ async fn run() -> Result<()> {
         config.preserve_source,
         k_config.start_time.to_rfc3339(),
         k_config.seed,
+        mz_config.enable_persistence,
     );
 
     let mz_client = mz_client::client(&mz_config.host, mz_config.port).await?;
@@ -168,6 +169,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
             &config.kafka_topic,
             config::KAFKA_SOURCE_NAME,
             "billing.Batch",
+            config.enable_persistence,
         )
         .await?;
 

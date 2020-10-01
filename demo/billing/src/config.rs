@@ -100,6 +100,10 @@ pub struct Args {
     /// Replication factor for the source topic. Has to be specified if --create-topic is true.
     #[structopt(long, requires("create-topic"))]
     replication_factor: Option<i32>,
+
+    // Whether or not to enable persistence for input Kafka sources
+    #[structopt(long)]
+    enable_persistence: bool,
 }
 
 impl Args {
@@ -150,6 +154,7 @@ impl Args {
             low_memory: self.low_memory,
             seed: self.seed,
             check_sink: self.check_sink,
+            enable_persistence: self.enable_persistence,
         }
     }
 
@@ -188,4 +193,5 @@ pub struct MzConfig {
     pub low_memory: bool,
     pub seed: u64,
     pub check_sink: bool,
+    pub enable_persistence: bool,
 }

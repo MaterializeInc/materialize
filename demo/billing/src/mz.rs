@@ -25,14 +25,23 @@ pub async fn create_proto_source(
     kafka_topic_name: &str,
     source_name: &str,
     message_name: &str,
+    enable_persistence: bool,
 ) -> Result<()> {
     let encoded = hex::encode(descriptor);
+
+    let enable_persistence_str = if enable_persistence {
+        "WITH (persistence = true)"
+    } else {
+        ""
+    };
+
     let query = format!(
         "CREATE SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
-         FORMAT PROTOBUF MESSAGE '{message}' USING SCHEMA '\\x{descriptor}'",
+         {persistence} FORMAT PROTOBUF MESSAGE '{message}' USING SCHEMA '\\x{descriptor}'",
         descriptor = encoded,
         kafka_url = kafka_url,
         topic = kafka_topic_name,
+        persistence = enable_persistence_str,
         source = source_name,
         message = message_name,
     );
@@ -256,6 +265,22 @@ FROM
 WHERE
     billing_agg_by_month.client_id = billing_prices.client_id AND billing_agg_by_month.meter = 'execution_time_ms'"
         .to_string(),
+    "CREATE MATERIALIZED VIEW billing_top_5_months_per_client AS
+SELECT
+    client_id,
+    month,
+    execution_time_ms,
+    monthly_bill,
+    cpu_num,
+    memory_gb
+FROM
+    (SELECT DISTINCT client_id FROM billing_monthly_statement) grp,
+    LATERAL
+        (SELECT month, execution_time_ms, monthly_bill, cpu_num, memory_gb
+            FROM
+                billing_monthly_statement
+            WHERE client_id = grp.client_id
+            ORDER BY monthly_bill DESC LIMIT 5)".to_string(),
     ];
 
     for v in views.iter() {
