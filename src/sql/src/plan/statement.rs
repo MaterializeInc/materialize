@@ -254,9 +254,12 @@ pub fn describe_statement(
             (Some(desc), scx.finalize_param_types()?)
         }
         Statement::Insert(InsertStatement {
-            table_name, source, ..
+            table_name,
+            columns,
+            source,
+            ..
         }) => {
-            query::plan_insert_query(&scx, table_name, source)?;
+            query::plan_insert_query(&scx, table_name, columns, source)?;
             (None, scx.finalize_param_types()?)
         }
 
@@ -2037,11 +2040,7 @@ fn handle_insert(
     }: InsertStatement,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    if !columns.is_empty() {
-        unsupported!("INSERT statement with specified columns");
-    }
-
-    let (id, mut expr) = query::plan_insert_query(scx, table_name, source)?;
+    let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
     expr.bind_parameters(&params)?;
     let expr = expr.decorrelate();
 
