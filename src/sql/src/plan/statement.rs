@@ -31,6 +31,7 @@ use dataflow_types::{
 use expr::{GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
+use ore::iter::IteratorExt;
 use repr::{strconv, Datum, RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
@@ -1820,6 +1821,10 @@ fn handle_create_table(
         .iter()
         .map(|c| Some(normalize::column_name(c.name.clone())))
         .collect();
+
+    if names.iter().has_duplicates() {
+        bail!("cannot CREATE TABLE with duplicate column names");
+    }
 
     // Build initial relation type that handles declared data types
     // and NOT NULL constraints.
