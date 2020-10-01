@@ -17,7 +17,7 @@ steps:
     concurrency_group: deploy/devsite
 
   - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.deploy.linux
-    timeout_in_minutes: 10
+    timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/linux
 
