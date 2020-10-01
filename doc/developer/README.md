@@ -28,6 +28,9 @@ land, and then browsed as reference material as you skill up on the codebase.
 * [debugging.md](debugging.md) is a guide to debugging Materialize using
   rust-gdb / rust-lldb.
 
+* [demos.md](demos.md) explains the two tiers of demos in this codebase and
+  how to add a new one.
+
 * [guide.md](guide.md) walks you through hacking on this codebase and our
   development philosophy.
 
