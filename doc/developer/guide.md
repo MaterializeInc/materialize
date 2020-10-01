@@ -120,8 +120,7 @@ access token for use with HTTPS][github-https].
 ## Prepping Confluent
 
 Like we mentioned above, you need to have a few Confluent services running to
-get Materialize to work. To prep what you need (for the [demo], at least), run
-the following:
+get Materialize to work. To prep what you need, run the following:
 
 ```shell
 confluent local start kafka     # Also starts zookeeper
@@ -142,8 +141,6 @@ Putting your computer to sleep often causes the service status to get out of
 sync. In other words, trust the output of `confluent local log` and `ps ... |
 grep` over the output of `confluent local status`. Still, it's reliable enough
 to be more convenient than managing each service manually.
-
-[demo](demo.md)
 
 ## Symbiosis mode
 
