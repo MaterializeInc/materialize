@@ -16,6 +16,15 @@ Materialize supports integration with monitoring tools using HTTP endpoints.
 
 ## Quick monitoring dashboard
 
+{{< warning >}}
+The monitoring dashboard is provided on a best-effort basis. It relies on
+Materialize's unstable [Prometheus metrics](#prometheus) and occasionally lags
+behind changes to these metrics.
+
+For best results, use only the latest version of the dashboard with the latest
+version of Materialize.
+{{< /warning >}}
+
 Materialize provides a recommended Grafana dashboard and an all-inclusive Docker image
 preconfigured to run it as [`materialize/dashboard`][simplemon-hub].
 
@@ -96,10 +105,20 @@ docker run --network host -e MATERIALIZED_URL=localhost:6875 materialize/dashboa
 
 ## Health check
 
+{{< warning >}}
+The health check is not part of Materialize's stable interface.
+Backwards-incompatible changes to the health check may be made at any time.
+{{< /warning >}}
+
 Materialize supports a minimal health check endpoint at `<materialized
 host>/status`.
 
 ## Prometheus
+
+{{< warning >}}
+The Prometheus metrics are not part of Materialize's stable interface.
+Backwards-incompatible changes to the exposed metrics may be made at any time.
+{{< /warning >}}
 
 Materialize exposes [Prometheus](https://prometheus.io/) metrics at the default
 path, `<materialized host>/metrics`.
