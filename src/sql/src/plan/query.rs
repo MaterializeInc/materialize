@@ -21,7 +21,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::iter;
 use std::mem;
@@ -109,6 +109,7 @@ pub fn plan_root_query(
 pub fn plan_insert_query(
     scx: &StatementContext,
     table_name: ObjectName,
+    columns: Vec<Ident>,
     source: InsertSource,
 ) -> Result<(GlobalId, RelationExpr), anyhow::Error> {
     let name = scx.resolve_item(table_name)?;
@@ -143,11 +144,42 @@ pub fn plan_insert_query(
             && fetch.is_none() =>
         {
             transform_ast::transform_values(scx, &mut values)?;
-            let type_hints = Some(desc.iter_types().map(|typ| &typ.scalar_type).collect());
+            let type_hints = desc.iter_types().map(|typ| &typ.scalar_type).collect();
             let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-            let (expr, _scope) = plan_values(&qcx, &values.0, type_hints)?;
-            let typ = qcx.relation_type(&expr);
-            (expr, typ)
+
+            if columns.is_empty() {
+                let (expr, _scope) = plan_values(&qcx, &values.0, Some(type_hints))?;
+                let typ = qcx.relation_type(&expr);
+                (expr, typ)
+            } else if columns.len() < desc.arity() {
+                unsupported!("INSERT statement with incomplete column set")
+            } else {
+                let column_to_index: HashMap<&str, usize> = desc
+                    .iter_names()
+                    .filter_map(|x| x)
+                    .enumerate()
+                    .map(|(idx, name)| (name.as_str(), idx))
+                    .collect();
+
+                let mut ordering = Vec::with_capacity(columns.len());
+                for c in &columns {
+                    if let Some(idx) = column_to_index.get(c.as_str()) {
+                        ordering.push(*idx);
+                    } else {
+                        bail!(
+                            "INSERT statement specified column {}, but it is not present in table",
+                            c.as_str(),
+                        );
+                    }
+                }
+
+                let type_hints_projected = ordering.iter().map(|idx| type_hints[*idx]).collect();
+
+                let (expr, _scope) = plan_values(&qcx, &values.0, Some(type_hints_projected))?;
+                let expr = expr.project(ordering);
+                let typ = qcx.relation_type(&expr);
+                (expr, typ)
+            }
         }
         InsertSource::Query(..) => unsupported!("complicated INSERT bodies"),
         InsertSource::DefaultValues => unsupported!("INSERT ... DEFAULT VALUES"),
@@ -158,8 +190,8 @@ pub fn plan_insert_query(
     if typ.arity() != desc.arity() {
         bail!(
             "INSERT statement specifies {} columns, but table has {} columns",
-            desc.arity(),
             typ.arity(),
+            desc.arity(),
         );
     }
     for ((name, exp_typ), typ) in desc.iter().zip(&typ.column_types) {
@@ -1752,7 +1784,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
 /// order as the input, where each expression has the appropriate casts to make
 /// them all of a uniform type.
 ///
-/// Note that this is our implementation of Postres' type conversion for
+/// Note that this is our implementation of Postgres' type conversion for
 /// ["`UNION`, `CASE`, and Related Constructs"][union-type-conv], though it isn't
 /// yet used in all of those cases.
 ///
