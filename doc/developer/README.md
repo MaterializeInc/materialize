@@ -34,9 +34,9 @@ land, and then browsed as reference material as you skill up on the codebase.
   Several sections of the guide are important enough to warrant their own
   documents:
 
-  * [guide-demo.md](guide-demo.md) contains instructions for running a simple
-    Materialize demo locally.
-  * [guide-testing.md](guide-testing.md) describe our various test suites and
+  * [guide-changes.md](guide-changes.md) describes practices and expectations for
+    committing and reviewing code.
+  * [guide-testing.md](guide-testing.md) describes our various test suites and
     our testing philosophy.
 
 * [metabase-demo.md](metabase-demo.md) contains instructions for setting up and
