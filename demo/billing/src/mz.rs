@@ -256,6 +256,22 @@ FROM
 WHERE
     billing_agg_by_month.client_id = billing_prices.client_id AND billing_agg_by_month.meter = 'execution_time_ms'"
         .to_string(),
+    "CREATE MATERIALIZED VIEW billing_top_5_months_per_client AS
+SELECT
+    client_id,
+    month,
+    execution_time_ms,
+    monthly_bill,
+    cpu_num,
+    memory_gb
+FROM
+    (SELECT DISTINCT client_id FROM billing_monthly_statement) grp,
+    LATERAL
+        (SELECT month, execution_time_ms, monthly_bill, cpu_num, memory_gb
+            FROM
+                billing_monthly_statement
+            WHERE client_id = grp.client_id
+            ORDER BY monthly_bill DESC LIMIT 5)".to_string(),
     ];
 
     for v in views.iter() {
