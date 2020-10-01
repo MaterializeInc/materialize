@@ -55,6 +55,12 @@ def speaker(prefix: str, for_progress: bool = False) -> Callable[..., None]:
     return say
 
 
+def confirm(question: str) -> bool:
+    """Render a question, returning True if the user says y or yes"""
+    response = input(f"{question} [y/N]")
+    return response.lower() in ("y", "yes")
+
+
 def progress(
     msg: str = "", prefix: Optional[str] = None, *, finish: bool = False
 ) -> None:
