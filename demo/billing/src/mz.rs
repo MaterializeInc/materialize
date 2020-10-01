@@ -25,14 +25,23 @@ pub async fn create_proto_source(
     kafka_topic_name: &str,
     source_name: &str,
     message_name: &str,
+    enable_persistence: bool,
 ) -> Result<()> {
     let encoded = hex::encode(descriptor);
+
+    let enable_persistence_str = if enable_persistence {
+        "WITH (persistence = true)"
+    } else {
+        ""
+    };
+
     let query = format!(
         "CREATE SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
-         FORMAT PROTOBUF MESSAGE '{message}' USING SCHEMA '\\x{descriptor}'",
+         {persistence} FORMAT PROTOBUF MESSAGE '{message}' USING SCHEMA '\\x{descriptor}'",
         descriptor = encoded,
         kafka_url = kafka_url,
         topic = kafka_topic_name,
+        persistence = enable_persistence_str,
         source = source_name,
         message = message_name,
     );
