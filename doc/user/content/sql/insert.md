@@ -66,6 +66,20 @@ SELECT * FROM t;
 In the above example, the second tuple provides a `NULL` value for column `a`, which
 is nullable. `NULL` values may not be inserted into column `b`, which is not nullable.
 
+You may also insert data using a column specification.
+
+```sql
+CREATE TABLE t (a int, b text NOT NULL);
+
+INSERT INTO t (b, a) VALUES ('a', 1), ('b', NULL);
+
+SELECT * FROM t;
+ a | b
+---+---
+   | b
+ 1 | a
+```
+
 ## Related pages
 
 - [`CREATE TABLE`](../create-table)

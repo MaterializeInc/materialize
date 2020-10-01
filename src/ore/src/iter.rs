@@ -27,7 +27,8 @@ where
     where
         Self::Item: Hash + Eq,
     {
-        let mut seen = HashSet::new();
+        let (lower, _) = self.size_hint();
+        let mut seen = HashSet::with_capacity(lower);
         for item in self {
             if !seen.insert(item) {
                 return true;

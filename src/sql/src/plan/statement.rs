@@ -31,6 +31,7 @@ use dataflow_types::{
 use expr::{GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
+use ore::iter::IteratorExt;
 use repr::{strconv, Datum, RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
@@ -254,9 +255,12 @@ pub fn describe_statement(
             (Some(desc), scx.finalize_param_types()?)
         }
         Statement::Insert(InsertStatement {
-            table_name, source, ..
+            table_name,
+            columns,
+            source,
+            ..
         }) => {
-            query::plan_insert_query(&scx, table_name, source)?;
+            query::plan_insert_query(&scx, table_name, columns, source)?;
             (None, scx.finalize_param_types()?)
         }
 
@@ -1818,6 +1822,10 @@ fn handle_create_table(
         .map(|c| Some(normalize::column_name(c.name.clone())))
         .collect();
 
+    if names.iter().has_duplicates() {
+        bail!("cannot CREATE TABLE with duplicate column names");
+    }
+
     // Build initial relation type that handles declared data types
     // and NOT NULL constraints.
     let typ = RelationType::new(
@@ -2037,11 +2045,7 @@ fn handle_insert(
     }: InsertStatement,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    if !columns.is_empty() {
-        unsupported!("INSERT statement with specified columns");
-    }
-
-    let (id, mut expr) = query::plan_insert_query(scx, table_name, source)?;
+    let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
     expr.bind_parameters(&params)?;
     let expr = expr.decorrelate();
 
