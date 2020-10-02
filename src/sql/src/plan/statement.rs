@@ -1353,7 +1353,7 @@ fn handle_drop_database(
     DropDatabaseStatement { name, if_exists }: DropDatabaseStatement,
 ) -> Result<Plan, anyhow::Error> {
     let name = match scx.resolve_database_ident(name) {
-        Ok(name) => name,
+        Ok((name, _id)) => name,
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the database
             // does not exist.
@@ -1662,10 +1662,10 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn resolve_default_database(&self) -> Result<DatabaseSpecifier, PlanError> {
+    pub fn resolve_default_database(&self) -> Result<(String, i64), PlanError> {
         let name = self.catalog.default_database();
-        self.catalog.resolve_database(name)?;
-        Ok(DatabaseSpecifier::Name(name.into()))
+        let id = self.catalog.resolve_database(name)?;
+        Ok((name.into(), id))
     }
 
     pub fn resolve_default_schema(&self) -> Result<SchemaSpecifier, PlanError> {
@@ -1674,17 +1674,17 @@ impl<'a> StatementContext<'a> {
             .1)
     }
 
-    pub fn resolve_database(&self, name: ObjectName) -> Result<String, PlanError> {
+    pub fn resolve_database(&self, name: ObjectName) -> Result<(String, i64), PlanError> {
         if name.0.len() != 1 {
             return Err(PlanError::OverqualifiedDatabaseName(name.to_string()));
         }
         self.resolve_database_ident(name.0.into_element())
     }
 
-    pub fn resolve_database_ident(&self, name: Ident) -> Result<String, PlanError> {
+    pub fn resolve_database_ident(&self, name: Ident) -> Result<(String, i64), PlanError> {
         let name = normalize::ident(name);
-        self.catalog.resolve_database(&name)?;
-        Ok(name)
+        let id = self.catalog.resolve_database(&name)?;
+        Ok((name, id))
     }
 
     pub fn resolve_schema(
