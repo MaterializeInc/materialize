@@ -106,7 +106,7 @@ impl PredicatePushdown {
                 // but we are not yet able to delete them from the `Filter`.
                 get_predicates
                     .entry(*id)
-                    .or_insert_with(|| HashSet::new())
+                    .or_insert_with(HashSet::new)
                     .clear();
             }
             x => {
@@ -454,7 +454,7 @@ impl PredicatePushdown {
             RelationExpr::Get { id, .. } => {
                 get_predicates
                     .entry(*id)
-                    .or_insert_with(|| HashSet::new())
+                    .or_insert_with(HashSet::new)
                     .clear();
             }
             x => {
