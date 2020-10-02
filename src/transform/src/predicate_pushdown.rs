@@ -99,11 +99,12 @@ impl PredicatePushdown {
                         .entry(id)
                         .or_insert_with(|| predicates.iter().cloned().collect())
                         .retain(|p| predicates.contains(p));
+                } else {
+                    input.visit1_mut(|e| self.dataflow_transform(e, get_predicates));
                 }
             }
             RelationExpr::Get { id, .. } => {
-                // We can report the predicates upward in `get_predicates`,
-                // but we are not yet able to delete them from the `Filter`.
+                // Purge all predicates associated with the id.
                 get_predicates
                     .entry(*id)
                     .or_insert_with(HashSet::new)
@@ -119,14 +120,27 @@ impl PredicatePushdown {
         }
     }
 
-    /// Single node predicate pushdown
+    /// Predicate pushdown
+    ///
+    /// This method looks for opportunities to push predicates toward
+    /// sources of data. Primarily, this is the `Filter` expression,
+    /// and moving its predicates through the operators it contains.
+    ///
+    /// In addition, the method accumulates the intersection of predicates
+    /// applied to each `Get` expression, so that the predicate can
+    /// in principle be pushed through to a `Let` binding, or to the
+    /// external source of the data if the `Get` binds to another view.
     fn action(
         &self,
         relation: &mut RelationExpr,
         get_predicates: &mut HashMap<Id, HashSet<ScalarExpr>>,
     ) {
+        // In the case of Filter or Get we have specific work to do;
+        // otherwise we should recursively descend.
         match relation {
             RelationExpr::Filter { input, predicates } => {
+                // Depending on the type of `input` we have different
+                // logic to apply to consider pushing `predicates` down.
                 match &mut **input {
                     RelationExpr::Let { id, value, body } => {
                         // Push all predicates to the body.
@@ -134,27 +148,20 @@ impl PredicatePushdown {
                             .take_dangerous()
                             .filter(std::mem::replace(predicates, Vec::new()));
 
-                        // A `Let` binding wants to push all predicates down in
-                        // `body`, and collect the intersection of those pushed
-                        // at `Get` statements. The intersection can be pushed
-                        // down to `value`.
+                        // Push predicates and collect intersection at `Get`s.
                         self.action(body, get_predicates);
-                        if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
-                            // `list` contains the intersection of predicates.
-                            body.visit_mut(&mut |e| {
-                                if let RelationExpr::Filter { input, predicates } = e {
-                                    if let RelationExpr::Get { id: id2, .. } = **input {
-                                        if id2 == Id::Local(*id) {
-                                            predicates.retain(|p| !list.contains(p));
-                                        }
-                                    }
-                                }
-                            });
 
-                            **value = value.take_dangerous().filter(list);
+                        // `get_predicates` should now contain the intersection
+                        // of predicates at each *use* of the binding. If it is
+                        // non-empty, we can move those predicates to the value.
+                        if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
+                            if !list.is_empty() {
+                                **value = value.take_dangerous().filter(list);
+                            }
                         }
-                        // The pre-order optimization will process `value` and
-                        // then (unnecessarily, I think) reconsider `body`.
+
+                        // Continue recursively on the value.
+                        self.action(value, get_predicates);
                     }
                     RelationExpr::Get { id, .. } => {
                         // We can report the predicates upward in `get_predicates`,
@@ -306,6 +313,12 @@ impl PredicatePushdown {
                             .collect();
 
                         *inputs = new_inputs;
+
+                        // Recursively descend on each of the inputs.
+                        for input in inputs.iter_mut() {
+                            self.action(input, get_predicates);
+                        }
+
                         if retain.is_empty() {
                             *relation = (**input).clone();
                         } else {
@@ -358,6 +371,8 @@ impl PredicatePushdown {
                         if !push_down.is_empty() {
                             *inner = Box::new(inner.take_dangerous().filter(push_down));
                         }
+                        self.action(inner, get_predicates);
+
                         if !retain.is_empty() {
                             *predicates = retain;
                         } else {
@@ -377,6 +392,8 @@ impl PredicatePushdown {
                             .take_dangerous()
                             .filter(predicates)
                             .project(outputs.clone());
+
+                        self.action(relation, get_predicates);
                     }
                     RelationExpr::Filter {
                         input,
@@ -388,6 +405,7 @@ impl PredicatePushdown {
                                 .into_iter()
                                 .chain(predicates2.clone().into_iter()),
                         );
+                        self.action(relation, get_predicates);
                     }
                     RelationExpr::Map { input, scalars } => {
                         // In the case of a Filter { Map {...} }, we can always push down the Filter
@@ -432,6 +450,7 @@ impl PredicatePushdown {
                         if !pushdown.is_empty() {
                             result = result.filter(pushdown);
                         }
+                        self.action(&mut result, get_predicates);
                         result = result.map(scalars);
                         if !retained.is_empty() {
                             result = result.filter(retained);
@@ -442,22 +461,28 @@ impl PredicatePushdown {
                         *base = Box::new(base.take_dangerous().filter(predicates.clone()));
                         for input in inputs {
                             *input = input.take_dangerous().filter(predicates.clone());
+                            self.action(input, get_predicates);
                         }
                     }
                     RelationExpr::Negate { input: inner } => {
                         let predicates = std::mem::replace(predicates, Vec::new());
                         *relation = inner.take_dangerous().filter(predicates).negate();
+                        self.action(relation, get_predicates);
                     }
-                    _ => (),
+                    x => {
+                        x.visit1_mut(|e| self.action(e, get_predicates));
+                    }
                 }
             }
             RelationExpr::Get { id, .. } => {
+                // Purge all predicates associated with the id.
                 get_predicates
                     .entry(*id)
                     .or_insert_with(HashSet::new)
                     .clear();
             }
             x => {
+                // Recursively descend.
                 x.visit1_mut(|e| self.action(e, get_predicates));
             }
         }
