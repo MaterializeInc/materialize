@@ -46,7 +46,6 @@ pub use crate::catalog::config::Config;
 
 const SYSTEM_CONN_ID: u32 = 0;
 
-pub const AMBIENT_DATABASE_ID: i64 = -1;
 pub const AMBIENT_SCHEMA_ID: i64 = -1;
 
 // TODO@jldlaughlin: Better assignment strategy for system type OIDs.
