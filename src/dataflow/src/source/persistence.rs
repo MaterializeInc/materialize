@@ -22,6 +22,7 @@ use futures::sink::Sink;
 use log::error;
 use repr::PersistedRecord;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::server::PersistenceMessage;
 
@@ -33,6 +34,8 @@ pub type PersistenceSender = Pin<Box<dyn Sink<PersistenceMessage, Error = comm::
 /// Describes what is provided from a persisted file.
 #[derive(Debug)]
 pub struct RecordFileMetadata {
+    /// The cluster id of the Materialize instance that wrote this file.
+    pub cluster_id: Uuid,
     /// The source global ID this file represents.
     pub source_id: GlobalId,
     /// The partition ID this file represents.
@@ -74,7 +77,7 @@ impl RecordFileMetadata {
 
         let parts: Vec<_> = file_name.split('-').collect();
 
-        if parts.len() != 5 {
+        if parts.len() != 6 {
             // File is either partially written, or entirely irrelevant.
             error!(
                 "Found invalid persistence file name: {}. Ignoring",
@@ -83,17 +86,19 @@ impl RecordFileMetadata {
             return Ok(None);
         }
         Ok(Some(Self {
-            source_id: parts[1].parse()?,
-            partition_id: parts[2].parse()?,
+            cluster_id: Uuid::parse_str(parts[1])?,
+            source_id: parts[2].parse()?,
+            partition_id: parts[3].parse()?,
             // Here we revert the transformation we made to convert this to a 0-indexed
             // offset in `generate_file_name`.
-            start_offset: parts[3].parse::<i64>()? + 1,
-            end_offset: parts[4].parse()?,
+            start_offset: parts[4].parse::<i64>()? + 1,
+            end_offset: parts[5].parse()?,
         }))
     }
 
     /// Generate a file name that can later be parsed into metadata.
     pub fn generate_file_name(
+        cluster_id: Uuid,
         source_id: GlobalId,
         partition_id: i32,
         start_offset: i64,
@@ -110,8 +115,9 @@ impl RecordFileMetadata {
             "start offset has to be a valid 1-indexed offset"
         );
         format!(
-            "{}-{}-{}-{}-{}",
+            "{}-{}-{}-{}-{}-{}",
             RECORD_FILE_PREFIX,
+            cluster_id.to_simple(),
             source_id,
             partition_id,
             start_offset - 1,

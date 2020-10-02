@@ -2699,6 +2699,7 @@ where
                         match crate::persistence::augment_connector(
                             source.connector.clone(),
                             path.clone(),
+                            self.catalog.cluster_id(),
                             *id,
                         ) {
                             Ok(Some(connector)) => Some(connector),
@@ -2916,7 +2917,7 @@ where
             if connector.persistence_enabled() {
                 if let Some(persistence_tx) = &mut self.persistence_tx {
                     persistence_tx
-                        .send(PersistenceMessage::AddSource(id))
+                        .send(PersistenceMessage::AddSource(self.catalog.cluster_id(), id))
                         .await
                         .expect("failed to send CREATE SOURCE notification to persistence thread");
                 } else {
