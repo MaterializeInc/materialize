@@ -194,8 +194,6 @@ async fn run_stream() -> Result<(), anyhow::Error> {
         }
     };
 
-    //let byo = opts.opt_present("byo");
-
     let topic_configs: Result<Vec<_>, _> = opts
         .opt_strs("topic-property")
         .into_iter()
@@ -287,15 +285,6 @@ async fn run_stream() -> Result<(), anyhow::Error> {
                                     key.as_bytes(),
                                     value.map(|v| v.as_bytes().to_owned()),
                                 )?;
-                                /*if byo {
-                                    state.ingest_consistency(
-                                        &consistency_name,
-                                        &topic_name,
-                                        timestamp,
-                                        timestamp + 1,
-                                    )?;
-                                }
-                                timestamp += 1;*/
                             }
                             old_len = 0;
                             pos += len as u64;
