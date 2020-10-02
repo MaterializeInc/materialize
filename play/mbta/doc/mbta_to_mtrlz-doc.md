@@ -3,7 +3,7 @@
 Run the mbtaupsert binary with `-h`, `--help`, or no options at all to see usage.
 
 The binary supports using either:
-1. a demo config file [see here](../demo/README.md), which is passed in with the
+1. a demo config file ([see here])(mbta-setup.md#config-file-creation), which is passed in with the
    `-c` command line argument. The config file allows the binary to convert multiple
    logs containing MBTA stream data into Kafka streams. The config file assumes
    the logs are in `../workspace` and follow the same naming convention

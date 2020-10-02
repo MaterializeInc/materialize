@@ -6,8 +6,8 @@ The Boston public transit system goes to sleep at around midnight local time and
 generally does not wake up until 5-6 am, so there may be no data in the stream
 when the system has closed for the night.
 
-To reduce the chance of things breaking, avoid changing things in
-[workspace](../workspace).
+To reduce the chance of things breaking, avoid changing things in the
+`play/mbta/workspace` directory.
 
 All the setup assumes you are running commands from [mbta directory](../)
 (<materialize root directory>/play/mbta).
@@ -81,7 +81,7 @@ however many seconds you think it will take to archive all the data. You can
 tear down the rest of the containers using the command above.
 
 Archives can be found at `workspace-<current_date_and_time>.tar.gz` file
-[in the `archive` directory](../archive).
+in the directory `play/mbta/archive`.
 
 To replay an archive, run
 `API_KEY=<insert_api_key_here> ARCHIVE_PATH=<insert_path_archive> ../../bin/mzconduct run mbta -w replay`. Do not uncompress the archive.
@@ -159,7 +159,7 @@ To manually connect to a single MBTA stream and load it into Kafka:
   cargo run -- -f path_to_stream_file.log -t topic_name
   ```
 
-  See the [mbta_to_mtrlz package documentation](../mbta_to_mtrlz-doc.md) for more
+  See the [mbta_to_mtrlz package documentation](mbta_to_mtrlz-doc.md) for more
   details on other options you can run with.
 
   You can use `kafka-console-consumer` to verify the correctness of your stream like this:
@@ -177,4 +177,4 @@ To manually connect to a single MBTA stream and load it into Kafka:
 
 3. Turn on materialize and create the sources and views corresponding to the kafka topics.
 
-  Check out the reference for creating a view to parse each type of stream [here](../mbta-reference.md).
+  Check out the reference for creating a view to parse each type of stream [here](mbta-reference.md).

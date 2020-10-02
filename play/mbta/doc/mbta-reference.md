@@ -46,7 +46,7 @@ CREATE SOURCE x
 For some of the streams, such as predictions or trips, MBTA requires that
 you use a filter in the API, so the data you want may be separated into multiple
 streams. The best way to handle this is using the [configuration
-file](../../demo/mbta-setup.md#automatic-stream-setup) to write the streams into
+file](mbta-setup.md#config-file-creation) to write the streams into
 the same kafka topic.
 
 If you want really want one Kafka topic per MBTA stream, you may want create a
