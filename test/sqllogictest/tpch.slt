@@ -1430,16 +1430,15 @@ ORDER BY
 | |   delta %5 %6.(#0)
 | |   delta %6 %5.(#0)
 | | demand = (#0, #5)
-| Reduce group=(#0, #0)
+| Reduce group=(#0)
 | | agg sum(#5)
-| Filter (#2 > 30000dec)
-| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %8 =
 | Join %4 %7 (= #8 #33)
 | | implementation = Differential %4 %7.(#0)
-| | demand = (#0, #1, #8, #11, #12, #21)
+| | demand = (#0, #1, #8, #11, #12, #21, #34)
+| Filter (#34 > 30000dec)
 | Reduce group=(#1, #0, #8, #12, #11)
 | | agg sum(#21)
 
