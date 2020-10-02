@@ -71,14 +71,14 @@ pub trait Catalog: fmt::Debug {
 
     /// Resolves the named database.
     ///
-    /// If `database_name` exists in the catalog, it returns `Ok`; otherwise it
-    /// returns an error.
+    /// If `database_name` exists in the catalog, it returns the ID of the
+    /// resolved database; otherwise it returns an error.
     ///
     /// This function is named as such for symmetry with [`resolve_schema`] and
     /// [`resolve_item`], but there is no such thing as a "partial" database
     /// name. All database names are full names. This function amounts to an
     /// existence check for the named database.
-    fn resolve_database(&self, database_name: &str) -> Result<(), CatalogError>;
+    fn resolve_database(&self, database_name: &str) -> Result<i64, CatalogError>;
 
     /// Resolves a partially-specified schema name.
     ///
@@ -283,7 +283,7 @@ impl Catalog for DummyCatalog {
         "dummy"
     }
 
-    fn resolve_database(&self, _: &str) -> Result<(), CatalogError> {
+    fn resolve_database(&self, _: &str) -> Result<i64, CatalogError> {
         unimplemented!();
     }
 

@@ -152,10 +152,10 @@ fn show_schemas<'a>(
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let database_name = if let Some(from) = from {
+    let (_database_name, database_id) = if let Some(from) = from {
         scx.resolve_database(from)?
     } else {
-        scx.resolve_default_database()?.to_string()
+        scx.resolve_default_database()?
     };
     let filter = match filter {
         Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
@@ -165,35 +165,23 @@ fn show_schemas<'a>(
 
     let query = if !full & !extended {
         format!(
-            "SELECT mz_schemas.name
-            FROM mz_catalog.mz_schemas
-            JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.name = '{}'",
-            database_name
+            "SELECT name FROM mz_catalog.mz_schemas WHERE database_id = {}",
+            database_id,
         )
     } else if full & !extended {
         format!(
-            "SELECT mz_schemas.name, type
-            FROM mz_catalog.mz_schemas
-            JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.name = '{}'",
-            database_name
+            "SELECT name, type FROM mz_catalog.mz_schemas WHERE database_id = {}",
+            database_id,
         )
     } else if !full & extended {
         format!(
-            "SELECT mz_schemas.name
-            FROM mz_catalog.mz_schemas
-            LEFT JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.name = '{}' OR mz_catalog.mz_databases.name IS NULL",
-            database_name,
+            "SELECT name FROM mz_catalog.mz_schemas WHERE database_id = {} OR database_id IS NULL",
+            database_id,
         )
     } else {
         format!(
-            "SELECT mz_schemas.name, type
-            FROM mz_catalog.mz_schemas
-            LEFT JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.name = '{}' OR mz_catalog.mz_databases.name IS NULL",
-            database_name,
+            "SELECT name, type FROM mz_catalog.mz_schemas WHERE database_id = {} OR database_id IS NULL",
+            database_id,
         )
     };
     let query = format!("SELECT * FROM ({}) WHERE {}", query, filter);

@@ -912,8 +912,8 @@ lazy_static! {
             },
             "pg_table_is_visible" => Scalar {
                 params!(Oid) => sql_op!(
-                    "(SELECT schema = ANY(current_schemas(true))
-                     FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.schema_id
+                    "(SELECT s.name = ANY(current_schemas(true))
+                     FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
                      WHERE o.oid = $1)"
                 )
             },
