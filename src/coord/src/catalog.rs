@@ -1518,6 +1518,10 @@ impl Catalog {
     pub fn persistence_directory(&self) -> Option<&Path> {
         self.persistence_directory.as_deref()
     }
+
+    pub fn cluster_id(&self) -> Uuid {
+        self.cluster_id
+    }
 }
 
 impl IdHumanizer for Catalog {
