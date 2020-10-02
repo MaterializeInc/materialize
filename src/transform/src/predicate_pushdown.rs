@@ -104,7 +104,10 @@ impl PredicatePushdown {
                 }
             }
             RelationExpr::Get { id, .. } => {
-                // Purge all predicates associated with the id.
+                // If we encounter a `Get` that is not wrapped by a `Filter`,
+                // we should purge all predicates associated with the id.
+                // This is because it is as if there is an empty `Filter`
+                // just around the `Get`, and so no predicates can be pushed.
                 get_predicates
                     .entry(*id)
                     .or_insert_with(HashSet::new)
@@ -128,8 +131,8 @@ impl PredicatePushdown {
     ///
     /// In addition, the method accumulates the intersection of predicates
     /// applied to each `Get` expression, so that the predicate can
-    /// in principle be pushed through to a `Let` binding, or to the
-    /// external source of the data if the `Get` binds to another view.
+    /// then be pushed through to a `Let` binding, or to the external
+    /// source of the data if the `Get` binds to another view.
     fn action(
         &self,
         relation: &mut RelationExpr,
