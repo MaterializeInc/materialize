@@ -62,9 +62,8 @@ use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_CATALOG_NAMES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
-    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS,
-    MZ_VIEW_KEYS,
+    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES, MZ_KAFKA_SINKS, MZ_SCHEMAS,
+    MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{
     self, Catalog, CatalogItem, Index, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
@@ -281,9 +280,6 @@ where
         let mut views_to_report = HashMap::new();
         let mut sinks_to_report = HashMap::new();
         for (id, oid, name, item) in catalog_entries {
-            // Mirror each recovered catalog entry.
-            self.report_catalog_update(id, name.to_string(), 1).await;
-
             if let Ok(desc) = item.desc(&name) {
                 self.report_column_updates(desc, id, 1).await?;
             }
@@ -985,12 +981,6 @@ where
             },
         )
         .await;
-    }
-
-    async fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
-        let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
-        self.update_catalog_view(MZ_CATALOG_NAMES.id, iter::once((row, diff)))
-            .await;
     }
 
     async fn report_database_update(
@@ -2404,13 +2394,6 @@ where
                     name,
                     item,
                 } => {
-                    self.report_catalog_update(
-                        *id,
-                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
-                        1,
-                    )
-                    .await;
-
                     if let Ok(desc) = item.desc(&name) {
                         self.report_column_updates(desc, *id, 1).await?;
                     }
@@ -2445,14 +2428,6 @@ where
                     to_name,
                     item,
                 } => {
-                    // Remove old name from mz_catalog_names.
-                    self.report_catalog_update(*id, from_name.to_string(), -1)
-                        .await;
-
-                    // Add new name to mz_catalog_names.
-                    self.report_catalog_update(*id, to_name.to_string(), 1)
-                        .await;
-
                     // Remove old name and add new name to relevant mz system tables.
                     match item {
                         CatalogItem::Source(_) => {
@@ -2509,8 +2484,6 @@ where
                 catalog::OpStatus::DroppedIndex { entry, nullable } => match entry.item() {
                     CatalogItem::Index(index) => {
                         indexes_to_drop.push(entry.id());
-                        self.report_catalog_update(entry.id(), entry.name().to_string(), -1)
-                            .await;
                         self.report_index_update_inner(
                             entry.oid(),
                             entry.id(),
@@ -2524,8 +2497,6 @@ where
                     _ => unreachable!("DroppedIndex for non-index item"),
                 },
                 catalog::OpStatus::DroppedItem { schema_id, entry } => {
-                    self.report_catalog_update(entry.id(), entry.name().to_string(), -1)
-                        .await;
                     match entry.item() {
                         CatalogItem::Table(_) => {
                             sources_to_drop.push(entry.id());

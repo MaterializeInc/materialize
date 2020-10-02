@@ -218,7 +218,6 @@ mz_worker_materialization_frontiers
 
 > SHOW TABLES FROM mz_catalog
 mz_avro_ocf_sinks
-mz_catalog_names
 mz_kafka_sinks
 mz_view_foreign_keys
 mz_view_keys
@@ -233,6 +232,7 @@ mz_views
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length
+mz_catalog_names
 mz_dataflow_names
 mz_dataflow_operator_dataflows
 mz_materialization_frontiers
