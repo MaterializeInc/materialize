@@ -80,7 +80,7 @@ To run the required load tests on the release candidate tag, Materialize employe
 can follow [these instructions for running semi-automatic load tests][load-instr]
 in the infrastructure repository. All of these tests can be run in parallel.
 
-[load-instr]: https://github.com/MaterializeInc/infra/tree/main/cloud#starting-a-load-test
+[load-instr]: https://github.com/MaterializeInc/infra/blob/main/doc/starting-a-load-test.md
 
 - [ ] Kick off a [full SQL logic test run](https://buildkite.com/materialize/sql-logic-tests)
   by clicking the 'New Build' button. For the values requested, use the following:
@@ -91,13 +91,15 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   You can continue on to the next step, but remember to verify that this test passes.
 
-- [ ] Start the load tests according to the instructions above, using your release tag as the
+- [ ] Start the load tests according to [the same instructions][load-instr], using your release tag as the
   `git-ref` value for the release benchmarks. You can use [This commit][] as an example to follow.
 
 [This commit]: https://github.com/MaterializeInc/infra/commit/fd7f594d6f9fb2fda3a604f21b730f8d401fe81c
 
-- [ ] Find the load tests in grafana.mz, and link to them in #release,
-  validating that data is showing up:
+- [ ] Find the load tests in https://grafana.i.mtrlz.dev/d/materialize-overview, and link
+  to them in #release, validating that data is present. Note that the default view of
+  that dashboard is of a full day, so it may look like the test started and aborted
+  suddenly:
 
   - [ ] chbench
   - [ ] billing-demo
@@ -112,11 +114,14 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 - [ ] Let the chaos tests run for 24 hours, with the following success criteria:
 
-  - [ ] Each chaos test's `chaos_run` container should complete with a `0` exit
-    code. To check this, SSH into each EC2 instance running a chaos test and run
-    `docker ps -a`.
+  - [ ] Each chaos test's `chaos_run` container should complete with a `0` exit code. To
+    check this, SSH into each EC2 instance running a chaos test and run `docker ps -a`.
+    You can ssh in using our [teleport cluster][], all chaos tests have a `purpose=chaos`
+    label.
 
-- [ ] Remove all load test machines.
+- [ ] Remove all load test machines, documented on [the same page][load-instr].
+
+[teleport cluster]: https://tsh.i.mtrlz.dev/cluster/tsh/nodes
 
 ## Final release
 
