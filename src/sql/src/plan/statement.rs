@@ -502,18 +502,14 @@ fn handle_show_databases(
     ShowDatabasesStatement { filter }: ShowDatabasesStatement,
 ) -> Result<Plan, anyhow::Error> {
     let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => {
-            format!("AND database LIKE {}", Value::String(like))
-        }
-        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
-        None => "".to_owned(),
+        Some(ShowStatementFilter::Like(like)) => format!("database LIKE {}", Value::String(like)),
+        Some(ShowStatementFilter::Where(expr)) => expr.to_string(),
+        None => "true".to_owned(),
     };
     handle_generated_select(
         scx,
         format!(
-            "SELECT database
-             FROM mz_catalog.mz_databases
-             WHERE mz_catalog.mz_databases.id != -1 {}",
+            "SELECT database FROM mz_catalog.mz_databases WHERE {}",
             filter
         ),
     )
@@ -575,21 +571,19 @@ fn handle_show_schemas(
             database_name, filter
         )
     } else if !full & extended {
-        // -1 is the ambient database id.
         format!(
             "SELECT schema
             FROM mz_catalog.mz_schemas
-            JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.id = -1 {}",
+            LEFT JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
+            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.database IS NULL {}",
             database_name, filter
         )
     } else {
-        // -1 is the ambient database id.
         format!(
             "SELECT schema, type
             FROM mz_catalog.mz_schemas
-            JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.id = -1 {}",
+            LEFT JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
+            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.database IS NULL {}",
             database_name, filter
         )
     };
