@@ -54,7 +54,9 @@ create a row with the following six fields in order:
 6. Heartbeat frequency. In other words, the frequency at which the `mbta_to_mtrlz`
    code should check the file for new data if it has caught up to the end of the
    file. Optional. Defaults to 250ms. Specifying this is mostly just for
-   avoiding unnecessary usage of CPU cycles for slow-moving topics.
+   avoiding unnecessary usage of CPU cycles for slow-moving topics. Technically
+   the `mbta_to_mtlrz` code only waits for the minimum time specified in the
+   entire config file before checking the tail end of each file.
 
 Here's a mapping of example apis you want to create a stream for, together with
 how it should be specified in the config file:
