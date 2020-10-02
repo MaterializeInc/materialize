@@ -65,7 +65,7 @@ use crate::catalog::builtin::{
     BUILTINS, MZ_AVRO_OCF_SINKS, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES, MZ_KAFKA_SINKS, MZ_SCHEMAS,
     MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, AMBIENT_SCHEMA_ID};
+use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState};
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
@@ -404,9 +404,6 @@ where
                 }
             }
         }
-        let oid = self.catalog.allocate_oid()?;
-        self.report_schema_update(oid, None, AMBIENT_SCHEMA_ID, "mz_temp", "system", 1)
-            .await;
 
         // Announce primary and foreign key relationships.
         if self.logging_granularity.is_some() {

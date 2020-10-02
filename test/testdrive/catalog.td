@@ -14,7 +14,6 @@ public
 SCHEMAS
 -------
 public
-mz_temp
 mz_catalog
 pg_catalog
 
