@@ -10,3 +10,7 @@ dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 itertools = "0.9"
 repr = { path = "../repr" }
+
+[dev-dependencies]
+datadriven = "0.3.0"
+anyhow = "1.0.28"

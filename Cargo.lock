@@ -4360,6 +4360,8 @@ dependencies = [
 name = "transform"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "datadriven",
  "dataflow-types",
  "expr",
  "itertools",
