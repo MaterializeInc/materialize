@@ -57,6 +57,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ansi_term"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d52a9bb7ec0cf484c551830a7ce27bd20d67eac647e1befb56b0be4ee39a55d2"
+dependencies = [
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -406,7 +415,7 @@ version = "2.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37e58ac78573c40708d45522f0d80fa2f01cc4f9b4e2bf749807255454312002"
 dependencies = [
- "ansi_term",
+ "ansi_term 0.11.0",
  "atty",
  "bitflags",
  "strsim",
@@ -4328,9 +4337,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-serde"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6ccba2f8f16e0ed268fc765d9b7ff22e965e7185d32f8f1ec8294fe17d86e79"
+checksum = "fb65ea441fbb84f9f6748fd496cf7f63ec9af5bca94dd86456978d055e8eb28b"
 dependencies = [
  "serde",
  "tracing-core",
@@ -4338,11 +4347,11 @@ dependencies = [
 
 [[package]]
 name = "tracing-subscriber"
-version = "0.2.7"
+version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c72c8cf3ec4ed69fef614d011a5ae4274537a8a8c59133558029bd731eb71659"
+checksum = "82bb5079aa76438620837198db8a5c529fb9878c730bc2b28179b0241cf04c10"
 dependencies = [
- "ansi_term",
+ "ansi_term 0.12.1",
  "chrono",
  "lazy_static",
  "matchers",
@@ -4351,6 +4360,7 @@ dependencies = [
  "serde_json",
  "sharded-slab",
  "smallvec",
+ "thread_local",
  "tracing-core",
  "tracing-log",
  "tracing-serde",
