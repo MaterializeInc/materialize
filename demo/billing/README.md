@@ -51,7 +51,13 @@ more. Generally its best to run with no more than `ncpus - 2` threads.
 see the [developer guide](../../doc/developer/develop.md) for detailed instructions
 on how to install Kafka.
 
-3. Run the billing demo with:
+3. Create the billing topic (this only needs to be run once):
+
+```shell session
+$ cargo run -- --message-count 0 --create-topic --partitions 1 --replication-factor 1
+```
+
+4. Run the billing demo with:
 
 ```shell session
 $ RUST_LOG=debug cargo run --release -- --message-count <number of messages to generate>
