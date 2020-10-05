@@ -65,6 +65,9 @@ Wrap your release notes at the 80 character mark.
 
 - Add support for the [`oid`](/sql/types/oid) type to represent PostgreSQL object IDs.
 
+- Add support for [array types](/sql/types/array) for compatibility with
+  PostgreSQL.
+
 - Add the [`lpad`](/sql/functions/#string-func) function, which prepends
   characters to fill a string to a given length.
 
@@ -74,8 +77,6 @@ Wrap your release notes at the 80 character mark.
   same relation multiple times with varying filters {{% gh 4361 %}}.
 
 {{% version-header v0.4.3 %}}
-<span id="v0.4.3"></span>
-## v0.4.3
 
 - Permit adjusting the logical compaction window on a per-index basis via the
   [`logical_compaction_window`](/sql/alter-index/#available-parameters)
