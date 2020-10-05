@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use futures::future::FutureExt;
 use lazy_static::lazy_static;
 use rand::Rng;
+use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use rusoto_credential::AwsCredentials;
 use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient};
@@ -92,6 +93,7 @@ pub struct State {
     kafka_addr: String,
     kafka_admin: rdkafka::admin::AdminClient<rdkafka::client::DefaultClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
+    kafka_config: ClientConfig,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
     kafka_topics: HashMap<String, i32>,
     aws_region: rusoto_core::Region,
@@ -450,14 +452,15 @@ pub async fn create_state(
         ccsr_config.build()
     };
 
-    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
+    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics, kafka_config) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
         use rdkafka::client::DefaultClientContext;
-        use rdkafka::config::ClientConfig;
         use rdkafka::producer::FutureProducer;
 
         let mut kafka_config = ClientConfig::new();
         kafka_config.set("bootstrap.servers", &config.kafka_addr);
+        kafka_config.set("group.id", "materialize-testdrive");
+        kafka_config.set("auto.offset.reset", "earliest");
         if let Some(cert_path) = &config.cert_path {
             kafka_config.set("security.protocol", "ssl");
             kafka_config.set("ssl.keystore.location", cert_path);
@@ -492,6 +495,7 @@ pub async fn create_state(
             admin_opts,
             producer,
             topics,
+            kafka_config,
         )
     };
 
@@ -528,6 +532,7 @@ pub async fn create_state(
         kafka_addr,
         kafka_admin,
         kafka_admin_opts,
+        kafka_config,
         kafka_producer,
         kafka_topics,
         aws_region,

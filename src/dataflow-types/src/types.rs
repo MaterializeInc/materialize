@@ -640,6 +640,7 @@ pub struct KafkaSinkConnector {
     pub fuel: usize,
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
+    pub config_options: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -688,6 +689,8 @@ pub struct KafkaSinkConnectorBuilder {
     pub replication_factor: u32,
     pub fuel: usize,
     pub consistency_value_schema: Option<String>,
+    pub config_options: HashMap<String, String>,
+    pub ccsr_config: ccsr::ClientConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

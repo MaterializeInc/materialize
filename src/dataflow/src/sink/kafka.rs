@@ -232,6 +232,11 @@ where
     // TODO(rkhaitan): experiment with different settings for this value to see
     // if it makes a big difference
     config.set("queue.buffering.max.ms", &format!("{}", 10));
+
+    for (k, v) in connector.config_options.iter() {
+        config.set(k, v);
+    }
+
     let sink_metrics = SinkMetrics::new(
         &connector.topic,
         &id.to_string(),
