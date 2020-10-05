@@ -11,7 +11,7 @@ use std::collections::BinaryHeap;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::{operators::consolidate::Consolidate, Hashable};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
