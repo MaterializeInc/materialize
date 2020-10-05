@@ -7,10 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Assert required mz_catalog objects are inserted on startup.
-> SELECT COUNT(*) FROM mz_tables WHERE global_id LIKE 's%'
-13
+# This test exercises solely to test OIDs at the boundary (e.g., by sending them
+# through pgwire).
 
-# There is one entry in mz_indexes for each field_number/expression of the index.
-> SELECT COUNT(global_id) FROM mz_indexes WHERE global_id LIKE 's%'
-76
+> SELECT 1::oid
+1
