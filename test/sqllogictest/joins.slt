@@ -500,3 +500,59 @@ EXPLAIN PLAN FOR SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 | | demand = (#0..#3)
 
 EOF
+
+# Regression test for #4361, in which inter-view predicate pushdown would cause
+# misoptimizations. Specifically, a predicate that was applied to only one use
+# of a view could be incorrectly applied to all uses of that view.
+#
+# Inter-view (mis-)optimizations don't appear in the output of EXPLAIN, so we
+# have to test this rather obliquely.
+
+statement ok
+CREATE TABLE t4362 (name text NOT NULL, id int NOT NULL)
+
+statement ok
+INSERT INTO t4362 VALUES ('a', 1), ('a', 2), ('b', 3)
+
+statement ok
+CREATE VIEW v4362 AS SELECT name, id FROM t4362
+
+query TT
+SELECT name, id FROM v4362 WHERE name = 'a'
+----
+a 1
+a 2
+
+query TT
+SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id = 1)
+----
+a 1
+a 2
+
+mode standard
+
+# At the time of writing, for this test to properly validate inter-view
+# optimization correctness, exactly one of the `Get materialize.public.v4362`
+# nodes must be followed a `Filter` node. If that is not the case in the plan
+# below, likely the test is no longer testing for the bug.
+
+query T multiline
+EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id = 1)
+----
+%0 =
+| Get materialize.public.v4362 (u12)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.v4362 (u12)
+| Filter (#1 = 1)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0, #1)
+| Project (#0, #1)
+
+EOF
+
+mode cockroach
