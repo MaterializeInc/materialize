@@ -1,5 +1,7 @@
 <div class="experimental">
-  <strong>EXPERIMENTAL!</strong> This feature is under construction and requires
+  <strong>EXPERIMENTAL!</strong>
+  {{ with .Inner}}{{.|markdownify}}{{else}}This feature{{ end }}
+  is under construction and requires
   <a href="{{"/cli/#experimental-mode"|relURL}}">experimental mode</a>.
 
   {{if in (apply $.Site.Params.versions "index" "." "name") (.Get 0)}}

@@ -28,6 +28,7 @@ Type | Aliases | Use | Size (bytes) | Syntax
 [`time`](time) | | Time without date | 4 | `TIME '01:23:45'`
 [`timestamp`](timestamp) | | Date and time | 8 | `TIMESTAMP '2007-02-01 15:04:05'`
 [`timestamp with time zone`](timestamp) | `timestamptz` | Date and time with timezone | 8 | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
+[Arrays](array) | | Multidimensional array | Variable | `ARRAY[...]`
 
 The names listed in the "Type" column represent the names specified in the SQL
 standard. For compatibility with other SQL database systems, Materialize often

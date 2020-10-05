@@ -8,7 +8,7 @@ menu:
 
 `SHOW CREATE TABLE` returns the SQL used to create the table.
 
-{{< experimental v0.4.1 >}}
+{{< experimental v0.4.1 />}}
 
 ## Syntax
 
