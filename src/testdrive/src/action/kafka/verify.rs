@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
-use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use tokio::stream::StreamExt;
@@ -79,10 +78,7 @@ impl Action for VerifyAction {
             .map_err(|e| format!("fetching schema: {}", e))?
             .raw;
 
-        let mut config = ClientConfig::new();
-        config.set("bootstrap.servers", &state.kafka_addr);
-        config.set("auto.offset.reset", "earliest");
-        config.set("group.id", "materialize-testdrive");
+        let config = state.kafka_config.clone();
 
         let schema =
             avro::parse_schema(&schema).map_err(|e| format!("parsing avro schema: {}", e))?;

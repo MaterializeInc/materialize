@@ -69,7 +69,6 @@ async fn register_kafka_topic(
     //
     // TODO(benesch): do we need to delete the Kafka topic if publishing the
     // schema fails?
-    // TODO(sploiselle): support SSL auth'ed sinks
     let schema_id = ccsr
         .publish_schema(&format!("{}-value", topic), schema)
         .await
@@ -89,10 +88,13 @@ async fn build_kafka(
     // Create Kafka topic with single partition.
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &builder.broker_addrs.to_string());
+    for (k, v) in builder.config_options.iter() {
+        config.set(k, v);
+    }
     let client = config
         .create::<AdminClient<_>>()
         .expect("creating admin client failed");
-    let ccsr = ccsr::ClientConfig::new(builder.schema_registry_url).build();
+    let ccsr = builder.ccsr_config.build();
 
     let schema_id = register_kafka_topic(
         &client,
@@ -132,6 +134,7 @@ async fn build_kafka(
         fuel: builder.fuel,
         frontier,
         strict: !with_snapshot,
+        config_options: builder.config_options,
     }))
 }
 

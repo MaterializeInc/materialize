@@ -17,6 +17,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
 use itertools::Itertools;
+use kafka_util::{extract_config, generate_ccsr_client_config};
 use lazy_static::lazy_static;
 use regex::Regex;
 use rusoto_core::Region;
@@ -1004,7 +1005,7 @@ fn kafka_sink_builder(
     desc: RelationDesc,
     topic_suffix: String,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
-    let schema_registry_url = match format {
+    let (schema_registry_url, ccsr_with_options) = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
             url,
             seed,
@@ -1013,10 +1014,7 @@ fn kafka_sink_builder(
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
-            if !with_options.is_empty() {
-                unsupported!("CONFLUENT SCHEMA REGISTRY ... WITH options in CREATE SINK");
-            }
-            url.parse()?
+            (url.parse::<Url>()?, normalize::options(&with_options))
         }
         _ => unsupported!("non-confluent schema registry avro sinks"),
     };
@@ -1050,6 +1048,13 @@ fn kafka_sink_builder(
         None
     };
 
+    let config_options = extract_config(&with_options)?;
+
+    let ccsr_config = generate_ccsr_client_config(
+        schema_registry_url.clone(),
+        &config_options,
+        &ccsr_with_options,
+    )?;
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
         schema_registry_url,
@@ -1059,6 +1064,8 @@ fn kafka_sink_builder(
         replication_factor,
         fuel: 10000,
         consistency_value_schema,
+        config_options,
+        ccsr_config,
     }))
 }
 
