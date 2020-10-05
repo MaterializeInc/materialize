@@ -70,6 +70,9 @@ Wrap your release notes at the 80 character mark.
 
 - Add `ENVELOPE MATERIALIZE`, which implements the [new CDC protocol](https://materialize.io/change-data-capture-part-1/).
 
+- Correct a query optimization that could misplan queries that referenced the
+  same relation multiple times with varying filters {{% gh 4361 %}}.
+
 {{% version-header v0.4.3 %}}
 <span id="v0.4.3"></span>
 ## v0.4.3
