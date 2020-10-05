@@ -497,7 +497,7 @@ fn plan_values(
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     ensure!(
         !values.is_empty(),
-        "Can't infer a type for empty VALUES expression"
+        "can't infer a type for empty VALUES expression"
     );
     let ecx = &ExprContext {
         qcx,

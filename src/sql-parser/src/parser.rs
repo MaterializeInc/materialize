@@ -2446,6 +2446,16 @@ impl Parser {
             SetExpr::Query(Box::new(subquery))
         } else if self.parse_keyword("VALUES") {
             SetExpr::Values(self.parse_values()?)
+        } else if self.parse_keyword("ARRAY") {
+            match self.parse_array()? {
+                Expr::Array(array) => {
+                    SetExpr::Values(Values(array.iter().map(|e| vec![e.clone()]).collect()))
+                }
+                _ => {
+                    let range = self.peek_prev_range();
+                    return parser_err!(self, range.start..range.end, "Cannot parse ARRAY values");
+                }
+            }
         } else {
             return self.expected(
                 self.peek_range(),

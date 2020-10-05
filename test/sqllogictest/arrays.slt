@@ -23,3 +23,45 @@ query TT
 SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
 ----
 NULL  NULL
+
+query T
+SELECT * FROM (ARRAY[1, 2, 3])
+----
+1
+2
+3
+
+# Test array functions
+query B
+SELECT 1 = ANY(ARRAY[1])
+----
+true
+
+query B
+SELECT 1 = ANY(ARRAY[2])
+----
+false
+
+query error no overload for i32 = string
+SELECT 1 = ANY(ARRAY['hi'::text])
+
+query error can't infer a type for empty VALUES expression
+SELECT 'hi'::text = ANY(ARRAY[])
+
+query error VALUES does not have uniform type
+SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
+
+query B
+SELECT 1 != ANY(ARRAY[1])
+----
+false
+
+query B
+select -1+3 > ANY(ARRAY[-1, 0, 1])
+----
+true
+
+query B
+select 'hello'::text <= ANY(ARRAY['there'::text])
+----
+true
