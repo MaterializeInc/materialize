@@ -219,7 +219,6 @@ mz_worker_materialization_frontiers  SYSTEM true
 TABLES                TYPE
 ----------------------------
 mz_avro_ocf_sinks     SYSTEM
-mz_catalog_names      SYSTEM
 mz_kafka_sinks        SYSTEM
 mz_view_foreign_keys  SYSTEM
 mz_view_keys          SYSTEM
@@ -252,6 +251,7 @@ mz_records_per_dataflow           SYSTEM false
 mz_records_per_dataflow_global    SYSTEM false
 mz_records_per_dataflow_operator  SYSTEM false
 mz_relations                      SYSTEM false
+mz_catalog_names                  SYSTEM false
 
 # test that information in shows correctly responds to materialization and unmaterialization of views
 

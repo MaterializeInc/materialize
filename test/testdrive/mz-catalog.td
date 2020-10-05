@@ -9,8 +9,8 @@
 
 # Assert required mz_catalog objects are inserted on startup.
 > SELECT COUNT(*) FROM mz_tables WHERE global_id LIKE 's%'
-13
+12
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(global_id) FROM mz_indexes WHERE global_id LIKE 's%'
-76
+75

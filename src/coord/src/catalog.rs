@@ -490,9 +490,7 @@ impl Catalog {
                     );
                 }
 
-                // TODO(benesch): disabling logging shouldn't turn off the
-                // views that have nothing to do with logging.
-                Builtin::View(view) if config.enable_logging => {
+                Builtin::View(view) if config.enable_logging || !view.needs_logs => {
                     let item = catalog
                         .parse_item(view.sql.into(), PlanContext::default())
                         .unwrap_or_else(|e| {
