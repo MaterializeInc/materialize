@@ -156,9 +156,9 @@ enable it quite easily with the following steps.
 
 To avoid re-reading data from Kafka on restart, Materialize lets you create
 persistent sources, which persist input messages from Kafka topics to files
-on the Materialize instance's local hard drive. Persistence will not solve all
-restart time related problems, as there are other factors beyond Kafka broker
-read performance that contribute to high restart times.
+on the Materialize instance's local hard drive. The current version of persistence
+is not intended to speed up Materialize's restart time, as there are other factors
+beyond Kafka broker read performance that contribute to high restart times.
 
 We recommend enabling persistence if you are using Kafka sources, need to relieve
 load on upstream Kafka brokers, and are comfortable using
