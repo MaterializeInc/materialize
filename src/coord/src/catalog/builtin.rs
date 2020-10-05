@@ -87,6 +87,8 @@ pub struct BuiltinView {
     pub schema: &'static str,
     pub sql: &'static str,
     pub id: GlobalId,
+    // TODO(benesch): auto-derive the needs_logs property.
+    pub needs_logs: bool,
 }
 
 // Builtin definitions below. Keep these sorted by global ID, and ensure you
@@ -379,6 +381,7 @@ GROUP BY
     mz_dataflow_operator_addresses.worker
 HAVING count(*) = 1",
     id: GlobalId::System(3000),
+    needs_logs: true,
 };
 
 pub const MZ_DATAFLOW_NAMES: BuiltinView = BuiltinView {
@@ -400,6 +403,7 @@ WHERE
     mz_dataflow_operator_addresses.worker = mz_addresses_with_unit_length.worker AND
     mz_dataflow_operator_addresses.slot = 0",
     id: GlobalId::System(3001),
+    needs_logs: true,
 };
 
 pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
@@ -422,6 +426,7 @@ WHERE
     mz_dataflow_names.local_id = mz_dataflow_operator_addresses.value AND
     mz_dataflow_names.worker = mz_dataflow_operator_addresses.worker",
     id: GlobalId::System(3002),
+    needs_logs: true,
 };
 
 pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
@@ -432,6 +437,7 @@ pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_worker_materialization_frontiers
 GROUP BY global_id",
     id: GlobalId::System(3003),
+    needs_logs: true,
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
@@ -450,6 +456,7 @@ WHERE
     mz_dataflow_operator_dataflows.id = mz_arrangement_sizes.operator AND
     mz_dataflow_operator_dataflows.worker = mz_arrangement_sizes.worker",
     id: GlobalId::System(3004),
+    needs_logs: true,
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
@@ -471,6 +478,7 @@ GROUP BY
     mz_dataflow_names.name,
     mz_records_per_dataflow_operator.worker",
     id: GlobalId::System(3005),
+    needs_logs: true,
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_GLOBAL: BuiltinView = BuiltinView {
@@ -486,6 +494,7 @@ GROUP BY
     mz_records_per_dataflow.id,
     mz_records_per_dataflow.name",
     id: GlobalId::System(3006),
+    needs_logs: true,
 };
 
 pub const MZ_PERF_ARRANGEMENT_RECORDS: BuiltinView = BuiltinView {
@@ -496,6 +505,7 @@ pub const MZ_PERF_ARRANGEMENT_RECORDS: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_arrangement_sizes mas
 LEFT JOIN mz_catalog.mz_dataflow_operators mdo ON mdo.id = mas.operator AND mdo.worker = mas.worker",
     id: GlobalId::System(3007),
+    needs_logs: true,
 };
 
 pub const MZ_PERF_PEEK_DURATIONS_CORE: BuiltinView = BuiltinView {
@@ -513,6 +523,7 @@ WHERE
     d_upper.duration_ns >= d_summed.duration_ns
 GROUP BY d_upper.worker, d_upper.duration_ns",
     id: GlobalId::System(3008),
+    needs_logs: true,
 };
 
 pub const MZ_PERF_PEEK_DURATIONS_BUCKET: BuiltinView = BuiltinView {
@@ -526,6 +537,7 @@ pub const MZ_PERF_PEEK_DURATIONS_BUCKET: BuiltinView = BuiltinView {
     GROUP BY worker
 )",
     id: GlobalId::System(3009),
+    needs_logs: true,
 };
 
 pub const MZ_PERF_PEEK_DURATIONS_AGGREGATES: BuiltinView = BuiltinView {
@@ -535,6 +547,7 @@ pub const MZ_PERF_PEEK_DURATIONS_AGGREGATES: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_peek_durations lpd
 GROUP BY worker",
     id: GlobalId::System(3010),
+    needs_logs: true,
 };
 
 pub const MZ_PERF_DEPENDENCY_FRONTIERS: BuiltinView = BuiltinView {
@@ -550,6 +563,7 @@ JOIN mz_catalog.mz_materialization_frontiers frontier_df ON index_deps.dataflow 
 JOIN mz_catalog.mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
 JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = frontier_source.global_id",
     id: GlobalId::System(3011),
+    needs_logs: true,
 };
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
@@ -560,6 +574,7 @@ pub const MZ_RELATIONS: BuiltinView = BuiltinView {
 UNION SELECT global_id, oid, schema_id, sources, 'source' FROM mz_catalog.mz_sources
 UNION SELECT global_id, oid, schema_id, views, 'view' FROM mz_catalog.mz_views",
     id: GlobalId::System(3012),
+    needs_logs: false,
 };
 
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
@@ -574,6 +589,7 @@ UNION
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_global_id = mz_relations.global_id",
     id: GlobalId::System(3013),
+    needs_logs: false,
 };
 
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
@@ -586,6 +602,7 @@ NULL::oid AS nspowner,
 NULL::text[] AS nspacl
 FROM mz_catalog.mz_schemas",
     id: GlobalId::System(3014),
+    needs_logs: false,
 };
 
 // TODO(jldlaughlin): add other fields - https://www.postgresql.org/docs/12/catalog-pg-class.html
@@ -600,6 +617,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.schema_id = mz_objects.schema_id",
     id: GlobalId::System(3015),
+    needs_logs: false,
 };
 
 lazy_static! {
