@@ -1189,6 +1189,7 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
             }
         }
         Expr::Coalesce { .. } => Some("coalesce".into()),
+        Expr::Array { .. } => Some("array".into()),
         Expr::List { .. } => Some("list".into()),
         Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
         Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
