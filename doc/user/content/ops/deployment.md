@@ -152,7 +152,7 @@ enable it quite easily with the following steps.
 
 ## Persistence
 
-{{< experimental v0.4.2 >}}
+{{< experimental v0.4.2 />}}
 
 To avoid re-reading data from Kafka on restart, Materialize lets you create
 persistent sources, which persist input messages from Kafka topics to files
