@@ -69,7 +69,6 @@ impl ProjectionExtraction {
             monotonic: _,
         } = relation
         {
-            // Populate a projection, and track its non-triviality.
             let mut projection = Vec::new();
 
             // If any key is an exact duplicate, we can remove it and use a projection.
