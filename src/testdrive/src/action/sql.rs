@@ -9,7 +9,7 @@
 
 use std::ascii;
 use std::error::Error;
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -18,7 +18,7 @@ use md5::{Digest, Md5};
 use postgres_array::Array;
 use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
-use tokio_postgres::types::Type;
+use tokio_postgres::types::{FromSql, Type};
 
 use ore::collections::CollectionExt;
 use ore::retry;
@@ -351,6 +351,43 @@ pub fn print_query(query: &str) {
 }
 
 fn decode_row(row: Row) -> Result<Vec<String>, String> {
+    enum ArrayElement<T> {
+        Null,
+        NonNull(T),
+    }
+
+    impl<T> fmt::Display for ArrayElement<T>
+    where
+        T: fmt::Display,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            match self {
+                ArrayElement::Null => f.write_str("NULL"),
+                ArrayElement::NonNull(t) => t.fmt(f),
+            }
+        }
+    }
+
+    impl<'a, T> FromSql<'a> for ArrayElement<T>
+    where
+        T: FromSql<'a>,
+    {
+        fn from_sql(
+            ty: &Type,
+            raw: &'a [u8],
+        ) -> Result<ArrayElement<T>, Box<dyn Error + Sync + Send>> {
+            T::from_sql(ty, raw).map(ArrayElement::NonNull)
+        }
+
+        fn from_sql_null(_: &Type) -> Result<ArrayElement<T>, Box<dyn Error + Sync + Send>> {
+            Ok(ArrayElement::Null)
+        }
+
+        fn accepts(ty: &Type) -> bool {
+            T::accepts(ty)
+        }
+    }
+
     let mut out = vec![];
     for (i, col) in row.columns().iter().enumerate() {
         let ty = col.type_();
@@ -359,7 +396,7 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
                 Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
                 Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
                 Type::TEXT_ARRAY => row
-                    .get::<_, Option<Array<String>>>(i)
+                    .get::<_, Option<Array<ArrayElement<String>>>>(i)
                     .map(|a| a.to_string()),
                 Type::BYTEA => row.get::<_, Option<Vec<u8>>>(i).map(|x| {
                     let s = x.into_iter().map(ascii::escape_default).flatten().collect();
