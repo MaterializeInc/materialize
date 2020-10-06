@@ -17,7 +17,6 @@
 //!
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
-use std::env;
 use std::env::VarError;
 use std::ffi::CStr;
 use std::fs::{self, File};
@@ -30,6 +29,7 @@ use std::process;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use std::{cmp, env};
 
 use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
@@ -203,14 +203,14 @@ fn run() -> Result<(), anyhow::Error> {
                     Err(VarError::NotUnicode(_)) => {
                         bail!("non-unicode character found in MZ_THREADS")
                     }
-                    Err(VarError::NotPresent) => 0,
+                    Err(VarError::NotPresent) => cmp::max(1, num_cpus::get_physical() / 2),
                 },
             },
         },
     };
     if threads == 0 {
         bail!(
-            "'--workers' must be specified and greater than 0\n\
+            "'--workers' must be greater than 0\n\
             hint: As a starting point, set the number of threads to half of the number of\n\
             cores on your system. Then, further adjust based on your performance needs.\n\
             hint: You may also set the environment variable MZ_WORKERS to the desired number\n\
@@ -545,7 +545,6 @@ fn adjust_rlimits() {
     #[cfg(target_os = "macos")]
     let hard = {
         use ore::cast::CastFrom;
-        use std::cmp;
         use sysctl::Sysctl;
 
         // On macOS, getrlimit by default reports that the hard limit is
