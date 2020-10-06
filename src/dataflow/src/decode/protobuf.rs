@@ -47,7 +47,7 @@ impl DecoderState for ProtobufDecoderState {
             }
             Err(err) => {
                 self.events_error += 1;
-                Err(format!("protobuf deserialization error: {}", err))
+                Err(format!("protobuf deserialization error: {:#}", err))
             }
         }
     }
@@ -68,7 +68,7 @@ impl DecoderState for ProtobufDecoderState {
             }
             Err(err) => {
                 self.events_error += 1;
-                error!("protobuf deserialization error: {}", err)
+                error!("protobuf deserialization error: {:#}", err)
             }
         }
     }
@@ -93,7 +93,7 @@ impl DecoderState for ProtobufDecoderState {
             }
             Err(err) => {
                 self.events_error += 1;
-                error!("protobuf deserialization error: {}", err)
+                error!("protobuf deserialization error: {:#}", err)
             }
         }
     }
