@@ -241,6 +241,7 @@ mz_peek_durations
 mz_scheduling_elapsed
 mz_scheduling_histogram
 mz_scheduling_parks
+mz_source_info
 mz_worker_materialization_frontiers
 
 > SHOW FULL SOURCES FROM mz_catalog
@@ -258,6 +259,7 @@ mz_peek_durations                    system true
 mz_scheduling_elapsed                system true
 mz_scheduling_histogram              system true
 mz_scheduling_parks                  system true
+mz_source_info                       system true
 mz_worker_materialization_frontiers  system true
 
 > SHOW TABLES FROM mz_catalog
@@ -301,7 +303,7 @@ SHOW EXTENDED TABLES not yet supported
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-26
+27
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

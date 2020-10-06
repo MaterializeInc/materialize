@@ -33,13 +33,16 @@ use kafka_util::KafkaAddrs;
 use log::{debug, error, info, log_enabled, warn};
 use repr::{PersistedRecord, PersistedRecordIter, Timestamp};
 
-use crate::server::{
-    PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-    TimestampMetadataUpdates,
-};
 use crate::source::persistence::{PersistenceSender, RecordFileMetadata, WorkerPersistenceData};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+};
+use crate::{
+    logging::materialized::Logger,
+    server::{
+        PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
+        TimestampMetadataUpdates,
+    },
 };
 
 /// Contains all information necessary to ingest data from Kafka
@@ -67,6 +70,8 @@ pub struct KafkaSourceInfo {
     worker_count: i32,
     /// Files to read on startup
     persisted_files: Vec<PathBuf>,
+    /// Timely worker logger for source events
+    logger: Option<Logger>,
 }
 
 impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
@@ -76,6 +81,7 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
         _active: bool,
         worker_id: usize,
         worker_count: usize,
+        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         _: &mut ConsistencyInfo,
@@ -87,6 +93,7 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
                 source_id,
                 worker_id,
                 worker_count,
+                logger,
                 consumer_activator,
                 kc,
             )),
@@ -221,7 +228,12 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 self.create_partition_queue(i);
                 consistency_info.partition_metrics.insert(
                     PartitionId::Kafka(i),
-                    PartitionMetrics::new(&self.topic_name, &self.source_id, &i.to_string()),
+                    PartitionMetrics::new(
+                        &self.topic_name,
+                        &self.source_id,
+                        &i.to_string(),
+                        self.logger.clone(),
+                    ),
                 );
             }
             consistency_info.update_partition_metadata(PartitionId::Kafka(i));
@@ -431,6 +443,7 @@ impl KafkaSourceInfo {
         source_id: SourceInstanceId,
         worker_id: usize,
         worker_count: usize,
+        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         kc: KafkaSourceConnector,
     ) -> KafkaSourceInfo {
@@ -499,6 +512,7 @@ impl KafkaSourceInfo {
             worker_id,
             worker_count,
             persisted_files,
+            logger,
         }
     }
 
