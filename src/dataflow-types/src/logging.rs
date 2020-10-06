@@ -51,6 +51,7 @@ pub enum MaterializedLog {
     FrontierCurrent,
     PeekCurrent,
     PeekDuration,
+    SourceInfo,
 }
 
 impl LogVariant {
@@ -131,6 +132,13 @@ impl LogVariant {
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
+            LogVariant::Materialized(MaterializedLog::SourceInfo) => RelationDesc::empty()
+                .with_column("source_name", ScalarType::String.nullable(false))
+                .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("partition_id", ScalarType::String.nullable(false))
+                //.with_column("offset", ScalarType::Int64.nullable(false))
+                .with_key(vec![0, 1, 2]),
+
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationDesc::empty()
                 .with_column("dataflow", ScalarType::String.nullable(false))
                 .with_column("source", ScalarType::String.nullable(false))
@@ -189,6 +197,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => vec![],
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
+            LogVariant::Materialized(MaterializedLog::SourceInfo) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
         }
     }

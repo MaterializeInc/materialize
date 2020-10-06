@@ -27,11 +27,15 @@ use dataflow_types::{
 };
 use expr::{PartitionId, SourceInstanceId};
 
-use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+};
+use crate::{
+    logging::materialized::Logger,
+    server::{
+        TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
+        TimestampMetadataUpdates,
+    },
 };
 
 lazy_static! {
@@ -83,6 +87,7 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
         active: bool,
         _worker_id: usize,
         _worker_count: usize,
+        logger: Option<Logger>,
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -132,7 +137,12 @@ impl KinesisSourceInfo {
             consistency_info.update_partition_metadata(kinesis_id.clone());
             consistency_info.partition_metrics.insert(
                 kinesis_id.clone(),
-                PartitionMetrics::new(&self.name, &self.id.to_string(), &kinesis_id.to_string()),
+                PartitionMetrics::new(
+                    &self.name,
+                    &self.id.to_string(),
+                    &kinesis_id.to_string(),
+                    None,
+                ),
             );
         }
         Ok(())
@@ -356,7 +366,7 @@ async fn create_state(
         consistency_info.update_partition_metadata(kinesis_id.clone());
         consistency_info.partition_metrics.insert(
             kinesis_id.clone(),
-            PartitionMetrics::new(name, &id.to_string(), &kinesis_id.to_string()),
+            PartitionMetrics::new(name, &id.to_string(), &kinesis_id.to_string(), None),
         );
     }
 

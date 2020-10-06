@@ -38,6 +38,7 @@ use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
 
 use super::source::util::source;
+use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
@@ -87,6 +88,8 @@ pub struct SourceConfig<'a, G> {
     pub encoding: DataEncoding,
     /// Channel to send persistence information to persister thread
     pub persistence_tx: Option<PersistenceSender>,
+    /// docs
+    pub logger: Option<Logger>,
 }
 
 #[derive(Clone, Serialize, Debug, Deserialize)]
@@ -216,6 +219,7 @@ pub(crate) trait SourceConstructor<Out> {
         active: bool,
         worker_id: usize,
         worker_count: usize,
+        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -258,7 +262,7 @@ impl MaybeLength for Value {
 /// [`create_source`] function.
 pub(crate) trait SourceInfo<Out> {
     /// Activates timestamping for a given source. The actions
-    /// take are a function of the source type and the consistency
+    /// taken are a function of the source type and the consistency
     fn activate_source_timestamping(
         id: &SourceInstanceId,
         consistency: &Consistency,
@@ -690,11 +694,49 @@ pub struct PartitionMetrics {
     closed_ts: DeleteOnDropGauge<'static, AtomicU64>,
     /// Total number of messages that have been received by the source and timestamped
     messages_ingested: DeleteOnDropCounter<'static, AtomicI64>,
+    /// todo
+    logger: Option<Logger>,
+    /// asdf
+    source_name: String,
+    /// asdf
+    source_id: String,
+    /// asdf
+    partition_id: String,
 }
 
 impl PartitionMetrics {
+    /// docs
+    pub fn offset_ingested(&mut self, prev_offset: i64, offset: i64) {
+        self.offset_ingested.set(offset);
+        if let Some(logger) = self.logger.as_mut() {
+            logger.log(MaterializedEvent::SourceInfo(
+                self.source_name.clone(),
+                self.source_id.clone(),
+                self.partition_id.clone(),
+                -(offset - prev_offset),
+            ));
+        }
+    }
+
+    /// docs
+    pub fn offset_received(&mut self, prev_offset: i64, offset: i64) {
+        self.offset_received.set(offset);
+        if let Some(logger) = self.logger.as_mut() {
+            logger.log(MaterializedEvent::SourceInfo(
+                self.source_name.clone(),
+                self.source_id.clone(),
+                self.partition_id.clone(),
+                offset - prev_offset,
+            ));
+        }
+    }
     /// Initialises partition metrics for a given (source_id, partition_id)
-    pub fn new(source_name: &str, source_id: &str, partition_id: &str) -> PartitionMetrics {
+    pub fn new(
+        source_name: &str,
+        source_id: &str,
+        partition_id: &str,
+        logger: Option<Logger>,
+    ) -> PartitionMetrics {
         lazy_static! {
             static ref OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
                 "mz_partition_offset_ingested",
@@ -744,6 +786,10 @@ impl PartitionMetrics {
                 &MESSAGES_INGESTED,
                 |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
+            logger,
+            source_name: source_name.to_string(),
+            source_id: source_id.to_string(),
+            partition_id: partition_id.to_string(),
         }
     }
 }
@@ -778,6 +824,7 @@ where
         active,
         encoding,
         mut persistence_tx,
+        logger,
         ..
     } = config;
 
@@ -811,6 +858,7 @@ where
             active,
             worker_id,
             worker_count,
+            logger,
             scope.sync_activator_for(&info.address[..]),
             source_connector.clone(),
             &mut consistency_info,
@@ -882,6 +930,7 @@ where
                         let offset = message.offset;
                         let msg_predecessor = predecessor;
                         predecessor = Some(offset);
+                        let prev_offset = msg_predecessor.map_or(0, |x| x.offset);
 
                         // Update ingestion metrics. Guaranteed to exist as the appropriate
                         // entry gets created in SourceConstructor or when a new partition
@@ -890,8 +939,7 @@ where
                             .partition_metrics
                             .get_mut(&partition)
                             .unwrap()
-                            .offset_received
-                            .set(offset.offset);
+                            .offset_received(prev_offset, offset.offset);
 
                         // Determine the timestamp to which we need to assign this message
                         let ts = consistency_info.find_matching_timestamp(
@@ -943,13 +991,11 @@ where
                                     Some(offset.offset),
                                 )));
 
-                                // Update ingestion metrics
-                                // Entry is guaranteed to exist as it gets created when we initialise the partition
                                 let partition_metrics = consistency_info
                                     .partition_metrics
                                     .get_mut(&partition)
                                     .unwrap();
-                                partition_metrics.offset_ingested.set(offset.offset);
+                                partition_metrics.offset_ingested(prev_offset, offset.offset);
                                 partition_metrics.messages_ingested.inc();
                             }
                         }
