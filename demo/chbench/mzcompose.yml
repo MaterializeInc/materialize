@@ -40,6 +40,7 @@ services:
       #
       # 1000 was chosen by fair dice roll
       - DIFFERENTIAL_EAGER_MERGE=1000
+      - DEFAULT_PROGRESS_MODE=${DEFAULT_PROGRESS_MODE}
   mysql:
     image: debezium/example-mysql:1.2
     ports:
@@ -423,6 +424,7 @@ mzconduct:
       env:
         MZ_SQL_EXPORTER_PORT: "9400:9399"
         MZ_THREADS: ${MZ_THREADS:-1}
+        DEFAULT_PROGRESS_MODE: ${DEFAULT_PROGRESS_MODE}
       steps:
       - step: start-services
         services: [materialized]
