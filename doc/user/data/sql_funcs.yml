@@ -197,7 +197,7 @@
       of `s` evaluates to `true`"
 
 - type: Subquery
-  description: Subquery functions take a query, e.g. [`SELECT`](/docs/sql/select)
+  description: Subquery functions take a query, e.g. [`SELECT`](/sql/select)
   functions:
   - signature: 'expression bool_op ALL(s: Query) -> bool'
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)

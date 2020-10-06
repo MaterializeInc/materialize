@@ -10,7 +10,7 @@
   <a name="{{ lower .type }}-func"></a>
 </h3>
 
-<p>{{ if .description }} {{ .description | markdownify }} {{ end }}</p>
+<p>{{ if .description }} {{ .description | $.Page.RenderString }} {{ end }}</p>
 
 {{end}}
 
@@ -35,7 +35,7 @@
     </td>
     <td>
 
-      {{ .description | markdownify }}
+      {{ .description | $.Page.RenderString }}
 
       {{ if .url}}(<a href="{{ .url}}">docs</a>){{ end }}
 

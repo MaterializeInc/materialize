@@ -1,6 +1,6 @@
 <div class="experimental">
   <strong>EXPERIMENTAL!</strong>
-  {{ with .Inner}}{{.|markdownify}}{{else}}This feature{{ end }}
+  {{ with .Inner}}{{.|$.Page.RenderString}}{{else}}This feature{{ end }}
   is under construction and requires
   <a href="{{"/cli/#experimental-mode"|relURL}}">experimental mode</a>.
 
