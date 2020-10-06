@@ -14,3 +14,8 @@
 array
 ----
 {{a,b},{NULL,d}}
+
+> SELECT ARRAY[ARRAY['a', 'b'], ARRAY[NULL, 'd']]::text
+array
+----
+{{a,b},{NULL,d}}

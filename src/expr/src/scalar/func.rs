@@ -2348,6 +2348,7 @@ pub enum UnaryFunc {
     CastJsonbToBool,
     CastUuidToString,
     CastRecordToString { ty: ScalarType },
+    CastArrayToString { ty: ScalarType },
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -2470,7 +2471,9 @@ impl UnaryFunc {
             UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
             UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
             UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
-            UnaryFunc::CastRecordToString { ty } => Ok(cast_record_to_string(a, ty, temp_storage)),
+            UnaryFunc::CastRecordToString { ty } | UnaryFunc::CastArrayToString { ty } => {
+                Ok(cast_collection_to_string(a, ty, temp_storage))
+            }
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
             UnaryFunc::CeilDecimal(scale) => Ok(ceil_decimal(a, *scale)),
@@ -2559,6 +2562,7 @@ impl UnaryFunc {
             | CastIntervalToString
             | CastBytesToString
             | CastRecordToString { .. }
+            | CastArrayToString { .. }
             | TrimWhitespace
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace => ScalarType::String.nullable(in_nullable),
@@ -2766,6 +2770,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
             UnaryFunc::CastUuidToString => f.write_str("uuidtostr"),
             UnaryFunc::CastRecordToString { .. } => f.write_str("recordtostr"),
+            UnaryFunc::CastArrayToString { .. } => f.write_str("arraytostr"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
@@ -3046,7 +3051,11 @@ fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a
     temp_storage.make_datum(|packer| packer.push_list(datums))
 }
 
-fn cast_record_to_string<'a>(a: Datum, ty: &ScalarType, temp_storage: &'a RowArena) -> Datum<'a> {
+fn cast_collection_to_string<'a>(
+    a: Datum,
+    ty: &ScalarType,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
     let mut buf = String::new();
     stringify_datum(&mut buf, a, ty);
     Datum::String(temp_storage.push_string(buf))
