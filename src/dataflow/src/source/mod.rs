@@ -38,6 +38,7 @@ use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
 
 use super::source::util::source;
+use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
@@ -87,6 +88,8 @@ pub struct SourceConfig<'a, G> {
     pub encoding: DataEncoding,
     /// Channel to send persistence information to persister thread
     pub persistence_tx: Option<PersistenceSender>,
+    /// Timely worker logger for source events
+    pub logger: Option<Logger>,
 }
 
 #[derive(Clone, Serialize, Debug, Deserialize)]
@@ -240,6 +243,7 @@ pub(crate) trait SourceConstructor<Out> {
         active: bool,
         worker_id: usize,
         worker_count: usize,
+        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -282,7 +286,7 @@ impl MaybeLength for Value {
 /// [`create_source`] function.
 pub(crate) trait SourceInfo<Out> {
     /// Activates timestamping for a given source. The actions
-    /// take are a function of the source type and the consistency
+    /// taken are a function of the source type and the consistency
     fn activate_source_timestamping(
         id: &SourceInstanceId,
         consistency: &Consistency,
@@ -720,7 +724,7 @@ impl SourceMetrics {
     }
 }
 
-/// Partition-specific Prometheus metrics
+/// Partition-specific metrics, recorded to both Prometheus and a system table
 pub struct PartitionMetrics {
     /// Highest offset that has been received by the source and timestamped
     offset_ingested: DeleteOnDropGauge<'static, AtomicI64>,
@@ -730,11 +734,34 @@ pub struct PartitionMetrics {
     closed_ts: DeleteOnDropGauge<'static, AtomicU64>,
     /// Total number of messages that have been received by the source and timestamped
     messages_ingested: DeleteOnDropCounter<'static, AtomicI64>,
+    logger: Option<Logger>,
+    source_name: String,
+    source_id: String,
+    partition_id: String,
+    last_offset: i64,
 }
 
 impl PartitionMetrics {
+    /// Record the latest offset ingested high-water mark
+    pub fn record_offset(&mut self, offset: i64) {
+        if let Some(logger) = self.logger.as_mut() {
+            logger.log(MaterializedEvent::SourceInfo {
+                source_name: self.source_name.clone(),
+                source_id: self.source_id.clone(),
+                partition_id: self.partition_id.clone(),
+                offset: offset - self.last_offset,
+            });
+        }
+        self.last_offset = offset;
+    }
+
     /// Initialises partition metrics for a given (source_id, partition_id)
-    pub fn new(source_name: &str, source_id: &str, partition_id: &str) -> PartitionMetrics {
+    pub fn new(
+        source_name: &str,
+        source_id: &str,
+        partition_id: &str,
+        logger: Option<Logger>,
+    ) -> PartitionMetrics {
         lazy_static! {
             static ref OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
                 "mz_partition_offset_ingested",
@@ -784,6 +811,25 @@ impl PartitionMetrics {
                 &MESSAGES_INGESTED,
                 |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
+            logger,
+            source_name: source_name.to_string(),
+            source_id: source_id.to_string(),
+            partition_id: partition_id.to_string(),
+            last_offset: 0,
+        }
+    }
+}
+
+impl Drop for PartitionMetrics {
+    fn drop(&mut self) {
+        // retract our partition from logging
+        if let Some(logger) = self.logger.as_mut() {
+            logger.log(MaterializedEvent::SourceInfo {
+                source_name: self.source_name.clone(),
+                source_id: self.source_id.clone(),
+                partition_id: self.partition_id.clone(),
+                offset: -self.last_offset,
+            });
         }
     }
 }
@@ -818,6 +864,7 @@ where
         active,
         encoding,
         mut persistence_tx,
+        logger,
         ..
     } = config;
 
@@ -851,6 +898,7 @@ where
             active,
             worker_id,
             worker_count,
+            logger,
             scope.sync_activator_for(&info.address[..]),
             source_connector.clone(),
             &mut consistency_info,
@@ -909,8 +957,10 @@ where
             // Bound execution of operator to prevent a single operator from hogging
             // the CPU if there are many messages to process
             let timer = Instant::now();
-            // Accumulate updates to BYTES_READ_COUNTER for Promethes metrics collection
+            // Accumulate updates to BYTES_READ_COUNTER for Prometheus metrics collection
             let mut bytes_read = 0;
+            // Accumulate updates to offsets for system table metrics collection
+            let mut mets = HashMap::new();
 
             // Record operator has been scheduled
             consistency_info
@@ -925,6 +975,12 @@ where
                         let offset = message.offset;
                         let msg_predecessor = predecessor;
                         predecessor = Some(offset);
+
+                        if let Some(off) = mets.get_mut(&partition) {
+                            *off = offset;
+                        } else {
+                            mets.insert(partition.clone(), offset);
+                        }
 
                         // Update ingestion metrics. Guaranteed to exist as the appropriate
                         // entry gets created in SourceConstructor or when a new partition
@@ -1038,6 +1094,14 @@ where
                         return SourceStatus::Done;
                     }
                 }
+            }
+
+            for (partition, offset) in mets {
+                let partition_metrics = consistency_info
+                    .partition_metrics
+                    .get_mut(&partition)
+                    .unwrap();
+                partition_metrics.record_offset(offset.offset);
             }
 
             // Downgrade capability (if possible) before exiting

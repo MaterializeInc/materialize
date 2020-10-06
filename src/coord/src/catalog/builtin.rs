@@ -94,8 +94,8 @@ pub struct BuiltinView {
 // Builtin definitions below. Keep these sorted by global ID, and ensure you
 // add new builtins to the `BUILTINS` map.
 //
-// Builtins are loaded in ID order, so sorting them by global ID makes the makes
-// the source code definition order match the load order.
+// Builtins are loaded in ID order, so sorting them by global ID makes the
+// source code definition order match the load order.
 //
 // A builtin must appear AFTER any items it depends upon. This means you may
 // need to reorder IDs if you change the dependency set of an existing builtin.
@@ -217,6 +217,14 @@ pub const MZ_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Materialized(MaterializedLog::PeekDuration),
     id: GlobalId::System(1024),
     index_id: GlobalId::System(1025),
+};
+
+pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
+    name: "mz_source_info",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Materialized(MaterializedLog::SourceInfo),
+    id: GlobalId::System(1026),
+    index_id: GlobalId::System(1027),
 };
 
 lazy_static! {
@@ -771,6 +779,7 @@ lazy_static! {
             Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
             Builtin::Log(&MZ_PEEK_ACTIVE),
             Builtin::Log(&MZ_PEEK_DURATIONS),
+            Builtin::Log(&MZ_SOURCE_INFO),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),
