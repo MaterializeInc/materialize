@@ -69,12 +69,26 @@ impl ProjectionExtraction {
             monotonic: _,
         } = relation
         {
+            let mut projection = Vec::new();
+
+            // If any key is an exact duplicate, we can remove it and use a projection.
+            let mut finger = 0;
+            while finger < group_key.len() {
+                if let Some(position) = group_key[..finger]
+                    .iter()
+                    .position(|x| x == &group_key[finger])
+                {
+                    projection.push(position);
+                    group_key.remove(finger);
+                } else {
+                    projection.push(finger);
+                    finger += 1;
+                }
+            }
+
             // If any entry of aggregates exists earlier in aggregates, we can remove it
             // and replace it with a projection that points to the first instance of it.
-            let mut projection = Vec::new();
-            projection.extend(0..group_key.len());
             let mut finger = 0;
-            let mut must_project = false;
             while finger < aggregates.len() {
                 if let Some(position) = aggregates[..finger]
                     .iter()
@@ -82,13 +96,12 @@ impl ProjectionExtraction {
                 {
                     projection.push(group_key.len() + position);
                     aggregates.remove(finger);
-                    must_project = true;
                 } else {
                     projection.push(group_key.len() + finger);
                     finger += 1;
                 }
             }
-            if must_project {
+            if projection.iter().enumerate().any(|(i, p)| i != *p) {
                 *relation = relation.take_dangerous().project(projection);
             }
         }
