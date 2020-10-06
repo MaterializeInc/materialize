@@ -63,7 +63,7 @@ where `n` is the number of _physical_ cores. Note that major cloud providers
 list the number of hyperthreaded cores (or _virtual_ CPUs). Divide this number
 by two to get the number of physical cores available. The reasoning is simple:
 Timely Dataflow is very computationally efficient and typically uses all
-available computational resources. Under high throuput, you should see each
+available computational resources. Under high throughput, you should see each
 worker pinning a core at 100% CPU, with no headroom for hyperthreading. One
 additional core is required for metadata management and coordination. Timely
 workers that have to fight for physical resources will only block each other.
