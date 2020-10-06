@@ -203,3 +203,30 @@ materialize.public.data_view  materialize.public.data_view_primary_idx   a      
 Index                                    "Create Index"
 --------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\" ON \"materialize\".\"public\".\"data_view\" (\"b\" - \"a\", \"a\")"
+
+> CREATE TABLE foo (
+    a int NOT NULL,
+    b decimal(13, 1),
+    z text
+  )
+> CREATE INDEX ON foo (a + b)
+> CREATE INDEX ON foo (substr(z, 3))
+> SHOW INDEXES FROM foo
+materialize.public.foo  materialize.public.foo_primary_idx    a       <null>          false  1
+materialize.public.foo  materialize.public.foo_primary_idx    b       <null>          true   2
+materialize.public.foo  materialize.public.foo_primary_idx    z       <null>          true   3
+materialize.public.foo  materialize.public.foo_expr_idx       <null>  "a + b"         true   1
+materialize.public.foo  materialize.public.foo_expr_idx1      <null>  "substr(z, 3)"  true   1
+> SHOW INDEXES FROM foo WHERE Column_name = 'b'
+materialize.public.foo  materialize.public.foo_primary_idx    b       <null>          true   2
+> SHOW INDEXES FROM foo WHERE Column_name = 'noexist'
+> SHOW INDEXES FROM foo WHERE Key_name = 'materialize.public.foo_expr_idx'
+materialize.public.foo  materialize.public.foo_expr_idx       <null>  "a + b"         true   1
+# TODO(justin): not handled in parser yet:
+#   SHOW INDEXES FROM v LIKE '%v'
+
+! SHOW INDEX FROM nonexistent
+unknown catalog item 'nonexistent'
+
+! SHOW INDEX FROM foo_primary_idx
+cannot show indexes on materialize.public.foo_primary_idx because it is a index
