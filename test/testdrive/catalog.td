@@ -230,6 +230,14 @@ mz_sources
 mz_sinks
 mz_views
 
+# `SHOW TABLES` and `mz_tables` should agree.
+> SELECT COUNT(*) FROM mz_tables WHERE global_id LIKE 's%'
+12
+
+# There is one entry in mz_indexes for each field_number/expression of the index.
+> SELECT COUNT(global_id) FROM mz_indexes WHERE global_id LIKE 's%'
+75
+
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length
 mz_catalog_names
