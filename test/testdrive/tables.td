@@ -181,6 +181,12 @@ TABLES
 ------
 v
 
+> SHOW TABLES LIKE 'foo'
+> SHOW TABLES LIKE 'v%'
+v
+> SHOW TABLES WHERE tables = 'v'
+v
+
 > SHOW SOURCES;
 SOURCES
 -------

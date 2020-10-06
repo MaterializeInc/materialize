@@ -126,23 +126,3 @@ query TT colnames
 SHOW FULL MATERIALIZED SOURCES
 ----
 SOURCES TYPE
-
-query T colnames
-SHOW TABLES
-----
-TABLES
-xyz
-
-query T
-SHOW TABLES LIKE 'xyz'
-----
-xyz
-
-query T
-SHOW TABLES LIKE 'abc'
-----
-
-query T
-SHOW TABLES WHERE tables = 'xyz'
-----
-xyz
