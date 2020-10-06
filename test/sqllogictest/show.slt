@@ -146,13 +146,3 @@ query T
 SHOW TABLES WHERE tables = 'xyz'
 ----
 xyz
-
-query T colnames
-SHOW SINKS
-----
-SINKS
-
-query TT colnames
-SHOW FULL SINKS
-----
-SINKS TYPE
