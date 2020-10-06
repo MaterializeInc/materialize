@@ -38,10 +38,10 @@ SOURCES
 -------
 
 > SHOW INDEXES FROM t;
-On_name               Key_name                          Column_name  Expression  Null   Seq_in_index
-----------------------------------------------------------------------------------------------------------------
-materialize.public.t  materialize.public.t_primary_idx  a            <null>      true              1
-materialize.public.t  materialize.public.t_primary_idx  b            <null>      false             2
+On_name  Key_name       Column_name  Expression  Null   Seq_in_index
+--------------------------------------------------------------------
+t        t_primary_idx  a            <null>      true   1
+t        t_primary_idx  b            <null>      false  2
 
 ! DROP INDEX t_primary_idx
 cannot drop 'materialize.public.t_primary_idx' as it is the default index for a table

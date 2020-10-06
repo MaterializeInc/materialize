@@ -31,11 +31,11 @@ $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
     SELECT * FROM mz_data
 
 > SHOW INDEXES FROM mz_view
-On_name                       Key_name                              Column_name  Expression  Null   Seq_in_index
-----------------------------------------------------------------------------------------------------------------
-materialize.public.mz_view  materialize.public.mz_view_primary_idx  a            <null>      false             1
-materialize.public.mz_view  materialize.public.mz_view_primary_idx  b            <null>      false             2
-materialize.public.mz_view  materialize.public.mz_view_primary_idx  mz_obj_no    <null>      false             3
+On_name  Key_name             Column_name  Expression  Null   Seq_in_index
+--------------------------------------------------------------------------
+mz_view  mz_view_primary_idx  a            <null>      false  1
+mz_view  mz_view_primary_idx  b            <null>      false  2
+mz_view  mz_view_primary_idx  mz_obj_no    <null>      false  3
 
 > CREATE VIEW dependent_view AS
     SELECT * FROM mz_view;
@@ -146,11 +146,11 @@ materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"re
 
 # Item's indexes are properly re-attributed
 > SHOW INDEXES FROM renamed_mz_view
-On_name                             Key_name                          Column_name Expression Null  Seq_in_index
----------------------------------------------------------------------------------------------------------------
- materialize.public.renamed_mz_view materialize.public.renamed_index  a           <null>     false            1
- materialize.public.renamed_mz_view materialize.public.renamed_index  b           <null>     false            2
- materialize.public.renamed_mz_view materialize.public.renamed_index  mz_obj_no   <null>     false            3
+On_name          Key_name       Column_name Expression Null  Seq_in_index
+-------------------------------------------------------------------------
+renamed_mz_view  renamed_index  a           <null>     false            1
+renamed_mz_view  renamed_index  b           <null>     false            2
+renamed_mz_view  renamed_index  mz_obj_no   <null>     false            3
 
 > SHOW CREATE INDEX renamed_index
 Index               "Create Index"
