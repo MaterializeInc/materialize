@@ -45,6 +45,11 @@ test1       USER     true
 > SHOW MATERIALIZED VIEWS
 test1
 
+> SHOW FULL MATERIALIZED VIEWS
+VIEWS    TYPE
+-------------
+test1    USER
+
 > SELECT * FROM test1
 b  sum
 ------
@@ -159,12 +164,14 @@ b  c
 ! SELECT * FROM idx1
 catalog item 'materialize.public.idx1' is an index and so cannot be depended upon
 
-! SELECT * from idx1
-catalog item 'materialize.public.idx1' is an index and so cannot be depended upon
-
 # If there exists a second primary index, dropping one primary index will not
 # unmaterialize the view.
 > DROP INDEX test5_primary_idx
+
+> SHOW FULL VIEWS LIKE 'test5'
+VIEWS       TYPE     MATERIALIZED
+----------------------------------
+test5       USER     true
 
 > SELECT * from test5
 b  c
@@ -183,6 +190,11 @@ b  c
 
 ! SELECT * from test5
 Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
+
+> SHOW FULL VIEWS LIKE 'test5'
+VIEWS       TYPE     MATERIALIZED
+----------------------------------
+test5       USER     false
 
 # Test that materialized views can be even if it requires multiple layers of
 # recursing through the AST to find a source.

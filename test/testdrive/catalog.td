@@ -190,6 +190,12 @@ unknown schema 'noexist'
 ! CREATE VIEW noexist.ignored.ignored AS SELECT 1
 unknown database 'noexist'
 
+# As should showing views.
+! SHOW VIEWS FROM noexist
+unknown schema 'noexist'
+! SHOW VIEWS FROM noexist_db.noexist_schema
+unknown database 'noexist_db'
+
 # Dropping database with cross-schema dependencies is ok.
 > CREATE DATABASE d1;
 > CREATE SCHEMA d1.s1;
@@ -239,6 +245,23 @@ mz_scheduling_histogram
 mz_scheduling_parks
 mz_worker_materialization_frontiers
 
+> SHOW FULL SOURCES FROM mz_catalog
+SOURCES                              TYPE   MATERIALIZED
+--------------------------------------------------------
+mz_arrangement_sharing               SYSTEM true
+mz_arrangement_sizes                 SYSTEM true
+mz_dataflow_channels                 SYSTEM true
+mz_dataflow_operator_addresses       SYSTEM true
+mz_dataflow_operators                SYSTEM true
+mz_materialization_dependencies      SYSTEM true
+mz_materializations                  SYSTEM true
+mz_peek_active                       SYSTEM true
+mz_peek_durations                    SYSTEM true
+mz_scheduling_elapsed                SYSTEM true
+mz_scheduling_histogram              SYSTEM true
+mz_scheduling_parks                  SYSTEM true
+mz_worker_materialization_frontiers  SYSTEM true
+
 > SHOW TABLES FROM mz_catalog
 mz_avro_ocf_sinks
 mz_kafka_sinks
@@ -252,6 +275,25 @@ mz_tables
 mz_sources
 mz_sinks
 mz_views
+
+> SHOW FULL TABLES FROM mz_catalog
+TABLES                TYPE
+----------------------------
+mz_avro_ocf_sinks     SYSTEM
+mz_kafka_sinks        SYSTEM
+mz_view_foreign_keys  SYSTEM
+mz_view_keys          SYSTEM
+mz_databases          SYSTEM
+mz_schemas            SYSTEM
+mz_columns            SYSTEM
+mz_indexes            SYSTEM
+mz_tables             SYSTEM
+mz_sinks              SYSTEM
+mz_sources            SYSTEM
+mz_views              SYSTEM
+
+! SHOW EXTENDED TABLES
+SHOW EXTENDED TABLES not yet supported
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE global_id LIKE 's%'
@@ -277,6 +319,25 @@ mz_records_per_dataflow
 mz_records_per_dataflow_global
 mz_records_per_dataflow_operator
 mz_relations
+
+> SHOW FULL VIEWS FROM mz_catalog
+VIEWS                             TYPE   MATERIALIZED
+-------------------------------------------------------
+mz_addresses_with_unit_length     SYSTEM false
+mz_dataflow_names                 SYSTEM false
+mz_dataflow_operator_dataflows    SYSTEM false
+mz_materialization_frontiers      SYSTEM false
+mz_objects                        SYSTEM false
+mz_perf_arrangement_records       SYSTEM false
+mz_perf_dependency_frontiers      SYSTEM false
+mz_perf_peek_durations_aggregates SYSTEM false
+mz_perf_peek_durations_bucket     SYSTEM false
+mz_perf_peek_durations_core       SYSTEM false
+mz_records_per_dataflow           SYSTEM false
+mz_records_per_dataflow_global    SYSTEM false
+mz_records_per_dataflow_operator  SYSTEM false
+mz_relations                      SYSTEM false
+mz_catalog_names                  SYSTEM false
 
 > SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active

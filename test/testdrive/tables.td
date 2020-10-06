@@ -51,6 +51,10 @@ Field      Nullable  Type
 -------------------------
 a          YES       int4
 b          NO        text
+> SHOW COLUMNS in t WHERE Field = 'a'
+a  YES  int4
+> SHOW COLUMNS in t LIKE 'b%'
+b  NO  text
 
 > INSERT INTO t VALUES (1, 'a');
 
