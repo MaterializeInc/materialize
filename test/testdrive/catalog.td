@@ -68,6 +68,21 @@ id          database
 1           materialize
 2           d
 
+# SHOW DATABASES should filter its output according to the provided LIKE or
+# WHERE clause.
+> SHOW DATABASES LIKE 'foo'
+> SHOW DATABASES LIKE 'd'
+d
+> SHOW DATABASES LIKE 'mat%'
+materialize
+> SHOW DATABASES WHERE (SELECT database = database)
+materialize
+d
+> SHOW DATABASES WHERE (id = (SELECT max(id) FROM mz_databases))
+d
+! SHOW DATABASES WHERE 7
+WHERE clause error: no overload for bool AND i32
+
 # Creating a database with a name that already exists should fail.
 ! CREATE DATABASE d
 database 'd' already exists
@@ -85,6 +100,14 @@ SCHEMAS
 -------
 public
 s
+
+# SHOW SCHEMAS should filter its output based on the provided LIKE or WHERE
+# clause.
+> SHOW SCHEMAS LIKE 'pub%'
+public
+> SHOW SCHEMAS LIKE 'private'
+> SHOW SCHEMAS WHERE schema = 'public'
+public
 
 # New views in the database should work.
 > CREATE MATERIALIZED VIEW d.public.v1 AS SELECT 1
