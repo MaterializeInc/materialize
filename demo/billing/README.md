@@ -51,6 +51,14 @@ more. Generally its best to run with no more than `ncpus - 2` threads.
 see the [developer guide](../../doc/developer/develop.md) for detailed instructions
 on how to install Kafka.
 
+Kafka should be started with `KAFKA_AUTO_CREATE_TOPICS_ENABLE=true`
+or you can create the billing topic (and can change partitions or
+replication-factor if desired):
+
+```shell session
+$ cargo run -- --message-count 0 --create-topic --partitions 1 --replication-factor 1
+```
+
 3. Run the billing demo with:
 
 ```shell session
