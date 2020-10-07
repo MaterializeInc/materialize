@@ -117,10 +117,16 @@ pub enum Expr {
     /// `SELECT (subquery) AS x` or `WHERE (subquery) = x`
     Subquery(Box<Query>),
     /// `<expr> <op> ANY/SOME (<query>)`
-    Any {
+    AnySubquery {
         left: Box<Expr>,
         op: BinaryOperator,
         right: Box<Query>,
+    },
+    /// `<expr> <op> ANY (<query>)`
+    AnyExpr {
+        left: Box<Expr>,
+        op: BinaryOperator,
+        right: Box<Expr>,
     },
     /// `<expr> <op> ALL (<query>)`
     All {
@@ -316,7 +322,15 @@ impl AstDisplay for Expr {
                 f.write_node(&s);
                 f.write_str(")");
             }
-            Expr::Any { left, op, right } => {
+            Expr::AnySubquery { left, op, right } => {
+                f.write_node(&left);
+                f.write_str(" ");
+                f.write_str(op);
+                f.write_str("ANY (");
+                f.write_node(&right);
+                f.write_str(")");
+            }
+            Expr::AnyExpr { left, op, right } => {
                 f.write_node(&left);
                 f.write_str(" ");
                 f.write_str(op);
