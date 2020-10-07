@@ -73,4 +73,4 @@ Technically, this code is not MBTA stream-specific. With a few lines of changes,
 it should be able to take any stream of json objects, parse out the desired key,
 and then produce a key-value Kafka topic out of it.
 
-Look in [doc/mbta_to_mtrlz-doc.md](doc/mbta_to_mtrlz-doc.md) for more information.
+Look in [doc/mbta-to-mtrlz-doc.md](doc/mbta-to-mtrlz-doc.md) for more information.

@@ -1,5 +1,5 @@
 [package]
-name = "mbta_to_mtrlz"
+name = "mbta-to-mtrlz"
 description = "Converts MBTA streams to Kafka streams to use in Materialize"
 version = "0.1.0"
 edition = "2018"

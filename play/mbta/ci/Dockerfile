@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -qy curl unzip
 
 #Copy build and scripts to /usr/local/bin
 
-COPY mbta_to_mtrlz /usr/local/bin
+COPY mbta-to-mtrlz /usr/local/bin
 COPY mbta-demo-cmd.sh /usr/local/bin
 
 #create workspace

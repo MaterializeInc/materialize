@@ -13,10 +13,10 @@
 
 set -euo pipefail
 
-mbta_to_mtrlz="$(whereis mbta_to_mtrlz| awk '{print $NF}')"
+mbta_to_mtrlz="$(whereis mbta-to-mtrlz| awk '{print $NF}')"
 
 if [ -z "$mbta_to_mtrlz" ]; then
-  mbta_to_mtrlz=../../target/release/mbta_to_mtrlz
+  mbta_to_mtrlz=../../target/release/mbta-to-mtrlz
 fi;
 
 function archive() {

@@ -105,7 +105,7 @@ async fn run_stream() -> Result<(), anyhow::Error> {
         "exit-at-end",
         "automatically exit when the end of the file is reached",
     );
-    let usage_details = opts.usage("usage: mbta_to_mtrlz [options] FILE");
+    let usage_details = opts.usage("usage: mbta-to-mtrlz [options] FILE");
     let opts = opts.parse(&args[1..])?;
 
     if opts.opt_present("h") {
@@ -227,7 +227,7 @@ async fn run_stream() -> Result<(), anyhow::Error> {
         &opts
             .opt_str("kafka-addr")
             .unwrap_or_else(|| "localhost:9092".to_string()),
-        "materialize.mbta_to_mtrlz",
+        "materialize.mbta-to-mtrlz",
         &[],
     )?;
 

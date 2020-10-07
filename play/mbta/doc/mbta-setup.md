@@ -51,7 +51,7 @@ create a row with the following six fields in order:
 
 5. Number of partitions that the kafka topic should have. Optional. Defaults to 1.
 
-6. Heartbeat frequency. In other words, the frequency at which the `mbta_to_mtrlz`
+6. Heartbeat frequency. In other words, the frequency at which the `mbta-to-mtrlz`
    code should check the file for new data if it has caught up to the end of the
    file. Optional. Defaults to 250ms. Specifying this is mostly just for
    avoiding unnecessary usage of CPU cycles for slow-moving topics. Technically
@@ -88,7 +88,7 @@ To replay an archive, run
 
 ## Automatic setup (Bash)
 
-First run `cargo build --release` in order to build the mbta_to_mtrlz binary.
+First run `cargo build --release` in order to build the mbta-to-mtrlz binary.
 
 To start and tear down a bunch of streams at once, [create a config
 file](#config-file-creation) or use one in (../examples).
@@ -114,7 +114,7 @@ complete before running the teardown script.
 and teardown. Notably, the `workspace/steady-pid.log` and `workspace/curl-pid.log` store
 the process ids of the background processes keeping all your streams alive. If you lose one
 of these two files somehow and want to tear down the processes, use:
-* `pkill mbta_to_mtrlz` to kill the code pushing streams into Kafka.
+* `pkill mbta-to-mtrlz` to kill the code pushing streams into Kafka.
 * `ps -f|grep mbta-demo-cmd` to find the pids for the connection maintenance threads.
 * `pkill curl` to kill all the curl commands downloading the streams. Note that
    you should kill the connection maintenance threads before killing the curl commands because
@@ -159,7 +159,7 @@ To manually connect to a single MBTA stream and load it into Kafka:
   cargo run -- -f path_to_stream_file.log -t topic_name
   ```
 
-  See the [mbta_to_mtrlz package documentation](mbta_to_mtrlz-doc.md) for more
+  See the [mbta-to-mtrlz package documentation](mbta-to-mtrlz-doc.md) for more
   details on other options you can run with.
 
   You can use `kafka-console-consumer` to verify the correctness of your stream like this:

@@ -1851,7 +1851,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
 
 [[package]]
-name = "mbta_to_mtrlz"
+name = "mbta-to-mtrlz"
 version = "0.1.0"
 dependencies = [
  "anyhow",
