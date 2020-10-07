@@ -9,9 +9,12 @@
 
 //! Integration tests for Materialize server.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
+
+use reqwest::{blocking::Client, StatusCode, Url};
 
 pub mod util;
 
@@ -161,6 +164,50 @@ fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+// Test the /sql POST endpoint of the HTTP server.
+#[test]
+fn test_http_sql() -> Result<(), Box<dyn Error>> {
+    let (server, _client) = util::start_server(util::Config::default())?;
+    let url = Url::parse(&format!("http://{}/sql", server.inner.local_addr()))?;
+    let mut params = HashMap::new();
+
+    struct TestCase {
+        query: &'static str,
+        status: StatusCode,
+        body: &'static str,
+    }
+
+    let tests = vec![
+        // Regular query works.
+        TestCase {
+            query: "select 1+2 as col",
+            status: StatusCode::OK,
+            body: r#"{"rows":[[3]],"col_names":["col"]}"#,
+        },
+        // Only one query at a time.
+        TestCase {
+            query: "select 1; select 2",
+            status: StatusCode::BAD_REQUEST,
+            body: r#"expected exactly 1 statement"#,
+        },
+        // CREATEs should not work.
+        TestCase {
+            query: "create view v as select 1",
+            status: StatusCode::BAD_REQUEST,
+            body: r#"unsupported plan"#,
+        },
+    ];
+
+    for tc in tests {
+        params.insert("sql", tc.query);
+        let res = Client::new().post(url.clone()).form(&params).send()?;
+        assert_eq!(res.status(), tc.status);
+        assert_eq!(res.text()?, tc.body);
     }
 
     Ok(())

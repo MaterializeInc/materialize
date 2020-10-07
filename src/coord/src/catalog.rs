@@ -103,6 +103,10 @@ impl ConnCatalog<'_> {
     fn database_spec(&self) -> DatabaseSpecifier {
         DatabaseSpecifier::Name(self.database.clone())
     }
+
+    pub fn conn_id(&self) -> u32 {
+        self.conn_id
+    }
 }
 
 #[derive(Debug, Serialize)]
