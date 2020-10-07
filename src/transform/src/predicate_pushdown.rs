@@ -182,24 +182,7 @@ impl PredicatePushdown {
                         // We want to scan `predicates` for any that can apply
                         // to individual elements of `inputs`.
 
-                        let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                        let input_arities = input_types
-                            .iter()
-                            .map(|i| i.column_types.len())
-                            .collect::<Vec<_>>();
-
-                        let mut offset = 0;
-                        let mut prior_arities = Vec::new();
-                        for input in 0..inputs.len() {
-                            prior_arities.push(offset);
-                            offset += input_arities[input];
-                        }
-
-                        let input_relation = input_arities
-                            .iter()
-                            .enumerate()
-                            .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                            .collect::<Vec<_>>();
+                        let join_util = expr::JoinUtil::new(inputs);
 
                         // Predicates to push at each input, and to retain.
                         let mut push_downs = vec![Vec::new(); inputs.len()];
@@ -214,11 +197,9 @@ impl PredicatePushdown {
                                 if let RelationExpr::ArrangeBy { .. } = inputs[index] {
                                     // do nothing. We do not want to push down a filter and block
                                     // usage of an index
-                                } else if let Some(localized) = localize_predicate(
+                                } else if let Some(localized) = join_util.try_localize_expression(
                                     &predicate,
                                     index,
-                                    &input_relation[..],
-                                    &prior_arities[..],
                                     &equivalences[..],
                                 ) {
                                     push_down.push(localized);
@@ -277,16 +258,8 @@ impl PredicatePushdown {
                                 }) {
                                     let mut expr1 = equivalence[pos].clone();
                                     let mut expr2 = equivalence[pos2].clone();
-                                    expr1.visit_mut(&mut |e| {
-                                        if let ScalarExpr::Column(c) = e {
-                                            *c -= prior_arities[input_relation[*c]];
-                                        }
-                                    });
-                                    expr2.visit_mut(&mut |e| {
-                                        if let ScalarExpr::Column(c) = e {
-                                            *c -= prior_arities[input_relation[*c]];
-                                        }
-                                    });
+                                    join_util.localize_expression(&mut expr1);
+                                    join_util.localize_expression(&mut expr2);
                                     use expr::BinaryFunc;
                                     push_downs[support.into_iter().next().unwrap()].push(
                                         ScalarExpr::CallBinary {
@@ -516,54 +489,5 @@ impl PredicatePushdown {
             ScalarExpr::Literal(_, _) => true,
             _ => false,
         }
-    }
-}
-
-// Uses equality constraints to rewrite `expr` with columns from relation `index`.
-fn localize_predicate(
-    expr: &ScalarExpr,
-    index: usize,
-    input_relation: &[usize],
-    prior_arities: &[usize],
-    equivalences: &[Vec<ScalarExpr>],
-) -> Option<ScalarExpr> {
-    let mut bail = false;
-    let mut expr = expr.clone();
-    expr.visit_mut(&mut |e| {
-        if let ScalarExpr::Column(column) = e {
-            let input = input_relation[*column];
-            let local = (input, *column - prior_arities[input]);
-            if input == index {
-                *column = local.1;
-            } else if let Some(col) = equivalences
-                .iter()
-                .find(|variable| variable.contains(&ScalarExpr::Column(*column)))
-                .and_then(|variable| {
-                    variable
-                        .iter()
-                        .flat_map(|e| {
-                            if let ScalarExpr::Column(c) = e {
-                                if input_relation[*c] == index {
-                                    Some(*c - prior_arities[input_relation[*c]])
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        })
-                        .next()
-                })
-            {
-                *column = col;
-            } else {
-                bail = true
-            }
-        }
-    });
-    if bail {
-        None
-    } else {
-        Some(expr)
     }
 }

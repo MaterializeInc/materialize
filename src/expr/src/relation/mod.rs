@@ -23,6 +23,7 @@ use crate::id::DummyHumanizer;
 use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
 
 pub mod func;
+pub mod join_util;
 
 /// An abstract syntax tree which defines a collection.
 ///
