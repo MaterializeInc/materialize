@@ -322,7 +322,7 @@ impl Desugarer {
                     right: Box::new(subquery.take()),
                 };
             } else {
-                *expr = Expr::Any {
+                *expr = Expr::AnySubquery {
                     left: Box::new(e.take()),
                     op: BinaryOperator::Eq,
                     right: Box::new(subquery.take()),
@@ -335,7 +335,7 @@ impl Desugarer {
         // `(SELECT mz_internal.mz_all($expr = $binding) FROM ($subquery) AS _ ($binding))
         //
         // and analogously for other operators and ANY.
-        if let Expr::Any { left, op, right } | Expr::All { left, op, right } = expr {
+        if let Expr::AnySubquery { left, op, right } | Expr::All { left, op, right } = expr {
             let left = match &mut **left {
                 Expr::Row { .. } => left.take(),
                 _ => Expr::Row {
@@ -373,7 +373,7 @@ impl Desugarer {
                             },
                         )
                         .call_unary(match expr {
-                            Expr::Any { .. } => vec!["mz_internal", "mz_any"],
+                            Expr::AnySubquery { .. } => vec!["mz_internal", "mz_any"],
                             Expr::All { .. } => vec!["mz_internal", "mz_all"],
                             _ => unreachable!(),
                         }),
