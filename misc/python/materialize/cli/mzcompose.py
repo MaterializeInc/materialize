@@ -53,7 +53,6 @@ def main(argv: List[str]) -> int:
         composes.append(build_compose_file(repo, args.command, config_file))
 
     # Hand over control to Docker Compose.
-    announce("Delegating to Docker Compose")
     dc_args = [
         "docker-compose",
         *[f"-f/dev/fd/{comp.fileno()}" for comp in composes],
@@ -63,6 +62,7 @@ def main(argv: List[str]) -> int:
         *([args.command] if args.command is not None else []),
         *args.extra,
     ]
+    announce(f"Delegating to Docker Compose, running command: {' '.join(dc_args)}")
     os.execvp("docker-compose", dc_args)
 
 
