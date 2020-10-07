@@ -291,6 +291,7 @@ class Composition:
 
         compose_files = itertools.chain(
             Path("demo").glob("*/mzcompose.yml"),
+            Path("play").glob("*/mzcompose.yml"),
             Path("test").glob("*/mzcompose.yml"),
             Path("test/performance").glob("*/mzcompose.yml"),
         )
