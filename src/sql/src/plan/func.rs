@@ -441,10 +441,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             .collect();
         let m = Self { ident, ecx };
 
-        let types: Vec<_> = cexprs
-            .iter()
-            .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
-            .collect();
+        let types: Vec<_> = cexprs.iter().map(|e| ecx.scalar_type(e)).collect();
 
         // try-catch in Rust.
         match || -> Result<R, anyhow::Error> {

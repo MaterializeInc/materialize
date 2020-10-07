@@ -17,7 +17,7 @@ use lazy_static::lazy_static;
 use repr::{ColumnType, RelationType, ScalarType};
 
 use crate::plan::expr::{
-    AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, ScalarTypeable, UnaryFunc,
+    AbstractExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc,
 };
 
 /// Rewrites predicates that contain subqueries so that the subqueries

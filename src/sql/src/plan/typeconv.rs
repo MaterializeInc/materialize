@@ -544,9 +544,7 @@ pub fn plan_coerce<'a>(
             let coerce_elem_to = match &coerce_to {
                 Plain(ScalarType::Array(typ)) => Plain((**typ).clone()),
                 Plain(_) => {
-                    let typ = exprs
-                        .iter()
-                        .find_map(|e| ecx.column_type(e).map(|t| t.scalar_type));
+                    let typ = exprs.iter().find_map(|e| ecx.scalar_type(e));
                     CoerceTo::Plain(typ.unwrap_or(ScalarType::String))
                 }
                 JsonbAny => bail!("cannot coerce array literal to jsonb type"),
@@ -563,7 +561,7 @@ pub fn plan_coerce<'a>(
                 bail!("unable to infer type for empty array")
             };
             for (i, e) in out.iter().enumerate() {
-                let t = ecx.scalar_type(&e);
+                let t = ecx.scalar_type(e);
                 if t != typ {
                     bail!(
                         "Cannot create array with mixed types. \
@@ -584,9 +582,7 @@ pub fn plan_coerce<'a>(
             let coerce_elem_to = match &coerce_to {
                 Plain(ScalarType::List(typ)) => Plain((**typ).clone()),
                 Plain(_) => {
-                    let typ = exprs
-                        .iter()
-                        .find_map(|e| ecx.column_type(e).map(|t| t.scalar_type));
+                    let typ = exprs.iter().find_map(|e| ecx.scalar_type(e));
                     CoerceTo::Plain(typ.unwrap_or(ScalarType::String))
                 }
                 JsonbAny => bail!("cannot coerce list literal to jsonb type"),
@@ -603,7 +599,7 @@ pub fn plan_coerce<'a>(
                 bail!("unable to infer type for empty list")
             };
             for (i, e) in out.iter().enumerate() {
-                let t = ecx.scalar_type(&e);
+                let t = ecx.scalar_type(e);
                 if t != typ {
                     bail!(
                         "Cannot create list with mixed types. \

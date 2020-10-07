@@ -46,8 +46,8 @@ use crate::names::PartialName;
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
-    AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
-    ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
+    AbstractColumnType, AbstractExpr, AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder,
+    ColumnRef, JoinKind, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func::{self, Func};
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
@@ -1764,7 +1764,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             let lhs = plan_expr(ecx, left)?;
             let rhs = plan_expr(ecx, right)?;
 
-            let (lhs, rhs) = if let Some(typ) = ecx.coercible_scalar_type(&lhs) {
+            let (lhs, rhs) = if let Some(typ) = ecx.scalar_type(&lhs) {
                 (
                     lhs.type_as(ecx, typ.clone())?,
                     rhs.type_as(
@@ -1772,7 +1772,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                         ScalarType::Array(Box::new(typ)),
                     )?,
                 )
-            } else if let Some(ScalarType::Array(array_type)) = ecx.coercible_scalar_type(&rhs) {
+            } else if let Some(ScalarType::Array(array_type)) = ecx.scalar_type(&rhs) {
                 (
                     lhs.type_as(&ecx.with_name("ANY operand"), *array_type.clone())?,
                     rhs.type_as(ecx, ScalarType::Array(array_type))?,
@@ -1871,10 +1871,7 @@ pub fn plan_homogeneous_exprs(
         cexprs.push(cexpr);
     }
 
-    let types: Vec<_> = cexprs
-        .iter()
-        .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
-        .collect();
+    let types: Vec<_> = cexprs.iter().map(|e| ecx.scalar_type(e)).collect();
 
     let target = match typeconv::guess_best_common_type(&types, type_hint) {
         Some(t) => t,
@@ -2429,7 +2426,7 @@ impl<'a> ExprContext<'a> {
 
     pub fn column_type<E>(&self, expr: &E) -> E::Type
     where
-        E: ScalarTypeable,
+        E: AbstractExpr,
     {
         expr.typ(
             &self.qcx.outer_relation_types,
@@ -2438,15 +2435,11 @@ impl<'a> ExprContext<'a> {
         )
     }
 
-    pub fn scalar_type(&self, expr: &ScalarExpr) -> ScalarType {
-        self.column_type(expr).scalar_type
-    }
-
-    pub fn coercible_scalar_type(&self, expr: &CoercibleScalarExpr) -> Option<ScalarType> {
-        match self.column_type(expr) {
-            Some(column_typ) => Some(column_typ.scalar_type),
-            None => None,
-        }
+    pub fn scalar_type<E>(&self, expr: &E) -> <E::Type as AbstractColumnType>::AbstractScalarType
+    where
+        E: AbstractExpr,
+    {
+        self.column_type(expr).scalar_type()
     }
 
     fn derived_query_context(&self) -> QueryContext {
