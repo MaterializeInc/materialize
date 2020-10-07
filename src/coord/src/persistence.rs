@@ -9,13 +9,14 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use futures::select;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
+use uuid::Uuid;
 
 use dataflow::source::persistence::RecordFileMetadata;
 use dataflow::PersistenceMessage;
@@ -46,6 +47,7 @@ struct Source {
     // Multiple source instances will send data to the same Source object
     // but the data will be deduplicated before it is persisted.
     id: GlobalId,
+    cluster_id: Uuid,
     path: PathBuf,
     // Number of records currently waiting to be written out.
     pending_records: usize,
@@ -58,9 +60,10 @@ struct Source {
 }
 
 impl Source {
-    fn new(id: GlobalId, path: PathBuf, max_pending_records: usize) -> Self {
+    fn new(id: GlobalId, cluster_id: Uuid, path: PathBuf, max_pending_records: usize) -> Self {
         Source {
             id,
+            cluster_id,
             path,
             pending_records: 0,
             max_pending_records,
@@ -130,6 +133,7 @@ impl Source {
                 // MzOffsets, so the starting number is off by 1 for something like
                 // Kafka
                 let file_name = RecordFileMetadata::generate_file_name(
+                    self.cluster_id,
                     self.id,
                     *partition_id,
                     prefix_start_offset,
@@ -265,34 +269,39 @@ impl Persister {
                     source.insert_record(data.partition_id, data.record)?;
                 }
             }
-            PersistenceMessage::AddSource(id) => {
+            PersistenceMessage::AddSource(cluster_id, source_id) => {
                 // Check if we already have a source
-                if self.sources.contains_key(&id) {
+                if self.sources.contains_key(&source_id) {
                     error!(
                             "Received signal to enable persistence for {} but it is already persisted. Ignoring.",
-                            id
+                            source_id
                         );
                     return Ok(false);
                 }
 
-                if self.disabled_sources.contains(&id) {
-                    error!("Received signal to enable persistence for {} but it has already been disabled. Ignoring.", id);
+                if self.disabled_sources.contains(&source_id) {
+                    error!("Received signal to enable persistence for {} but it has already been disabled. Ignoring.", source_id);
                     return Ok(false);
                 }
 
                 // Create a new subdirectory to store this source's data.
-                let source_path = self.config.path.join(id.to_string());
+                let source_path = self.config.path.join(source_id.to_string());
                 fs::create_dir_all(&source_path).with_context(|| {
                     anyhow!(
                         "trying to create persistence directory: {:#?} for source: {}",
                         source_path,
-                        id
+                        source_id
                     )
                 })?;
 
-                let source = Source::new(id, source_path, self.config.max_pending_records);
-                self.sources.insert(id, source);
-                info!("Enabled persistence for source: {}", id);
+                let source = Source::new(
+                    source_id,
+                    cluster_id,
+                    source_path,
+                    self.config.max_pending_records,
+                );
+                self.sources.insert(source_id, source);
+                info!("Enabled persistence for source: {}", source_id);
             }
             PersistenceMessage::DropSource(id) => {
                 if !self.sources.contains_key(&id) {
@@ -340,7 +349,8 @@ impl Persister {
 /// which may or may not have new data around previously persisted files.
 pub fn augment_connector(
     mut source_connector: SourceConnector,
-    persistence_directory: PathBuf,
+    persistence_directory: &Path,
+    cluster_id: Uuid,
     source_id: GlobalId,
 ) -> Result<Option<SourceConnector>, anyhow::Error> {
     match &mut source_connector {
@@ -351,7 +361,7 @@ pub fn augment_connector(
                 // This connector has no persistence, so do nothing.
                 Ok(None)
             } else {
-                augment_connector_inner(connector, persistence_directory, source_id)?;
+                augment_connector_inner(connector, persistence_directory, cluster_id, source_id)?;
                 Ok(Some(source_connector))
             }
         }
@@ -361,7 +371,8 @@ pub fn augment_connector(
 
 fn augment_connector_inner(
     connector: &mut ExternalSourceConnector,
-    persistence_directory: PathBuf,
+    persistence_directory: &Path,
+    cluster_id: Uuid,
     source_id: GlobalId,
 ) -> Result<(), anyhow::Error> {
     match connector {
@@ -390,6 +401,18 @@ fn augment_connector_inner(
                     let path = file.path();
                     if let Some(metadata) = RecordFileMetadata::from_path(&path)? {
                         if metadata.source_id != source_id {
+                            error!("Ignoring persistence file with invalid source id. Received: {} expected: {} path: {}",
+                                   metadata.source_id,
+                                   source_id,
+                                   path.display());
+                            continue;
+                        }
+
+                        if metadata.cluster_id != cluster_id {
+                            error!("Ignoring persistence file with invalid cluster id. Received: {} expected: {} path: {}",
+                            metadata.cluster_id,
+                            cluster_id,
+                            path.display());
                             continue;
                         }
 
