@@ -122,7 +122,7 @@ use timely::communication::Allocate;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
+use expr::{GlobalId, Id, MapFilterProject, RelationExpr, ScalarExpr, SourceInstanceId};
 use mz_avro::types::Value;
 use mz_avro::Schema;
 use ore::cast::CastFrom;
@@ -740,6 +740,70 @@ impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    fn extract_map_filter_project(
+        &mut self,
+        relation_expr: &RelationExpr,
+    ) -> Option<(MapFilterProject, RelationExpr)> {
+        match relation_expr {
+            RelationExpr::Map { input, scalars } => {
+                let (mfp, input) = self.extract_map_filter_project(input)?;
+                Some((mfp.map(scalars.iter().cloned()), input))
+            }
+            RelationExpr::Filter { input, predicates } => {
+                let (mfp, input) = self.extract_map_filter_project(input)?;
+                Some((mfp.filter(predicates.iter().cloned()), input))
+            }
+            RelationExpr::Project { input, outputs } => {
+                let (mfp, input) = self.extract_map_filter_project(input)?;
+                Some((mfp.project(outputs.iter().cloned()), input))
+            }
+            RelationExpr::Get { .. } => Some((
+                MapFilterProject::new(relation_expr.arity()),
+                relation_expr.clone(),
+            )),
+            _ => None,
+        }
+    }
+
+    /// Attempt to extract a chain of map/filter/project operators on top of a Get. Returns true if
+    /// it was successful and false otherwise. We still fall back to individual implementations for
+    /// the various operators so that ones like Filter, that special-case being on top of a join,
+    /// can still do so.
+    fn try_render_map_filter_project(
+        &mut self,
+        relation_expr: &RelationExpr,
+        scope: &mut G,
+        worker_index: usize,
+    ) -> bool {
+        if let Some((mfp, input)) = self.extract_map_filter_project(relation_expr) {
+            self.ensure_rendered(&input, scope, worker_index);
+            let (ok_collection, mut err_collection) = self
+                .flat_map_ref(&input, {
+                    let mut row_packer = repr::RowPacker::new();
+                    let temp_storage = RowArena::new();
+                    move |row| {
+                        mfp.evaluate(&mut row.unpack(), &temp_storage, &mut row_packer)
+                            .map_err(|e| e.into())
+                            .transpose()
+                    }
+                })
+                .unwrap();
+
+            use timely::dataflow::operators::ok_err::OkErr;
+            let (oks, errors) = ok_collection.inner.ok_err(|(x, t, d)| match x {
+                Ok(x) => Ok((x, t, d)),
+                Err(x) => Err((x, t, d)),
+            });
+            err_collection = err_collection.concat(&errors.as_collection());
+
+            self.collections
+                .insert(relation_expr.clone(), (oks.as_collection(), err_collection));
+            true
+        } else {
+            false
+        }
+    }
+
     /// Ensures the context contains an entry for `relation_expr`.
     ///
     /// This method may construct new dataflow elements and register then in the context,
@@ -804,43 +868,47 @@ where
                 }
 
                 RelationExpr::Project { input, outputs } => {
-                    self.ensure_rendered(input, scope, worker_index);
-                    let outputs = outputs.clone();
-                    let (ok_collection, err_collection) = self.collection(input).unwrap();
-                    let ok_collection = ok_collection.map({
-                        let mut row_packer = repr::RowPacker::new();
-                        move |row| {
-                            let datums = row.unpack();
-                            row_packer.pack(outputs.iter().map(|i| datums[*i]))
-                        }
-                    });
+                    if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
+                        self.ensure_rendered(input, scope, worker_index);
+                        let outputs = outputs.clone();
+                        let (ok_collection, err_collection) = self.collection(input).unwrap();
+                        let ok_collection = ok_collection.map({
+                            let mut row_packer = repr::RowPacker::new();
+                            move |row| {
+                                let datums = row.unpack();
+                                row_packer.pack(outputs.iter().map(|i| datums[*i]))
+                            }
+                        });
 
-                    self.collections
-                        .insert(relation_expr.clone(), (ok_collection, err_collection));
+                        self.collections
+                            .insert(relation_expr.clone(), (ok_collection, err_collection));
+                    }
                 }
 
                 RelationExpr::Map { input, scalars } => {
-                    self.ensure_rendered(input, scope, worker_index);
-                    let scalars = scalars.clone();
-                    let (ok_collection, err_collection) = self.collection(input).unwrap();
-                    let (ok_collection, new_err_collection) = ok_collection.map_fallible({
-                        let mut row_packer = repr::RowPacker::new();
-                        move |input_row| {
-                            let mut datums = input_row.unpack();
-                            let temp_storage = RowArena::new();
-                            for scalar in &scalars {
-                                let datum = scalar.eval(&datums, &temp_storage)?;
-                                // Scalar is allowed to see the outputs of previous scalars.
-                                // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
-                                // Note that this doesn't mutate input_row.
-                                datums.push(datum);
+                    if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
+                        self.ensure_rendered(input, scope, worker_index);
+                        let scalars = scalars.clone();
+                        let (ok_collection, err_collection) = self.collection(input).unwrap();
+                        let (ok_collection, new_err_collection) = ok_collection.map_fallible({
+                            let mut row_packer = repr::RowPacker::new();
+                            move |input_row| {
+                                let mut datums = input_row.unpack();
+                                let temp_storage = RowArena::new();
+                                for scalar in &scalars {
+                                    let datum = scalar.eval(&datums, &temp_storage)?;
+                                    // Scalar is allowed to see the outputs of previous scalars.
+                                    // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
+                                    // Note that this doesn't mutate input_row.
+                                    datums.push(datum);
+                                }
+                                Ok::<_, DataflowError>(row_packer.pack(&*datums))
                             }
-                            Ok::<_, DataflowError>(row_packer.pack(&*datums))
-                        }
-                    });
-                    let err_collection = err_collection.concat(&new_err_collection);
-                    self.collections
-                        .insert(relation_expr.clone(), (ok_collection, err_collection));
+                        });
+                        let err_collection = err_collection.concat(&new_err_collection);
+                        self.collections
+                            .insert(relation_expr.clone(), (ok_collection, err_collection));
+                    }
                 }
 
                 RelationExpr::FlatMap {
@@ -916,47 +984,53 @@ where
                 }
 
                 RelationExpr::Filter { input, predicates } => {
-                    let collections = if let RelationExpr::Join {
-                        inputs,
-                        implementation,
-                        ..
-                    } = &**input
-                    {
-                        for input in inputs {
-                            self.ensure_rendered(input, scope, worker_index);
-                        }
-                        let (ok_collection, err_collection) = match implementation {
-                            expr::JoinImplementation::Differential(_start, _order) => {
-                                self.render_join(input, predicates, scope)
+                    if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
+                        let collections = if let RelationExpr::Join {
+                            inputs,
+                            implementation,
+                            ..
+                        } = &**input
+                        {
+                            for input in inputs {
+                                self.ensure_rendered(input, scope, worker_index);
                             }
-                            expr::JoinImplementation::DeltaQuery(_orders) => self
-                                .render_delta_join(input, predicates, scope, worker_index, |t| {
-                                    t.saturating_sub(1)
-                                }),
-                            expr::JoinImplementation::Unimplemented => {
-                                panic!("Attempt to render unimplemented join");
-                            }
-                        };
-                        (ok_collection, err_collection.map(Into::into))
-                    } else {
-                        self.ensure_rendered(input, scope, worker_index);
-                        let temp_storage = RowArena::new();
-                        let predicates = predicates.clone();
-                        let (ok_collection, err_collection) = self.collection(input).unwrap();
-                        let (ok_collection, new_err_collection) =
-                            ok_collection.filter_fallible(move |input_row| {
-                                let datums = input_row.unpack();
-                                for p in &predicates {
-                                    if p.eval(&datums, &temp_storage)? != Datum::True {
-                                        return Ok(false);
-                                    }
+                            let (ok_collection, err_collection) = match implementation {
+                                expr::JoinImplementation::Differential(_start, _order) => {
+                                    self.render_join(input, predicates, scope)
                                 }
-                                Ok::<_, DataflowError>(true)
-                            });
-                        let err_collection = err_collection.concat(&new_err_collection);
-                        (ok_collection, err_collection)
-                    };
-                    self.collections.insert(relation_expr.clone(), collections);
+                                expr::JoinImplementation::DeltaQuery(_orders) => self
+                                    .render_delta_join(
+                                        input,
+                                        predicates,
+                                        scope,
+                                        worker_index,
+                                        |t| t.saturating_sub(1),
+                                    ),
+                                expr::JoinImplementation::Unimplemented => {
+                                    panic!("Attempt to render unimplemented join");
+                                }
+                            };
+                            (ok_collection, err_collection.map(Into::into))
+                        } else {
+                            self.ensure_rendered(input, scope, worker_index);
+                            let temp_storage = RowArena::new();
+                            let predicates = predicates.clone();
+                            let (ok_collection, err_collection) = self.collection(input).unwrap();
+                            let (ok_collection, new_err_collection) = ok_collection
+                                .filter_fallible(move |input_row| {
+                                    let datums = input_row.unpack();
+                                    for p in &predicates {
+                                        if p.eval(&datums, &temp_storage)? != Datum::True {
+                                            return Ok(false);
+                                        }
+                                    }
+                                    Ok::<_, DataflowError>(true)
+                                });
+                            let err_collection = err_collection.concat(&new_err_collection);
+                            (ok_collection, err_collection)
+                        };
+                        self.collections.insert(relation_expr.clone(), collections);
+                    }
                 }
 
                 RelationExpr::Join {
