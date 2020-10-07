@@ -692,11 +692,8 @@ pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
 }
 
 // TODO(justin): this should return an error.
-pub fn files_for_source(id: GlobalId) -> Vec<PathBuf> {
-    // TODO(justin): plumb through the configured persistence directory, for now this is only
-    // suitable for testing.
-    let persistence_dir = PathBuf::from("mzdata/persistence");
-    let source_path = persistence_dir.join(id.to_string());
+pub fn files_for_source(id: GlobalId, persistence_directory: &PathBuf) -> Vec<PathBuf> {
+    let source_path = persistence_directory.join(id.to_string());
     match std::fs::read_dir(&source_path) {
         Ok(entries) => entries.map(|e| e.unwrap().path()).collect(),
         Err(_) => {
@@ -709,16 +706,23 @@ pub fn files_for_source(id: GlobalId) -> Vec<PathBuf> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum TableFunc {
-    JsonbEach { stringify: bool },
+    JsonbEach {
+        stringify: bool,
+    },
     JsonbObjectKeys,
-    JsonbArrayElements { stringify: bool },
+    JsonbArrayElements {
+        stringify: bool,
+    },
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
     GenerateSeriesInt32,
     GenerateSeriesInt64,
     // TODO(justin): should also possibly have GenerateSeriesTimestamp{,Tz}.
     Repeat,
-    ReadPersistedData { source: GlobalId },
+    ReadPersistedData {
+        source: GlobalId,
+        persistence_directory: PathBuf,
+    },
 }
 
 impl TableFunc {
@@ -743,9 +747,12 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => generate_series_int32(datums[0], datums[1]),
             TableFunc::GenerateSeriesInt64 => generate_series_int64(datums[0], datums[1]),
             TableFunc::Repeat => repeat(datums[0]),
-            TableFunc::ReadPersistedData { source } => {
+            TableFunc::ReadPersistedData {
+                source,
+                persistence_directory,
+            } => {
                 let mut row_packer = RowPacker::new();
-                files_for_source(*source)
+                files_for_source(*source, persistence_directory)
                     .iter()
                     .flat_map(|e| {
                         PersistedRecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
@@ -842,7 +849,7 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
             TableFunc::Repeat => f.write_str("repeat"),
-            TableFunc::ReadPersistedData { source } => {
+            TableFunc::ReadPersistedData { source, .. } => {
                 write!(f, "internal_read_persisted_data({})", source)
             }
         }

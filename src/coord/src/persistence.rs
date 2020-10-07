@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
@@ -340,7 +340,7 @@ impl Persister {
 /// which may or may not have new data around previously persisted files.
 pub fn augment_connector(
     mut source_connector: SourceConnector,
-    persistence_directory: PathBuf,
+    persistence_directory: &Path,
     source_id: GlobalId,
 ) -> Result<Option<SourceConnector>, anyhow::Error> {
     match &mut source_connector {
@@ -361,7 +361,7 @@ pub fn augment_connector(
 
 fn augment_connector_inner(
     connector: &mut ExternalSourceConnector,
-    persistence_directory: PathBuf,
+    persistence_directory: &Path,
     source_id: GlobalId,
 ) -> Result<(), anyhow::Error> {
     match connector {

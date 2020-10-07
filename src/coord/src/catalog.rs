@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
@@ -89,6 +89,7 @@ pub struct Catalog {
     cluster_id: Uuid,
     /// Used to assign a PostgreSQL object ID (OID) to each object in the catalog.
     oid_counter: u32,
+    persistence_directory: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -361,6 +362,7 @@ impl Catalog {
             experimental_mode,
             cluster_id,
             oid_counter: FIRST_USER_OID,
+            persistence_directory: config.persistence_directory,
         };
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
 
@@ -1512,6 +1514,10 @@ impl Catalog {
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
+
+    pub fn persistence_directory(&self) -> Option<&Path> {
+        self.persistence_directory.as_deref()
+    }
 }
 
 impl IdHumanizer for Catalog {
@@ -1649,6 +1655,7 @@ pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
         path: Some(path),
         enable_logging: true,
         experimental_mode: None,
+        persistence_directory: None,
     })?;
     Ok(catalog.dump())
 }
@@ -1747,6 +1754,10 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
 
     fn is_materialized(&self, id: GlobalId) -> bool {
         !self.catalog.indexes[&id].is_empty()
+    }
+
+    fn persistence_directory(&self) -> Option<&Path> {
+        self.catalog.persistence_directory()
     }
 }
 

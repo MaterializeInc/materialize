@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
@@ -142,7 +142,6 @@ where
     // Channel to communicate source status updates and shutdown notifications to the persister
     // thread.
     persistence_tx: Option<PersistenceSender>,
-    persistence_path: Option<PathBuf>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -2666,10 +2665,10 @@ where
                     // If Materialize has persistence enabled, check to see if the source has any
                     // already persisted data that can be reused, and if so, augment the source
                     // connector to use that data before importing it into the dataflow.
-                    let connector = if let Some(path) = &self.persistence_path {
+                    let connector = if let Some(path) = self.catalog.persistence_directory() {
                         match crate::persistence::augment_connector(
                             source.connector.clone(),
-                            path.clone(),
+                            path,
                             *id,
                         ) {
                             Ok(Some(connector)) => Some(connector),
@@ -2992,6 +2991,7 @@ where
             path: catalog_path.as_deref(),
             experimental_mode: Some(experimental_mode),
             enable_logging: logging_granularity.is_some(),
+            persistence_directory: persistence_config.map(|pc| pc.path),
         })?;
 
         let mut coord = Coordinator {
@@ -3009,7 +3009,6 @@ where
             logical_compaction_window_ms: logical_compaction_window
                 .map(duration_to_timestamp_millis),
             persistence_tx,
-            persistence_path: persistence_config.map(|pc| pc.path),
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,

@@ -1124,9 +1124,14 @@ lazy_static! {
                         CatalogItemType::Source => {},
                         _ =>  bail!("{} is a {}, but internal_read_persisted_data requires a source", source, entry.item_type()),
                     }
+                    let persistence_directory = ecx.qcx.scx.catalog.persistence_directory();
+                    if persistence_directory.is_none() {
+                        bail!("source persistence is currently disabled. Try rerunning Materialize with '--experimental'.");
+                    }
                     Ok(TableFuncPlan {
                         func: TableFunc::ReadPersistedData {
                             source: entry.id(),
+                            persistence_directory: persistence_directory.expect("known to exist").to_path_buf(),
                         },
                         exprs: vec![],
                         column_names: vec!["filename", "offset", "key", "value"].iter().map(|c| Some(ColumnName::from(*c))).collect(),
