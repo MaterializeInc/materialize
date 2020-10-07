@@ -908,6 +908,13 @@ lazy_static! {
             "pg_get_userbyid" => Scalar {
                 params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'")
             },
+            "pg_table_is_visible" => Scalar {
+                params!(Oid) => sql_op!(
+                    "(SELECT schema = ANY(current_schemas(true))
+                     FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.schema_id
+                     WHERE o.oid = $1)"
+                )
+            },
             "replace" => Scalar {
                 params!(String, String, String) => VariadicFunc::Replace
             },

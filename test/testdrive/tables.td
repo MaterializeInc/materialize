@@ -258,3 +258,15 @@ INSERT statement specifies 1 expressions, but table has 2 columns
 
 ! INSERT INTO t (a, a) VALUES (1, 'str')
 INSERT statement specifies duplicate column
+
+# Test pg_table_is_visible.
+> CREATE SCHEMA non_default
+> CREATE TABLE non_default.hidden (dummy int)
+> SELECT tables, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 1
+tables  visible
+---------------
+hidden  false
+j       true
+large   true
+t       true
+v       true
