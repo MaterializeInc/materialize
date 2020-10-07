@@ -73,6 +73,8 @@ pub enum BinaryOperator {
     JsonDeletePath,
     JsonContainsPath,
     JsonApplyPathPredicate,
+    ArrayContains,
+    ArrayDoesNotContain,
 }
 
 impl fmt::Display for BinaryOperator {
@@ -110,6 +112,8 @@ impl fmt::Display for BinaryOperator {
             BinaryOperator::JsonDeletePath => "#-",
             BinaryOperator::JsonContainsPath => "@?",
             BinaryOperator::JsonApplyPathPredicate => "@@",
+            BinaryOperator::ArrayContains => "ARRAY CONTAINS",
+            BinaryOperator::ArrayDoesNotContain => "ARRAY DOES NOT CONTAIN",
         })
     }
 }

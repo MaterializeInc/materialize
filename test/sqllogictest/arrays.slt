@@ -23,3 +23,42 @@ query TT
 SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
 ----
 NULL  NULL
+
+query B
+SELECT 1 = ANY(ARRAY[1, 2])
+----
+true
+
+query B
+SELECT 1 = ANY(ARRAY[2])
+----
+false
+
+query B
+SELECT 1 = ANY(ARRAY['1', '2'])
+----
+true
+
+query error SELECT clause must have type i32\[\], not type string\[\]
+SELECT 1 = ANY(ARRAY['hi'::text])
+
+query B
+SELECT 'hi'::text = ANY(ARRAY[])
+----
+false
+
+query error Cannot create array with mixed types
+SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
+
+query B
+SELECT 1 != ANY(ARRAY[1])
+----
+false
+
+query B
+select 'hello'::text != ANY(ARRAY['there'::text])
+----
+true
+
+query error ANY comparison op <= not yet supported
+select 'hello'::text <= ANY(ARRAY['there'::text])

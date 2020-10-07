@@ -1759,6 +1759,49 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             }
             .into()
         }
+        Expr::AnyExpr { left, op, right } => {
+            let lhs = plan_expr(ecx, left)?;
+            let rhs = plan_expr(ecx, right)?;
+
+            let (lhs, rhs) = if let Some(typ) = ecx.coercible_scalar_type(&lhs) {
+                (
+                    lhs.type_as(ecx, typ.clone())?,
+                    rhs.type_as(ecx, ScalarType::Array(Box::new(typ)))?,
+                )
+            } else if let Some(ScalarType::Array(array_type)) = ecx.coercible_scalar_type(&rhs) {
+                (
+                    lhs.type_as(ecx, *array_type.clone())?,
+                    rhs.type_as(ecx, ScalarType::Array(array_type))?,
+                )
+            } else {
+                (lhs.type_as_any(ecx)?, rhs.type_as_any(ecx)?)
+            };
+
+            match &ecx.scalar_type(&rhs) {
+                ScalarType::Array(array_type) => {
+                    let element_type = ecx.scalar_type(&lhs);
+                    if element_type != **array_type {
+                        bail!(
+                            "cannot evaluate ANY for element type {} and array type {}",
+                            element_type,
+                            array_type
+                        )
+                    }
+                }
+                _ => unsupported!("op ANY requires array on right hand side"),
+            }
+
+            let func = match op {
+                BinaryOperator::Eq => BinaryFunc::ArrayContains,
+                BinaryOperator::NotEq => BinaryFunc::ArrayDoesNotContain,
+                op => unsupported!(format!("ANY comparison op {}", op)),
+            };
+            CoercibleScalarExpr::Coerced(ScalarExpr::CallBinary {
+                func,
+                expr1: Box::new(lhs),
+                expr2: Box::new(rhs),
+            })
+        }
 
         // Subqueries.
         Expr::Exists(query) => {
@@ -1789,7 +1832,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
         Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
         Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
-        Expr::Any { .. } => unreachable!("Expr::Any not desugared"),
+        Expr::AnySubquery { .. } => unreachable!("Expr::AnySubquery not desugared"),
         Expr::All { .. } => unreachable!("Expr::All not desugared"),
         Expr::Between { .. } => unreachable!("Expr::Between not desugared"),
     })
@@ -2389,6 +2432,13 @@ impl<'a> ExprContext<'a> {
 
     pub fn scalar_type(&self, expr: &ScalarExpr) -> ScalarType {
         self.column_type(expr).scalar_type
+    }
+
+    pub fn coercible_scalar_type(&self, expr: &CoercibleScalarExpr) -> Option<ScalarType> {
+        match self.column_type(expr) {
+            Some(column_typ) => Some(column_typ.scalar_type),
+            None => None,
+        }
     }
 
     fn derived_query_context(&self) -> QueryContext {

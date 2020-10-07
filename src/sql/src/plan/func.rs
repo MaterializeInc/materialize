@@ -1682,6 +1682,12 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::NotEq,
                 params!(String, String) => BinaryFunc::NotEq,
                 params!(Jsonb, Jsonb) => BinaryFunc::NotEq
+            },
+            BinaryOperator::ArrayContains => Scalar {
+                params!(Any, ArrayAny) => BinaryFunc::ArrayContains
+            },
+            BinaryOperator::ArrayDoesNotContain => Scalar {
+                params!(Any, ArrayAny) => BinaryFunc::ArrayDoesNotContain
             }
         }
     };

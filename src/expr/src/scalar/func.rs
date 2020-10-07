@@ -15,7 +15,7 @@ use std::str;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
-use itertools::Itertools;
+use itertools::{any, Itertools};
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
@@ -1788,6 +1788,8 @@ pub enum BinaryFunc {
     EncodedBytesCharLength,
     ListIndex,
     ListLengthMax { max_dim: usize },
+    ArrayContains,
+    ArrayDoesNotContain,
 }
 
 impl BinaryFunc {
@@ -1899,6 +1901,8 @@ impl BinaryFunc {
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
             BinaryFunc::ListIndex => Ok(eager!(list_index)),
             BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
+            BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
+            BinaryFunc::ArrayDoesNotContain => Ok(eager!(array_does_not_contain)),
         }
     }
 
@@ -1911,7 +1915,9 @@ impl BinaryFunc {
             _ => false,
         };
         match self {
-            And | Or | Eq | NotEq | Lt | Lte | Gt | Gte => ScalarType::Bool.nullable(in_nullable),
+            And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains | ArrayDoesNotContain => {
+                ScalarType::Bool.nullable(in_nullable)
+            }
 
             MatchLikePattern | MatchRegex { .. } => {
                 // The output can be null if the pattern is invalid.
@@ -2155,7 +2161,9 @@ impl BinaryFunc {
             | JsonbDeleteString
             | TextConcat
             | ListIndex
-            | MatchRegex { .. } => true,
+            | MatchRegex { .. }
+            | ArrayContains
+            | ArrayDoesNotContain => true,
             MatchLikePattern
             | ToCharTimestamp
             | ToCharTimestampTz
@@ -2260,6 +2268,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
             BinaryFunc::ListIndex => f.write_str("list_index"),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
+            BinaryFunc::ArrayContains => f.write_str("array_contains"),
+            BinaryFunc::ArrayDoesNotContain => f.write_str("array_does_not_contain"),
         }
     }
 }
@@ -3297,6 +3307,19 @@ fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Dat
             None => Datum::Null,
         })
     }
+}
+
+fn datum_in_array<'a>(a: Datum<'a>, b: Datum<'a>) -> bool {
+    let array = Datum::unwrap_array(&b);
+    any(&array.elements(), |e| e == a)
+}
+
+fn array_contains<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(datum_in_array(a, b))
+}
+
+fn array_does_not_contain<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(!datum_in_array(a, b))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
