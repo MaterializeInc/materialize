@@ -38,7 +38,7 @@ use log::{info, trace, warn};
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("materialized: {}", err);
+        eprintln!("materialized: {:#}", err);
         process::exit(1);
     }
 }
