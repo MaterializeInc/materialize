@@ -22,6 +22,7 @@ oid          NO        oid
 relname      NO        text
 relnamespace NO        oid
 relowner     YES       oid
+relkind      YES       text
 
 > SHOW COLUMNS FROM pg_database
 Field        Nullable  Type

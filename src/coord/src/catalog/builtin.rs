@@ -630,7 +630,13 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     mz_objects.oid,
     name AS relname,
     mz_schemas.oid AS relnamespace,
-    NULL::oid AS relowner
+    NULL::oid AS relowner,
+    CASE
+        WHEN mz_objects.type = 'table' THEN 'r'
+        WHEN mz_objects.type = 'source' THEN 'r'
+        WHEN mz_objects.type = 'index' THEN 'i'
+        WHEN mz_objects.type = 'view' THEN 'v'
+    END relkind
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.schema_id = mz_objects.schema_id",
     id: GlobalId::System(3016),
