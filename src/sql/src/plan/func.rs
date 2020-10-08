@@ -219,10 +219,7 @@ macro_rules! sql_op {
             let mut expr = query::plan_expr(&ecx, &*EXPR)?.type_as_any(&ecx)?;
 
             // Replace the parameters with the actual arguments.
-            expr.visit_mut(&mut |e| match e {
-                ScalarExpr::Parameter(i) => *e = args[*i - 1].clone(),
-                _ => (),
-            });
+            expr.splice_parameters(&args, 0);
 
             Ok(expr)
         }))
