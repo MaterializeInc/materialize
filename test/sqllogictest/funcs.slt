@@ -480,9 +480,6 @@ SELECT mz_catalog.mod(7, 4)
 query error unknown database 'noexist'
 SELECT noexist.pg_catalog.mod(7, 4)
 
-# Materialize only supports UTF8-encoded databases. pg_encoding_to_char
-# should only return a non-null value for 6 (the hardcoded encoding id
-# for UTF8).
 query T
 SELECT pg_catalog.pg_encoding_to_char(6)
 ----

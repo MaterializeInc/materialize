@@ -903,6 +903,8 @@ lazy_static! {
                 })
             },
             "pg_encoding_to_char" => Scalar {
+                // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
+                // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
                 params!(Int64) => sql_op!(
                     "(SELECT CASE WHEN $1 = 6 THEN 'UTF8'::text ELSE 'NULL'::text END pg_encoding_to_char)"
                 )
