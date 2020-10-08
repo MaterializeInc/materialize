@@ -633,6 +633,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     NULL::oid AS relowner,
     CASE
         WHEN mz_objects.type = 'table' THEN 'r'
+        WHEN mz_objects.type = 'source' THEN 'r'
         WHEN mz_objects.type = 'index' THEN 'i'
         WHEN mz_objects.type = 'view' THEN 'v'
     END relkind
