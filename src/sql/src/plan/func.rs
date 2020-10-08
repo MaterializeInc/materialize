@@ -902,6 +902,11 @@ lazy_static! {
                     Ok(ScalarExpr::literal_null(ScalarType::String))
                 })
             },
+            "pg_encoding_to_char" => Scalar {
+                // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
+                // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
+                params!(Int64) => sql_op!("CASE WHEN $1 = 6 THEN 'UTF8' ELSE NULL END")
+            },
             "pg_get_userbyid" => Scalar {
                 params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'")
             },
