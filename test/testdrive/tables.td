@@ -38,10 +38,10 @@ SOURCES
 -------
 
 > SHOW INDEXES FROM t;
-On_name               Key_name                          Column_name  Expression  Null   Seq_in_index
-----------------------------------------------------------------------------------------------------------------
-materialize.public.t  materialize.public.t_primary_idx  a            <null>      true              1
-materialize.public.t  materialize.public.t_primary_idx  b            <null>      false             2
+On_name  Key_name       Column_name  Expression  Null   Seq_in_index
+--------------------------------------------------------------------
+t        t_primary_idx  a            <null>      true   1
+t        t_primary_idx  b            <null>      false  2
 
 ! DROP INDEX t_primary_idx
 cannot drop 'materialize.public.t_primary_idx' as it is the default index for a table
@@ -51,6 +51,10 @@ Field      Nullable  Type
 -------------------------
 a          YES       int4
 b          NO        text
+> SHOW COLUMNS in t WHERE Field = 'a'
+a  YES  int4
+> SHOW COLUMNS in t LIKE 'b%'
+b  NO  text
 
 > INSERT INTO t VALUES (1, 'a');
 
@@ -179,6 +183,12 @@ unknown catalog item 't'
 > SHOW TABLES;
 TABLES
 ------
+v
+
+> SHOW TABLES LIKE 'foo'
+> SHOW TABLES LIKE 'v%'
+v
+> SHOW TABLES WHERE tables = 'v'
 v
 
 > SHOW SOURCES;
