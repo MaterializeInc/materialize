@@ -22,6 +22,7 @@ oid          NO        oid
 relname      NO        text
 relnamespace NO        oid
 relowner     YES       oid
+relkind      YES       text
 
 ! SELECT current_schemas()
 Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;
