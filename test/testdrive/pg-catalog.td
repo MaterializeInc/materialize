@@ -23,6 +23,17 @@ relname      NO        text
 relnamespace NO        oid
 relowner     YES       oid
 
+> SHOW COLUMNS FROM pg_database
+Field        Nullable  Type
+--------------------------
+ oid         NO        oid
+ datname     NO        text
+ datdba      YES       oid
+ encoding    NO        int4
+ datcollate  NO        text
+ datctype    NO        text
+ datacl      YES       _text
+
 ! SELECT current_schemas()
 Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;
 
