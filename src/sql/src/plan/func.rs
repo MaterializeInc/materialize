@@ -902,6 +902,11 @@ lazy_static! {
                     Ok(ScalarExpr::literal_null(ScalarType::String))
                 })
             },
+            "pg_encoding_to_char" => Scalar {
+                params!(Int64) => sql_op!(
+                    "(SELECT CASE WHEN $1 = 6 THEN 'UTF8'::text ELSE 'NULL'::text END pg_encoding_to_char)"
+                )
+            },
             "pg_get_userbyid" => Scalar {
                 params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'")
             },
