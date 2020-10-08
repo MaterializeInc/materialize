@@ -19,7 +19,7 @@ use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::warn;
+use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
@@ -1108,36 +1108,74 @@ impl BinlogSchemaIndices {
     }
 }
 
+/// Ordered means we can trust Debezium high water marks
+///
+/// In standard operation, Debezium should always emit messages in position order, but
+/// messages may be duplicated.
+///
+/// For example, this is a legal stream of Debezium event positions:
+///
+/// ```text
+/// 1 2 3 2
+/// ```
+///
+/// Note that `2` appears twice, but the *first* time it appeared it appeared in order.
+/// Any position below the highest-ever seen position is guaranteed to be a duplicate,
+/// and can be ignored.
+///
+/// Now consider this stream:
+///
+/// ```text
+/// 1 3 2
+/// ```
+///
+/// In this case, `2` is sent *out* of order, and if it is ignored we will miss important
+/// state.
+///
+/// It is possible for users to do things with multiple databases and multiple Debezium
+/// instances pointing at the same Kafka topic that mean that the Debezium guarantees do
+/// not hold, in which case we are required to track individual messages, instead of just
+/// the highest-ever-seen message.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum DebeziumDeduplicationStrategy {
+    /// We can trust high water mark
     Ordered,
+    /// We need to store some piece of state for every message
     Full,
 }
 
+/// Track whether or not we should skip a specific debezium message
 #[derive(Debug)]
-pub enum DebeziumDeduplicationState {
-    Ordered {
-        /// Last recorded (pos, row, offset) for each MySQL binlog file.
-        /// (Or "", in the Postgres case)
-        /// Messages that are not ahead of the last recorded pos/row will be skipped.
-        binlog_offsets: HashMap<String, (usize, usize, Option<i64>)>,
-    },
-    Full {
-        seen_offsets: HashMap<String, HashSet<(usize, usize)>>,
-    },
+struct DebeziumDeduplicationState {
+    /// Last recorded (pos, row, offset) for each MySQL binlog file.
+    /// (Or "", in the Postgres case)
+    /// Messages that are not ahead of the last recorded pos/row will be skipped.
+    binlog_offsets: HashMap<String, (usize, usize, Option<i64>)>,
+    /// Whether or not to track every message we've ever seen
+    full: TrackFull,
+}
+
+/// If we need to deal debezium possibly going back after it hasn't seen things
+#[derive(Debug)]
+enum TrackFull {
+    No,
+    /// Track all offsets that have ever been seen
+    /// binlog filename to offset
+    SeenOffsets(HashMap<String, HashSet<(usize, usize)>>),
 }
 
 impl DebeziumDeduplicationState {
     fn new(strat: DebeziumDeduplicationStrategy) -> Self {
-        match strat {
-            DebeziumDeduplicationStrategy::Ordered => DebeziumDeduplicationState::Ordered {
-                binlog_offsets: Default::default(),
-            },
-            DebeziumDeduplicationStrategy::Full => DebeziumDeduplicationState::Full {
-                seen_offsets: Default::default(),
-            },
+        let full = match strat {
+            DebeziumDeduplicationStrategy::Ordered => TrackFull::No,
+            DebeziumDeduplicationStrategy::Full => TrackFull::SeenOffsets(Default::default()),
+        };
+        DebeziumDeduplicationState {
+            binlog_offsets: Default::default(),
+            full,
         }
     }
+
     #[must_use]
     fn should_use_record(
         &mut self,
@@ -1151,46 +1189,76 @@ impl DebeziumDeduplicationState {
             RowCoordinates::MySql { pos, row } => (pos, row),
             RowCoordinates::Postgres { lsn } => (lsn, 0),
         };
-        match self {
-            DebeziumDeduplicationState::Ordered { binlog_offsets } => {
-                match binlog_offsets.get_mut(file) {
-                    Some((old_max_pos, old_max_row, old_offset)) => {
-                        if (*old_max_pos, *old_max_row) >= (pos, row) {
-                            let offset_string = if let Some(coord) = coord {
-                                format!(" at offset {}", coord)
-                            } else {
-                                format!("")
-                            };
-                            let old_offset_string = if let Some(old_offset) = old_offset {
-                                format!(" at offset {}", old_offset)
-                            } else {
-                                format!("")
-                            };
-                            warn!("Debezium for source {}:{} did not advance in binlog file {}: previously read ({}, {}){}, now read ({}, {}){}. Skipping record.",
-                                    debug_name, worker_idx, file, old_max_pos, old_max_row, old_offset_string, pos, row, offset_string);
-                            return false;
-                        }
-                        *old_max_pos = pos;
-                        *old_max_row = row;
-                        *old_offset = coord;
-                    }
-                    None => {
-                        // The extra lookup is fine - this is the cold path.
-                        binlog_offsets.insert(file.to_owned(), (pos, row, coord));
-                    }
+        struct SkipInfo<'a> {
+            old_max_pos: &'a usize,
+            old_max_row: &'a usize,
+            old_offset: &'a Option<i64>,
+        }
+        let should_skip = match self.binlog_offsets.get_mut(file) {
+            Some((old_max_pos, old_max_row, old_offset)) => {
+                if (*old_max_pos, *old_max_row) >= (pos, row) {
+                    Some(SkipInfo {
+                        old_max_pos,
+                        old_max_row,
+                        old_offset,
+                    })
+                } else {
+                    // update the debezium high water mark
+                    *old_max_pos = pos;
+                    *old_max_row = row;
+                    *old_offset = coord;
+                    None
                 }
-                true
             }
+            None => {
+                // The extra lookup is fine - this is the cold path.
+                self.binlog_offsets
+                    .insert(file.to_owned(), (pos, row, coord));
+                None
+            }
+        };
 
-            DebeziumDeduplicationState::Full { seen_offsets } => {
+        match &mut self.full {
+            TrackFull::No => should_skip.is_none(),
+            TrackFull::SeenOffsets(seen_offsets) => {
                 if let Some(seen_offsets) = seen_offsets.get_mut(file) {
-                    if seen_offsets.insert((pos, row)) {
-                        true
-                    } else {
-                        warn!("Source {}:{} already ingested binlog coordinates ({}, {}) in file {}. Skipping record.",
-                              debug_name, worker_idx, pos, row, file);
-                        false
+                    let is_new = seen_offsets.insert((pos, row));
+
+                    match (is_new, should_skip) {
+                        // new item that correctly is past the highest item we've ever seen
+                        (true, None) => {}
+                        // new item that violates Debezium "guarantee" that the no new
+                        // records will ever be sent with a position below the highest
+                        // position ever seen
+                        (true, Some(skipinfo)) => {
+                            // TODO: This would be nicer if it included the wall-clock kafka event time
+                            warn!(
+                                "Source: {}:{} created a new record behind the highest point in binlog_file={} \
+                                 new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{}",
+                                debug_name, worker_idx, file, pos, row, coord.unwrap_or(-1),
+                                skipinfo.old_max_pos, skipinfo.old_max_row
+                            );
+                        }
+                        // Duplicate item below the highest seen item
+                        (false, Some(skipinfo)) => {
+                            debug!(
+                                "Source: {}:{} already ingested binlog coordinates {}:{}:{} (old binlog: {}:{} kafka offset: {})",
+                                debug_name, worker_idx, file, pos, row, skipinfo.old_max_pos,
+                                skipinfo.old_max_row, skipinfo.old_offset.unwrap_or(-1)
+                            );
+                        }
+                        // already exists, but is past the debezium high water mark.
+                        //
+                        // This should be impossible because we set the high-water mark
+                        // every time we insert something
+                        (false, None) => {
+                            error!("We surprisingly are seeing a duplicate record that \
+                                    is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={}",
+                                   file, pos, row, coord.unwrap_or(-1));
+                        }
                     }
+
+                    is_new
                 } else {
                     let mut hs = HashSet::new();
                     hs.insert((pos, row));
