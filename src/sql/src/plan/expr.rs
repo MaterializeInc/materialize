@@ -215,9 +215,13 @@ impl CoercibleScalarExpr {
     }
 }
 
-pub trait ScalarTypeable {
-    type Type;
+/// An expression whose type can be ascertained.
+///
+/// Abstracts over `ScalarExpr` and `CoercibleScalarExpr`.
+pub trait AbstractExpr {
+    type Type: AbstractColumnType;
 
+    /// Computes the type of the expression.
     fn typ(
         &self,
         outers: &[RelationType],
@@ -226,7 +230,7 @@ pub trait ScalarTypeable {
     ) -> Self::Type;
 }
 
-impl ScalarTypeable for CoercibleScalarExpr {
+impl AbstractExpr for CoercibleScalarExpr {
     type Type = Option<ColumnType>;
 
     fn typ(
@@ -239,6 +243,34 @@ impl ScalarTypeable for CoercibleScalarExpr {
             CoercibleScalarExpr::Coerced(expr) => Some(expr.typ(outers, inner, params)),
             _ => None,
         }
+    }
+}
+
+/// A column type-like object whose underlying scalar type-like object can be
+/// ascertained.
+///
+/// Abstracts over `ColumnType` and `Option<ColumnType>`.
+pub trait AbstractColumnType {
+    type AbstractScalarType;
+
+    /// Converts the column type-like object into its inner scalar type-like
+    /// object.
+    fn scalar_type(self) -> Self::AbstractScalarType;
+}
+
+impl AbstractColumnType for ColumnType {
+    type AbstractScalarType = ScalarType;
+
+    fn scalar_type(self) -> Self::AbstractScalarType {
+        self.scalar_type
+    }
+}
+
+impl AbstractColumnType for Option<ColumnType> {
+    type AbstractScalarType = Option<ScalarType>;
+
+    fn scalar_type(self) -> Self::AbstractScalarType {
+        self.map(|t| t.scalar_type)
     }
 }
 
@@ -1108,7 +1140,7 @@ impl ScalarExpr {
     }
 }
 
-impl ScalarTypeable for ScalarExpr {
+impl AbstractExpr for ScalarExpr {
     type Type = ColumnType;
 
     fn typ(
