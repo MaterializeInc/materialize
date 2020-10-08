@@ -637,6 +637,22 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.schema_id = mz_objects.schema_id",
     needs_logs: false,
 };
 
+pub const PG_DATABASE: BuiltinView = BuiltinView {
+    name: "pg_database",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_database AS SELECT
+    oid,
+    database as datname,
+    NULL::oid AS datdba,
+    6 as encoding,
+    'C' as datcollate,
+    'C' as datctype,
+    NULL::text[] as datacl
+FROM mz_catalog.mz_databases",
+    id: GlobalId::System(3017),
+    needs_logs: false,
+};
+
 lazy_static! {
     pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
         let builtins = vec![
@@ -682,6 +698,7 @@ lazy_static! {
             Builtin::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
             Builtin::View(&PG_NAMESPACE),
             Builtin::View(&PG_CLASS),
+            Builtin::View(&PG_DATABASE),
         ];
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
