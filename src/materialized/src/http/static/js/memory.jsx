@@ -392,6 +392,18 @@ function View(props) {
     hpccWasm.graphviz.layout(dot, 'svg', 'dot').then(setGraph);
   }, [loading]);
 
+  let dotLink = null;
+  if (dot) {
+    const link = new URL('https://materialize.io/memory-visualization/');
+    // Pass information as a JSON object to allow for easily extending this in
+    // the future. The hash is used instead of search because it reduces privacy
+    // concerns and avoids server-side URL size limits.
+    link.hash = JSON.stringify({
+      dot: dot,
+    });
+    dotLink = <a href={link}>share</a>;
+  }
+
   return (
     <div style={{ marginTop: '2em' }}>
       {loading ? (
@@ -404,6 +416,7 @@ function View(props) {
             Name: {stats.name}, dataflow_id: {props.dataflow_id}, records:{' '}
             {stats.records}
           </h3>
+          {dotLink}
           <div dangerouslySetInnerHTML={{ __html: graph }}></div>
         </div>
       )}
