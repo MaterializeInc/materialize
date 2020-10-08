@@ -14,26 +14,24 @@ use std::mem;
 use std::time::Instant;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::sink::{self, SinkExt};
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 use itertools::izip;
 use lazy_static::lazy_static;
-use log::{debug, trace};
+use log::debug;
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
-use tokio_util::codec::Framed;
 
 use coord::session::Session;
 use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::{PeekResponse, Update};
 use ore::cast::CastFrom;
-use ore::future::OreSinkExt;
 use repr::{Datum, RelationDesc, Row, RowArena};
 use sql::ast::Statement;
 
-use crate::codec::Codec;
+use crate::codec::FramedConn;
 use crate::message::{
     self, BackendMessage, ErrorSeverity, FrontendMessage, NoticeSeverity, VERSIONS, VERSION_3,
 };
@@ -86,14 +84,14 @@ impl State {
     }
 }
 
-pub struct StateMachine<'a, A> {
-    pub conn: &'a mut sink::Buffer<Framed<A, Codec>, BackendMessage>,
+pub struct StateMachine<A> {
+    pub conn: FramedConn<A>,
     pub conn_id: u32,
     pub secret_key: u32,
     pub cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
 }
 
-impl<'a, A> StateMachine<'a, A>
+impl<A> StateMachine<A>
 where
     A: AsyncRead + AsyncWrite + Unpin,
 {
@@ -115,7 +113,7 @@ where
     }
 
     async fn advance_ready(&mut self, session: Session) -> Result<State, comm::Error> {
-        let message = self.recv().await?;
+        let message = self.conn.recv().await?;
         let timer = Instant::now();
         let name = match &message {
             Some(message) => message.name(),
@@ -184,7 +182,7 @@ where
     }
 
     async fn advance_drain(&mut self, session: Session) -> Result<State, comm::Error> {
-        match self.recv().await? {
+        match self.conn.recv().await? {
             Some(FrontendMessage::Sync) => self.sync(session).await,
             None => Ok(State::Done),
             _ => Ok(State::Drain(session)),
@@ -264,7 +262,7 @@ where
         });
         messages.extend(notices);
         messages.push(BackendMessage::ReadyForQuery(session.transaction().into()));
-        self.send_all(messages).await?;
+        self.conn.send_all(messages).await?;
         self.flush(session).await
     }
 
@@ -323,7 +321,7 @@ where
 
         // Maybe send row description.
         if let Some(desc) = &row_desc {
-            self.send(BackendMessage::RowDescription(
+            self.conn.send(BackendMessage::RowDescription(
                 message::row_description_from_desc(&desc),
             ))
             .await?;
@@ -438,7 +436,7 @@ where
                 result: Ok(()),
                 session,
             } => {
-                self.send(BackendMessage::ParseComplete).await?;
+                self.conn.send(BackendMessage::ParseComplete).await?;
                 Ok(State::Ready(session))
             }
             coord::Response {
@@ -521,7 +519,7 @@ where
             .set_portal(portal_name, statement_name, params, result_formats)
             .unwrap();
 
-        self.send(BackendMessage::BindComplete).await?;
+        self.conn.send(BackendMessage::BindComplete).await?;
         Ok(State::Ready(session))
     }
 
@@ -638,7 +636,7 @@ where
         name: String,
     ) -> Result<State, comm::Error> {
         session.remove_prepared_statement(&name);
-        self.send(BackendMessage::CloseComplete).await?;
+        self.conn.send(BackendMessage::CloseComplete).await?;
         Ok(State::Ready(session))
     }
 
@@ -648,7 +646,7 @@ where
         name: String,
     ) -> Result<State, comm::Error> {
         session.remove_portal(&name);
-        self.send(BackendMessage::CloseComplete).await?;
+        self.conn.send(BackendMessage::CloseComplete).await?;
         Ok(State::Ready(session))
     }
 
@@ -680,7 +678,7 @@ where
                     ))
                     .await?
             }
-            None => self.send(BackendMessage::NoData).await?,
+            None => self.conn.send(BackendMessage::NoData).await?,
         }
         Ok(State::Ready(session))
     }
@@ -699,7 +697,7 @@ where
                 // variable, or rustc barfs out a completely inscrutable
                 // error: https://github.com/rust-lang/rust/issues/64960.
                 let tag = format!($($arg)*);
-                self.send(BackendMessage::CommandComplete { tag }).await?;
+                self.conn.send(BackendMessage::CommandComplete { tag }).await?;
                 Ok(State::Ready(session))
             }};
         }
@@ -707,7 +705,7 @@ where
         macro_rules! created {
             ($existed:expr, $code:expr, $type:expr) => {{
                 if $existed {
-                    self.send(BackendMessage::NoticeResponse {
+                    self.conn.send(BackendMessage::NoticeResponse {
                         severity: NoticeSeverity::Notice,
                         code: $code,
                         message: concat!($type, " already exists, skipping").into(),
@@ -751,7 +749,7 @@ where
             ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
             ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
             ExecuteResponse::EmptyQuery => {
-                self.send(BackendMessage::EmptyQueryResponse).await?;
+                self.conn.send(BackendMessage::EmptyQueryResponse).await?;
                 Ok(State::Ready(session))
             }
             ExecuteResponse::Inserted(n) => {
@@ -795,7 +793,7 @@ where
                     None
                 };
                 if let Some(msg) = msg {
-                    self.send(msg).await?;
+                    self.conn.send(msg).await?;
                 }
                 command_complete!("SET")
             }
@@ -857,7 +855,7 @@ where
             }
         }
 
-        self.conn.get_mut().codec_mut().set_encode_state(
+        self.conn.set_encode_state(
             row_desc
                 .typ()
                 .column_types
@@ -868,7 +866,7 @@ where
         );
 
         let nrows = cmp::min(max_rows, rows.len());
-        self.send_all(
+        self.conn.send_all(
             rows.drain(..nrows).map(move |row| {
                 BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
             }),
@@ -887,12 +885,12 @@ where
         // we still send a PortalSuspended. The number of remaining rows after the rows
         // have been sent doesn't matter. This matches postgres.
         if max_rows == 0 || max_rows > nrows {
-            self.send(BackendMessage::CommandComplete {
+            self.conn.send(BackendMessage::CommandComplete {
                 tag: format!("SELECT {}", nrows),
             })
             .await?;
         } else {
-            self.send(BackendMessage::PortalSuspended).await?;
+            self.conn.send(BackendMessage::PortalSuspended).await?;
         }
 
         Ok(State::Ready(session))
@@ -908,7 +906,7 @@ where
         let column_formats = iter::repeat(pgrepr::Format::Text)
             .take(typ.column_types.len())
             .collect();
-        self.send(BackendMessage::CopyOutResponse {
+        self.conn.send(BackendMessage::CopyOutResponse {
             overall_format: pgrepr::Format::Text,
             column_formats,
         })
@@ -922,7 +920,7 @@ where
                     let updates = updates?;
                     count += updates.len();
                     for update in updates {
-                        self.send(BackendMessage::CopyData(message::encode_update(
+                        self.conn.send(BackendMessage::CopyData(message::encode_update(
                             update, typ,
                         )))
                         .await?;
@@ -947,42 +945,16 @@ where
                     // desired notifications via POLLRDHUP [0].
                     //
                     // [0]: https://lkml.org/lkml/2003/7/12/116
-                    self.send(BackendMessage::CopyData(vec![])).await?;
+                    self.conn.send(BackendMessage::CopyData(vec![])).await?;
                 }
             }
             self.conn.flush().await?;
         }
 
         let tag = format!("COPY {}", count);
-        self.send(BackendMessage::CopyDone).await?;
-        self.send(BackendMessage::CommandComplete { tag }).await?;
+        self.conn.send(BackendMessage::CopyDone).await?;
+        self.conn.send(BackendMessage::CommandComplete { tag }).await?;
         Ok(State::Ready(session))
-    }
-
-    async fn recv(&mut self) -> Result<Option<FrontendMessage>, comm::Error> {
-        let message = self.conn.try_next().await?;
-        match &message {
-            Some(message) => trace!("cid={} recv={:?}", self.conn_id, message),
-            None => trace!("cid={} recv=<eof>", self.conn_id),
-        }
-        Ok(message)
-    }
-
-    async fn send(&mut self, message: BackendMessage) -> Result<(), comm::Error> {
-        trace!("cid={} send={:?}", self.conn_id, message);
-        Ok(self.conn.enqueue(message).await?)
-    }
-
-    async fn send_all(
-        &mut self,
-        messages: impl IntoIterator<Item = BackendMessage>,
-    ) -> Result<(), comm::Error> {
-        // N.B. we intentionally don't use `self.conn.send_all` here to avoid
-        // flushing the sink unnecessarily.
-        for m in messages {
-            self.send(m).await?;
-        }
-        Ok(())
     }
 
     async fn error(

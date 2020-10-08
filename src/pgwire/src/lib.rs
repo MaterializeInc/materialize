@@ -29,6 +29,5 @@ mod protocol;
 mod secrets;
 mod server;
 
-pub use codec::Codec;
 pub use protocol::match_handshake;
 pub use server::Server;

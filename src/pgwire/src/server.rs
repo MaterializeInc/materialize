@@ -16,11 +16,10 @@ use futures::sink::SinkExt;
 use openssl::ssl::SslAcceptor;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
-use tokio_util::codec::Framed;
 
 use coord::session::Session;
 
-use crate::codec::{self, Codec, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
+use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::FrontendStartupMessage;
 use crate::protocol::StateMachine;
@@ -63,7 +62,7 @@ impl Server {
                     self.secrets.generate(conn_id);
 
                     let mut machine = StateMachine {
-                        conn: &mut Framed::new(conn, Codec::new()).buffer(32),
+                        conn: FramedConn::new(conn_id, conn),
                         conn_id,
                         secret_key: self.secrets.get(conn_id).unwrap(),
                         cmdq_tx: self.cmdq_tx.clone(),
