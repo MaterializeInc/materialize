@@ -479,3 +479,13 @@ SELECT mz_catalog.mod(7, 4)
 
 query error unknown database 'noexist'
 SELECT noexist.pg_catalog.mod(7, 4)
+
+query T
+SELECT pg_catalog.pg_encoding_to_char(6)
+----
+UTF8
+
+query T
+SELECT pg_catalog.pg_encoding_to_char(7)
+----
+NULL
