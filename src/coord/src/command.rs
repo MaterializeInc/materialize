@@ -17,7 +17,6 @@ use sql::ast::{ObjectType, Statement};
 
 use crate::session::Session;
 
-/// The requests the client can make of a [`Coordinator`](crate::Coordinator).
 #[derive(Debug)]
 pub enum Command {
     /// Notify the coordinator of a new client session.
@@ -26,10 +25,6 @@ pub enum Command {
         tx: futures::channel::oneshot::Sender<Response<Vec<StartupMessage>>>,
     },
 
-    /// Save the specified statement as a prepared statement.
-    ///
-    /// The prepared statement is saved in the connection's [`sql::Session`]
-    /// under the specified name.
     Describe {
         name: String,
         stmt: Option<Statement>,
@@ -38,28 +33,24 @@ pub enum Command {
         tx: futures::channel::oneshot::Sender<Response<()>>,
     },
 
-    /// Execute a bound portal.
     Execute {
         portal_name: String,
         session: Session,
         tx: futures::channel::oneshot::Sender<Response<ExecuteResponse>>,
     },
 
-    /// Cancel the query currently running on another connection.
-    CancelRequest { conn_id: u32 },
+    CancelRequest {
+        conn_id: u32,
+    },
 
-    /// Dump the catalog to a JSON string.
     DumpCatalog {
         tx: futures::channel::oneshot::Sender<String>,
     },
 
-    /// Remove temporary objects created by a given connection.
-    Terminate { conn_id: u32 },
+    Terminate {
+        session: Session,
+    },
 
-    /// Execute a statement as the system user that is not tied to a session.
-    ///
-    /// This will execute in a pseudo session that is not able to create any
-    /// temporary resources that would normally need to be cleaned up by Terminate.
     NoSessionExecute {
         stmt: Statement,
         params: sql::plan::Params,

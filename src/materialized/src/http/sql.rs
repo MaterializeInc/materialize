@@ -11,8 +11,6 @@ use std::collections::HashMap;
 use std::future::Future;
 
 use anyhow::bail;
-use futures::channel::mpsc::UnboundedSender;
-use futures::SinkExt;
 use hyper::{header, Body, Request, Response, StatusCode};
 use serde::Serialize;
 use serde_json::{Number, Value};
@@ -31,7 +29,7 @@ impl Server {
         &self,
         req: Request<Body>,
     ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        let cmdq_tx = self.cmdq_tx.clone();
+        let coord_client = self.coord_client.clone();
         async move {
             let res = async {
                 let body = hyper::body::to_bytes(req).await?;
@@ -44,7 +42,7 @@ impl Server {
                     datums: repr::Row::new(vec![]),
                     types: vec![],
                 };
-                let res = query_sql_as_system(cmdq_tx, sql.to_string(), params).await?;
+                let res = query_sql_as_system(coord_client, sql.to_string(), params).await?;
                 Ok(Response::builder()
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(serde_json::to_string(&res)?))
@@ -61,7 +59,7 @@ impl Server {
 
 // Execute a single SQL statement as the system user.
 async fn query_sql_as_system(
-    mut cmdq_tx: UnboundedSender<coord::Command>,
+    mut coord_client: coord::Client,
     sql: String,
     params: Params,
 ) -> anyhow::Result<SqlResult> {
@@ -70,11 +68,7 @@ async fn query_sql_as_system(
         bail!("expected exactly 1 statement");
     }
     let stmt = stmts.into_element();
-    let (tx, rx) = futures::channel::oneshot::channel();
-    cmdq_tx
-        .send(coord::Command::NoSessionExecute { stmt, params, tx })
-        .await?;
-    let res = rx.await??;
+    let res = coord_client.execute(stmt, params).await?;
     let rows = match res.response {
         ExecuteResponse::SendingRows(rows) => {
             let response = rows.await?;

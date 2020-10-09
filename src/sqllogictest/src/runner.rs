@@ -29,7 +29,6 @@ use std::borrow::ToOwned;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::mem;
 use std::ops;
 use std::path::Path;
 use std::str;
@@ -280,10 +279,9 @@ const NUM_TIMELY_WORKERS: usize = 3;
 
 pub(crate) struct State {
     // Drop order matters for these fields.
-    cmd_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
+    coord_client: coord::SessionClient,
     _dataflow_workers: Box<dyn Drop>,
     _coord_thread: JoinOnDropHandle<()>,
-    session: Session,
 }
 
 fn format_row(
@@ -405,10 +403,9 @@ impl State {
         .join_on_drop();
 
         Ok(State {
-            cmd_tx,
+            coord_client: coord::Client::new(cmd_tx).for_session(Session::dummy()),
             _dataflow_workers: Box::new(dataflow_workers),
             _coord_thread: coord_thread,
-            session: Session::dummy(),
         })
     }
 
@@ -742,46 +739,28 @@ impl State {
         let portal_name = String::from("");
 
         // Parse.
-        {
-            let (tx, rx) = futures::channel::oneshot::channel();
-            self.cmd_tx
-                .unbounded_send(coord::Command::Describe {
-                    name: statement_name.clone(),
-                    stmt: Some(stmt),
-                    param_types: vec![],
-                    session: mem::replace(&mut self.session, Session::dummy()),
-                    tx,
-                })
-                .expect("futures channel should not fail");
-            let resp = rx.await.expect("futures channel should not fail");
-            resp.result?;
-            self.session = resp.session;
-        }
+        self.coord_client
+            .describe(statement_name.clone(), Some(stmt), vec![])
+            .await?;
 
         // Bind.
         let stmt = self
-            .session
+            .coord_client
+            .session()
             .get_prepared_statement(&statement_name)
             .expect("unnamed prepared statement missing");
         let desc = stmt.desc().cloned();
         let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
-        self.session
-            .set_portal(portal_name.clone(), statement_name, vec![], result_formats)?;
+        self.coord_client.session().set_portal(
+            portal_name.clone(),
+            statement_name,
+            vec![],
+            result_formats,
+        )?;
 
         // Execute.
-        {
-            let (tx, rx) = futures::channel::oneshot::channel();
-            self.cmd_tx
-                .unbounded_send(coord::Command::Execute {
-                    portal_name,
-                    session: mem::replace(&mut self.session, Session::dummy()),
-                    tx,
-                })
-                .expect("futures channel should not fail");
-            let resp = rx.await.expect("futures channel should not fail");
-            self.session = resp.session;
-            Ok((desc, resp.result?))
-        }
+        let res = self.coord_client.execute(portal_name).await?;
+        Ok((desc, res))
     }
 }
 

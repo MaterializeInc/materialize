@@ -68,13 +68,14 @@ use crate::catalog::builtin::{
 use crate::catalog::{
     self, Catalog, CatalogItem, Index, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
 };
+use crate::command::{
+    Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+};
 use crate::persistence::{PersistenceConfig, Persister};
 use crate::session::{PreparedStatement, Session};
+use crate::sink_connector;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
-use crate::{
-    sink_connector, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
-};
 
 mod arrangement_state;
 
@@ -688,8 +689,8 @@ where
                     let _ = tx.send(self.catalog.dump());
                 }
 
-                Message::Command(Command::Terminate { conn_id }) => {
-                    self.handle_terminate(conn_id).await;
+                Message::Command(Command::Terminate { mut session }) => {
+                    self.handle_terminate(&mut session).await;
                 }
 
                 Message::Worker(WorkerFeedbackWithMeta {
@@ -946,20 +947,19 @@ where
         }
     }
 
-    /// Terminate any temporary objects created by the named `conn_id`
-    /// stored on the Coordinator.
-    async fn handle_terminate(&mut self, conn_id: u32) {
-        if let Some(name) = self.active_tails.remove(&conn_id) {
+    /// Terminate any temporary objects created by the specified session.
+    async fn handle_terminate(&mut self, session: &mut Session) {
+        if let Some(name) = self.active_tails.remove(&session.conn_id()) {
             self.drop_sinks(vec![name]).await;
         }
 
-        // Remove all temporary items created by the conn_id.
-        let ops = self.catalog.drop_temp_item_ops(conn_id);
+        // Remove all temporary items created by the session.
+        let ops = self.catalog.drop_temp_item_ops(session.conn_id());
         self.catalog_transact(ops)
             .await
             .expect("unable to drop temporary items for conn_id");
         self.catalog
-            .drop_temporary_schema(conn_id)
+            .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
     }
 
