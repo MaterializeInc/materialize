@@ -2135,7 +2135,7 @@ where
                     // linearizability by choosing the latest input time.
                     self.get_read_ts()
                 } else {
-                    let upper = self.indexes.greatest_open_upper(index_ids.iter().cloned());
+                    let upper = self.indexes.greatest_open_upper(index_ids.iter().copied());
                     // We peek at the largest element not in advance of `upper`, which
                     // involves a subtraction. If `upper` contains a zero timestamp there
                     // is no "prior" answer, and we do not want to peek at it as it risks
