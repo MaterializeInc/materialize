@@ -14,7 +14,7 @@ use dogsdogsdogs::altneu::AltNeu;
 use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
-use expr::{JoinUtil, RelationExpr, ScalarExpr};
+use expr::{JoinInputMapper, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, Timestamp};
 
 use super::context::{ArrangementFlavor, Context};
@@ -59,7 +59,7 @@ where
                         // existing arrangements, to which we have access).
                         let mut delta_queries = Vec::new();
 
-                        let join_util = JoinUtil::new(inputs);
+                        let input_mapper = JoinInputMapper::new(inputs);
 
                         let mut err_streams = Vec::with_capacity(inputs.len());
                         for relation in 0..inputs.len() {
@@ -84,7 +84,7 @@ where
                                 err_streams.push(errs);
 
                                 // We track the sources of each column in our update stream.
-                                let mut source_columns = join_util.global_columns(relation)
+                                let mut source_columns = input_mapper.global_columns(relation)
                                     .collect::<Vec<_>>();
 
                                 let mut predicates = predicates.to_vec();
@@ -107,7 +107,7 @@ where
                                 for (other, next_key) in order.iter() {
 
                                     let next_key_rebased = next_key.iter().map(
-                                        |k| join_util.map_expr_to_global(k, *other)
+                                        |k| input_mapper.map_expr_to_global(k, *other)
                                     ).collect::<Vec<_>>();
 
                                     // Keys for the incoming updates are determined by locating
@@ -115,7 +115,7 @@ where
                                     let prev_key = next_key_rebased
                                         .iter()
                                         .map(|expr| {
-                                            let mut bound_expr = join_util
+                                            let mut bound_expr = input_mapper
                                                 .find_bound_expr(expr, &bound_inputs, &equivalences)
                                                 .expect("Expression in join plan is not bound at time of use");
 
@@ -199,7 +199,7 @@ where
 
                                     // Update our map of the sources of each column in the update stream.
                                     source_columns
-                                        .extend(join_util.global_columns(*other));
+                                        .extend(input_mapper.global_columns(*other));
 
                                     let (oks, errs) = build_filter(
                                         update_stream,

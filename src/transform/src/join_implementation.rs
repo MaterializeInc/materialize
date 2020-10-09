@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, JoinUtil, RelationExpr, ScalarExpr};
+use expr::{Id, JoinInputMapper, RelationExpr, ScalarExpr};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -82,7 +82,7 @@ impl JoinImplementation {
         } = relation
         {
             // Common information of broad utility.
-            let join_util = JoinUtil::new(inputs);
+            let input_mapper = JoinInputMapper::new(inputs);
 
             // The first fundamental question is whether we should employ a delta query or not.
             //
@@ -136,7 +136,7 @@ impl JoinImplementation {
                 // TODO: expand `order_input`
                 available_arrangements[index].retain(|key| {
                     key.iter().all(|k| {
-                        let k = join_util.map_expr_to_global(k, index);
+                        let k = input_mapper.map_expr_to_global(k, index);
                         equivalences
                             .iter()
                             .any(|equivalence| equivalence.contains(&k))
@@ -147,10 +147,18 @@ impl JoinImplementation {
             // Determine if we can perform delta queries with the existing arrangements.
             // We could defer the execution if we are sure we know we want one input,
             // but we could imagine wanting the best from each and then comparing the two.
-            let delta_query_plan =
-                delta_queries::plan(relation, &join_util, &available_arrangements, &unique_keys);
-            let differential_plan =
-                differential::plan(relation, &join_util, &available_arrangements, &unique_keys);
+            let delta_query_plan = delta_queries::plan(
+                relation,
+                &input_mapper,
+                &available_arrangements,
+                &unique_keys,
+            );
+            let differential_plan = differential::plan(
+                relation,
+                &input_mapper,
+                &available_arrangements,
+                &unique_keys,
+            );
 
             *relation = delta_query_plan
                 .or(differential_plan)
@@ -161,14 +169,14 @@ impl JoinImplementation {
 
 mod delta_queries {
 
-    use expr::{JoinImplementation, JoinUtil, RelationExpr, ScalarExpr};
+    use expr::{JoinImplementation, JoinInputMapper, RelationExpr, ScalarExpr};
 
     /// Creates a delta query plan, and any predicates that need to be lifted.
     ///
     /// The method returns `None` if it fails to find a sufficiently pleasing plan.
     pub fn plan(
         join: &RelationExpr,
-        join_util: &JoinUtil,
+        input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<ScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
     ) -> Option<RelationExpr> {
@@ -191,7 +199,7 @@ mod delta_queries {
             }
 
             // Determine a viable order for each relation, or return `None` if none found.
-            let orders = super::optimize_orders(equivalences, available, unique_keys, join_util);
+            let orders = super::optimize_orders(equivalences, available, unique_keys, input_mapper);
 
             // A viable delta query requires that, for every order,
             // there is an arrangement for every input except for
@@ -219,7 +227,7 @@ mod delta_queries {
             super::implement_arrangements(
                 inputs,
                 available,
-                join_util,
+                input_mapper,
                 orders.iter().flatten(),
                 &mut lifted,
             );
@@ -252,12 +260,12 @@ mod delta_queries {
 
 mod differential {
 
-    use expr::{JoinImplementation, JoinUtil, RelationExpr, ScalarExpr};
+    use expr::{JoinImplementation, JoinInputMapper, RelationExpr, ScalarExpr};
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
     pub fn plan(
         join: &RelationExpr,
-        join_util: &JoinUtil,
+        input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<ScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
     ) -> Option<RelationExpr> {
@@ -281,7 +289,7 @@ mod differential {
             // point iteration; we choose to start with the first input optimizing our criteria, which
             // should remain stable even when promoted to the first position.
             let mut orders =
-                super::optimize_orders(equivalences, available, unique_keys, join_util);
+                super::optimize_orders(equivalences, available, unique_keys, input_mapper);
 
             // For differential join, it is not as important for the starting
             // input to have good characteristics because the other ones
@@ -324,7 +332,13 @@ mod differential {
 
             // Implement arrangements in each of the inputs.
             let mut lifted = Vec::new();
-            super::implement_arrangements(inputs, available, join_util, order.iter(), &mut lifted);
+            super::implement_arrangements(
+                inputs,
+                available,
+                input_mapper,
+                order.iter(),
+                &mut lifted,
+            );
 
             if !lifted.is_empty() {
                 // We must add the support of expression in `lifted` to the `demand`
@@ -366,7 +380,7 @@ mod differential {
 fn implement_arrangements<'a>(
     inputs: &mut [RelationExpr],
     available_arrangements: &[Vec<Vec<ScalarExpr>>],
-    join_util: &JoinUtil,
+    input_mapper: &JoinInputMapper,
     needed_arrangements: impl Iterator<Item = &'a (usize, Vec<ScalarExpr>)>,
     lifted_predicates: &mut Vec<ScalarExpr>,
 ) {
@@ -395,7 +409,7 @@ fn implement_arrangements<'a>(
                 lifted_predicates.extend(
                     predicates
                         .drain(..)
-                        .map(|expr| join_util.map_expr_to_global(&expr, index)),
+                        .map(|expr| input_mapper.map_expr_to_global(&expr, index)),
                 );
                 inputs[index] = inner.take_dangerous();
             }
@@ -414,9 +428,9 @@ fn optimize_orders(
     equivalences: &[Vec<ScalarExpr>],
     available: &[Vec<Vec<ScalarExpr>>],
     unique_keys: &[Vec<Vec<usize>>],
-    join_util: &JoinUtil,
+    input_mapper: &JoinInputMapper,
 ) -> Vec<Vec<(Characteristics, Vec<ScalarExpr>, usize)>> {
-    let mut orderer = Orderer::new(equivalences, available, unique_keys, join_util);
+    let mut orderer = Orderer::new(equivalences, available, unique_keys, input_mapper);
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
         .collect::<Vec<_>>()
@@ -457,7 +471,7 @@ struct Orderer<'a> {
     equivalences: &'a [Vec<ScalarExpr>],
     arrangements: &'a [Vec<Vec<ScalarExpr>>],
     unique_keys: &'a [Vec<Vec<usize>>],
-    join_util: &'a JoinUtil,
+    input_mapper: &'a JoinInputMapper,
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
     unique_arrangement: Vec<Vec<bool>>,
 
@@ -474,14 +488,14 @@ impl<'a> Orderer<'a> {
         equivalences: &'a [Vec<ScalarExpr>],
         arrangements: &'a [Vec<Vec<ScalarExpr>>],
         unique_keys: &'a [Vec<Vec<usize>>],
-        join_util: &'a JoinUtil,
+        input_mapper: &'a JoinInputMapper,
     ) -> Self {
         let inputs = arrangements.len();
         // A map from inputs to the equivalence classes in which they are referenced.
         let mut reverse_equivalences = vec![Vec::new(); inputs];
         for (index, equivalence) in equivalences.iter().enumerate() {
             for (index2, expr) in equivalence.iter().enumerate() {
-                for input in join_util.lookup_inputs(expr) {
+                for input in input_mapper.lookup_inputs(expr) {
                     reverse_equivalences[input].push((index, index2));
                 }
             }
@@ -509,7 +523,7 @@ impl<'a> Orderer<'a> {
             equivalences,
             arrangements,
             unique_keys,
-            join_util,
+            input_mapper,
             reverse_equivalences,
             unique_arrangement,
             order,
@@ -585,10 +599,10 @@ impl<'a> Orderer<'a> {
             let candidate_start_key = key
                 .iter()
                 .filter_map(|k| {
-                    let k = self.join_util.map_expr_to_global(k, *second);
-                    self.join_util
+                    let k = self.input_mapper.map_expr_to_global(k, *second);
+                    self.input_mapper
                         .find_bound_expr(&k, &[start], self.equivalences)
-                        .map(|bound_key| self.join_util.map_expr_to_local(&bound_key))
+                        .map(|bound_key| self.input_mapper.map_expr_to_local(&bound_key))
                 })
                 .collect::<Vec<_>>();
             if candidate_start_key.len() == key.len() {
@@ -623,7 +637,7 @@ impl<'a> Orderer<'a> {
                 // come in to scope, which may result in an expression in `equivalence`
                 // becoming fully defined (when its support is contained in placed inputs)
                 let fully_supported = self
-                    .join_util
+                    .input_mapper
                     .lookup_inputs(&self.equivalences[*equivalence][*expr_index])
                     .into_iter()
                     .all(|i| self.placed[i]);
@@ -631,7 +645,7 @@ impl<'a> Orderer<'a> {
                     self.equivalences_active[*equivalence] = true;
                     for expr in self.equivalences[*equivalence].iter() {
                         // find the relations that columns in the expression belong to
-                        let rels = self.join_util.lookup_inputs(expr);
+                        let rels = self.input_mapper.lookup_inputs(expr);
                         // Skip the expression if
                         // * the expression is a literal -> this would translate
                         //   to `rels` being empty
@@ -642,7 +656,7 @@ impl<'a> Orderer<'a> {
                         //   query better.
                         if rels.len() == 1 {
                             let rel = rels.first().unwrap();
-                            let expr = self.join_util.map_expr_to_local(&expr);
+                            let expr = self.input_mapper.map_expr_to_local(&expr);
 
                             // Update bound columns.
                             self.bound[*rel].push(expr);

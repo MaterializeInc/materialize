@@ -18,7 +18,7 @@ use crate::ScalarExpr;
 /// This utility focuses on taking expressions that are in terms of
 /// the local input and re-expressing them in global terms and vice versa.
 #[derive(Debug)]
-pub struct JoinUtil {
+pub struct JoinInputMapper {
     /// The number of columns per input. All other fields in this struct are
     /// derived using the information in this field.
     arities: Vec<usize>,
@@ -30,8 +30,8 @@ pub struct JoinUtil {
     prior_arities: Vec<usize>,
 }
 
-impl JoinUtil {
-    /// Creates a new `JoinUtil` and calculates the mapping of global context
+impl JoinInputMapper {
+    /// Creates a new `JoinInputMapper` and calculates the mapping of global context
     /// columns to local context columns.
     pub fn new(inputs: &[RelationExpr]) -> Self {
         let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -53,7 +53,7 @@ impl JoinUtil {
             .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
             .collect::<Vec<_>>();
 
-        JoinUtil {
+        JoinInputMapper {
             arities,
             input_relation,
             prior_arities,
@@ -127,7 +127,7 @@ impl JoinUtil {
     ///
     /// ```
     /// use repr::{Datum, ColumnType, RelationType, ScalarType};
-    /// use expr::{JoinUtil, RelationExpr, ScalarExpr};
+    /// use expr::{JoinInputMapper, RelationExpr, ScalarExpr};
     ///
     /// // A two-column schema common to each of the three inputs
     /// let schema = RelationType::new(vec![
@@ -147,14 +147,14 @@ impl JoinUtil {
     ///   vec![ScalarExpr::Column(1), ScalarExpr::Column(2), ScalarExpr::Column(4)],
     /// ];
     ///
-    /// let join_util = JoinUtil::new(&[input0, input1, input2]);
+    /// let input_mapper = JoinInputMapper::new(&[input0, input1, input2]);
     /// assert_eq!(
     ///   Some(ScalarExpr::Column(4)),
-    ///   join_util.find_bound_expr(&ScalarExpr::Column(2), &[2], &equivalences)
+    ///   input_mapper.find_bound_expr(&ScalarExpr::Column(2), &[2], &equivalences)
     /// );
     /// assert_eq!(
     ///   None,
-    ///   join_util.find_bound_expr(&ScalarExpr::Column(0), &[1], &equivalences)
+    ///   input_mapper.find_bound_expr(&ScalarExpr::Column(0), &[1], &equivalences)
     /// );
     /// ```
     pub fn find_bound_expr(

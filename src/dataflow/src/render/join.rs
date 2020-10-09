@@ -57,7 +57,7 @@ where
                 equivalence.dedup();
             }
 
-            let join_util = expr::JoinUtil::new(inputs);
+            let input_mapper = expr::JoinInputMapper::new(inputs);
 
             // Unwrap demand
             // TODO: If we pushed predicates into the operator, we could have a
@@ -69,7 +69,7 @@ where
             let (mut joined, mut errs) = self.collection(&inputs[*start]).unwrap();
 
             // Maintain sources of each in-progress column.
-            let mut source_columns = join_util.global_columns(*start).collect::<Vec<_>>();
+            let mut source_columns = input_mapper.global_columns(*start).collect::<Vec<_>>();
 
             let mut predicates = predicates.to_vec();
             if start_arr.is_none() || inputs.len() == 1 {
@@ -92,7 +92,7 @@ where
             for (input_index, (input, next_keys)) in order.iter().enumerate() {
                 let next_keys_rebased = next_keys
                     .iter()
-                    .map(|k| join_util.map_expr_to_global(k, *input))
+                    .map(|k| input_mapper.map_expr_to_global(k, *input))
                     .collect::<Vec<_>>();
 
                 // Keys for the next input to be joined must be produced from
@@ -101,7 +101,7 @@ where
                 let prev_keys = next_keys_rebased
                     .iter()
                     .map(|expr| {
-                        let mut bound_expr = join_util
+                        let mut bound_expr = input_mapper
                             .find_bound_expr(expr, &bound_inputs, &equivalences)
                             .expect("Expression in join plan is not bound at time of use");
 
@@ -136,12 +136,12 @@ where
                 }
                 column_demand.extend(demand.iter().cloned());
 
-                let next_source_vals = join_util
+                let next_source_vals = input_mapper
                     .global_columns(*input)
                     .filter(|c| column_demand.contains(c))
                     .collect::<Vec<_>>();
 
-                let next_vals = join_util.map_columns_to_local(&next_source_vals);
+                let next_vals = input_mapper.map_columns_to_local(&next_source_vals);
 
                 // When joining the first input, check to see if there is a
                 // convenient ready-made arrangement
