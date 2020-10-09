@@ -63,6 +63,8 @@ Wrap your release notes at the 80 character mark.
   `pg_catalog` schemas, this support improves compatibility with various
   PostgreSQL tools that generate SQL queries with qualified function references.
 
+- Add support for the following psql meta commands: `\l`, `\d`, `\dv`, `\dt`, `\di`.
+
 - Add support for the [`oid`](/sql/types/oid) type to represent PostgreSQL object IDs.
 
 - Add support for [array types](/sql/types/array) for compatibility with
