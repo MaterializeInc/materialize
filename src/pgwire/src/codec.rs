@@ -30,8 +30,8 @@ use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
 use ore::cast::CastFrom;
-use ore::netio;
 use ore::future::OreSinkExt;
+use ore::netio;
 
 use crate::message::{
     BackendMessage, FrontendMessage, FrontendStartupMessage, TransactionStatus, VERSION_CANCEL,
@@ -67,12 +67,12 @@ impl fmt::Display for CodecError {
 /// A connection that manages the encoding and decoding of pgwire frames.
 pub struct FramedConn<A> {
     conn_id: u32,
-    inner: sink::Buffer<Framed<A, Codec>, BackendMessage>
+    inner: sink::Buffer<Framed<A, Codec>, BackendMessage>,
 }
 
 impl<A> FramedConn<A>
 where
-    A: AsyncRead + AsyncWrite + Unpin
+    A: AsyncRead + AsyncWrite + Unpin,
 {
     /// Constructs a new framed connection.
     ///
@@ -85,7 +85,7 @@ where
     pub fn new(conn_id: u32, inner: A) -> FramedConn<A> {
         FramedConn {
             conn_id,
-            inner: Framed::new(inner, Codec::new()).buffer(32)
+            inner: Framed::new(inner, Codec::new()).buffer(32),
         }
     }
 
@@ -149,24 +149,6 @@ where
     }
 }
 
-/// A Tokio codec to encode and decode pgwire frames.
-///
-/// Use a `Codec` by wrapping it in a [`tokio::codec::Framed`]:
-///
-/// ```
-/// use futures::stream::StreamExt;
-/// use pgwire::Codec;
-/// use tokio::io;
-/// use tokio::net::TcpStream;
-/// use tokio_util::codec::Framed;
-///
-/// async fn handle_connection(rw: TcpStream) {
-///     let mut rw = Framed::new(rw, Codec::new());
-///     while let Some(msg) = rw.next().await {
-///         println!("{:#?}", msg);
-///     }
-/// }
-/// ```
 struct Codec {
     decode_state: DecodeState,
     encode_state: Vec<(pgrepr::Type, pgrepr::Format)>,
