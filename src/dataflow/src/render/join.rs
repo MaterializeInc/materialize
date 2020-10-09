@@ -90,10 +90,10 @@ where
 
             let mut bound_inputs = vec![*start];
             for (input_index, (input, next_keys)) in order.iter().enumerate() {
-                let mut next_keys_rebased = next_keys.clone();
-                for expr in next_keys_rebased.iter_mut() {
-                    join_util.globalize_expression(expr, *input);
-                }
+                let next_keys_rebased = next_keys
+                    .iter()
+                    .map(|k| join_util.map_expr_to_global(k, *input))
+                    .collect::<Vec<_>>();
 
                 // Keys for the next input to be joined must be produced from
                 // ScalarExprs found in `equivalences`, re-written to bind the
@@ -141,7 +141,7 @@ where
                     .filter(|c| column_demand.contains(c))
                     .collect::<Vec<_>>();
 
-                let next_vals = join_util.localize_columns(&next_source_vals);
+                let next_vals = join_util.map_columns_to_local(&next_source_vals);
 
                 // When joining the first input, check to see if there is a
                 // convenient ready-made arrangement

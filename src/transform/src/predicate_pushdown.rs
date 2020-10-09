@@ -197,11 +197,13 @@ impl PredicatePushdown {
                                 if let RelationExpr::ArrangeBy { .. } = inputs[index] {
                                     // do nothing. We do not want to push down a filter and block
                                     // usage of an index
-                                } else if let Some(localized) = join_util.try_localize_expression(
-                                    &predicate,
-                                    index,
-                                    &equivalences[..],
-                                ) {
+                                } else if let Some(localized) = join_util
+                                    .try_map_to_input_with_bound_expr(
+                                        &predicate,
+                                        index,
+                                        &equivalences[..],
+                                    )
+                                {
                                     push_down.push(localized);
                                     pushed = true;
                                 }
@@ -256,10 +258,8 @@ impl PredicatePushdown {
                                         && i != &pos
                                         && equivalence[*i].support() == support
                                 }) {
-                                    let mut expr1 = equivalence[pos].clone();
-                                    let mut expr2 = equivalence[pos2].clone();
-                                    join_util.localize_expression(&mut expr1);
-                                    join_util.localize_expression(&mut expr2);
+                                    let expr1 = join_util.map_expr_to_local(&equivalence[pos]);
+                                    let expr2 = join_util.map_expr_to_local(&equivalence[pos2]);
                                     use expr::BinaryFunc;
                                     push_downs[support.into_iter().next().unwrap()].push(
                                         ScalarExpr::CallBinary {

@@ -136,8 +136,7 @@ impl JoinImplementation {
                 // TODO: expand `order_input`
                 available_arrangements[index].retain(|key| {
                     key.iter().all(|k| {
-                        let mut k = k.clone();
-                        join_util.globalize_expression(&mut k, index);
+                        let k = join_util.map_expr_to_global(k, index);
                         equivalences
                             .iter()
                             .any(|equivalence| equivalence.contains(&k))
@@ -393,10 +392,11 @@ fn implement_arrangements<'a>(
                 predicates,
             } = &mut inputs[index]
             {
-                lifted_predicates.extend(predicates.drain(..).map(|mut expr| {
-                    join_util.globalize_expression(&mut expr, index);
-                    expr
-                }));
+                lifted_predicates.extend(
+                    predicates
+                        .drain(..)
+                        .map(|expr| join_util.map_expr_to_global(&expr, index)),
+                );
                 inputs[index] = inner.take_dangerous();
             }
         }
@@ -585,14 +585,10 @@ impl<'a> Orderer<'a> {
             let candidate_start_key = key
                 .iter()
                 .filter_map(|k| {
-                    let mut k = k.clone();
-                    self.join_util.globalize_expression(&mut k, *second);
+                    let k = self.join_util.map_expr_to_global(k, *second);
                     self.join_util
                         .find_bound_expr(&k, &[start], self.equivalences)
-                        .map(|mut bound_key| {
-                            self.join_util.localize_expression(&mut bound_key);
-                            bound_key
-                        })
+                        .map(|bound_key| self.join_util.map_expr_to_local(&bound_key))
                 })
                 .collect::<Vec<_>>();
             if candidate_start_key.len() == key.len() {
@@ -646,8 +642,7 @@ impl<'a> Orderer<'a> {
                         //   query better.
                         if rels.len() == 1 {
                             let rel = rels.first().unwrap();
-                            let mut expr = expr.clone();
-                            self.join_util.localize_expression(&mut expr);
+                            let expr = self.join_util.map_expr_to_local(&expr);
 
                             // Update bound columns.
                             self.bound[*rel].push(expr);

@@ -19,11 +19,14 @@ use crate::ScalarExpr;
 /// the local input and re-expressing them in global terms and vice versa.
 #[derive(Debug)]
 pub struct JoinUtil {
-    /// The number of columns per input
+    /// The number of columns per input. All other fields in this struct are
+    /// derived using the information in this field.
     arities: Vec<usize>,
-    /// Looks up which input each column belongs to
+    /// Looks up which input each column belongs to. Derived from `arities`.
+    /// Stored as a field to avoid recomputation.
     input_relation: Vec<usize>,
-    /// The sum of the arities of the previous inputs in the join
+    /// The sum of the arities of the previous inputs in the join. Derived from
+    /// `arities`. Stored as a field to avoid recomputation.
     prior_arities: Vec<usize>,
 }
 
@@ -69,29 +72,35 @@ impl JoinUtil {
         self.prior_arities[index]..(self.prior_arities[index] + self.arities[index])
     }
 
-    /// Shift the column references in an expression from the context of the
-    /// larger join to the context of the input that the expression refers to.
-    pub fn localize_expression(&self, expr: &mut ScalarExpr) {
+    /// Takes an expression from the global context and creates a new version
+    /// where column references have been remapped to the local context.
+    /// Assumes that all columns in `expr` are from the same input.
+    pub fn map_expr_to_local(&self, expr: &ScalarExpr) -> ScalarExpr {
+        let mut expr = expr.clone();
         expr.visit_mut(&mut |e| {
             if let ScalarExpr::Column(c) = e {
                 *c -= self.prior_arities[self.input_relation[*c]];
             }
         });
+        expr
     }
 
-    /// Shift the column references in an expression from the context of the
-    /// `index`th input to the context of the larger join.
-    pub fn globalize_expression(&self, expr: &mut ScalarExpr, index: usize) {
+    /// Takes an expression from the local context of the `index`th input and
+    /// creates a new version where column references have been remapped to the
+    /// global context.
+    pub fn map_expr_to_global(&self, expr: &ScalarExpr, index: usize) -> ScalarExpr {
+        let mut expr = expr.clone();
         expr.visit_mut(&mut |e| {
             if let ScalarExpr::Column(c) = e {
                 *c += self.prior_arities[index];
             }
         });
+        expr
     }
 
-    /// Convert column numbers to their corresponding values relative to the
-    /// input it comes from
-    pub fn localize_columns(&self, columns: &[usize]) -> Vec<usize> {
+    /// Remap column numbers from the global to the local context.
+    /// Assumes column numbers are from the same input.
+    pub fn map_columns_to_local(&self, columns: &[usize]) -> Vec<usize> {
         columns
             .iter()
             .map(|c| *c - self.prior_arities[self.input_relation[*c]])
@@ -113,6 +122,41 @@ impl JoinUtil {
     /// Takes an expression in the global context and looks in `equivalences`
     /// for an equivalent expression (also expressed in the global context) that
     /// belongs to one or more of the inputs in `bound_inputs`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use repr::{Datum, ColumnType, RelationType, ScalarType};
+    /// use expr::{JoinUtil, RelationExpr, ScalarExpr};
+    ///
+    /// // A two-column schema common to each of the three inputs
+    /// let schema = RelationType::new(vec![
+    ///   ScalarType::Int32.nullable(false),
+    ///   ScalarType::Int32.nullable(false),
+    /// ]);
+    ///
+    /// // the specific data are not important here.
+    /// let data = vec![Datum::Int32(0), Datum::Int32(1)];
+    /// let input0 = RelationExpr::constant(vec![data.clone()], schema.clone());
+    /// let input1 = RelationExpr::constant(vec![data.clone()], schema.clone());
+    /// let input2 = RelationExpr::constant(vec![data.clone()], schema.clone());
+    ///
+    /// // [input0(#0) = input2(#1)], [input0(#1) = input1(#0) = input2(#0)]
+    /// let equivalences = vec![
+    ///   vec![ScalarExpr::Column(0), ScalarExpr::Column(5)],
+    ///   vec![ScalarExpr::Column(1), ScalarExpr::Column(2), ScalarExpr::Column(4)],
+    /// ];
+    ///
+    /// let join_util = JoinUtil::new(&[input0, input1, input2]);
+    /// assert_eq!(
+    ///   Some(ScalarExpr::Column(4)),
+    ///   join_util.find_bound_expr(&ScalarExpr::Column(2), &[2], &equivalences)
+    /// );
+    /// assert_eq!(
+    ///   None,
+    ///   join_util.find_bound_expr(&ScalarExpr::Column(0), &[1], &equivalences)
+    /// );
+    /// ```
     pub fn find_bound_expr(
         &self,
         expr: &ScalarExpr,
@@ -137,7 +181,7 @@ impl JoinUtil {
     /// Takes an expression in the global context and makes rewrites in the
     /// global context so we can identify using `lookup_inputs` whether if an expression
     /// was only partially rewritten.
-    fn try_localize_subexpression(
+    fn try_map_to_input_with_bound_expr_sub(
         &self,
         expr: &mut ScalarExpr,
         index: usize,
@@ -151,29 +195,28 @@ impl JoinUtil {
             *expr = bound_expr;
         } else {
             // recurse to see if we can replace subexpressions further down
-            expr.visit1_mut(|e| self.try_localize_subexpression(e, index, equivalences))
+            expr.visit1_mut(|e| self.try_map_to_input_with_bound_expr_sub(e, index, equivalences))
         }
     }
 
-    /// Try to rewrite an expression referencing the larger join so that all the
-    /// column references point to the `index` input taking advantage of equivalences
-    /// in the join, if necessary.
-    /// The return value, if not None, is in the context local to input `index`
-    pub fn try_localize_expression(
+    /// Try to rewrite an expression from the global context so that all the
+    /// columns point to the `index` input by replacing subexpressions with their
+    /// bound equivalents in the `index`th input if necessary.
+    /// The return value, if not None, is in the context of the `index`th input
+    pub fn try_map_to_input_with_bound_expr(
         &self,
         expr: &ScalarExpr,
         index: usize,
         equivalences: &[Vec<ScalarExpr>],
     ) -> Option<ScalarExpr> {
         let mut expr = expr.clone();
-        expr.visit1_mut(&mut |e| self.try_localize_subexpression(e, index, equivalences));
+        expr.visit1_mut(&mut |e| self.try_map_to_input_with_bound_expr_sub(e, index, equivalences));
         // if the localization attempt is successful, all columns in `expr`
         // should only come from input `index`
         let inputs_after_localization = self.lookup_inputs(&expr);
         if inputs_after_localization.len() == 1 {
             if *inputs_after_localization.first().unwrap() == index {
-                self.localize_expression(&mut expr);
-                return Some(expr);
+                return Some(self.map_expr_to_local(&expr));
             }
         }
         None

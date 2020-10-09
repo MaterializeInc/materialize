@@ -106,10 +106,9 @@ where
                                 // other relations, in the specified order.
                                 for (other, next_key) in order.iter() {
 
-                                    let mut next_key_rebased = next_key.clone();
-                                    for expr in next_key_rebased.iter_mut() {
-                                        join_util.globalize_expression(expr, *other);
-                                    }
+                                    let next_key_rebased = next_key.iter().map(
+                                        |k| join_util.map_expr_to_global(k, *other)
+                                    ).collect::<Vec<_>>();
 
                                     // Keys for the incoming updates are determined by locating
                                     // the elements of `next_keys` among the existing `columns`.
