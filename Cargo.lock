@@ -995,6 +995,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "enum-kinds"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c30ea541ff8aec761976f2eadf20371fa06fbc0f2cb2f8fb505a7f1340d459a0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "env_logger"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2091,6 +2102,7 @@ dependencies = [
  "chrono",
  "crc",
  "digest",
+ "enum-kinds",
  "itertools",
  "lazy_static",
  "libflate",
@@ -2102,8 +2114,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "snap",
- "strum",
- "strum_macros",
  "uuid",
 ]
 
@@ -3831,24 +3841,6 @@ checksum = "8fc47de4dfba76248d1e9169ccff240eea2a4dc1e34e309b95b2393109b4b383"
 dependencies = [
  "heck",
  "proc-macro-error",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "strum"
-version = "0.19.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3924a58d165da3b7b2922c667ab0673c7b5fd52b5c19ea3442747bcb3cd15abe"
-
-[[package]]
-name = "strum_macros"
-version = "0.19.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d2ab682ecdcae7f5f45ae85cd7c1e6c8e68ea42c8a612d47fedf831c037146a"
-dependencies = [
- "heck",
  "proc-macro2",
  "quote",
  "syn",
