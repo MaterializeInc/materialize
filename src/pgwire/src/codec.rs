@@ -21,13 +21,16 @@ use std::str;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
+use futures::{sink, SinkExt, TryStreamExt};
 use lazy_static::lazy_static;
+use log::trace;
 use postgres::error::SqlState;
 use prometheus::{register_uint_counter, UIntCounter};
-use tokio::io::{self, AsyncRead, AsyncReadExt};
-use tokio_util::codec::{Decoder, Encoder};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio_util::codec::{Decoder, Encoder, Framed};
 
 use ore::cast::CastFrom;
+use ore::future::OreSinkExt;
 use ore::netio;
 
 use crate::message::{
@@ -61,25 +64,92 @@ impl fmt::Display for CodecError {
     }
 }
 
-/// A Tokio codec to encode and decode pgwire frames.
-///
-/// Use a `Codec` by wrapping it in a [`tokio::codec::Framed`]:
-///
-/// ```
-/// use futures::stream::StreamExt;
-/// use pgwire::Codec;
-/// use tokio::io;
-/// use tokio::net::TcpStream;
-/// use tokio_util::codec::Framed;
-///
-/// async fn handle_connection(rw: TcpStream) {
-///     let mut rw = Framed::new(rw, Codec::new());
-///     while let Some(msg) = rw.next().await {
-///         println!("{:#?}", msg);
-///     }
-/// }
-/// ```
-pub struct Codec {
+/// A connection that manages the encoding and decoding of pgwire frames.
+pub struct FramedConn<A> {
+    conn_id: u32,
+    inner: sink::Buffer<Framed<A, Codec>, BackendMessage>,
+}
+
+impl<A> FramedConn<A>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Constructs a new framed connection.
+    ///
+    /// The underlying connection, `inner`, is expected to be something like a
+    /// TCP stream. Anything that implements [`AsyncRead`] and [`AsyncWrite`]
+    /// will do.
+    ///
+    /// The supplied `conn_id` is used to identify the connection in logging
+    /// messages.
+    pub fn new(conn_id: u32, inner: A) -> FramedConn<A> {
+        FramedConn {
+            conn_id,
+            inner: Framed::new(inner, Codec::new()).buffer(32),
+        }
+    }
+
+    /// Reads and decodes one frontend message from the client.
+    ///
+    /// Blocks until the client sends a complete message. If the client
+    /// terminates the stream, returns `None`. Returns an error if the client
+    /// sends a malformatted message or if the connection underlying is broken.
+    pub async fn recv(&mut self) -> Result<Option<FrontendMessage>, io::Error> {
+        let message = self.inner.try_next().await?;
+        match &message {
+            Some(message) => trace!("cid={} recv={:?}", self.conn_id, message),
+            None => trace!("cid={} recv=<eof>", self.conn_id),
+        }
+        Ok(message)
+    }
+
+    /// Encodes and sends one backend message to the client.
+    ///
+    /// Note that the connection is not flushed after calling this method. You
+    /// must call [`FramedConn::flush`] explicitly. Returns an error if the
+    /// underlying connection is broken.
+    pub async fn send(&mut self, message: BackendMessage) -> Result<(), io::Error> {
+        trace!("cid={} send={:?}", self.conn_id, message);
+        Ok(self.inner.enqueue(message).await?)
+    }
+
+    /// Encodes and sends the backend messages in the `messages` iterator to the
+    /// client.
+    ///
+    /// As with [`FramedConn::send`], the connection is not flushed after
+    /// calling this method. You must call [`FramedConn::flush`] explicitly.
+    /// Returns an error if the underlying connection is broken.
+    pub async fn send_all(
+        &mut self,
+        messages: impl IntoIterator<Item = BackendMessage>,
+    ) -> Result<(), io::Error> {
+        // N.B. we intentionally don't use `self.conn.send_all` here to avoid
+        // flushing the sink unnecessarily.
+        for m in messages {
+            self.send(m).await?;
+        }
+        Ok(())
+    }
+
+    /// Flushes all outstanding messages.
+    pub async fn flush(&mut self) -> Result<(), io::Error> {
+        self.inner.flush().await
+    }
+
+    /// Injects state that affects how certain backend messages are encoded.
+    ///
+    /// Specifically, the encoding of `BackendMessage::DataRow` depends upon the
+    /// types of the datums in the row. To avoid including the same type
+    /// information in each message, we use this side channel to install the
+    /// type information in the codec before sending any data row messages. This
+    /// violates the abstraction boundary a bit but results in much better
+    /// performance.
+    pub fn set_encode_state(&mut self, encode_state: Vec<(pgrepr::Type, pgrepr::Format)>) {
+        self.inner.get_mut().codec_mut().encode_state = encode_state;
+    }
+}
+
+struct Codec {
     decode_state: DecodeState,
     encode_state: Vec<(pgrepr::Type, pgrepr::Format)>,
 }
@@ -91,10 +161,6 @@ impl Codec {
             decode_state: DecodeState::Head,
             encode_state: vec![],
         }
-    }
-
-    pub fn set_encode_state(&mut self, encode_state: Vec<(pgrepr::Type, pgrepr::Format)>) {
-        self.encode_state = encode_state;
     }
 
     fn encode_error_notice_response(

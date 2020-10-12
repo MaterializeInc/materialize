@@ -15,7 +15,6 @@
 
 use std::time::Instant;
 
-use futures::channel::mpsc::UnboundedSender;
 use futures::future::{FutureExt, TryFutureExt};
 use hyper::{service, Method};
 use openssl::ssl::SslAcceptor;
@@ -43,7 +42,7 @@ fn sniff_tls(buf: &[u8]) -> bool {
 
 pub struct Server {
     tls: Option<SslAcceptor>,
-    cmdq_tx: UnboundedSender<coord::Command>,
+    coord_client: coord::Client,
     /// When this server started
     start_time: Instant,
 }
@@ -51,7 +50,7 @@ pub struct Server {
 impl Server {
     pub fn new(
         tls: Option<SslAcceptor>,
-        cmdq_tx: UnboundedSender<coord::Command>,
+        coord_client: coord::Client,
         start_time: Instant,
         worker_count: &str,
     ) -> Server {
@@ -61,7 +60,7 @@ impl Server {
             .set(1);
         Server {
             tls,
-            cmdq_tx,
+            coord_client,
             start_time,
         }
     }

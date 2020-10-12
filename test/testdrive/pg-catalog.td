@@ -35,6 +35,20 @@ Field        Nullable  Type
  datctype    NO        text
  datacl      YES       _text
 
+> SHOW COLUMNS FROM pg_index
+Field        Nullable  Type
+--------------------------
+indexrelid   NO        oid
+indrelid     NO        oid
+
+> SHOW COLUMNS FROM pg_description
+Field        Nullable  Type
+--------------------------
+objoid       NO        oid
+classoid     YES       oid
+objsubid     NO        int4
+description  YES       text
+
 ! SELECT current_schemas()
 Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;
 

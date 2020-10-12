@@ -44,6 +44,7 @@ pub const VERSIONS: &[i32] = &[
 ];
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ErrorSeverity {
     Error,
     Fatal,
@@ -61,6 +62,7 @@ impl ErrorSeverity {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum NoticeSeverity {
     Warning,
     Notice,

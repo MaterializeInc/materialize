@@ -41,8 +41,6 @@ function useSQL(sql) {
         setLoading(false);
       })
       .catch((error) => {
-        console.debug(typeof error);
-        console.debug(JSON.stringify(error));
         setError(error);
         setLoading(false);
       });
@@ -130,6 +128,7 @@ function View(props) {
   const [records, setRecords] = useState(null);
   const [opers, setOpers] = useState(null);
   const [chans, setChans] = useState(null);
+  const [elapsed, setElapsed] = useState(null);
   const [graph, setGraph] = useState(null);
   const [dot, setDot] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -270,11 +269,39 @@ function View(props) {
       `);
       setRecords(Object.fromEntries(records_table.rows));
 
+      const elapsed_table = await query(`
+        SELECT
+          id, sum(elapsed_ns)
+        FROM
+          mz_catalog.mz_scheduling_elapsed
+        WHERE
+          id
+          IN (
+              SELECT
+                id
+              FROM
+                mz_catalog.mz_dataflow_operator_addresses
+              WHERE
+                slot = 0
+                AND value
+                  = (
+                      SELECT
+                        value
+                      FROM
+                        mz_catalog.mz_dataflow_operator_addresses
+                      WHERE
+                        id = ${props.dataflow_id}
+                    )
+            )
+        GROUP BY
+          id;
+      `);
+      setElapsed(Object.fromEntries(elapsed_table.rows));
+
       setLoading(false);
     };
     load().catch((error) => {
-      console.debug(typeof error, error);
-      setError(JSON.stringify(error));
+      setError(error);
       setLoading(false);
     });
   }, [props]);
@@ -336,6 +363,7 @@ function View(props) {
       if (!addrs[id].length) {
         return '';
       }
+      const notes = [`id: ${id}`];
       let style = '';
       if (id in records) {
         const record_count = records[id];
@@ -343,10 +371,13 @@ function View(props) {
         // currently has 0 records). The fill color is a deeper red based on how many
         // records this operator has compared to the operator with the most records.
         const alpha = ((record_count / max_record_count) * 0xff).toString(16);
-        name += ` (${record_count} records)`;
+        notes.push(`${record_count} records`);
         style = `,style=filled,color=red,fillcolor="#ff0000${alpha}"`;
       }
-      return `_${id} [label="${name} (id: ${id})"${style}]`;
+      if (id in elapsed) {
+        notes.push(`${dispNs(elapsed[id])}`);
+      }
+      return `_${id} [label="${name} (${notes.join(', ')})"${style}]`;
     });
     oper_labels.unshift('');
     clusters.unshift('');
@@ -391,6 +422,25 @@ function makeAddrStr(addrs, id, other) {
 
 function addrStr(addr) {
   return addr.join(', ');
+}
+
+// dispNs displays ns nanoseconds in a human-readable string.
+function dispNs(ns) {
+  const timeTable = [
+    [60, 's'],
+    [60, 'm'],
+    [60, 'h'],
+  ];
+  const parts = [];
+  let v = ns / 1e9;
+  timeTable.forEach(([div, disp], idx) => {
+    const part = Math.floor(v % div);
+    if (part >= 1 || idx === 0) {
+      parts.unshift(`${part}${disp}`);
+    }
+    v = Math.floor(v / div);
+  });
+  return parts.join('');
 }
 
 const content = document.getElementById('content');

@@ -68,13 +68,14 @@ use crate::catalog::builtin::{
 use crate::catalog::{
     self, Catalog, CatalogItem, Index, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
 };
+use crate::command::{
+    Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+};
 use crate::persistence::{PersistenceConfig, Persister};
 use crate::session::{PreparedStatement, Session};
+use crate::sink_connector;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
-use crate::{
-    sink_connector, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
-};
 
 mod arrangement_state;
 
@@ -688,8 +689,8 @@ where
                     let _ = tx.send(self.catalog.dump());
                 }
 
-                Message::Command(Command::Terminate { conn_id }) => {
-                    self.handle_terminate(conn_id).await;
+                Message::Command(Command::Terminate { mut session }) => {
+                    self.handle_terminate(&mut session).await;
                 }
 
                 Message::Worker(WorkerFeedbackWithMeta {
@@ -946,20 +947,19 @@ where
         }
     }
 
-    /// Terminate any temporary objects created by the named `conn_id`
-    /// stored on the Coordinator.
-    async fn handle_terminate(&mut self, conn_id: u32) {
-        if let Some(name) = self.active_tails.remove(&conn_id) {
+    /// Terminate any temporary objects created by the specified session.
+    async fn handle_terminate(&mut self, session: &mut Session) {
+        if let Some(name) = self.active_tails.remove(&session.conn_id()) {
             self.drop_sinks(vec![name]).await;
         }
 
-        // Remove all temporary items created by the conn_id.
-        let ops = self.catalog.drop_temp_item_ops(conn_id);
+        // Remove all temporary items created by the session.
+        let ops = self.catalog.drop_temp_item_ops(session.conn_id());
         self.catalog_transact(ops)
             .await
             .expect("unable to drop temporary items for conn_id");
         self.catalog
-            .drop_temporary_schema(conn_id)
+            .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
     }
 
@@ -2117,6 +2117,11 @@ where
         let uses_ids = &source.global_uses();
         let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
 
+        // Determine the valid lower bound of times that can produce correct outputs.
+        // This bound is determined by the arrangements contributing to the query,
+        // and does not depend on the transitive sources.
+        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
+
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
         let timestamp = match when {
@@ -2130,12 +2135,12 @@ where
                 if !indexes_complete {
                     bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
                 }
-                if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
+                let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
                     // If the view depends on any tables, we enforce
                     // linearizability by choosing the latest input time.
                     self.get_read_ts()
                 } else {
-                    let upper = self.indexes.greatest_open_upper(index_ids.iter().cloned());
+                    let upper = self.indexes.greatest_open_upper(index_ids.iter().copied());
                     // We peek at the largest element not in advance of `upper`, which
                     // involves a subtraction. If `upper` contains a zero timestamp there
                     // is no "prior" answer, and we do not want to peek at it as it risks
@@ -2164,14 +2169,17 @@ where
                         // This should only happen for literals that have no sources
                         Timestamp::max_value()
                     }
+                };
+                // If the candidate is not beyond the valid `since` frontier,
+                // force it to become so as best as we can. If `since` is empty
+                // this will be a no-op, as there is no valid time, but that should
+                // then be caught below.
+                if !since.less_equal(&candidate) {
+                    candidate.advance_by(since.borrow());
                 }
+                candidate
             }
         };
-
-        // Determine the valid lower bound of times that can produce correct outputs.
-        // This bound is determined by the arrangements contributing to the query,
-        // and does not depend on the transitive sources.
-        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
 
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
