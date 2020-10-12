@@ -13,4 +13,4 @@ repr = { path = "../repr" }
 
 [dev-dependencies]
 datadriven = "0.3.0"
-anyhow = "1.0.28"
+anyhow = "1.0.33"
