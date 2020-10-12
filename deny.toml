@@ -10,6 +10,12 @@ skip = [
     # Waiting on chrono to migrate to time v0.2.
     { name = "time", version = "0.1.42" },
 ]
+deny = [
+    # Strum has suspect code quality and includes many unneeded features. Use
+    # more targeted enum macro crates, e.g. `enum-kinds`.
+    { name = "strum" },
+    { name = "strum-macros" },
+]
 
 [licenses]
 allow = [
