@@ -3,12 +3,23 @@ multiple-versions = "deny"
 skip = [
     # Do not add to this list without good reason! Duplicate dependencies slow
     # down compilation and bloat the binary.
+
+    # Waiting for approximately the entire Rust ecosystem to upgrade to
+    # v1.0.0.
+    { name = "cfg-if", version = "0.1.0" },
+
     # Waiting on mio 0.7: https://github.com/tokio-rs/tokio/issues/1190.
     { name = "miow", version = "0.2.1" },
     { name = "winapi", version = "0.2.8" },
 
     # Waiting on chrono to migrate to time v0.2.
     { name = "time", version = "0.1.42" },
+]
+deny = [
+    # Strum has suspect code quality and includes many unneeded features. Use
+    # more targeted enum macro crates, e.g. `enum-kinds`.
+    { name = "strum" },
+    { name = "strum-macros" },
 ]
 
 [licenses]

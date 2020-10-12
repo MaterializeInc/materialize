@@ -630,10 +630,57 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     mz_objects.oid,
     name AS relname,
     mz_schemas.oid AS relnamespace,
-    NULL::oid AS relowner
+    NULL::oid AS relowner,
+    CASE
+        WHEN mz_objects.type = 'table' THEN 'r'
+        WHEN mz_objects.type = 'source' THEN 'r'
+        WHEN mz_objects.type = 'index' THEN 'i'
+        WHEN mz_objects.type = 'view' THEN 'v'
+    END relkind
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.schema_id = mz_objects.schema_id",
     id: GlobalId::System(3016),
+    needs_logs: false,
+};
+
+pub const PG_DATABASE: BuiltinView = BuiltinView {
+    name: "pg_database",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_database AS SELECT
+    oid,
+    database as datname,
+    NULL::oid AS datdba,
+    6 as encoding,
+    'C' as datcollate,
+    'C' as datctype,
+    NULL::text[] as datacl
+FROM mz_catalog.mz_databases",
+    id: GlobalId::System(3017),
+    needs_logs: false,
+};
+
+pub const PG_INDEX: BuiltinView = BuiltinView {
+    name: "pg_index",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_index AS SELECT
+    mz_indexes.oid as indexrelid,
+    mz_objects.oid as indrelid
+FROM mz_catalog.mz_indexes
+JOIN mz_catalog.mz_objects ON mz_indexes.on_global_id = mz_objects.global_id",
+    id: GlobalId::System(3018),
+    needs_logs: false,
+};
+
+pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
+    name: "pg_description",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_description AS SELECT
+    oid as objoid,
+    NULL::oid as classoid,
+    0::int4 as objsubid,
+    NULL::text as description
+FROM pg_catalog.pg_class",
+    id: GlobalId::System(3019),
     needs_logs: false,
 };
 
@@ -682,6 +729,9 @@ lazy_static! {
             Builtin::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
             Builtin::View(&PG_NAMESPACE),
             Builtin::View(&PG_CLASS),
+            Builtin::View(&PG_DATABASE),
+            Builtin::View(&PG_INDEX),
+            Builtin::View(&PG_DESCRIPTION),
         ];
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };

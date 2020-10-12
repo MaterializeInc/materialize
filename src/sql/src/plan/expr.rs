@@ -215,9 +215,13 @@ impl CoercibleScalarExpr {
     }
 }
 
-pub trait ScalarTypeable {
-    type Type;
+/// An expression whose type can be ascertained.
+///
+/// Abstracts over `ScalarExpr` and `CoercibleScalarExpr`.
+pub trait AbstractExpr {
+    type Type: AbstractColumnType;
 
+    /// Computes the type of the expression.
     fn typ(
         &self,
         outers: &[RelationType],
@@ -226,7 +230,7 @@ pub trait ScalarTypeable {
     ) -> Self::Type;
 }
 
-impl ScalarTypeable for CoercibleScalarExpr {
+impl AbstractExpr for CoercibleScalarExpr {
     type Type = Option<ColumnType>;
 
     fn typ(
@@ -239,6 +243,34 @@ impl ScalarTypeable for CoercibleScalarExpr {
             CoercibleScalarExpr::Coerced(expr) => Some(expr.typ(outers, inner, params)),
             _ => None,
         }
+    }
+}
+
+/// A column type-like object whose underlying scalar type-like object can be
+/// ascertained.
+///
+/// Abstracts over `ColumnType` and `Option<ColumnType>`.
+pub trait AbstractColumnType {
+    type AbstractScalarType;
+
+    /// Converts the column type-like object into its inner scalar type-like
+    /// object.
+    fn scalar_type(self) -> Self::AbstractScalarType;
+}
+
+impl AbstractColumnType for ColumnType {
+    type AbstractScalarType = ScalarType;
+
+    fn scalar_type(self) -> Self::AbstractScalarType {
+        self.scalar_type
+    }
+}
+
+impl AbstractColumnType for Option<ColumnType> {
+    type AbstractScalarType = Option<ScalarType>;
+
+    fn scalar_type(self) -> Self::AbstractScalarType {
+        self.map(|t| t.scalar_type)
     }
 }
 
@@ -521,6 +553,9 @@ impl RelationExpr {
         )
     }
 
+    // TODO(benesch): these visit methods are too duplicative. Figure out how
+    // to deduplicate.
+
     pub fn visit<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
@@ -742,6 +777,62 @@ impl RelationExpr {
         }
     }
 
+    /// See the documentation for [`ScalarExpr::splice_parameters`].
+    pub fn splice_parameters(&mut self, params: &[ScalarExpr], depth: usize) {
+        match self {
+            RelationExpr::Join {
+                kind,
+                on,
+                left,
+                right,
+            } => {
+                left.splice_parameters(params, depth);
+                let depth = if kind.is_lateral() { depth + 1 } else { depth };
+                right.splice_parameters(params, depth);
+                on.splice_parameters(params, depth);
+            }
+            RelationExpr::Map { scalars, input } => {
+                for scalar in scalars {
+                    scalar.splice_parameters(params, depth);
+                }
+                input.splice_parameters(params, depth);
+            }
+            RelationExpr::CallTable { exprs, .. } => {
+                for expr in exprs {
+                    expr.splice_parameters(params, depth);
+                }
+            }
+            RelationExpr::Filter { predicates, input } => {
+                for predicate in predicates {
+                    predicate.splice_parameters(params, depth);
+                }
+                input.splice_parameters(params, depth);
+            }
+            RelationExpr::Reduce {
+                aggregates, input, ..
+            } => {
+                for aggregate in aggregates {
+                    aggregate.expr.splice_parameters(params, depth);
+                }
+                input.splice_parameters(params, depth);
+            }
+            RelationExpr::Union { base, inputs } => {
+                base.splice_parameters(params, depth);
+                for input in inputs {
+                    input.splice_parameters(params, depth);
+                }
+            }
+            RelationExpr::Project { input, .. }
+            | RelationExpr::Distinct { input }
+            | RelationExpr::TopK { input, .. }
+            | RelationExpr::Negate { input }
+            | RelationExpr::Threshold { input } => {
+                input.splice_parameters(params, depth);
+            }
+            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+        }
+    }
+
     /// Constructs a constant collection from specific rows and schema.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
         let mut row_packer = repr::RowPacker::new();
@@ -776,7 +867,7 @@ impl RelationExpr {
 
 impl ScalarExpr {
     /// Replaces any parameter references in the expression with the
-    /// corresponding datum in `parameters`.
+    /// corresponding datum in `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
         match self {
             ScalarExpr::Literal(_, _) | ScalarExpr::Column(_) | ScalarExpr::CallNullary(_) => {
@@ -811,6 +902,29 @@ impl ScalarExpr {
             }
             ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => expr.bind_parameters(params),
         }
+    }
+
+    // Like [`ScalarExpr::bind_parameters`]`, except that parameters are
+    // replaced with the corresponding expression fragment from `params` rather
+    // than a datum.
+    ///
+    /// Specifically, the parameter `$1` will be replaced with `params[0]`, the
+    /// parameter `$2` will be replaced with `params[1]`, and so on. Parameters
+    /// in `self` that refer to invalid indices of `params` will cause a panic.
+    ///
+    /// Column references in parameters will be corrected to account for the
+    /// depth at which they are spliced.
+    pub fn splice_parameters(&mut self, params: &[ScalarExpr], depth: usize) {
+        self.visit_mut(&mut |e| match e {
+            ScalarExpr::Parameter(i) => {
+                *e = params[*i - 1].clone();
+                // Correct any column references in the parameter expression for
+                // its new depth.
+                e.visit_columns(0, &mut |_, col| col.level += depth);
+            }
+            ScalarExpr::Exists(e) | ScalarExpr::Select(e) => e.splice_parameters(params, depth + 1),
+            _ => (),
+        })
     }
 
     pub fn literal(datum: Datum, scalar_type: ScalarType) -> ScalarExpr {
@@ -1026,7 +1140,7 @@ impl ScalarExpr {
     }
 }
 
-impl ScalarTypeable for ScalarExpr {
+impl AbstractExpr for ScalarExpr {
     type Type = ColumnType;
 
     fn typ(

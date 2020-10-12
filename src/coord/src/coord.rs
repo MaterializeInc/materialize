@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
@@ -68,11 +68,14 @@ use crate::catalog::builtin::{
 use crate::catalog::{
     self, Catalog, CatalogItem, Index, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
 };
+use crate::command::{
+    Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+};
 use crate::persistence::{PersistenceConfig, Persister};
 use crate::session::{PreparedStatement, Session};
+use crate::sink_connector;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
-use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
 
 mod arrangement_state;
 
@@ -142,7 +145,6 @@ where
     // Channel to communicate source status updates and shutdown notifications to the persister
     // thread.
     persistence_tx: Option<PersistenceSender>,
-    persistence_path: Option<PathBuf>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -587,6 +589,40 @@ where
                     }
                 }
 
+                // NoSessionExecute is designed to support a limited set of queries that
+                // run as the system user and are not associated with a user session. Due to
+                // that limitation, they do not support all plans (some of which require side
+                // effects in the session).
+                Message::Command(Command::NoSessionExecute { stmt, params, tx }) => {
+                    let res = async {
+                        let stmt = sql::pure::purify(stmt).await?;
+                        let catalog = self.catalog.for_system_session();
+                        let (desc, _) = sql::plan::describe(&catalog, stmt.clone(), &[])?;
+                        let pcx = PlanContext::default();
+                        let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
+                        // At time of writing this comment, Peeks use the connection id only for
+                        // logging, so it is safe to reuse the system id, which is the conn_id from
+                        // for_system_session().
+                        let conn_id = catalog.conn_id();
+                        let response = match plan {
+                            Plan::Peek {
+                                source,
+                                when,
+                                finishing,
+                                materialize,
+                            } => {
+                                self.sequence_peek(conn_id, source, when, finishing, materialize)
+                                    .await?
+                            }
+
+                            _ => bail!("unsupported plan"),
+                        };
+                        Ok(NoSessionExecuteResponse { desc, response })
+                    }
+                    .await;
+                    let _ = tx.send(res);
+                }
+
                 Message::StatementReady {
                     session,
                     tx,
@@ -653,8 +689,8 @@ where
                     let _ = tx.send(self.catalog.dump());
                 }
 
-                Message::Command(Command::Terminate { conn_id }) => {
-                    self.handle_terminate(conn_id).await;
+                Message::Command(Command::Terminate { mut session }) => {
+                    self.handle_terminate(&mut session).await;
                 }
 
                 Message::Worker(WorkerFeedbackWithMeta {
@@ -911,20 +947,19 @@ where
         }
     }
 
-    /// Terminate any temporary objects created by the named `conn_id`
-    /// stored on the Coordinator.
-    async fn handle_terminate(&mut self, conn_id: u32) {
-        if let Some(name) = self.active_tails.remove(&conn_id) {
+    /// Terminate any temporary objects created by the specified session.
+    async fn handle_terminate(&mut self, session: &mut Session) {
+        if let Some(name) = self.active_tails.remove(&session.conn_id()) {
             self.drop_sinks(vec![name]).await;
         }
 
-        // Remove all temporary items created by the conn_id.
-        let ops = self.catalog.drop_temp_item_ops(conn_id);
+        // Remove all temporary items created by the session.
+        let ops = self.catalog.drop_temp_item_ops(session.conn_id());
         self.catalog_transact(ops)
             .await
             .expect("unable to drop temporary items for conn_id");
         self.catalog
-            .drop_temporary_schema(conn_id)
+            .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
     }
 
@@ -2082,6 +2117,11 @@ where
         let uses_ids = &source.global_uses();
         let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
 
+        // Determine the valid lower bound of times that can produce correct outputs.
+        // This bound is determined by the arrangements contributing to the query,
+        // and does not depend on the transitive sources.
+        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
+
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
         let timestamp = match when {
@@ -2095,12 +2135,12 @@ where
                 if !indexes_complete {
                     bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
                 }
-                if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
+                let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
                     // If the view depends on any tables, we enforce
                     // linearizability by choosing the latest input time.
                     self.get_read_ts()
                 } else {
-                    let upper = self.indexes.greatest_open_upper(index_ids.iter().cloned());
+                    let upper = self.indexes.greatest_open_upper(index_ids.iter().copied());
                     // We peek at the largest element not in advance of `upper`, which
                     // involves a subtraction. If `upper` contains a zero timestamp there
                     // is no "prior" answer, and we do not want to peek at it as it risks
@@ -2129,14 +2169,17 @@ where
                         // This should only happen for literals that have no sources
                         Timestamp::max_value()
                     }
+                };
+                // If the candidate is not beyond the valid `since` frontier,
+                // force it to become so as best as we can. If `since` is empty
+                // this will be a no-op, as there is no valid time, but that should
+                // then be caught below.
+                if !since.less_equal(&candidate) {
+                    candidate.advance_by(since.borrow());
                 }
+                candidate
             }
         };
-
-        // Determine the valid lower bound of times that can produce correct outputs.
-        // This bound is determined by the arrangements contributing to the query,
-        // and does not depend on the transitive sources.
-        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
 
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
@@ -2666,10 +2709,11 @@ where
                     // If Materialize has persistence enabled, check to see if the source has any
                     // already persisted data that can be reused, and if so, augment the source
                     // connector to use that data before importing it into the dataflow.
-                    let connector = if let Some(path) = &self.persistence_path {
+                    let connector = if let Some(path) = self.catalog.persistence_directory() {
                         match crate::persistence::augment_connector(
                             source.connector.clone(),
-                            path.clone(),
+                            path,
+                            self.catalog.cluster_id(),
                             *id,
                         ) {
                             Ok(Some(connector)) => Some(connector),
@@ -2887,7 +2931,7 @@ where
             if connector.persistence_enabled() {
                 if let Some(persistence_tx) = &mut self.persistence_tx {
                     persistence_tx
-                        .send(PersistenceMessage::AddSource(id))
+                        .send(PersistenceMessage::AddSource(self.catalog.cluster_id(), id))
                         .await
                         .expect("failed to send CREATE SOURCE notification to persistence thread");
                 } else {
@@ -2992,6 +3036,7 @@ where
             path: catalog_path.as_deref(),
             experimental_mode: Some(experimental_mode),
             enable_logging: logging_granularity.is_some(),
+            persistence_directory: persistence_config.map(|pc| pc.path),
         })?;
 
         let mut coord = Coordinator {
@@ -3009,7 +3054,6 @@ where
             logical_compaction_window_ms: logical_compaction_window
                 .map(duration_to_timestamp_millis),
             persistence_tx,
-            persistence_path: persistence_config.map(|pc| pc.path),
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,

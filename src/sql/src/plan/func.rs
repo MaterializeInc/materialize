@@ -219,10 +219,7 @@ macro_rules! sql_op {
             let mut expr = query::plan_expr(&ecx, &*EXPR)?.type_as_any(&ecx)?;
 
             // Replace the parameters with the actual arguments.
-            expr.visit_mut(&mut |e| match e {
-                ScalarExpr::Parameter(i) => *e = args[*i - 1].clone(),
-                _ => (),
-            });
+            expr.splice_parameters(&args, 0);
 
             Ok(expr)
         }))
@@ -441,10 +438,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             .collect();
         let m = Self { ident, ecx };
 
-        let types: Vec<_> = cexprs
-            .iter()
-            .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
-            .collect();
+        let types: Vec<_> = cexprs.iter().map(|e| ecx.scalar_type(e)).collect();
 
         // try-catch in Rust.
         match || -> Result<R, anyhow::Error> {
@@ -908,8 +902,20 @@ lazy_static! {
                     Ok(ScalarExpr::literal_null(ScalarType::String))
                 })
             },
+            "pg_encoding_to_char" => Scalar {
+                // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
+                // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
+                params!(Int64) => sql_op!("CASE WHEN $1 = 6 THEN 'UTF8' ELSE NULL END")
+            },
             "pg_get_userbyid" => Scalar {
                 params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'")
+            },
+            "pg_table_is_visible" => Scalar {
+                params!(Oid) => sql_op!(
+                    "(SELECT schema = ANY(current_schemas(true))
+                     FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.schema_id
+                     WHERE o.oid = $1)"
+                )
             },
             "replace" => Scalar {
                 params!(String, String, String) => VariadicFunc::Replace
@@ -1124,9 +1130,14 @@ lazy_static! {
                         CatalogItemType::Source => {},
                         _ =>  bail!("{} is a {}, but internal_read_persisted_data requires a source", source, entry.item_type()),
                     }
+                    let persistence_directory = ecx.qcx.scx.catalog.persistence_directory();
+                    if persistence_directory.is_none() {
+                        bail!("source persistence is currently disabled. Try rerunning Materialize with '--experimental'.");
+                    }
                     Ok(TableFuncPlan {
                         func: TableFunc::ReadPersistedData {
                             source: entry.id(),
+                            persistence_directory: persistence_directory.expect("known to exist").to_path_buf(),
                         },
                         exprs: vec![],
                         column_names: vec!["filename", "offset", "key", "value"].iter().map(|c| Some(ColumnName::from(*c))).collect(),

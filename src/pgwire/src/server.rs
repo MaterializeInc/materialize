@@ -12,15 +12,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::bail;
-use futures::sink::SinkExt;
 use openssl::ssl::SslAcceptor;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
-use tokio_util::codec::Framed;
 
 use coord::session::Session;
 
-use crate::codec::{self, Codec, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
+use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::FrontendStartupMessage;
 use crate::protocol::StateMachine;
@@ -30,19 +28,16 @@ pub struct Server {
     id_alloc: IdAllocator,
     secrets: SecretManager,
     tls: Option<SslAcceptor>,
-    cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
+    coord_client: coord::Client,
 }
 
 impl Server {
-    pub fn new(
-        tls: Option<SslAcceptor>,
-        cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
-    ) -> Server {
+    pub fn new(tls: Option<SslAcceptor>, coord_client: coord::Client) -> Server {
         Server {
             id_alloc: IdAllocator::new(1, 1 << 16),
             secrets: SecretManager::new(),
             tls,
-            cmdq_tx,
+            coord_client,
         }
     }
 
@@ -62,19 +57,17 @@ impl Server {
                     };
                     self.secrets.generate(conn_id);
 
-                    let mut machine = StateMachine {
-                        conn: &mut Framed::new(conn, Codec::new()).buffer(32),
+                    let coord_client = self.coord_client.for_session(Session::new(conn_id));
+
+                    let machine = StateMachine {
+                        conn: FramedConn::new(conn_id, conn),
                         conn_id,
                         secret_key: self.secrets.get(conn_id).unwrap(),
-                        cmdq_tx: self.cmdq_tx.clone(),
+                        coord_client,
                     };
-                    let res = machine.start(Session::new(conn_id), version, params).await;
+                    let res = machine.run(version, params).await;
 
                     // Clean up state tied to this specific connection.
-                    self.cmdq_tx
-                        .clone()
-                        .send(coord::Command::Terminate { conn_id })
-                        .await?;
                     self.id_alloc.free(conn_id);
                     self.secrets.free(conn_id);
                     return Ok(res?);
@@ -85,10 +78,7 @@ impl Server {
                     secret_key,
                 } => {
                     if self.secrets.verify(conn_id, secret_key) {
-                        self.cmdq_tx
-                            .clone()
-                            .send(coord::Command::CancelRequest { conn_id })
-                            .await?;
+                        self.coord_client.clone().cancel_request(conn_id).await;
                     }
                     // For security, the client is not told whether the cancel
                     // request succeeds or fails.

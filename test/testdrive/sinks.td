@@ -61,6 +61,15 @@ snk3
 snk4
 snk5
 
+> SHOW FULL SINKS
+SINKS  TYPE
+-----------
+snk1   USER
+snk2   USER
+snk3   USER
+snk4   USER
+snk5   USER
+
 $ kafka-verify format=avro sink=materialize.public.snk1
 {"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 2}}}
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 3}}}

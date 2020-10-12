@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -21,4 +21,8 @@ pub struct Config<'a> {
     pub experimental_mode: Option<bool>,
     /// Whether to enable logging sources and the views that depend upon them.
     pub enable_logging: bool,
+    /// Path to persist source data to disk.
+    ///
+    /// If set to `None`, indicates that source persistence is disabled.
+    pub persistence_directory: Option<PathBuf>,
 }

@@ -21,6 +21,7 @@
 //! provided by something other than a pgwire server.
 
 mod catalog;
+mod client;
 mod command;
 mod coord;
 mod persistence;
@@ -31,7 +32,8 @@ mod util;
 pub mod session;
 
 pub use crate::catalog::dump as dump_catalog;
-pub use crate::command::{Command, ExecuteResponse, Response, RowsFuture, StartupMessage};
+pub use crate::client::{Client, SessionClient};
+pub use crate::command::{ExecuteResponse, NoSessionExecuteResponse, StartupMessage};
 pub use crate::coord::{serve, Config};
 pub use crate::persistence::PersistenceConfig;
 pub use crate::timestamp::TimestampConfig;

@@ -10,30 +10,25 @@
 use std::cmp;
 use std::convert::TryFrom;
 use std::iter;
-use std::mem;
 use std::time::Instant;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::sink::{self, SinkExt};
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::StreamExt;
 use itertools::izip;
 use lazy_static::lazy_static;
-use log::{debug, trace};
+use log::debug;
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
-use tokio_util::codec::Framed;
 
-use coord::session::Session;
 use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::{PeekResponse, Update};
 use ore::cast::CastFrom;
-use ore::future::OreSinkExt;
 use repr::{Datum, RelationDesc, Row, RowArena};
 use sql::ast::Statement;
 
-use crate::codec::Codec;
+use crate::codec::FramedConn;
 use crate::message::{
     self, BackendMessage, ErrorSeverity, FrontendMessage, NoticeSeverity, VERSIONS, VERSION_3,
 };
@@ -75,47 +70,43 @@ lazy_static! {
 
 #[derive(Debug)]
 enum State {
-    Ready(Session),
-    Drain(Session),
+    Ready,
+    Drain,
     Done,
 }
 
-impl State {
-    fn take(&mut self) -> State {
-        mem::replace(self, State::Done)
-    }
-}
-
-pub struct StateMachine<'a, A> {
-    pub conn: &'a mut sink::Buffer<Framed<A, Codec>, BackendMessage>,
+pub struct StateMachine<A> {
+    pub conn: FramedConn<A>,
     pub conn_id: u32,
     pub secret_key: u32,
-    pub cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
+    pub coord_client: coord::SessionClient,
 }
 
-impl<'a, A> StateMachine<'a, A>
+impl<A> StateMachine<A>
 where
     A: AsyncRead + AsyncWrite + Unpin,
 {
-    pub async fn start(
-        &mut self,
-        session: Session,
+    pub async fn run(
+        mut self,
         version: i32,
         params: Vec<(String, String)>,
     ) -> Result<(), comm::Error> {
-        let mut state = self.startup(session, version, params).await?;
+        let mut state = self.startup(version, params).await?;
 
         loop {
-            state = match state.take() {
-                State::Ready(session) => self.advance_ready(session).await?,
-                State::Drain(session) => self.advance_drain(session).await?,
-                State::Done => return Ok(()),
+            state = match state {
+                State::Ready => self.advance_ready().await?,
+                State::Drain => self.advance_drain().await?,
+                State::Done => break,
             }
         }
+
+        self.coord_client.terminate().await;
+        Ok(())
     }
 
-    async fn advance_ready(&mut self, session: Session) -> Result<State, comm::Error> {
-        let message = self.recv().await?;
+    async fn advance_ready(&mut self) -> Result<State, comm::Error> {
+        let message = self.conn.recv().await?;
         let timer = Instant::now();
         let name = match &message {
             Some(message) => message.name(),
@@ -123,12 +114,12 @@ where
         };
 
         let next_state = match message {
-            Some(FrontendMessage::Query { sql }) => self.query(session, sql).await?,
+            Some(FrontendMessage::Query { sql }) => self.query(sql).await?,
             Some(FrontendMessage::Parse {
                 name,
                 sql,
                 param_types,
-            }) => self.parse(session, name, sql, param_types).await?,
+            }) => self.parse(name, sql, param_types).await?,
             Some(FrontendMessage::Bind {
                 portal_name,
                 statement_name,
@@ -137,7 +128,6 @@ where
                 result_formats,
             }) => {
                 self.bind(
-                    session,
                     portal_name,
                     statement_name,
                     param_formats,
@@ -154,27 +144,23 @@ where
                     Ok(0) | Err(_) => usize::MAX, // If `max_rows < 0`, no limit.
                     Ok(n) => n,
                 };
-                self.execute(session, portal_name, max_rows).await?
+                self.execute(portal_name, max_rows).await?
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
-                self.describe_statement(session, name).await?
+                self.describe_statement(name).await?
             }
-            Some(FrontendMessage::DescribePortal { name }) => {
-                self.describe_portal(session, name).await?
-            }
-            Some(FrontendMessage::CloseStatement { name }) => {
-                self.close_statement(session, name).await?
-            }
-            Some(FrontendMessage::ClosePortal { name }) => self.close_portal(session, name).await?,
-            Some(FrontendMessage::Flush) => self.flush(session).await?,
-            Some(FrontendMessage::Sync) => self.sync(session).await?,
+            Some(FrontendMessage::DescribePortal { name }) => self.describe_portal(name).await?,
+            Some(FrontendMessage::CloseStatement { name }) => self.close_statement(name).await?,
+            Some(FrontendMessage::ClosePortal { name }) => self.close_portal(name).await?,
+            Some(FrontendMessage::Flush) => self.flush().await?,
+            Some(FrontendMessage::Sync) => self.sync().await?,
             Some(FrontendMessage::Terminate) => State::Done,
             None => State::Done,
         };
 
         let status = match next_state {
-            State::Ready(_) | State::Done => "success",
-            State::Drain(_) => "error",
+            State::Ready | State::Done => "success",
+            State::Drain => "error",
         };
         COMMAND_DURATIONS
             .with_label_values(&[name, status])
@@ -183,17 +169,16 @@ where
         Ok(next_state)
     }
 
-    async fn advance_drain(&mut self, session: Session) -> Result<State, comm::Error> {
-        match self.recv().await? {
-            Some(FrontendMessage::Sync) => self.sync(session).await,
+    async fn advance_drain(&mut self) -> Result<State, comm::Error> {
+        match self.conn.recv().await? {
+            Some(FrontendMessage::Sync) => self.sync().await,
             None => Ok(State::Done),
-            _ => Ok(State::Drain(session)),
+            _ => Ok(State::Drain),
         }
     }
 
     async fn startup(
         &mut self,
-        mut session: Session,
         version: i32,
         params: Vec<(String, String)>,
     ) -> Result<State, comm::Error> {
@@ -207,53 +192,41 @@ where
         }
 
         for (name, value) in params {
-            let _ = session.set(&name, &value);
+            let _ = self.coord_client.session().set(&name, &value);
         }
 
-        let (tx, rx) = futures::channel::oneshot::channel();
-        self.cmdq_tx
-            .send(coord::Command::Startup { session, tx })
-            .await?;
-        let (notices, session) = match rx.await? {
-            coord::Response {
-                result: Ok(messages),
-                session,
-            } => {
-                let notices: Vec<_> = messages
-                    .into_iter()
-                    .map(|m| match m {
-                        StartupMessage::UnknownSessionDatabase => BackendMessage::NoticeResponse {
-                            severity: NoticeSeverity::Notice,
-                            code: SqlState::SUCCESSFUL_COMPLETION,
-                            message: format!(
-                                "session database '{}' does not exist",
-                                session.database()
-                            ),
-                            detail: None,
-                            hint: Some(
-                                "Create the database with CREATE DATABASE \
+        let notices: Vec<_> = match self.coord_client.startup().await {
+            Ok(messages) => messages
+                .into_iter()
+                .map(|m| match m {
+                    StartupMessage::UnknownSessionDatabase => BackendMessage::NoticeResponse {
+                        severity: NoticeSeverity::Notice,
+                        code: SqlState::SUCCESSFUL_COMPLETION,
+                        message: format!(
+                            "session database '{}' does not exist",
+                            self.coord_client.session().database()
+                        ),
+                        detail: None,
+                        hint: Some(
+                            "Create the database with CREATE DATABASE \
                                  or pick an extant database with SET DATABASE = <name>. \
                                  List available databases with SHOW DATABASES."
-                                    .into(),
-                            ),
-                        },
-                    })
-                    .collect();
-                (notices, session)
-            }
-            coord::Response {
-                result: Err(err),
-                session,
-            } => {
+                                .into(),
+                        ),
+                    },
+                })
+                .collect(),
+            Err(e) => {
                 return self
-                    .error(session, SqlState::INTERNAL_ERROR, format!("{:#}", err))
+                    .error(SqlState::INTERNAL_ERROR, format!("{:#}", e))
                     .await;
             }
         };
 
         let mut messages = vec![BackendMessage::AuthenticationOk];
         messages.extend(
-            session
+            self.coord_client
+                .session()
                 .notify_vars()
                 .iter()
                 .map(|v| BackendMessage::ParameterStatus(v.name(), v.value())),
@@ -263,56 +236,45 @@ where
             secret_key: self.secret_key,
         });
         messages.extend(notices);
-        messages.push(BackendMessage::ReadyForQuery(session.transaction().into()));
-        self.send_all(messages).await?;
-        self.flush(session).await
+        messages.push(BackendMessage::ReadyForQuery(
+            self.coord_client.session().transaction().into(),
+        ));
+        self.conn.send_all(messages).await?;
+        self.flush().await
     }
 
-    async fn one_query(&mut self, session: Session, stmt: Statement) -> Result<State, comm::Error> {
+    async fn one_query(&mut self, stmt: Statement) -> Result<State, comm::Error> {
         let stmt_name = String::from("");
-        let portal_name = String::from("");
-        let (tx, rx) = futures::channel::oneshot::channel();
-        let cmd = coord::Command::Describe {
-            name: stmt_name.clone(),
-            stmt: Some(stmt),
-            param_types: vec![],
-            session,
-            tx,
-        };
+        let param_types = vec![];
+        if let Err(e) = self
+            .coord_client
+            .describe(stmt_name.clone(), Some(stmt), param_types)
+            .await
+        {
+            return self
+                .error(SqlState::INTERNAL_ERROR, format!("{:#}", e))
+                .await;
+        }
 
-        self.cmdq_tx.send(cmd).await?;
-        let mut session = match rx.await? {
-            coord::Response {
-                result: Ok(()),
-                session,
-            } => session,
-            coord::Response {
-                result: Err(err),
-                session,
-            } => {
-                return self
-                    .error(session, SqlState::INTERNAL_ERROR, format!("{:#}", err))
-                    .await;
-            }
-        };
-
-        let stmt = session.get_prepared_statement("").unwrap();
+        let stmt = self
+            .coord_client
+            .session()
+            .get_prepared_statement(&stmt_name)
+            .unwrap();
         if !stmt.param_types().is_empty() {
             return self
-                .error(
-                    session,
-                    SqlState::UNDEFINED_PARAMETER,
-                    "there is no parameter $1",
-                )
+                .error(SqlState::UNDEFINED_PARAMETER, "there is no parameter $1")
                 .await;
         }
 
         let row_desc = stmt.desc().cloned();
 
         // Bind.
+        let portal_name = String::from("");
         let params = vec![];
         let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
-        session
+        self.coord_client
+            .session()
             .set_portal(
                 portal_name.clone(),
                 stmt_name.clone(),
@@ -323,67 +285,48 @@ where
 
         // Maybe send row description.
         if let Some(desc) = &row_desc {
-            self.send(BackendMessage::RowDescription(
-                message::row_description_from_desc(&desc),
-            ))
-            .await?;
+            self.conn
+                .send(BackendMessage::RowDescription(
+                    message::row_description_from_desc(&desc),
+                ))
+                .await?;
         }
 
         // Execute.
-        let (tx, rx) = futures::channel::oneshot::channel();
-        self.cmdq_tx
-            .send(coord::Command::Execute {
-                portal_name: portal_name.clone(),
-                session,
-                tx,
-            })
-            .await?;
-        match rx.await? {
-            coord::Response {
-                result: Ok(response),
-                session,
-            } => {
+        match self.coord_client.execute(portal_name.clone()).await {
+            Ok(response) => {
                 let max_rows = usize::MAX;
-                self.send_execute_response(session, response, row_desc, portal_name, max_rows)
+                self.send_execute_response(response, row_desc, portal_name, max_rows)
                     .await
             }
-            coord::Response {
-                result: Err(err),
-                session,
-            } => {
-                self.error(session, SqlState::INTERNAL_ERROR, format!("{:#}", err))
+            Err(e) => {
+                self.error(SqlState::INTERNAL_ERROR, format!("{:#}", e))
                     .await
             }
         }
     }
 
-    async fn query(&mut self, mut session: Session, sql: String) -> Result<State, comm::Error> {
+    async fn query(&mut self, sql: String) -> Result<State, comm::Error> {
         let stmts = match sql::parse::parse(sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                let session = match self
-                    .error(session, SqlState::SYNTAX_ERROR, format!("{:#}", err))
-                    .await?
-                {
-                    State::Drain(s) => s,
-                    _ => unreachable!(),
-                };
-                return self.sync(session).await;
+                self.error(SqlState::SYNTAX_ERROR, format!("{:#}", err))
+                    .await?;
+                return self.sync().await;
             }
         };
         for stmt in stmts {
-            match self.one_query(session, stmt).await? {
-                State::Ready(s) => session = s,
-                State::Drain(s) => return self.sync(s).await,
+            match self.one_query(stmt).await? {
+                State::Ready => (),
+                State::Drain => break,
                 State::Done => return Ok(State::Done),
             }
         }
-        self.sync(session).await
+        self.sync().await
     }
 
     async fn parse(
         &mut self,
-        session: Session,
         name: String,
         sql: String,
         param_oids: Vec<u32>,
@@ -396,7 +339,6 @@ where
                 None => {
                     return self
                         .error(
-                            session,
                             SqlState::PROTOCOL_VIOLATION,
                             format!("unable to decode parameter whose type OID is {}", oid),
                         )
@@ -405,47 +347,34 @@ where
             }
         }
 
-        let (tx, rx) = futures::channel::oneshot::channel();
         let stmts = match sql::parse::parse(sql.clone()) {
             Ok(stmts) => stmts,
             Err(err) => {
                 return self
-                    .error(session, SqlState::SYNTAX_ERROR, format!("{:#}", err))
+                    .error(SqlState::SYNTAX_ERROR, format!("{:#}", err))
                     .await;
             }
         };
         if stmts.len() > 1 {
             return self
                 .error(
-                    session,
                     SqlState::INTERNAL_ERROR,
                     "cannot insert multiple commands into a prepared statement",
                 )
                 .await;
         }
         let maybe_stmt = stmts.into_iter().next();
-        let cmd = coord::Command::Describe {
-            name,
-            stmt: maybe_stmt,
-            param_types,
-            session,
-            tx,
-        };
-        self.cmdq_tx.send(cmd).await?;
-
-        match rx.await? {
-            coord::Response {
-                result: Ok(()),
-                session,
-            } => {
-                self.send(BackendMessage::ParseComplete).await?;
-                Ok(State::Ready(session))
+        match self
+            .coord_client
+            .describe(name, maybe_stmt, param_types)
+            .await
+        {
+            Ok(()) => {
+                self.conn.send(BackendMessage::ParseComplete).await?;
+                Ok(State::Ready)
             }
-            coord::Response {
-                result: Err(err),
-                session,
-            } => {
-                self.error(session, SqlState::INTERNAL_ERROR, format!("{:#}", err))
+            Err(e) => {
+                self.error(SqlState::INTERNAL_ERROR, format!("{:#}", e))
                     .await
             }
         }
@@ -453,19 +382,21 @@ where
 
     async fn bind(
         &mut self,
-        mut session: Session,
         portal_name: String,
         statement_name: String,
         param_formats: Vec<pgrepr::Format>,
         raw_params: Vec<Option<Vec<u8>>>,
         result_formats: Vec<pgrepr::Format>,
     ) -> Result<State, comm::Error> {
-        let stmt = match session.get_prepared_statement(&statement_name) {
+        let stmt = match self
+            .coord_client
+            .session()
+            .get_prepared_statement(&statement_name)
+        {
             Some(stmt) => stmt,
             None => {
                 return self
                     .error(
-                        session,
                         SqlState::INVALID_SQL_STATEMENT_NAME,
                         "prepared statement does not exist",
                     )
@@ -482,13 +413,11 @@ where
                 actual = raw_params.len(),
                 expected = param_types.len()
             );
-            return self
-                .error(session, SqlState::PROTOCOL_VIOLATION, message)
-                .await;
+            return self.error(SqlState::PROTOCOL_VIOLATION, message).await;
         }
         let param_formats = match pad_formats(param_formats, raw_params.len()) {
             Ok(param_formats) => param_formats,
-            Err(msg) => return self.error(session, SqlState::PROTOCOL_VIOLATION, msg).await,
+            Err(msg) => return self.error(SqlState::PROTOCOL_VIOLATION, msg).await,
         };
         let buf = RowArena::new();
         let mut params: Vec<(Datum, repr::ScalarType)> = Vec::new();
@@ -499,9 +428,7 @@ where
                     Ok(param) => params.push(param.into_datum(&buf, typ)),
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
-                        return self
-                            .error(session, SqlState::INVALID_PARAMETER_VALUE, msg)
-                            .await;
+                        return self.error(SqlState::INVALID_PARAMETER_VALUE, msg).await;
                     }
                 },
             }
@@ -514,32 +441,33 @@ where
                 .unwrap_or(0),
         ) {
             Ok(result_formats) => result_formats,
-            Err(msg) => return self.error(session, SqlState::PROTOCOL_VIOLATION, msg).await,
+            Err(msg) => return self.error(SqlState::PROTOCOL_VIOLATION, msg).await,
         };
 
-        session
+        self.coord_client
+            .session()
             .set_portal(portal_name, statement_name, params, result_formats)
             .unwrap();
 
-        self.send(BackendMessage::BindComplete).await?;
-        Ok(State::Ready(session))
+        self.conn.send(BackendMessage::BindComplete).await?;
+        Ok(State::Ready)
     }
 
     async fn execute(
         &mut self,
-        mut session: Session,
         portal_name: String,
         max_rows: usize,
     ) -> Result<State, comm::Error> {
-        let row_desc = session
+        let row_desc = self
+            .coord_client
+            .session()
             .get_prepared_statement_for_portal(&portal_name)
             .and_then(|stmt| stmt.desc().cloned());
-        let portal = match session.get_portal_mut(&portal_name) {
+        let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
             Some(portal) => portal,
             None => {
                 return self
                     .error(
-                        session,
                         SqlState::INVALID_SQL_STATEMENT_NAME,
                         "portal does not exist",
                     )
@@ -550,7 +478,6 @@ where
             let rows = portal.remaining_rows.take().unwrap();
             return self
                 .send_rows(
-                    session,
                     row_desc.expect("portal missing row desc on resumption"),
                     portal_name,
                     rows,
@@ -559,38 +486,20 @@ where
                 .await;
         }
 
-        let (tx, rx) = futures::channel::oneshot::channel();
-        self.cmdq_tx
-            .send(coord::Command::Execute {
-                portal_name: portal_name.clone(),
-                session,
-                tx,
-            })
-            .await?;
-        match rx.await? {
-            coord::Response {
-                result: Ok(response),
-                session,
-            } => {
-                self.send_execute_response(session, response, row_desc, portal_name, max_rows)
+        match self.coord_client.execute(portal_name.clone()).await {
+            Ok(response) => {
+                self.send_execute_response(response, row_desc, portal_name, max_rows)
                     .await
             }
-            coord::Response {
-                result: Err(err),
-                session,
-            } => {
-                self.error(session, SqlState::INTERNAL_ERROR, format!("{:#}", err))
+            Err(e) => {
+                self.error(SqlState::INTERNAL_ERROR, format!("{:#}", e))
                     .await
             }
         }
     }
 
-    async fn describe_statement(
-        &mut self,
-        session: Session,
-        name: String,
-    ) -> Result<State, comm::Error> {
-        match session.get_prepared_statement(&name) {
+    async fn describe_statement(&mut self, name: String) -> Result<State, comm::Error> {
+        match self.coord_client.session().get_prepared_statement(&name) {
             Some(stmt) => {
                 self.conn
                     .send(BackendMessage::ParameterDescription(
@@ -601,27 +510,21 @@ where
             None => {
                 return self
                     .error(
-                        session,
                         SqlState::INVALID_SQL_STATEMENT_NAME,
                         "prepared statement does not exist",
                     )
                     .await
             }
         }
-        self.send_describe_rows(session, name).await
+        self.send_describe_rows(name).await
     }
 
-    async fn describe_portal(
-        &mut self,
-        session: Session,
-        name: String,
-    ) -> Result<State, comm::Error> {
-        let portal = match session.get_portal(&name) {
+    async fn describe_portal(&mut self, name: String) -> Result<State, comm::Error> {
+        let portal = match self.coord_client.session().get_portal(&name) {
             Some(portal) => portal,
             None => {
                 return self
                     .error(
-                        session,
                         SqlState::INVALID_SQL_STATEMENT_NAME,
                         "portal does not exist",
                     )
@@ -629,47 +532,39 @@ where
             }
         };
         let stmt_name = portal.statement_name.clone();
-        self.send_describe_rows(session, stmt_name).await
+        self.send_describe_rows(stmt_name).await
     }
 
-    async fn close_statement(
-        &mut self,
-        mut session: Session,
-        name: String,
-    ) -> Result<State, comm::Error> {
-        session.remove_prepared_statement(&name);
-        self.send(BackendMessage::CloseComplete).await?;
-        Ok(State::Ready(session))
+    async fn close_statement(&mut self, name: String) -> Result<State, comm::Error> {
+        self.coord_client.session().remove_prepared_statement(&name);
+        self.conn.send(BackendMessage::CloseComplete).await?;
+        Ok(State::Ready)
     }
 
-    async fn close_portal(
-        &mut self,
-        mut session: Session,
-        name: String,
-    ) -> Result<State, comm::Error> {
-        session.remove_portal(&name);
-        self.send(BackendMessage::CloseComplete).await?;
-        Ok(State::Ready(session))
+    async fn close_portal(&mut self, name: String) -> Result<State, comm::Error> {
+        self.coord_client.session().remove_portal(&name);
+        self.conn.send(BackendMessage::CloseComplete).await?;
+        Ok(State::Ready)
     }
 
-    async fn flush(&mut self, session: Session) -> Result<State, comm::Error> {
+    async fn flush(&mut self) -> Result<State, comm::Error> {
         self.conn.flush().await?;
-        Ok(State::Ready(session))
+        Ok(State::Ready)
     }
 
-    async fn sync(&mut self, session: Session) -> Result<State, comm::Error> {
+    async fn sync(&mut self) -> Result<State, comm::Error> {
         self.conn
-            .send(BackendMessage::ReadyForQuery(session.transaction().into()))
+            .send(BackendMessage::ReadyForQuery(
+                self.coord_client.session().transaction().into(),
+            ))
             .await?;
-        self.flush(session).await
+        self.flush().await
     }
 
-    async fn send_describe_rows(
-        &mut self,
-        session: Session,
-        stmt_name: String,
-    ) -> Result<State, comm::Error> {
-        let stmt = session
+    async fn send_describe_rows(&mut self, stmt_name: String) -> Result<State, comm::Error> {
+        let stmt = self
+            .coord_client
+            .session()
             .get_prepared_statement(&stmt_name)
             .expect("send_describe_statement called incorrectly");
         match stmt.desc() {
@@ -680,14 +575,13 @@ where
                     ))
                     .await?
             }
-            None => self.send(BackendMessage::NoData).await?,
+            None => self.conn.send(BackendMessage::NoData).await?,
         }
-        Ok(State::Ready(session))
+        Ok(State::Ready)
     }
 
     async fn send_execute_response(
         &mut self,
-        session: Session,
         response: ExecuteResponse,
         row_desc: Option<RelationDesc>,
         portal_name: String,
@@ -699,22 +593,23 @@ where
                 // variable, or rustc barfs out a completely inscrutable
                 // error: https://github.com/rust-lang/rust/issues/64960.
                 let tag = format!($($arg)*);
-                self.send(BackendMessage::CommandComplete { tag }).await?;
-                Ok(State::Ready(session))
+                self.conn.send(BackendMessage::CommandComplete { tag }).await?;
+                Ok(State::Ready)
             }};
         }
 
         macro_rules! created {
             ($existed:expr, $code:expr, $type:expr) => {{
                 if $existed {
-                    self.send(BackendMessage::NoticeResponse {
-                        severity: NoticeSeverity::Notice,
-                        code: $code,
-                        message: concat!($type, " already exists, skipping").into(),
-                        detail: None,
-                        hint: None,
-                    })
-                    .await?;
+                    self.conn
+                        .send(BackendMessage::NoticeResponse {
+                            severity: NoticeSeverity::Notice,
+                            code: $code,
+                            message: concat!($type, " already exists, skipping").into(),
+                            detail: None,
+                            hint: None,
+                        })
+                        .await?;
                 }
                 command_complete!("CREATE {}", $type.to_uppercase())
             }};
@@ -751,8 +646,8 @@ where
             ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
             ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
             ExecuteResponse::EmptyQuery => {
-                self.send(BackendMessage::EmptyQueryResponse).await?;
-                Ok(State::Ready(session))
+                self.conn.send(BackendMessage::EmptyQueryResponse).await?;
+                Ok(State::Ready)
             }
             ExecuteResponse::Inserted(n) => {
                 // "On successful completion, an INSERT command returns a
@@ -770,18 +665,14 @@ where
                 match rx.await? {
                     PeekResponse::Canceled => {
                         self.error(
-                            session,
                             SqlState::QUERY_CANCELED,
                             "canceling statement due to user request",
                         )
                         .await
                     }
-                    PeekResponse::Error(text) => {
-                        self.error(session, SqlState::INTERNAL_ERROR, text).await
-                    }
+                    PeekResponse::Error(text) => self.error(SqlState::INTERNAL_ERROR, text).await,
                     PeekResponse::Rows(rows) => {
-                        self.send_rows(session, row_desc, portal_name, rows, max_rows)
-                            .await
+                        self.send_rows(row_desc, portal_name, rows, max_rows).await
                     }
                 }
             }
@@ -789,13 +680,19 @@ where
                 // This code is somewhat awkwardly structured because we
                 // can't hold `var` across an await point.
                 let qn = name.to_string();
-                let msg = if let Some(var) = session.notify_vars().iter().find(|v| v.name() == qn) {
+                let msg = if let Some(var) = self
+                    .coord_client
+                    .session()
+                    .notify_vars()
+                    .iter()
+                    .find(|v| v.name() == qn)
+                {
                     Some(BackendMessage::ParameterStatus(var.name(), var.value()))
                 } else {
                     None
                 };
                 if let Some(msg) = msg {
-                    self.send(msg).await?;
+                    self.conn.send(msg).await?;
                 }
                 command_complete!("SET")
             }
@@ -805,7 +702,7 @@ where
             ExecuteResponse::Tailing { rx } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::Tailing");
-                self.stream_rows(session, row_desc, rx).await
+                self.stream_rows(row_desc, rx).await
             }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
@@ -815,13 +712,14 @@ where
 
     async fn send_rows(
         &mut self,
-        mut session: Session,
         row_desc: RelationDesc,
         portal_name: String,
         mut rows: Vec<Row>,
         max_rows: usize,
     ) -> Result<State, comm::Error> {
-        let portal = session
+        let portal = self
+            .coord_client
+            .session()
             .get_portal_mut(&portal_name)
             .expect("valid portal name for send rows");
 
@@ -831,7 +729,6 @@ where
             if datums.len() != col_types.len() {
                 return self
                     .error(
-                        session,
                         SqlState::INTERNAL_ERROR,
                         format!(
                             "internal error: row descriptor has {} columns but row has {} columns",
@@ -845,7 +742,6 @@ where
                 if !d.is_instance_of(&t) {
                     return self
                         .error(
-                            session,
                             SqlState::INTERNAL_ERROR,
                             format!(
                                 "internal error: column {} is not of expected type {}: {}",
@@ -857,7 +753,7 @@ where
             }
         }
 
-        self.conn.get_mut().codec_mut().set_encode_state(
+        self.conn.set_encode_state(
             row_desc
                 .typ()
                 .column_types
@@ -868,12 +764,11 @@ where
         );
 
         let nrows = cmp::min(max_rows, rows.len());
-        self.send_all(
-            rows.drain(..nrows).map(move |row| {
+        self.conn
+            .send_all(rows.drain(..nrows).map(move |row| {
                 BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
-            }),
-        )
-        .await?;
+            }))
+            .await?;
         ROWS_RETURNED.inc_by(u64::cast_from(nrows));
 
         // Always return rows back, even if it's empty. This prevents an unclosed
@@ -887,20 +782,20 @@ where
         // we still send a PortalSuspended. The number of remaining rows after the rows
         // have been sent doesn't matter. This matches postgres.
         if max_rows == 0 || max_rows > nrows {
-            self.send(BackendMessage::CommandComplete {
-                tag: format!("SELECT {}", nrows),
-            })
-            .await?;
+            self.conn
+                .send(BackendMessage::CommandComplete {
+                    tag: format!("SELECT {}", nrows),
+                })
+                .await?;
         } else {
-            self.send(BackendMessage::PortalSuspended).await?;
+            self.conn.send(BackendMessage::PortalSuspended).await?;
         }
 
-        Ok(State::Ready(session))
+        Ok(State::Ready)
     }
 
     async fn stream_rows(
         &mut self,
-        session: Session,
         row_desc: RelationDesc,
         mut rx: comm::mpsc::Receiver<Vec<Update>>,
     ) -> Result<State, comm::Error> {
@@ -908,11 +803,12 @@ where
         let column_formats = iter::repeat(pgrepr::Format::Text)
             .take(typ.column_types.len())
             .collect();
-        self.send(BackendMessage::CopyOutResponse {
-            overall_format: pgrepr::Format::Text,
-            column_formats,
-        })
-        .await?;
+        self.conn
+            .send(BackendMessage::CopyOutResponse {
+                overall_format: pgrepr::Format::Text,
+                column_formats,
+            })
+            .await?;
 
         let mut count = 0;
         loop {
@@ -922,10 +818,11 @@ where
                     let updates = updates?;
                     count += updates.len();
                     for update in updates {
-                        self.send(BackendMessage::CopyData(message::encode_update(
-                            update, typ,
-                        )))
-                        .await?;
+                        self.conn
+                            .send(BackendMessage::CopyData(message::encode_update(
+                                update, typ,
+                            )))
+                            .await?;
                     }
                 }
                 Err(time::Elapsed { .. }) => {
@@ -947,47 +844,22 @@ where
                     // desired notifications via POLLRDHUP [0].
                     //
                     // [0]: https://lkml.org/lkml/2003/7/12/116
-                    self.send(BackendMessage::CopyData(vec![])).await?;
+                    self.conn.send(BackendMessage::CopyData(vec![])).await?;
                 }
             }
             self.conn.flush().await?;
         }
 
         let tag = format!("COPY {}", count);
-        self.send(BackendMessage::CopyDone).await?;
-        self.send(BackendMessage::CommandComplete { tag }).await?;
-        Ok(State::Ready(session))
-    }
-
-    async fn recv(&mut self) -> Result<Option<FrontendMessage>, comm::Error> {
-        let message = self.conn.try_next().await?;
-        match &message {
-            Some(message) => trace!("cid={} recv={:?}", self.conn_id, message),
-            None => trace!("cid={} recv=<eof>", self.conn_id),
-        }
-        Ok(message)
-    }
-
-    async fn send(&mut self, message: BackendMessage) -> Result<(), comm::Error> {
-        trace!("cid={} send={:?}", self.conn_id, message);
-        Ok(self.conn.enqueue(message).await?)
-    }
-
-    async fn send_all(
-        &mut self,
-        messages: impl IntoIterator<Item = BackendMessage>,
-    ) -> Result<(), comm::Error> {
-        // N.B. we intentionally don't use `self.conn.send_all` here to avoid
-        // flushing the sink unnecessarily.
-        for m in messages {
-            self.send(m).await?;
-        }
-        Ok(())
+        self.conn.send(BackendMessage::CopyDone).await?;
+        self.conn
+            .send(BackendMessage::CommandComplete { tag })
+            .await?;
+        Ok(State::Ready)
     }
 
     async fn error(
         &mut self,
-        mut session: Session,
         code: SqlState,
         message: impl Into<String>,
     ) -> Result<State, comm::Error> {
@@ -1006,8 +878,8 @@ where
                 detail: None,
             })
             .await?;
-        session.fail_transaction();
-        Ok(State::Drain(session))
+        self.coord_client.session().fail_transaction();
+        Ok(State::Drain)
     }
 
     async fn fatal(

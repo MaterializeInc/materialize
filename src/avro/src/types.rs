@@ -8,8 +8,8 @@ use std::hash::BuildHasher;
 use std::u8;
 
 use chrono::{NaiveDate, NaiveDateTime};
+use enum_kinds::EnumKind;
 use serde_json::Value as JsonValue;
-use strum_macros::EnumDiscriminants;
 
 use crate::schema::{RecordField, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 
@@ -42,8 +42,8 @@ pub struct DecimalValue {
     pub scale: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, EnumDiscriminants)] // Can't be Eq because there are floats
-#[strum_discriminants(name(ScalarKind))]
+#[derive(Clone, Copy, Debug, PartialEq, EnumKind)] // Can't be Eq because there are floats
+#[enum_kind(ScalarKind)]
 pub enum Scalar {
     Null,
     Boolean(bool),

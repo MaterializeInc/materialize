@@ -844,23 +844,23 @@ fn handle_show_indexes(
 
     let base_query = format!(
         "SELECT
-            on_names.name as on_name,
-            index_names.name as key_name,
-            mz_catalog.mz_columns.field as column_name,
-            mz_catalog.mz_indexes.expression as expression,
-            mz_catalog.mz_indexes.nullable as nullable,
-            mz_catalog.mz_indexes.seq_in_index as seq_in_index
+            objs.name AS on_name,
+            idxs.indexes AS key_name,
+            cols.field AS column_name,
+            idxs.expression AS expression,
+            idxs.nullable AS nullable,
+            idxs.seq_in_index AS seq_in_index
         FROM
-            mz_catalog.mz_indexes
-            JOIN mz_catalog.mz_catalog_names AS on_names ON mz_catalog.mz_indexes.on_global_id = on_names.global_id
-            JOIN mz_catalog.mz_catalog_names AS index_names ON mz_catalog.mz_indexes.global_id = index_names.global_id
-            LEFT OUTER JOIN mz_catalog.mz_columns ON mz_catalog.mz_indexes.on_global_id = mz_catalog.mz_columns.global_id
-                AND mz_catalog.mz_indexes.field_number = mz_catalog.mz_columns.field_number
+            mz_catalog.mz_indexes AS idxs
+            JOIN mz_catalog.mz_objects AS objs ON idxs.on_global_id = objs.global_id
+            LEFT JOIN mz_catalog.mz_columns AS cols
+                ON idxs.on_global_id = cols.global_id AND idxs.field_number = cols.field_number
         WHERE
-            on_names.name = '{}'
+            objs.global_id = '{}'
         ORDER BY
-            key_name asc,
-            seq_in_index asc", from_name
+            key_name ASC,
+            seq_in_index ASC",
+        from_entry.id(),
     );
 
     let query = if let Some(filter) = filter {

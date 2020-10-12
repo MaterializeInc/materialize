@@ -1788,6 +1788,7 @@ pub enum BinaryFunc {
     EncodedBytesCharLength,
     ListIndex,
     ListLengthMax { max_dim: usize },
+    ArrayContains,
 }
 
 impl BinaryFunc {
@@ -1899,6 +1900,7 @@ impl BinaryFunc {
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
             BinaryFunc::ListIndex => Ok(eager!(list_index)),
             BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
+            BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
         }
     }
 
@@ -1911,7 +1913,9 @@ impl BinaryFunc {
             _ => false,
         };
         match self {
-            And | Or | Eq | NotEq | Lt | Lte | Gt | Gte => ScalarType::Bool.nullable(in_nullable),
+            And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
+                ScalarType::Bool.nullable(in_nullable)
+            }
 
             MatchLikePattern | MatchRegex { .. } => {
                 // The output can be null if the pattern is invalid.
@@ -2155,7 +2159,8 @@ impl BinaryFunc {
             | JsonbDeleteString
             | TextConcat
             | ListIndex
-            | MatchRegex { .. } => true,
+            | MatchRegex { .. }
+            | ArrayContains => true,
             MatchLikePattern
             | ToCharTimestamp
             | ToCharTimestampTz
@@ -2260,6 +2265,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
             BinaryFunc::ListIndex => f.write_str("list_index"),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
+            BinaryFunc::ArrayContains => f.write_str("array_contains"),
         }
     }
 }
@@ -3306,6 +3312,11 @@ fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Dat
             None => Datum::Null,
         })
     }
+}
+
+fn array_contains<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let array = Datum::unwrap_array(&b);
+    Datum::from(array.elements().iter().any(|e| e == a))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

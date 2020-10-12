@@ -815,15 +815,26 @@ impl Parser {
                     _ => self.expected(op_range, "comparison operator", Some(tok))?,
                 }
                 self.expect_token(&Token::LParen)?;
-                let query = self.parse_query()?;
-                self.expect_token(&Token::RParen)?;
                 if kw == "ANY" || kw == "SOME" {
-                    Ok(Expr::Any {
-                        left: Box::new(expr),
-                        op,
-                        right: Box::new(query),
-                    })
+                    let expr = if self.parse_one_of_keywords(&["SELECT", "VALUES"]).is_some() {
+                        self.prev_token();
+                        Expr::AnySubquery {
+                            left: Box::new(expr),
+                            op,
+                            right: Box::new(self.parse_query()?),
+                        }
+                    } else {
+                        Expr::AnyExpr {
+                            left: Box::new(expr),
+                            op,
+                            right: Box::new(self.parse_expr()?),
+                        }
+                    };
+                    self.expect_token(&Token::RParen)?;
+                    Ok(expr)
                 } else {
+                    let query = self.parse_query()?;
+                    self.expect_token(&Token::RParen)?;
                     Ok(Expr::All {
                         left: Box::new(expr),
                         op,

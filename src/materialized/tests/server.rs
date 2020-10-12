@@ -9,9 +9,12 @@
 
 //! Integration tests for Materialize server.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
+
+use reqwest::{blocking::Client, StatusCode, Url};
 
 pub mod util;
 
@@ -87,7 +90,8 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 "s2011", "s2012", "s2013", "s2014", "s2015", "s2016", "s2017", "s2018", "s2019",
                 "s2020", "s2021", "s2022", "s2023", "s2024", "s3000", "s3001", "s3002", "s3003",
                 "s3004", "s3005", "s3006", "s3007", "s3008", "s3009", "s3010", "s3011", "s3012",
-                "s3013", "s3014", "s3015", "s3016", "u1", "u2", "u3", "u4", "u5", "u6"
+                "s3013", "s3014", "s3015", "s3016", "s3017", "s3018", "s3019", "u1", "u2", "u3",
+                "u4", "u5", "u6"
             ]
         );
     }
@@ -161,6 +165,50 @@ fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+// Test the /sql POST endpoint of the HTTP server.
+#[test]
+fn test_http_sql() -> Result<(), Box<dyn Error>> {
+    let (server, _client) = util::start_server(util::Config::default())?;
+    let url = Url::parse(&format!("http://{}/sql", server.inner.local_addr()))?;
+    let mut params = HashMap::new();
+
+    struct TestCase {
+        query: &'static str,
+        status: StatusCode,
+        body: &'static str,
+    }
+
+    let tests = vec![
+        // Regular query works.
+        TestCase {
+            query: "select 1+2 as col",
+            status: StatusCode::OK,
+            body: r#"{"rows":[[3]],"col_names":["col"]}"#,
+        },
+        // Only one query at a time.
+        TestCase {
+            query: "select 1; select 2",
+            status: StatusCode::BAD_REQUEST,
+            body: r#"expected exactly 1 statement"#,
+        },
+        // CREATEs should not work.
+        TestCase {
+            query: "create view v as select 1",
+            status: StatusCode::BAD_REQUEST,
+            body: r#"unsupported plan"#,
+        },
+    ];
+
+    for tc in tests {
+        params.insert("sql", tc.query);
+        let res = Client::new().post(url.clone()).form(&params).send()?;
+        assert_eq!(res.status(), tc.status);
+        assert_eq!(res.text()?, tc.body);
     }
 
     Ok(())

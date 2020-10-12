@@ -148,16 +148,16 @@ catalog item 'materialize.public.i1' is an index and so cannot be depended upon
 > CREATE INDEX i2 ON v2a(x*2);
 
 > SHOW INDEX in v2a;
-On_name                  Key_name                             Column_name Expression     Null   Seq_in_index
-------------------------------------------------------------------------------------------------------------
-materialize.public.v2a   materialize.public.i2                <null>      "x * 2"    false  1
-materialize.public.v2a   materialize.public.v2a_primary_idx   x           <null>         false  1
+On_name   Key_name          Column_name Expression  Null   Seq_in_index
+-----------------------------------------------------------------------
+v2a       i2                <null>      "x * 2"     false  1
+v2a       v2a_primary_idx   x           <null>      false  1
 
 > SHOW INDEX in v2;
-On_name                Key_name                              Column_name Expression Null   Seq_in_index
--------------------------------------------------------------------------------------------------------
-materialize.public.v2  materialize.public.i1                 x           <null>     false  1
-materialize.public.v2  materialize.public.v2_primary_idx     x           <null>     false  1
+On_name  Key_name        Column_name Expression Null   Seq_in_index
+-------------------------------------------------------------------
+v2       i1              x           <null>     false  1
+v2       v2_primary_idx  x           <null>     false  1
 
 # Test that dependent indexes do not prevent view deletion when restrict is specified
 # but do not cause deletion of dependent views
@@ -167,10 +167,10 @@ materialize.public.v2  materialize.public.v2_primary_idx     x           <null> 
 unknown catalog item 'v2a'
 
 > SHOW INDEX in v2;
-On_name                  Key_name                              Column_name Expression Null  Seq_in_index
-------------------------------------------------------------------------------------------------------
-materialize.public.v2    materialize.public.i1                 x           <null>     false 1
-materialize.public.v2    materialize.public.v2_primary_idx     x           <null>     false 1
+On_name  Key_name           Column_name Expression Null  Seq_in_index
+---------------------------------------------------------------------
+v2       i1                 x           <null>     false 1
+v2       v2_primary_idx     x           <null>     false 1
 
 ! DROP INDEX i2;
 unknown catalog item 'i2'
@@ -182,19 +182,19 @@ unknown catalog item 'i2'
 > CREATE INDEX i3 ON v4a(y);
 
 > SHOW INDEX in v4a;
-On_name                  Key_name                               Column_name Expression Null  Seq_in_index
--------------------------------------------------------------------------------------------------------
-materialize.public.v4a   materialize.public.i3                  y           <null>     false 1
-materialize.public.v4a   materialize.public.v4a_primary_idx     y           <null>     false 1
+On_name  Key_name            Column_name Expression Null  Seq_in_index
+----------------------------------------------------------------------
+v4a      i3                  y           <null>     false 1
+v4a      v4a_primary_idx     y           <null>     false 1
 
 > CREATE INDEX i4 ON v4(x);
 
 > SHOW INDEX in v4;
-On_name                 Key_name                           Column_name Expression Null  Seq_in_index
-------------------------------------------------------------------------------------------------
-materialize.public.v4   materialize.public.i4              x           <null>     false 1
-materialize.public.v4   materialize.public.v4_primary_idx  x           <null>     false 1
-materialize.public.v4   materialize.public.v4_primary_idx  y           <null>     false 2
+On_name  Key_name                           Column_name Expression Null  Seq_in_index
+-------------------------------------------------------------------------------------
+v4       i4              x           <null>     false 1
+v4       v4_primary_idx  x           <null>     false 1
+v4       v4_primary_idx  y           <null>     false 2
 
 # Test cascade deletes associated indexes as well
 > DROP VIEW v4a CASCADE;
@@ -206,35 +206,35 @@ unknown catalog item 'v4a'
 unknown catalog item 'i3'
 
 > SHOW INDEX in v4;
-On_name                 Key_name                              Column_name Expression Null  Seq_in_index
------------------------------------------------------------------------------------------------------
-materialize.public.v4   materialize.public.i4                  x           <null>     false 1
-materialize.public.v4   materialize.public.v4_primary_idx      x           <null>     false 1
-materialize.public.v4   materialize.public.v4_primary_idx      y           <null>     false 2
+On_name  Key_name            Column_name Expression Null  Seq_in_index
+----------------------------------------------------------------------
+v4       i4                  x           <null>     false 1
+v4       v4_primary_idx      x           <null>     false 1
+v4       v4_primary_idx      y           <null>     false 2
 
 > CREATE MATERIALIZED VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
 
 > CREATE INDEX i5 ON v5(substr);
 
 > SHOW INDEX in v5;
-On_name                 Key_name                            Column_name Expression Null  Seq_in_index
------------------------------------------------------------------------------------------------------
-materialize.public.v5   materialize.public.i5               substr      <null>     true  1
-materialize.public.v5   materialize.public.v5_primary_idx   substr      <null>     true  1
+On_name   Key_name         Column_name Expression Null  Seq_in_index
+--------------------------------------------------------------------
+v5        i5               substr      <null>     true  1
+v5        v5_primary_idx   substr      <null>     true  1
 
 > CREATE VIEW multicol AS SELECT 'a' AS a, 'b', 'c', 'd' AS d
 > CREATE INDEX i6 ON multicol (2, a, 4)
 > SHOW INDEX IN multicol
-On_name                      Key_name               Column_name  Expression   Null    Seq_in_index
------------------------------------------------------------------------------------------------------
-materialize.public.multicol  materialize.public.i6  ?column?     <null>       false   1
-materialize.public.multicol  materialize.public.i6  a            <null>       false   2
-materialize.public.multicol  materialize.public.i6  d            <null>       false   3
+On_name   Key_name  Column_name  Expression   Null    Seq_in_index
+------------------------------------------------------------------
+multicol  i6        ?column?     <null>       false   1
+multicol  i6        a            <null>       false   2
+multicol  i6        d            <null>       false   3
 
 > SHOW INDEX IN multicol WHERE Column_name = 'a'
-On_name                      Key_name               Column_name  Expression   Null    Seq_in_index
------------------------------------------------------------------------------------------------------
-materialize.public.multicol  materialize.public.i6  a            <null>       false   2
+On_name   Key_name  Column_name  Expression   Null    Seq_in_index
+------------------------------------------------------------------
+multicol  i6        a            <null>       false   2
 
 # Test cascade deletes all indexes associated with cascaded views
 > DROP VIEW v4 CASCADE;
@@ -268,11 +268,11 @@ unknown catalog item 'i4'
 > CREATE INDEX j1 on s3(ascii(y))
 
 > SHOW INDEX in s3;
-On_name                 Key_name                              Column_name Expression     Null  Seq_in_index
-----------------------------------------------------------------------------------------------------
-materialize.public.s3   materialize.public.j1                 <null>      "ascii(y)" false 1
-materialize.public.s3   materialize.public.s3_primary_idx     x           <null>         false 1
-materialize.public.s3   materialize.public.s3_primary_idx     y           <null>         false 2
+On_name  Key_name           Column_name Expression     Null  Seq_in_index
+-------------------------------------------------------------------------
+s3       j1                 <null>      "ascii(y)" false 1
+s3       s3_primary_idx     x           <null>         false 1
+s3       s3_primary_idx     y           <null>         false 2
 
 > DROP SOURCE s3;
 
@@ -296,16 +296,16 @@ unknown catalog item 'j1'
 > CREATE INDEX j3 on w(z);
 
 > SHOW INDEX in s4;
-On_name                 Key_name                              Column_name Expression  Null  Seq_in_index
-----------------------------------------------------------------------------------------------------
-materialize.public.s4   materialize.public.j2                 <null>      "x + 2" false 1
-materialize.public.s4   materialize.public.s4_primary_idx     x           <null>      false 1
-materialize.public.s4   materialize.public.s4_primary_idx     y           <null>      false 2
+On_name  Key_name           Column_name Expression  Null  Seq_in_index
+----------------------------------------------------------------------
+s4       j2                 <null>      "x + 2" false 1
+s4       s4_primary_idx     x           <null>      false 1
+s4       s4_primary_idx     y           <null>      false 2
 
 > SHOW INDEX in w;
-On_name                Key_name                            Column_name Expression Null  Seq_in_index
-----------------------------------------------------------------------------------------------------
-materialize.public.w   materialize.public.j3               z           <null>     false 1
+On_name  Key_name         Column_name Expression Null  Seq_in_index
+-------------------------------------------------------------------
+w        j3               z           <null>     false 1
 
 > DROP SOURCE s4 CASCADE;
 

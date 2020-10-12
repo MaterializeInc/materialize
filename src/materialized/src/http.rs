@@ -15,7 +15,6 @@
 
 use std::time::Instant;
 
-use futures::channel::mpsc::UnboundedSender;
 use futures::future::{FutureExt, TryFutureExt};
 use hyper::{service, Method};
 use openssl::ssl::SslAcceptor;
@@ -24,9 +23,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use ore::netio::SniffedStream;
 
 mod catalog;
+mod memory;
 mod metrics;
 mod prof;
 mod root;
+mod sql;
 mod util;
 
 const METHODS: &[&[u8]] = &[
@@ -41,7 +42,7 @@ fn sniff_tls(buf: &[u8]) -> bool {
 
 pub struct Server {
     tls: Option<SslAcceptor>,
-    cmdq_tx: UnboundedSender<coord::Command>,
+    coord_client: coord::Client,
     /// When this server started
     start_time: Instant,
 }
@@ -49,7 +50,7 @@ pub struct Server {
 impl Server {
     pub fn new(
         tls: Option<SslAcceptor>,
-        cmdq_tx: UnboundedSender<coord::Command>,
+        coord_client: coord::Client,
         start_time: Instant,
         worker_count: &str,
     ) -> Server {
@@ -59,7 +60,7 @@ impl Server {
             .set(1);
         Server {
             tls,
-            cmdq_tx,
+            coord_client,
             start_time,
         }
     }
@@ -98,7 +99,9 @@ impl Server {
             (&Method::GET, "/metrics") => self.handle_prometheus(req).boxed(),
             (&Method::GET, "/status") => self.handle_status(req).boxed(),
             (&Method::GET, "/prof") => self.handle_prof(req).boxed(),
+            (&Method::GET, "/memory") => self.handle_memory(req).boxed(),
             (&Method::POST, "/prof") => self.handle_prof(req).boxed(),
+            (&Method::POST, "/sql") => self.handle_sql(req).boxed(),
             (&Method::GET, "/internal/catalog") => self.handle_internal_catalog(req).boxed(),
             _ => self.handle_static(req).boxed(),
         });

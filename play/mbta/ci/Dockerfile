@@ -7,10 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Assert required mz_catalog objects are inserted on startup.
-> SELECT COUNT(*) FROM mz_tables WHERE global_id LIKE 's%'
-12
+FROM ubuntu:bionic-20200403
 
-# There is one entry in mz_indexes for each field_number/expression of the index.
-> SELECT COUNT(global_id) FROM mz_indexes WHERE global_id LIKE 's%'
-75
+RUN apt-get update && apt-get install -qy curl unzip
+
+#Copy build and scripts to /usr/local/bin
+
+COPY mbta-to-mtrlz /usr/local/bin
+COPY mbta-demo-cmd.sh /usr/local/bin
+
+#create workspace
+WORKDIR /workdir
+
+ENTRYPOINT ["mbta-demo-cmd.sh"]

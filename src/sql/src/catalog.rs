@@ -13,6 +13,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::path::Path;
 use std::time::SystemTime;
 
 use expr::{GlobalId, ScalarExpr};
@@ -144,6 +145,11 @@ pub trait Catalog: fmt::Debug {
 
     /// Expresses whether or not the catalog allows experimental mode features.
     fn experimental_mode(&self) -> bool;
+
+    /// Reports the top level directory where source persistence information is stored.
+    ///
+    /// If set to `None`, indicates that source persistence is disabled.
+    fn persistence_directory(&self) -> Option<&Path>;
 }
 
 /// An item in a [`Catalog`].
@@ -319,5 +325,9 @@ impl Catalog for DummyCatalog {
 
     fn experimental_mode(&self) -> bool {
         false
+    }
+
+    fn persistence_directory(&self) -> Option<&Path> {
+        None
     }
 }

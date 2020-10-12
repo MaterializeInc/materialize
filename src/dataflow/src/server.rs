@@ -38,6 +38,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
+use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
@@ -165,7 +166,7 @@ pub enum PersistenceMessage {
     /// Data to be persisted (sent from dataflow workers)
     Data(WorkerPersistenceData),
     /// Add source to persist
-    AddSource(GlobalId),
+    AddSource(Uuid, GlobalId),
     /// Drop source to persist
     DropSource(GlobalId),
     /// Shut down persistence thread

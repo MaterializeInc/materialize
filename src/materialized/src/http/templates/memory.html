@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Memory{% endblock %}
+
+{% block head %}
+<link href="/css/memory.css" rel="stylesheet">
+
+<script src="https://cdn.jsdelivr.net/npm/react@16/umd/react.development.js" crossorigin></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@16/umd/react-dom.development.js" crossorigin></script>
+<!-- babel is used for JSX compilation -->
+<script src="https://cdn.jsdelivr.net/npm/babel-standalone@6/babel.min.js"></script>
+<!-- hpcc-js/wasm has GraphViz compiled to wasm -->
+<script src="https://cdn.jsdelivr.net/npm/@hpcc-js/wasm@0.3/dist/index.min.js"></script>
+<script src="/js/memory.jsx" type="text/babel"></script>
+{% endblock %}
+
+{% block content %}
+<div id="content"></div>
+{% endblock %}
