@@ -677,7 +677,10 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_description AS SELECT
     oid as objoid,
     oid as classoid,
-    NULL::int4 as objsubid,
+    CASE
+        WHEN relkind = 'i' THEN NULL::int4
+        ELSE 0::int4
+    END objsubid,
     NULL::text as description
 FROM pg_catalog.pg_class",
     id: GlobalId::System(3019),
