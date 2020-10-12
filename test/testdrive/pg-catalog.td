@@ -46,7 +46,7 @@ Field        Nullable  Type
 --------------------------
 objoid       NO        oid
 classoid     YES       oid
-objsubid     YES       int4
+objsubid     NO        int4
 description  YES       text
 
 ! SELECT current_schemas()
