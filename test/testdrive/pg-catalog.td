@@ -45,7 +45,7 @@ indrelid     NO        oid
 Field        Nullable  Type
 --------------------------
 objoid       NO        oid
-classoid     NO        oid
+classoid     YES       oid
 objsubid     YES       int4
 description  YES       text
 
