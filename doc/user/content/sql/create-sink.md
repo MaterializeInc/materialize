@@ -49,6 +49,18 @@ Field | Value type | Description
 `replication_factor` | `int` | Set the sink Kafka topic's replication factor. This defaults to 1.
 `consistency` | `bool` | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
 
+#### SSL `WITH` options
+
+Use the following options to connect Materialize to an SSL-encrypted Kafka
+cluster.
+
+Field | Value | Description
+------|-------|------------
+`ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication.
+`ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.
+`ssl_key_password` | `text` | Your SSL key's password, if any.
+`ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+
 ### AS OF
 
 `AS OF` is the specific point in time to start emitting all events for a given `SINK`. If you don't
