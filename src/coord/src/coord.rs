@@ -2117,6 +2117,11 @@ where
         let uses_ids = &source.global_uses();
         let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
 
+        // Determine the valid lower bound of times that can produce correct outputs.
+        // This bound is determined by the arrangements contributing to the query,
+        // and does not depend on the transitive sources.
+        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
+
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
         let timestamp = match when {
@@ -2130,7 +2135,7 @@ where
                 if !indexes_complete {
                     bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
                 }
-                if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
+                let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
                     // If the view depends on any tables, we enforce
                     // linearizability by choosing the latest input time.
                     self.get_read_ts()
@@ -2164,14 +2169,17 @@ where
                         // This should only happen for literals that have no sources
                         Timestamp::max_value()
                     }
+                };
+                // If the candidate is not beyond the valid `since` frontier,
+                // force it to become so as best as we can. If `since` is empty
+                // this will be a no-op, as there is no valid time, but that should
+                // then be caught below.
+                if !since.less_equal(&candidate) {
+                    candidate.advance_by(since.borrow());
                 }
+                candidate
             }
         };
-
-        // Determine the valid lower bound of times that can produce correct outputs.
-        // This bound is determined by the arrangements contributing to the query,
-        // and does not depend on the transitive sources.
-        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
 
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
