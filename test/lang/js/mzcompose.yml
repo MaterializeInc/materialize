@@ -12,6 +12,7 @@ services:
   materialized:
     mzbuild: materialized
     command: -w1
+    environment: [MZ_LOG=pgwire=trace]
   js:
     image: node:13.12.0
     command: /workdir/test/lang/js/test.sh
