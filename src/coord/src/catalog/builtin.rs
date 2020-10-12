@@ -671,6 +671,22 @@ JOIN mz_catalog.mz_objects ON mz_indexes.on_global_id = mz_objects.global_id",
     needs_logs: false,
 };
 
+pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
+    name: "pg_description",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_description AS SELECT
+    oid as objoid,
+    NULL::oid as classoid,
+    CASE
+        WHEN relkind = 'i' THEN NULL::int4
+        ELSE 0::int4
+    END objsubid,
+    NULL::text as description
+FROM pg_catalog.pg_class",
+    id: GlobalId::System(3019),
+    needs_logs: false,
+};
+
 lazy_static! {
     pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
         let builtins = vec![
@@ -718,6 +734,7 @@ lazy_static! {
             Builtin::View(&PG_CLASS),
             Builtin::View(&PG_DATABASE),
             Builtin::View(&PG_INDEX),
+            Builtin::View(&PG_DESCRIPTION),
         ];
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
