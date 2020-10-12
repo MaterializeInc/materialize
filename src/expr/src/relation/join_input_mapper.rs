@@ -210,7 +210,8 @@ impl JoinInputMapper {
         equivalences: &[Vec<ScalarExpr>],
     ) -> Option<ScalarExpr> {
         let mut expr = expr.clone();
-        expr.visit1_mut(&mut |e| self.try_map_to_input_with_bound_expr_sub(e, index, equivalences));
+        // call the recursive submethod
+        self.try_map_to_input_with_bound_expr_sub(&mut expr, index, equivalences);
         // if the localization attempt is successful, all columns in `expr`
         // should only come from input `index`
         let inputs_after_localization = self.lookup_inputs(&expr);
@@ -220,5 +221,136 @@ impl JoinInputMapper {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BinaryFunc, ScalarExpr, UnaryFunc};
+    use repr::{Datum, ScalarType};
+
+    #[test]
+    fn try_map_to_input_with_bound_expr_test() {
+        let input_mapper = JoinInputMapper {
+            arities: vec![2, 3, 3],
+            input_relation: vec![0, 0, 1, 1, 1, 2, 2, 2],
+            prior_arities: vec![0, 2, 5],
+        };
+
+        // keys are numbered by (equivalence class #, input #)
+        let key10 = ScalarExpr::Column(0);
+        let key12 = ScalarExpr::Column(6);
+        let localized_key12 = ScalarExpr::Column(1);
+
+        let mut equivalences = vec![vec![key10.clone(), key12.clone()]];
+
+        // when the column is already part of the target input, all that happens
+        // is that it gets localized
+        assert_eq!(
+            Some(ScalarExpr::Column(1)),
+            input_mapper.try_map_to_input_with_bound_expr(&key12, 2, &equivalences)
+        );
+
+        // basic tests that we can find a column's corresponding column in a
+        // different input
+        assert_eq!(
+            Some(key10.clone()),
+            input_mapper.try_map_to_input_with_bound_expr(&key12, 0, &equivalences)
+        );
+        assert_eq!(
+            None,
+            input_mapper.try_map_to_input_with_bound_expr(&key12, 1, &equivalences)
+        );
+
+        let key20 = ScalarExpr::CallUnary {
+            func: UnaryFunc::NegInt32,
+            expr: Box::new(ScalarExpr::Column(1)),
+        };
+        let key21 = ScalarExpr::CallBinary {
+            func: BinaryFunc::AddInt32,
+            expr1: Box::new(ScalarExpr::Column(2)),
+            expr2: Box::new(ScalarExpr::literal(
+                Ok(Datum::Int32(4)),
+                ScalarType::Int32.nullable(false),
+            )),
+        };
+        let key22 = ScalarExpr::Column(5);
+        let localized_key22 = ScalarExpr::Column(0);
+        equivalences.push(vec![key22.clone(), key20.clone(), key21.clone()]);
+
+        // basic tests that we can find an expression's corresponding expression in a
+        // different input
+        assert_eq!(
+            Some(key20.clone()),
+            input_mapper.try_map_to_input_with_bound_expr(&key21, 0, &equivalences)
+        );
+        assert_eq!(
+            Some(localized_key22.clone()),
+            input_mapper.try_map_to_input_with_bound_expr(&key21, 2, &equivalences)
+        );
+
+        // test that `try_map_to_input_with_bound_expr` will map multiple
+        // subexpressions to the corresponding expressions bound to a different input
+        let key_comp = ScalarExpr::CallBinary {
+            func: BinaryFunc::MulInt32,
+            expr1: Box::new(key12.clone()),
+            expr2: Box::new(key22),
+        };
+        assert_eq!(
+            Some(ScalarExpr::CallBinary {
+                func: BinaryFunc::MulInt32,
+                expr1: Box::new(key10.clone()),
+                expr2: Box::new(key20.clone()),
+            }),
+            input_mapper.try_map_to_input_with_bound_expr(&key_comp, 0, &equivalences)
+        );
+
+        // test that the function returns None when part
+        // of the expression can be mapped to an input but the rest can't
+        assert_eq!(
+            None,
+            input_mapper.try_map_to_input_with_bound_expr(&key_comp, 1, &equivalences)
+        );
+
+        let key_comp_plus_non_key = ScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1: Box::new(key_comp),
+            expr2: Box::new(ScalarExpr::Column(7)),
+        };
+        assert_eq!(
+            None,
+            input_mapper.try_map_to_input_with_bound_expr(&key_comp_plus_non_key, 0, &equivalences)
+        );
+
+        let key_comp_multi_input = ScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1: Box::new(key12),
+            expr2: Box::new(key21),
+        };
+        // test that the function works when part of the expression is already
+        // part of the target input
+        assert_eq!(
+            Some(ScalarExpr::CallBinary {
+                func: BinaryFunc::Eq,
+                expr1: Box::new(localized_key12),
+                expr2: Box::new(localized_key22),
+            }),
+            input_mapper.try_map_to_input_with_bound_expr(&key_comp_multi_input, 2, &equivalences)
+        );
+        // test that the function works when parts of the expression come from
+        // multiple inputs
+        assert_eq!(
+            Some(ScalarExpr::CallBinary {
+                func: BinaryFunc::Eq,
+                expr1: Box::new(key10),
+                expr2: Box::new(key20),
+            }),
+            input_mapper.try_map_to_input_with_bound_expr(&key_comp_multi_input, 0, &equivalences)
+        );
+        assert_eq!(
+            None,
+            input_mapper.try_map_to_input_with_bound_expr(&key_comp_multi_input, 1, &equivalences)
+        )
     }
 }
