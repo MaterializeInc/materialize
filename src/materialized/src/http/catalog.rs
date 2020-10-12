@@ -9,10 +9,8 @@
 
 //! Catalog introspection HTTP endpoints.
 
-use std::future::Future;
-
-use futures::sink::SinkExt;
 use hyper::{header, Body, Request, Response};
+use std::future::Future;
 
 use crate::http::Server;
 
@@ -21,11 +19,9 @@ impl Server {
         &self,
         _: Request<Body>,
     ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        let (tx, rx) = futures::channel::oneshot::channel();
-        let mut cmdq_tx = self.cmdq_tx.clone();
+        let mut coord_client = self.coord_client.clone();
         async move {
-            cmdq_tx.send(coord::Command::DumpCatalog { tx }).await?;
-            let dump = rx.await?;
+            let dump = coord_client.dump_catalog().await;
             Ok(Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(dump))

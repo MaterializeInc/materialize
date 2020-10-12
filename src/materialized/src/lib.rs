@@ -162,7 +162,8 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
 
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
-    let (cmdq_tx, cmd_rx) = mpsc::unbounded::<coord::Command>();
+    let (cmdq_tx, cmd_rx) = mpsc::unbounded();
+    let coord_client = coord::Client::new(cmdq_tx);
 
     // Extract timely dataflow parameters.
     let is_primary = config.process == 0;
@@ -217,10 +218,10 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             if is_primary {
                 let mut mux = Mux::new();
                 mux.add_handler(switchboard.clone());
-                mux.add_handler(pgwire::Server::new(tls.clone(), cmdq_tx.clone()));
+                mux.add_handler(pgwire::Server::new(tls.clone(), coord_client.clone()));
                 mux.add_handler(http::Server::new(
                     tls,
-                    cmdq_tx,
+                    coord_client,
                     start_time,
                     &num_timely_workers.to_string(),
                 ));
