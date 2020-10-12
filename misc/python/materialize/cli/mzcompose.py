@@ -27,6 +27,21 @@ from materialize import mzbuild
 announce = ui.speaker("==>")
 say = ui.speaker("")
 
+MIN_DOCKER_VERSION = (1, 27, 0)
+
+
+def assert_docker_compose_version() -> None:
+    """Check the version of docker-compose installed.
+
+    Raises `MzRuntimeError` if the version is not recent enough.
+    """
+    cmd = ["docker-compose", "version", "--short"]
+    output = subprocess.check_output(cmd).decode("utf-8").strip()
+    version = tuple(int(i) for i in output.split("."))
+    if version < MIN_DOCKER_VERSION:
+        msg = f"Unsupported docker-compose version: {version}, min required: {MIN_DOCKER_VERSION}"
+        raise errors.MzConfigurationError(msg)
+
 
 def main(argv: List[str]) -> int:
     # Lightly parse the arguments so we know what to do.
@@ -47,12 +62,15 @@ def main(argv: List[str]) -> int:
     if args.command == "gen-shortcuts":
         return gen_shortcuts(repo)
 
+    assert_docker_compose_version()
+
     announce("Collecting mzbuild dependencies")
     composes = []
     for config_file in config_files:
         composes.append(build_compose_file(repo, args.command, config_file))
 
     # Hand over control to Docker Compose.
+    announce("Delegating to Docker Compose")
     dc_args = [
         "docker-compose",
         *[f"-f/dev/fd/{comp.fileno()}" for comp in composes],
@@ -62,7 +80,6 @@ def main(argv: List[str]) -> int:
         *([args.command] if args.command is not None else []),
         *args.extra,
     ]
-    announce(f"Delegating to Docker Compose, running command: {' '.join(dc_args)}")
     os.execvp("docker-compose", dc_args)
 
 
