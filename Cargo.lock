@@ -1858,6 +1858,7 @@ dependencies = [
  "fallible-iterator",
  "futures",
  "getopts",
+ "hex",
  "hyper",
  "include_dir",
  "itertools",

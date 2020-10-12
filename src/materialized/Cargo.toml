@@ -22,6 +22,7 @@ dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 futures = "0.3"
 getopts = "0.2"
+hex = "0.4"
 hyper = "0.13.8"
 include_dir = "0.6.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }

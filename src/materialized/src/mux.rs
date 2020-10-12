@@ -9,7 +9,6 @@
 
 use std::sync::Arc;
 
-use anyhow::Context;
 use async_trait::async_trait;
 use futures::future::TryFutureExt;
 use futures::stream::{Stream, StreamExt};
@@ -99,19 +98,25 @@ async fn handle_connection(handlers: Arc<Handlers>, conn: TcpStream) {
     for handler in &*handlers {
         if handler.match_handshake(buf) {
             if let Err(e) = handler.handle_connection(ss.into_sniffed()).await {
-                error!("error handling connection: {}", e);
+                error!("error handling connection in {}: {:#}", handler.name(), e);
             }
             return;
         }
     }
 
-    log::warn!("unknown protocol connection!");
+    log::warn!(
+        "dropped connection using unknown protocol (sniffed: 0x{})",
+        hex::encode(buf)
+    );
     let _ = ss.into_sniffed().write_all(b"unknown protocol\n").await;
 }
 
 /// A connection handler manages an incoming network connection.
 #[async_trait]
 pub trait ConnectionHandler {
+    /// Returns the name of the connection handler for use in e.g. log messages.
+    fn name(&self) -> &str;
+
     /// Determines whether this handler can accept the connection based on the
     /// first several bytes in the stream.
     fn match_handshake(&self, buf: &[u8]) -> bool;
@@ -122,30 +127,40 @@ pub trait ConnectionHandler {
 
 #[async_trait]
 impl ConnectionHandler for pgwire::Server {
+    fn name(&self) -> &str {
+        "pgwire server"
+    }
+
     fn match_handshake(&self, buf: &[u8]) -> bool {
         pgwire::match_handshake(buf)
     }
 
     async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
-        self.handle_connection(conn)
-            .await
-            .context("in pgwire server")
+        self.handle_connection(conn).await
     }
 }
 
 #[async_trait]
 impl ConnectionHandler for http::Server {
+    fn name(&self) -> &str {
+        "http server"
+    }
+
     fn match_handshake(&self, buf: &[u8]) -> bool {
         self.match_handshake(buf)
     }
 
     async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
-        self.handle_connection(conn).await.context("in http server")
+        self.handle_connection(conn).await
     }
 }
 
 #[async_trait]
 impl ConnectionHandler for comm::Switchboard<SniffedStream<TcpStream>> {
+    fn name(&self) -> &str {
+        "switchboard"
+    }
+
     fn match_handshake(&self, buf: &[u8]) -> bool {
         comm::protocol::match_handshake(buf)
     }
