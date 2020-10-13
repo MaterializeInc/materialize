@@ -7,24 +7,39 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Handles SQLs scoping rules.
-
-//! A scope spans a single SQL `Query`.
-//! Nested subqueries create new scopes.
+//! Handles SQL's scoping rules.
+//!
+//! A scope spans a single SQL `Query`. Nested subqueries create new scopes.
 //! Names are resolved against the innermost scope first.
-//! * If a match is found, it is returned
-//! * If no matches are found, the name is resolved against the parent scope
-//! * If multiple matches are found, the name is ambigious and we return an error to the user
-
+//! * If a match is found, it is returned.
+//! * If no matches are found, the name is resolved against the parent scope.
+//! * If multiple matches are found, the name is ambigious and we return an
+//!   error to the user.
+//!
 //! Matching rules:
 //! * `bar` will match any column in the scope named `bar`
-//! * `foo.bar` will match any column in the scope named `bar` that originated from a table named `foo`
-//! * Table aliases such as `foo as quux` replace the old table name.
-//! * Functions create unnamed columns, which can be named with columns aliases `(bar + 1) as more_bar`
-
-//! Additionally, most databases fold some form of CSE into name resolution so that eg `SELECT sum(x) FROM foo GROUP BY sum(x)` would be treated something like `SELECT "sum(x)" FROM foo GROUP BY sum(x) AS "sum(x)"` rather than failing to resolve `x`. We handle this by including the underlying `sql_parser::ast::Expr` in cases where this is possible.
-
-//! Many sql expressions do strange and arbitrary things to scopes. Rather than try to capture them all here, we just expose the internals of `Scope` and handle it in the appropriate place in `super::query`.
+//! * `foo.bar` will match any column in the scope named `bar` that originated
+//!    from a table named `foo`.
+//! * Table aliases such as `foo AS quux` replace the old table name.
+//! * Functions create unnamed columns, which can be named with columns aliases
+//!   `(bar + 1) as more_bar`.
+//!
+//! Additionally, most databases fold some form of CSE into name resolution so
+//! that eg `SELECT sum(x) FROM foo GROUP BY sum(x)` would be treated something
+//! like `SELECT "sum(x)" FROM foo GROUP BY sum(x) AS "sum(x)"` rather than
+//! failing to resolve `x`. We handle this by including the underlying
+//! `sql_parser::ast::Expr` in cases where this is possible.
+//!
+//! Many SQL expressions do strange and arbitrary things to scopes. Rather than
+//! try to capture them all here, we just expose the internals of `Scope` and
+//! handle it in the appropriate place in `super::query`.
+//!
+//! NOTE(benesch): The above approach of exposing scope's internals to the
+//! entire planner has not aged well. SQL scopes are now full of undocumented
+//! assumptions and requirements, since various subcomponents of the planner
+//! shove data into scope items to communicate with subcomponents a mile away.
+//! I've tried to refactor this code several times to no avail. It works better
+//! than you might expect. But you have been warned. Tread carefully!
 
 use itertools::Itertools;
 
