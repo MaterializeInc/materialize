@@ -53,7 +53,6 @@ NULL  NULL  4  r4
 1     l1    1  r1
 3     l3    3  r3
 
-
 # Test that columns detected to be equivalent retain the names that the user
 # asks for. Protects against regression of #1217.
 query II colnames,rowsort
@@ -61,11 +60,23 @@ SELECT ra, r.ra FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
 ra  ra
 
-
 # Test that columns detected to be equivalent retain the names that the user
 # asks for. Protects against regression of #1217.
 query ITIT colnames,rowsort
 SELECT * FROM l JOIN r ON l.la = r.ra LIMIT 0
+----
+la  lb  ra  rb
+
+# Test that columns detected to be equivalent do not interfere with qualified
+# wildcard expansion. Protects against regression of #4477.
+query ITIT colnames
+SELECT l.*, r.* FROM l JOIN r ON l.la = r.ra LIMIT 0
+----
+la  lb  ra  rb
+
+# Like the last test, but with the equality reversed.
+query ITIT colnames
+SELECT l.*, r.* FROM l JOIN r ON r.ra = l.la LIMIT 0
 ----
 la  lb  ra  rb
 
