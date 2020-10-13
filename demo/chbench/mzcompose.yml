@@ -601,7 +601,7 @@ mzconduct:
          run
          --dsn=mysql --gen-dir=/var/lib/mysql-files
          --analytic-threads=0
-         --transactional-threads=1
+         --transactional-threads=${OLTP_THREADS:-1}
          --run-seconds=864000
          -l /dev/stdout
          --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
@@ -616,7 +616,7 @@ mzconduct:
          run
          --dsn=postgres --gen-dir=/var/lib/postgres-files
          --analytic-threads=0
-         --transactional-threads=1
+         --transactional-threads=${OLTP_THREADS:-1}
          --run-seconds=864000
          -l /dev/stdout
          --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
