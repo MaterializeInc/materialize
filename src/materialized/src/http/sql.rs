@@ -38,11 +38,8 @@ impl Server {
                     Some(sql) => sql,
                     None => bail!("expected `sql` parameter"),
                 };
-                let params = Params {
-                    datums: repr::Row::new(vec![]),
-                    types: vec![],
-                };
-                let res = query_sql_as_system(coord_client, sql.to_string(), params).await?;
+                let res =
+                    query_sql_as_system(coord_client, sql.to_string(), Params::empty()).await?;
                 Ok(Response::builder()
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(serde_json::to_string(&res)?))

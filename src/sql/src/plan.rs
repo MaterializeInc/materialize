@@ -234,6 +234,16 @@ pub struct Params {
     pub types: Vec<ScalarType>,
 }
 
+impl Params {
+    /// Returns a `Params` with no parameters.
+    pub fn empty() -> Params {
+        Params {
+            datums: Row::pack(&[]),
+            types: vec![],
+        }
+    }
+}
+
 /// Controls planning of a SQL query.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct PlanContext {

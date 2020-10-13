@@ -520,14 +520,7 @@ pub fn handle_show_columns(
 
 fn handle_generated_select(scx: &StatementContext, query: String) -> Result<Plan, anyhow::Error> {
     match parse::parse(query)?.into_element() {
-        Statement::Select(select) => super::handle_select(
-            scx,
-            select,
-            &Params {
-                datums: Row::pack(&[]),
-                types: vec![],
-            },
-        ),
+        Statement::Select(select) => super::handle_select(scx, select, &Params::empty()),
         _ => unreachable!("known to be select statement"),
     }
 }
