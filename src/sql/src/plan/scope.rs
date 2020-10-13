@@ -67,7 +67,9 @@ pub struct ScopeItemName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScopeItem {
     // The canonical name should appear first in the list (e.g., the name
-    // assigned by an alias.)
+    // assigned by an alias.) Similarly, the name that specifies the canonical
+    // table must appear before names that specify non-canonical tables.
+    // This impacts the behavior of the `is_from_table` test.
     pub names: Vec<ScopeItemName>,
     pub expr: Option<sql_parser::ast::Expr>,
     // Whether this item is actually resolveable by its name. Non-nameable scope
@@ -100,9 +102,11 @@ impl ScopeItem {
     }
 
     pub fn is_from_table(&self, table_name: &PartialName) -> bool {
-        self.names
-            .iter()
-            .any(|n| n.table_name.as_ref() == Some(&table_name))
+        // Only consider the first name that specifies a table component.
+        // Even though there may be a later name that matches the table, the
+        // column is not actually considered to come from that table; it is just
+        // known to be equivalent to the *real* column from that table.
+        self.names.iter().find_map(|n| n.table_name.as_ref()) == Some(table_name)
     }
 
     pub fn short_display_name(&self) -> String {
