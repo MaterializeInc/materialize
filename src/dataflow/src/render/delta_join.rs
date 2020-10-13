@@ -14,7 +14,7 @@ use dogsdogsdogs::altneu::AltNeu;
 use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
-use expr::{RelationExpr, ScalarExpr};
+use expr::{JoinInputMapper, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, Timestamp};
 
 use super::context::{ArrangementFlavor, Context};
@@ -59,19 +59,7 @@ where
                         // existing arrangements, to which we have access).
                         let mut delta_queries = Vec::new();
 
-                        // We'll need type information for arities, if nothing else.
-                        let types = inputs.iter().map(|input| input.typ()).collect::<Vec<_>>();
-                        let arities = types
-                            .iter()
-                            .map(|typ| typ.column_types.len())
-                            .collect::<Vec<_>>();
-
-                        let mut offset = 0;
-                        let mut prior_arities = Vec::new();
-                        for input in 0..inputs.len() {
-                            prior_arities.push(offset);
-                            offset += arities[input];
-                        }
+                        let input_mapper = JoinInputMapper::new(inputs);
 
                         let mut err_streams = Vec::with_capacity(inputs.len());
                         for relation in 0..inputs.len() {
@@ -96,7 +84,7 @@ where
                                 err_streams.push(errs);
 
                                 // We track the sources of each column in our update stream.
-                                let mut source_columns = (prior_arities[relation]..prior_arities[relation]+arities[relation])
+                                let mut source_columns = input_mapper.global_columns(relation)
                                     .collect::<Vec<_>>();
 
                                 let mut predicates = predicates.to_vec();
@@ -110,6 +98,10 @@ where
                                     err_streams.push(errs.leave().leave());
                                 }
 
+                                // We track the input relations as they are
+                                // added to the join so we can figure out
+                                // which expressions have been bound.
+                                let mut bound_inputs = vec![relation];
                                 // We use the order specified by the implementation.
                                 let order = &orders[relation];
 
@@ -117,36 +109,18 @@ where
                                 // other relations, in the specified order.
                                 for (other, next_key) in order.iter() {
 
-                                    let mut next_key_rebased = next_key.clone();
-                                    for expr in next_key_rebased.iter_mut() {
-                                        expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
-                                            *c += prior_arities[*other];
-                                        });
-                                    }
+                                    let next_key_rebased = next_key.iter().map(
+                                        |k| input_mapper.map_expr_to_global(k.clone(), *other)
+                                    ).collect::<Vec<_>>();
 
                                     // Keys for the incoming updates are determined by locating
                                     // the elements of `next_keys` among the existing `columns`.
                                     let prev_key = next_key_rebased
                                         .iter()
                                         .map(|expr| {
-                                            // We expect to find `expr` in some `equivalence` which
-                                            // has a bound expression. Otherwise, the join plan is
-                                            // defective and we should panic.
-                                            let equivalence =
-                                            equivalences
-                                                .iter()
-                                                .find(|equivs| equivs.contains(expr))
-                                                .expect("Expression in join plan is not in an equivalence relation");
-
-                                            // We expect to find exactly one bound expression, as
-                                            // multiple bound expressions should result in a filter
-                                            // and be removed once they have.
-                                            let mut bound_expr =
-                                            equivalence
-                                                .iter()
-                                                .find(|expr| expr.support().into_iter().all(|c| source_columns.contains(&c)))
-                                                .expect("Expression in join plan is not bound at time of use")
-                                                .clone();
+                                            let mut bound_expr = input_mapper
+                                                .find_bound_expr(expr, &bound_inputs, &equivalences)
+                                                .expect("Expression in join plan is not bound at time of use");
 
                                             bound_expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
                                                 *c = source_columns.iter().position(|x| x == c).expect("Did not find bound column in source_columns");
@@ -228,7 +202,7 @@ where
 
                                     // Update our map of the sources of each column in the update stream.
                                     source_columns
-                                        .extend((0..arities[*other]).map(|c| prior_arities[*other] + c));
+                                        .extend(input_mapper.global_columns(*other));
 
                                     let (oks, errs) = build_filter(
                                         update_stream,
@@ -240,6 +214,8 @@ where
                                     if let Some(errs) = errs {
                                         err_streams.push(errs.leave().leave());
                                     }
+
+                                    bound_inputs.push(*other);
                                 }
 
                                 // We must now de-permute the results to return to the common order.

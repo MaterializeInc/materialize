@@ -22,6 +22,7 @@ pub mod explain;
 pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId, PartitionId, SourceInstanceId};
 pub use relation::func::{AggregateFunc, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
+pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
     compare_columns, AggregateExpr, ColumnOrder, IdGen, JoinImplementation, RelationExpr,
     RowSetFinishing,
