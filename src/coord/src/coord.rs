@@ -338,7 +338,7 @@ where
             })
             .collect();
         for (database_name, database_id, database_oid, schemas) in dbs {
-            self.report_database_update(database_oid, database_id, &database_name, 1)
+            self.report_database_update(database_id, database_oid, &database_name, 1)
                 .await;
 
             for (schema_name, schema_id, schema_oid, items) in schemas {
@@ -999,8 +999,8 @@ where
 
     async fn report_database_update(
         &mut self,
-        oid: u32,
         database_id: i64,
+        oid: u32,
         name: &str,
         diff: isize,
     ) {
@@ -1008,8 +1008,8 @@ where
             MZ_DATABASES.id,
             iter::once((
                 Row::pack(&[
-                    Datum::Int32(oid as i32),
                     Datum::Int64(database_id),
+                    Datum::Int32(oid as i32),
                     Datum::String(&name),
                 ]),
                 diff,
@@ -2398,8 +2398,8 @@ where
         let statuses = self.catalog.transact(ops)?;
         for status in &statuses {
             match status {
-                catalog::OpStatus::CreatedDatabase { name, id, oid } => {
-                    self.report_database_update(*oid, *id, name, 1).await;
+                catalog::OpStatus::CreatedDatabase { id, oid, name } => {
+                    self.report_database_update(*id, *oid, name, 1).await;
                 }
                 catalog::OpStatus::CreatedSchema {
                     database_id,
@@ -2492,8 +2492,8 @@ where
                         }
                     }
                 }
-                catalog::OpStatus::DroppedDatabase { name, id, oid } => {
-                    self.report_database_update(*oid, *id, name, -1).await;
+                catalog::OpStatus::DroppedDatabase { id, oid, name } => {
+                    self.report_database_update(*id, *oid, name, -1).await;
                 }
                 catalog::OpStatus::DroppedSchema {
                     database_id,

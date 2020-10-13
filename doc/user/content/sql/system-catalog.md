@@ -55,10 +55,11 @@ schema.
 
 The `mz_databases` table contains a row for each database in the system.
 
-Field       | Meaning
-------------|----------
-`global_id` | The unique ID of the database.
-`database`  | The name of the database.
+Field  | Meaning
+-------|----------
+`id`   | Materialize's unique ID for the database.
+`oid`  | A [PostgreSQL-compatible OID][oid] for the database.
+`name` | The name of the database.
 
 ### `mz_schemas`
 
@@ -121,3 +122,4 @@ If you are having trouble making a PostgreSQL tool work with Materialize, please
 Materialize with minor changes to the `pg_catalog` compatibility shim.
 
 [gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
+[oid]: /sql/types/oid
