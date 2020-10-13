@@ -1021,7 +1021,8 @@ impl RowArena {
         }
     }
 
-    /// Convenience function to make a new `Row` containing a single datum, and take ownership of it for the lifetime of the arena
+    /// Convenience function to make a new `Row` containing a single datum, and
+    /// take ownership of it for the lifetime of the arena
     ///
     /// ```
     /// # use repr::{RowArena, Datum};
