@@ -21,6 +21,7 @@ x-port-mappings:
   - &postgres ${POSTGRES_PORT:-5432:5432}
   - &control-center ${CC_PORT:-9021:9021}
   - &grafana 3000:3000
+  - &prometheus 9090:9090
   - &metabase 3030:3000
 
 version: '3.7'
@@ -190,6 +191,7 @@ services:
       - 'MATERIALIZED_URL=materialized:6875'
     ports:
       - *grafana
+      - *prometheus
     volumes:
       # ensure that data doesn't get lost across restarts
       - ./prometheus/data:/prometheus
