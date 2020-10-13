@@ -49,6 +49,14 @@ classoid     YES       oid
 objsubid     NO        int4
 description  YES       text
 
+> SHOW COLUMNS FROM pg_attribute
+Field        Nullable  Type
+--------------------------
+attrelid     NO        oid
+attname      NO        text
+attnum       NO        int8
+attnotnull   NO        bool
+
 ! SELECT current_schemas()
 Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;
 
