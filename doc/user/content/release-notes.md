@@ -78,6 +78,10 @@ Wrap your release notes at the 80 character mark.
 - Correct a query optimization that could misplan queries that referenced the
   same relation multiple times with varying filters {{% gh 4361 %}}.
 
+- Report the current version to a central server operated by
+  materialize.io. If a new version is available a warning will be
+  logged. This can be disabled with the `--disable-telemetry` option.
+
 {{% version-header v0.4.3 %}}
 
 - Permit adjusting the logical compaction window on a per-index basis via the

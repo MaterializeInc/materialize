@@ -385,7 +385,7 @@ impl State {
         // Note that the coordinator must be initialized *after* launching the
         // dataflow workers, as booting the coordinator can involve sending enough
         // data to workers to fill up a `comm` channel buffer (#3280).
-        let coord_thread = coord::serve(coord::Config {
+        let (coord_thread, _cluster_id) = coord::serve(coord::Config {
             switchboard,
             cmd_rx,
             num_timely_workers: NUM_TIMELY_WORKERS,
@@ -399,8 +399,8 @@ impl State {
             logical_compaction_window: None,
             experimental_mode: true,
         })
-        .await?
-        .join_on_drop();
+        .await?;
+        let coord_thread = coord_thread.join_on_drop();
 
         Ok(State {
             coord_client: coord::Client::new(cmd_tx).for_session(Session::dummy()),
