@@ -680,6 +680,19 @@ FROM pg_catalog.pg_class",
     needs_logs: false,
 };
 
+pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
+    name: "pg_attribute",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_attribute AS SELECT
+    oid as attrelid,
+    field as attname,
+    field_number as attnum,
+    NOT nullable as attnotnull
+FROM mz_catalog.mz_tables JOIN mz_catalog.mz_columns ON mz_tables.global_id = mz_columns.global_id",
+    id: GlobalId::System(3020),
+    needs_logs: false,
+};
+
 lazy_static! {
     pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
         let builtins = vec![
@@ -728,6 +741,7 @@ lazy_static! {
             Builtin::View(&PG_DATABASE),
             Builtin::View(&PG_INDEX),
             Builtin::View(&PG_DESCRIPTION),
+            Builtin::View(&PG_ATTRIBUTE),
         ];
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
