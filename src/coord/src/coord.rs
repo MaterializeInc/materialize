@@ -2145,6 +2145,11 @@ where
                     // involves a subtraction. If `upper` contains a zero timestamp there
                     // is no "prior" answer, and we do not want to peek at it as it risks
                     // hanging awaiting the response to data that may never arrive.
+                    //
+                    // The .get(0) here breaks the antichain abstraction by assuming this antichain
+                    // has 0 or 1 elements in it. It happens to work because we use a timestamp
+                    // type that meets that assumption, but would break if we used a more general
+                    // timestamp.
                     if let Some(candidate) = upper.elements().get(0) {
                         if *candidate > 0 {
                             candidate.saturating_sub(1)
