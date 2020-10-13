@@ -25,7 +25,7 @@ from materialize import spawn
 from materialize import ui
 
 
-announce = ui.speaker("==>")
+announce = ui.speaker("==> ")
 say = ui.speaker("")
 
 MIN_COMPOSE_VERSION = (1, 25, 0)
