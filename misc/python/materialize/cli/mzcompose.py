@@ -53,9 +53,6 @@ def main(argv: List[str]) -> int:
         config_files = args.file
 
     ui.Verbosity.init_from_env(args.mz_quiet)
-    # TODO: we should propagate this down to subprocesses by explicit command-line flags, probably
-    if ui.Verbosity.quiet:
-        os.environ["MZ_QUIET"] = "yes"
 
     root = Path(os.environ["MZ_ROOT"])
     repo = mzbuild.Repository(root)
