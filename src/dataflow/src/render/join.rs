@@ -88,11 +88,14 @@ where
                 }
             }
 
+            // We track the input relations as they are
+            // added to the join so we can figure out
+            // which expressions have been bound.
             let mut bound_inputs = vec![*start];
             for (input_index, (input, next_keys)) in order.iter().enumerate() {
                 let next_keys_rebased = next_keys
                     .iter()
-                    .map(|k| input_mapper.map_expr_to_global(k, *input))
+                    .map(|k| input_mapper.map_expr_to_global(k.clone(), *input))
                     .collect::<Vec<_>>();
 
                 // Keys for the next input to be joined must be produced from

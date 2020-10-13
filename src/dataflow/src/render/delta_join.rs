@@ -98,6 +98,9 @@ where
                                     err_streams.push(errs.leave().leave());
                                 }
 
+                                // We track the input relations as they are
+                                // added to the join so we can figure out
+                                // which expressions have been bound.
                                 let mut bound_inputs = vec![relation];
                                 // We use the order specified by the implementation.
                                 let order = &orders[relation];
@@ -107,7 +110,7 @@ where
                                 for (other, next_key) in order.iter() {
 
                                     let next_key_rebased = next_key.iter().map(
-                                        |k| input_mapper.map_expr_to_global(k, *other)
+                                        |k| input_mapper.map_expr_to_global(k.clone(), *other)
                                     ).collect::<Vec<_>>();
 
                                     // Keys for the incoming updates are determined by locating

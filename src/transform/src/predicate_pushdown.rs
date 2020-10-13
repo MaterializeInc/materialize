@@ -199,7 +199,7 @@ impl PredicatePushdown {
                                     // usage of an index
                                 } else if let Some(localized) = input_mapper
                                     .try_map_to_input_with_bound_expr(
-                                        &predicate,
+                                        predicate.clone(),
                                         index,
                                         &equivalences[..],
                                     )
@@ -258,8 +258,10 @@ impl PredicatePushdown {
                                         && i != &pos
                                         && equivalence[*i].support() == support
                                 }) {
-                                    let expr1 = input_mapper.map_expr_to_local(&equivalence[pos]);
-                                    let expr2 = input_mapper.map_expr_to_local(&equivalence[pos2]);
+                                    let expr1 =
+                                        input_mapper.map_expr_to_local(equivalence[pos].clone());
+                                    let expr2 =
+                                        input_mapper.map_expr_to_local(equivalence[pos2].clone());
                                     use expr::BinaryFunc;
                                     push_downs[support.into_iter().next().unwrap()].push(
                                         ScalarExpr::CallBinary {

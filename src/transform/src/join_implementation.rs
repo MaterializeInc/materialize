@@ -136,7 +136,7 @@ impl JoinImplementation {
                 // TODO: expand `order_input`
                 available_arrangements[index].retain(|key| {
                     key.iter().all(|k| {
-                        let k = input_mapper.map_expr_to_global(k, index);
+                        let k = input_mapper.map_expr_to_global(k.clone(), index);
                         equivalences
                             .iter()
                             .any(|equivalence| equivalence.contains(&k))
@@ -409,7 +409,7 @@ fn implement_arrangements<'a>(
                 lifted_predicates.extend(
                     predicates
                         .drain(..)
-                        .map(|expr| input_mapper.map_expr_to_global(&expr, index)),
+                        .map(|expr| input_mapper.map_expr_to_global(expr, index)),
                 );
                 inputs[index] = inner.take_dangerous();
             }
@@ -599,10 +599,10 @@ impl<'a> Orderer<'a> {
             let candidate_start_key = key
                 .iter()
                 .filter_map(|k| {
-                    let k = self.input_mapper.map_expr_to_global(k, *second);
+                    let k = self.input_mapper.map_expr_to_global(k.clone(), *second);
                     self.input_mapper
                         .find_bound_expr(&k, &[start], self.equivalences)
-                        .map(|bound_key| self.input_mapper.map_expr_to_local(&bound_key))
+                        .map(|bound_key| self.input_mapper.map_expr_to_local(bound_key))
                 })
                 .collect::<Vec<_>>();
             if candidate_start_key.len() == key.len() {
@@ -639,13 +639,12 @@ impl<'a> Orderer<'a> {
                 let fully_supported = self
                     .input_mapper
                     .lookup_inputs(&self.equivalences[*equivalence][*expr_index])
-                    .into_iter()
                     .all(|i| self.placed[i]);
                 if fully_supported {
                     self.equivalences_active[*equivalence] = true;
                     for expr in self.equivalences[*equivalence].iter() {
                         // find the relations that columns in the expression belong to
-                        let rels = self.input_mapper.lookup_inputs(expr);
+                        let mut rels = self.input_mapper.lookup_inputs(&expr);
                         // Skip the expression if
                         // * the expression is a literal -> this would translate
                         //   to `rels` being empty
@@ -654,54 +653,60 @@ impl<'a> Orderer<'a> {
                         //   this case. Arguably, if this happens, it would
                         //   not be unreasonable to ask the user to write the
                         //   query better.
-                        if rels.len() == 1 {
-                            let rel = rels.first().unwrap();
-                            let expr = self.input_mapper.map_expr_to_local(&expr);
+                        if let Some(rel) = rels.next() {
+                            if rels.next().is_none() {
+                                let expr = self.input_mapper.map_expr_to_local(expr.clone());
 
-                            // Update bound columns.
-                            self.bound[*rel].push(expr);
-                            self.bound[*rel].sort();
+                                // Update bound columns.
+                                self.bound[rel].push(expr);
+                                self.bound[rel].sort();
 
-                            // Reconsider all available arrangements.
-                            for (pos, keys) in self.arrangements[*rel].iter().enumerate() {
-                                if !self.arrangement_active[*rel].contains(&pos) {
-                                    // TODO: support the restoration of the
-                                    // following original lines, which have been
-                                    // commented out because Materialize may
-                                    // panic otherwise. The original line and comments
-                                    // here are:
-                                    // Determine if the arrangement is viable, which happens when the
-                                    // support of its keys are all bound.
-                                    // if keys.iter().all(|k| k.support().iter().all(|c| self.bound[*rel].contains(&ScalarExpr::Column(*c))) {
+                                // Reconsider all available arrangements.
+                                for (pos, keys) in self.arrangements[rel].iter().enumerate() {
+                                    if !self.arrangement_active[rel].contains(&pos) {
+                                        // TODO: support the restoration of the
+                                        // following original lines, which have been
+                                        // commented out because Materialize may
+                                        // panic otherwise. The original line and comments
+                                        // here are:
+                                        // Determine if the arrangement is viable, which happens when the
+                                        // support of its keys are all bound.
+                                        // if keys.iter().all(|k| k.support().iter().all(|c| self.bound[*rel].contains(&ScalarExpr::Column(*c))) {
 
-                                    // Determine if the arrangement is viable,
-                                    // which happens when all its keys are bound.
-                                    if keys.iter().all(|k| self.bound[*rel].contains(k)) {
-                                        self.arrangement_active[*rel].push(pos);
-                                        // TODO: This could be pre-computed, as it is independent of the order.
-                                        let is_unique = self.unique_arrangement[*rel][pos];
-                                        self.priority_queue.push((
-                                            Characteristics::new(is_unique, keys.len(), true, *rel),
-                                            keys.clone(),
-                                            *rel,
-                                        ));
+                                        // Determine if the arrangement is viable,
+                                        // which happens when all its keys are bound.
+                                        if keys.iter().all(|k| self.bound[rel].contains(k)) {
+                                            self.arrangement_active[rel].push(pos);
+                                            // TODO: This could be pre-computed, as it is independent of the order.
+                                            let is_unique = self.unique_arrangement[rel][pos];
+                                            self.priority_queue.push((
+                                                Characteristics::new(
+                                                    is_unique,
+                                                    keys.len(),
+                                                    true,
+                                                    rel,
+                                                ),
+                                                keys.clone(),
+                                                rel,
+                                            ));
+                                        }
                                     }
                                 }
+                                let is_unique = self.unique_keys[rel].iter().any(|cols| {
+                                    cols.iter()
+                                        .all(|c| self.bound[rel].contains(&ScalarExpr::Column(*c)))
+                                });
+                                self.priority_queue.push((
+                                    Characteristics::new(
+                                        is_unique,
+                                        self.bound[rel].len(),
+                                        false,
+                                        rel,
+                                    ),
+                                    self.bound[rel].clone(),
+                                    rel,
+                                ));
                             }
-                            let is_unique = self.unique_keys[*rel].iter().any(|cols| {
-                                cols.iter()
-                                    .all(|c| self.bound[*rel].contains(&ScalarExpr::Column(*c)))
-                            });
-                            self.priority_queue.push((
-                                Characteristics::new(
-                                    is_unique,
-                                    self.bound[*rel].len(),
-                                    false,
-                                    *rel,
-                                ),
-                                self.bound[*rel].clone(),
-                                *rel,
-                            ));
                         }
                     }
                 }

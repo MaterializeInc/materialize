@@ -9,6 +9,8 @@
 
 use std::ops::Range;
 
+use itertools::Itertools;
+
 use crate::RelationExpr;
 use crate::ScalarExpr;
 
@@ -75,8 +77,7 @@ impl JoinInputMapper {
     /// Takes an expression from the global context and creates a new version
     /// where column references have been remapped to the local context.
     /// Assumes that all columns in `expr` are from the same input.
-    pub fn map_expr_to_local(&self, expr: &ScalarExpr) -> ScalarExpr {
-        let mut expr = expr.clone();
+    pub fn map_expr_to_local(&self, mut expr: ScalarExpr) -> ScalarExpr {
         expr.visit_mut(&mut |e| {
             if let ScalarExpr::Column(c) = e {
                 *c -= self.prior_arities[self.input_relation[*c]];
@@ -88,8 +89,7 @@ impl JoinInputMapper {
     /// Takes an expression from the local context of the `index`th input and
     /// creates a new version where column references have been remapped to the
     /// global context.
-    pub fn map_expr_to_global(&self, expr: &ScalarExpr, index: usize) -> ScalarExpr {
-        let mut expr = expr.clone();
+    pub fn map_expr_to_global(&self, mut expr: ScalarExpr, index: usize) -> ScalarExpr {
         expr.visit_mut(&mut |e| {
             if let ScalarExpr::Column(c) = e {
                 *c += self.prior_arities[index];
@@ -103,20 +103,17 @@ impl JoinInputMapper {
     pub fn map_columns_to_local(&self, columns: &[usize]) -> Vec<usize> {
         columns
             .iter()
-            .map(|c| *c - self.prior_arities[self.input_relation[*c]])
-            .collect::<Vec<_>>()
+            .map(move |c| *c - self.prior_arities[self.input_relation[*c]])
+            .collect()
     }
 
     /// Find the sorted, dedupped set of inputs an expression references
-    pub fn lookup_inputs(&self, expr: &ScalarExpr) -> Vec<usize> {
-        let mut result = expr
-            .support()
+    pub fn lookup_inputs(&self, expr: &ScalarExpr) -> impl Iterator<Item = usize> {
+        expr.support()
             .iter()
             .map(|c| self.input_relation[*c])
-            .collect::<Vec<_>>();
-        result.sort();
-        result.dedup();
-        result
+            .sorted()
+            .dedup()
     }
 
     /// Takes an expression in the global context and looks in `equivalences`
@@ -164,11 +161,10 @@ impl JoinInputMapper {
         equivalences: &[Vec<ScalarExpr>],
     ) -> Option<ScalarExpr> {
         if let Some(equivalence) = equivalences.iter().find(|equivs| equivs.contains(expr)) {
-            if let Some(bound_expr) = equivalence.iter().find(|expr| {
-                self.lookup_inputs(expr)
-                    .into_iter()
-                    .all(|i| bound_inputs.contains(&i))
-            }) {
+            if let Some(bound_expr) = equivalence
+                .iter()
+                .find(|expr| self.lookup_inputs(expr).all(|i| bound_inputs.contains(&i)))
+            {
                 return Some(bound_expr.clone());
             }
         }
@@ -187,10 +183,17 @@ impl JoinInputMapper {
         index: usize,
         equivalences: &[Vec<ScalarExpr>],
     ) {
-        let inputs = self.lookup_inputs(expr);
-        if inputs.len() == 1 && *inputs.first().unwrap() == index {
-            // we're good. do not continue the recursion
-        } else if let Some(bound_expr) = self.find_bound_expr(expr, &[index], equivalences) {
+        {
+            let mut inputs = self.lookup_inputs(expr);
+            if let Some(first_input) = inputs.next() {
+                if inputs.next().is_none() && first_input == index {
+                    // there is only one input, and it is equal to index, so we're
+                    // good. do not continue the recursion
+                    return;
+                }
+            }
+        }
+        if let Some(bound_expr) = self.find_bound_expr(expr, &[index], equivalences) {
             // replace the subexpression with the equivalent one from input `index`
             *expr = bound_expr;
         } else {
@@ -205,19 +208,18 @@ impl JoinInputMapper {
     /// The return value, if not None, is in the context of the `index`th input
     pub fn try_map_to_input_with_bound_expr(
         &self,
-        expr: &ScalarExpr,
+        mut expr: ScalarExpr,
         index: usize,
         equivalences: &[Vec<ScalarExpr>],
     ) -> Option<ScalarExpr> {
-        let mut expr = expr.clone();
         // call the recursive submethod
         self.try_map_to_input_with_bound_expr_sub(&mut expr, index, equivalences);
         // if the localization attempt is successful, all columns in `expr`
         // should only come from input `index`
-        let inputs_after_localization = self.lookup_inputs(&expr);
-        if inputs_after_localization.len() == 1 {
-            if *inputs_after_localization.first().unwrap() == index {
-                return Some(self.map_expr_to_local(&expr));
+        let mut inputs_after_localization = self.lookup_inputs(&expr);
+        if let Some(first_input) = inputs_after_localization.next() {
+            if inputs_after_localization.next().is_none() && first_input == index {
+                return Some(self.map_expr_to_local(expr));
             }
         }
         None
@@ -249,18 +251,18 @@ mod tests {
         // is that it gets localized
         assert_eq!(
             Some(ScalarExpr::Column(1)),
-            input_mapper.try_map_to_input_with_bound_expr(&key12, 2, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(key12.clone(), 2, &equivalences)
         );
 
         // basic tests that we can find a column's corresponding column in a
         // different input
         assert_eq!(
             Some(key10.clone()),
-            input_mapper.try_map_to_input_with_bound_expr(&key12, 0, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(key12.clone(), 0, &equivalences)
         );
         assert_eq!(
             None,
-            input_mapper.try_map_to_input_with_bound_expr(&key12, 1, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(key12.clone(), 1, &equivalences)
         );
 
         let key20 = ScalarExpr::CallUnary {
@@ -283,11 +285,11 @@ mod tests {
         // different input
         assert_eq!(
             Some(key20.clone()),
-            input_mapper.try_map_to_input_with_bound_expr(&key21, 0, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(key21.clone(), 0, &equivalences)
         );
         assert_eq!(
             Some(localized_key22.clone()),
-            input_mapper.try_map_to_input_with_bound_expr(&key21, 2, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(key21.clone(), 2, &equivalences)
         );
 
         // test that `try_map_to_input_with_bound_expr` will map multiple
@@ -303,14 +305,14 @@ mod tests {
                 expr1: Box::new(key10.clone()),
                 expr2: Box::new(key20.clone()),
             }),
-            input_mapper.try_map_to_input_with_bound_expr(&key_comp, 0, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(key_comp.clone(), 0, &equivalences)
         );
 
         // test that the function returns None when part
         // of the expression can be mapped to an input but the rest can't
         assert_eq!(
             None,
-            input_mapper.try_map_to_input_with_bound_expr(&key_comp, 1, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(key_comp.clone(), 1, &equivalences)
         );
 
         let key_comp_plus_non_key = ScalarExpr::CallBinary {
@@ -320,7 +322,7 @@ mod tests {
         };
         assert_eq!(
             None,
-            input_mapper.try_map_to_input_with_bound_expr(&key_comp_plus_non_key, 0, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(key_comp_plus_non_key, 0, &equivalences)
         );
 
         let key_comp_multi_input = ScalarExpr::CallBinary {
@@ -336,7 +338,11 @@ mod tests {
                 expr1: Box::new(localized_key12),
                 expr2: Box::new(localized_key22),
             }),
-            input_mapper.try_map_to_input_with_bound_expr(&key_comp_multi_input, 2, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(
+                key_comp_multi_input.clone(),
+                2,
+                &equivalences
+            )
         );
         // test that the function works when parts of the expression come from
         // multiple inputs
@@ -346,11 +352,15 @@ mod tests {
                 expr1: Box::new(key10),
                 expr2: Box::new(key20),
             }),
-            input_mapper.try_map_to_input_with_bound_expr(&key_comp_multi_input, 0, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(
+                key_comp_multi_input.clone(),
+                0,
+                &equivalences
+            )
         );
         assert_eq!(
             None,
-            input_mapper.try_map_to_input_with_bound_expr(&key_comp_multi_input, 1, &equivalences)
+            input_mapper.try_map_to_input_with_bound_expr(key_comp_multi_input, 1, &equivalences)
         )
     }
 }
