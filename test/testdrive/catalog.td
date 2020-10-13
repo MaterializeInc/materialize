@@ -14,7 +14,6 @@ public
 SCHEMAS
 -------
 public
-mz_temp
 mz_catalog
 pg_catalog
 
@@ -51,7 +50,6 @@ materialize
 > SELECT id, database FROM mz_catalog.mz_databases
 id          database
 -----------------------
--1          AMBIENT
 1           materialize
 
 # Creating a database should be reflected in the output of SHOW DATABASES.
@@ -62,7 +60,7 @@ database
 d
 materialize
 
-> SELECT id, database FROM mz_catalog.mz_databases WHERE id != -1
+> SELECT id, database FROM mz_catalog.mz_databases
 id          database
 -----------------------
 1           materialize
@@ -81,7 +79,7 @@ d
 > SHOW DATABASES WHERE (id = (SELECT max(id) FROM mz_databases))
 d
 ! SHOW DATABASES WHERE 7
-WHERE clause error: no overload for bool AND i32
+WHERE clause must have type bool, not type i32
 
 # Creating a database with a name that already exists should fail.
 ! CREATE DATABASE d
@@ -147,7 +145,6 @@ materialize
 > SELECT id, database FROM mz_catalog.mz_databases
 id          database
 -----------------------
--1          AMBIENT
 1           materialize
 
 # The session database should remain set to the dropped database, but future
@@ -219,7 +216,6 @@ materialize
 > SELECT id, database FROM mz_catalog.mz_databases
 id          database
 -----------------------
--1          AMBIENT
 1           materialize
 2           d
 4           d2

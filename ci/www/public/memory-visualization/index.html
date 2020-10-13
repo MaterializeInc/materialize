@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>materialized memory viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/@hpcc-js/wasm@0.3/dist/index.min.js"></script>
+  </head>
+  <body>
+    <div><button onClick="copy()">copy graph.dot to clipboard</button></div>
+    <div id="graph"></div>
+    <script>
+      const hpccWasm = window['@hpcc-js/wasm'];
+
+      const hash = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+      const graph = hash.dot;
+
+      hpccWasm.graphviz.layout(graph, 'svg', 'dot').then((svg) => {
+        document.getElementById('graph').innerHTML = svg;
+      });
+
+      function copy() {
+        navigator.clipboard.writeText(graph);
+      }
+    </script>
+  </body>
+</html>
