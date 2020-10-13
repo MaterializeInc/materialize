@@ -603,7 +603,7 @@ mzconduct:
          --analytic-threads=0
          --transactional-threads=${OLTP_THREADS:-1}
          --run-seconds=864000
-         -l /dev/stdout
+         -l /var/log/chbench.log
          --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
          --mz-url=postgresql://${MZ_HOST:-materialized}:6875/materialize?sslmode=disable
 
@@ -618,6 +618,6 @@ mzconduct:
          --analytic-threads=0
          --transactional-threads=${OLTP_THREADS:-1}
          --run-seconds=864000
-         -l /dev/stdout
+         -l /var/log/chbench.log
          --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
