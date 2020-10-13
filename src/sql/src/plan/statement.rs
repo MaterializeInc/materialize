@@ -18,7 +18,6 @@ use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
 use itertools::Itertools;
 use kafka_util::{extract_config, generate_ccsr_client_config};
-use lazy_static::lazy_static;
 use regex::Regex;
 use rusoto_core::Region;
 use url::Url;
@@ -40,8 +39,8 @@ use sql_parser::ast::{
     CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
     DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
     Format, Ident, IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query,
-    SelectStatement, SetVariableStatement, SetVariableValue, ShowObjectsStatement,
-    ShowVariableStatement, SqlOption, Statement, TailStatement, Value,
+    SelectStatement, SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption,
+    Statement, TailStatement, Value,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -57,42 +56,6 @@ use crate::plan::{
 use crate::pure::Schema;
 
 mod show;
-
-lazy_static! {
-    static ref SHOW_DATABASES_DESC: RelationDesc =
-        RelationDesc::empty().with_column("database", ScalarType::String.nullable(false));
-    static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::empty()
-        .with_column("On_name", ScalarType::String.nullable(false))
-        .with_column("Key_name", ScalarType::String.nullable(false))
-        .with_column("Column_name", ScalarType::String.nullable(true))
-        .with_column("Expression", ScalarType::String.nullable(true))
-        .with_column("Null", ScalarType::Bool.nullable(false))
-        .with_column("Seq_in_index", ScalarType::Int64.nullable(false));
-    static ref SHOW_COLUMNS_DESC: RelationDesc = RelationDesc::empty()
-        .with_column("Field", ScalarType::String.nullable(false))
-        .with_column("Nullable", ScalarType::String.nullable(false))
-        .with_column("Type", ScalarType::String.nullable(false));
-}
-
-pub fn make_show_objects_desc(
-    object_type: ObjectType,
-    materialized: bool,
-    full: bool,
-) -> RelationDesc {
-    let col_name = object_type_as_plural_str(object_type);
-    if full {
-        let mut relation_desc = RelationDesc::empty()
-            .with_column(col_name, ScalarType::String.nullable(false))
-            .with_column("TYPE", ScalarType::String.nullable(false));
-        if !materialized && (ObjectType::View == object_type || ObjectType::Source == object_type) {
-            relation_desc =
-                relation_desc.with_column("MATERIALIZED", ScalarType::Bool.nullable(false));
-        }
-        relation_desc
-    } else {
-        RelationDesc::empty().with_column(col_name, ScalarType::String.nullable(false))
-    }
-}
 
 pub fn describe_statement(
     catalog: &dyn Catalog,
@@ -199,21 +162,10 @@ pub fn describe_statement(
             vec![],
         ),
 
-        Statement::ShowColumns(_) => (Some(SHOW_COLUMNS_DESC.clone()), vec![]),
-
-        Statement::ShowIndexes(_) => (Some(SHOW_INDEXES_DESC.clone()), vec![]),
-
-        Statement::ShowDatabases(_) => (Some(SHOW_DATABASES_DESC.clone()), vec![]),
-
-        Statement::ShowObjects(ShowObjectsStatement {
-            object_type,
-            full,
-            materialized,
-            ..
-        }) => (
-            Some(make_show_objects_desc(object_type, materialized, full)),
-            vec![],
-        ),
+        Statement::ShowColumns(stmt) => show::show_columns(&scx, stmt)?.describe()?,
+        Statement::ShowIndexes(stmt) => show::show_indexes(&scx, stmt)?.describe()?,
+        Statement::ShowDatabases(stmt) => show::show_databases(&scx, stmt)?.describe()?,
+        Statement::ShowObjects(stmt) => show::show_objects(&scx, stmt)?.describe()?,
 
         Statement::ShowVariable(ShowVariableStatement { variable, .. }) => {
             if variable.as_str() == unicase::Ascii::new("ALL") {
@@ -300,15 +252,15 @@ pub fn handle_statement(
         Statement::AlterObjectRename(stmt) => handle_alter_object_rename(scx, stmt),
         Statement::AlterIndexOptions(stmt) => handle_alter_index_options(scx, stmt),
 
-        Statement::ShowColumns(stmt) => show::handle_show_columns(scx, stmt),
+        Statement::ShowColumns(stmt) => show::show_columns(scx, stmt)?.handle(),
         Statement::ShowCreateTable(stmt) => show::handle_show_create_table(scx, stmt),
         Statement::ShowCreateSource(stmt) => show::handle_show_create_source(scx, stmt),
         Statement::ShowCreateView(stmt) => show::handle_show_create_view(scx, stmt),
         Statement::ShowCreateSink(stmt) => show::handle_show_create_sink(scx, stmt),
         Statement::ShowCreateIndex(stmt) => show::handle_show_create_index(scx, stmt),
-        Statement::ShowDatabases(stmt) => show::handle_show_databases(scx, stmt),
-        Statement::ShowObjects(stmt) => show::handle_show_objects(scx, stmt),
-        Statement::ShowIndexes(stmt) => show::handle_show_indexes(scx, stmt),
+        Statement::ShowDatabases(stmt) => show::show_databases(scx, stmt)?.handle(),
+        Statement::ShowObjects(stmt) => show::show_objects(scx, stmt)?.handle(),
+        Statement::ShowIndexes(stmt) => show::show_indexes(scx, stmt)?.handle(),
 
         Statement::SetVariable(stmt) => handle_set_variable(scx, stmt),
         Statement::ShowVariable(stmt) => handle_show_variable(scx, stmt),
@@ -1677,17 +1629,6 @@ impl PartialEq<ObjectType> for CatalogItemType {
 impl PartialEq<CatalogItemType> for ObjectType {
     fn eq(&self, other: &CatalogItemType) -> bool {
         other == self
-    }
-}
-
-fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
-    match object_type {
-        ObjectType::Schema => "SCHEMAS",
-        ObjectType::Index => "INDEXES",
-        ObjectType::Table => "TABLES",
-        ObjectType::View => "VIEWS",
-        ObjectType::Source => "SOURCES",
-        ObjectType::Sink => "SINKS",
     }
 }
 

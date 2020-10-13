@@ -20,7 +20,7 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
   FORMAT BYTES
 
 > SHOW COLUMNS FROM data
-Field      Nullable  Type
+field      nullable  type
 --------------------------
 data       NO        bytea
 mz_offset  NO        int8
@@ -38,7 +38,7 @@ data           mz_offset
   FORMAT BYTES
 
 > SHOW COLUMNS FROM data_named_col
-Field      Nullable  Type
+field      nullable  type
 --------------------------
 named_col  NO        bytea
 mz_offset  NO        int8

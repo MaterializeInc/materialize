@@ -14,6 +14,16 @@ aliases:
 
 {{< diagram "show-sinks.svg" >}}
 
+## Details
+
+### Output format
+
+`SHOW SINKS`'s output is a table with one column, `name`.
+
+{{< version-changed v0.5.0 >}}
+The output column is renamed from `SINKS` to `name`.
+{{< /version-changed >}}
+
 ## Examples
 
 ```sql

@@ -54,7 +54,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 > CREATE MATERIALIZED VIEW data_view as SELECT * from data
 
 > SHOW COLUMNS FROM data_view
-Field  Nullable  Type
+field  nullable  type
 ---------------------
 u      NO        uuid
 

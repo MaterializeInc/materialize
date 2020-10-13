@@ -17,7 +17,7 @@ $ file-append path=request.log
   FORMAT REGEX '(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -'
 
 > SHOW COLUMNS FROM regex_source
-Field              Nullable  Type
+field              nullable  type
 ---------------------------------
 ip                 YES       text
 ts                 YES       text
@@ -44,7 +44,7 @@ helper+ins+hennaed
   FORMAT REGEX '(?P<foo1>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<foo2>[^]]+)\] "(?P<foo3>(?:GET /search/\?kw=(?P<foo4>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<foo5>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<foo6>\d{3}) -'
 
 > SHOW COLUMNS FROM regex_source_named_cols
-Field              Nullable  Type
+field              nullable  type
 ---------------------------------
 ip                 YES       text
 ts                 YES       text

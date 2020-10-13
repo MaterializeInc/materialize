@@ -30,7 +30,7 @@ a  b  mz_obj_no
 3  4  2
 
 > SHOW COLUMNS FROM basic
-Field      Nullable  Type
+field      nullable  type
 -------------------------
 a          NO        int8
 b          NO        int4
@@ -50,7 +50,7 @@ a  b  mz_obj_no
 3  4  2
 
 > SHOW COLUMNS FROM basic_no_codec
-Field      Nullable  Type
+field      nullable  type
 -------------------------
 a          NO        int8
 b          NO        int4
@@ -70,7 +70,7 @@ a  b  mz_obj_no
 3  4  2
 
 > SHOW COLUMNS FROM basic_snappy
-Field      Nullable  Type
+field      nullable  type
 -------------------------
 a          NO        int8
 b          NO        int4
@@ -96,7 +96,7 @@ a  b  mz_obj_no
 3  4  2
 
 > SHOW COLUMNS FROM reader_schema
-Field      Nullable  Type
+field      nullable  type
 -------------------------
 a          NO        int8
 b          NO        int8
@@ -178,7 +178,7 @@ d     ts ts_tz  mz_obj_no
 "2000-01-01" "2000-01-01 10:10:10.000890" "2000-01-01 08:10:10.000857" 2
 
 > SHOW COLUMNS FROM timestamp_source
-Field      Nullable  Type
+field      nullable  type
 -------------------------
 d             NO      date
 ts            NO      timestamp

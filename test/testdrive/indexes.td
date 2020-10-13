@@ -38,7 +38,7 @@ field_number     field
 2                mz_obj_no
 
 > SHOW INDEXES FROM mz_data
-On_name  Key_name             Column_name  Expression  Null   Seq_in_index
+on_name  key_name             column_name  expression  nullable   seq_in_index
 --------------------------------------------------------------------------
 mz_data  mz_data_primary_idx  a            <null>      false  1
 mz_data  mz_data_primary_idx  b            <null>      false  2
@@ -49,14 +49,14 @@ mz_data  mz_data_primary_idx  mz_obj_no    <null>      false  3
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
 
 > SHOW INDEXES FROM data
-On_name                   Key_name                              Column_name  Expression  Null  Seq_in_index
+on_name                   key_name                              column_name  expression  nullable  seq_in_index
 -----------------------------------------------------------------------------------------------------------
 
 # Views can have default indexes added
 > CREATE DEFAULT INDEX ON data
 
 > SHOW INDEXES FROM data
-On_name  Key_name          Column_name  Expression  Null   Seq_in_index
+on_name  key_name          column_name  expression  nullable   seq_in_index
 -----------------------------------------------------------------------
 data     data_primary_idx  a            <null>      false  1
 data     data_primary_idx  b            <null>      false  2
@@ -65,7 +65,7 @@ data     data_primary_idx  mz_obj_no    <null>      false  3
 > CREATE DEFAULT INDEX ON mz_data
 
 > SHOW INDEXES FROM mz_data
-On_name  Key_name              Column_name  Expression  Null   Seq_in_index
+on_name  key_name              column_name  expression  nullable   seq_in_index
 ---------------------------------------------------------------------------
 mz_data  mz_data_primary_idx   a            <null>      false             1
 mz_data  mz_data_primary_idx   b            <null>      false             2
@@ -79,7 +79,7 @@ mz_data  mz_data_primary_idx1  mz_obj_no    <null>      false             3
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW INDEXES FROM matv
-On_name   Key_name          Column_name  Expression  Null  Seq_in_index
+on_name   key_name          column_name  expression  nullable  seq_in_index
 ------------------------------------------------------------------------
 matv      matv_primary_idx  b            <null>      false             1
 
@@ -87,14 +87,14 @@ matv      matv_primary_idx  b            <null>      false             1
 > CREATE VIEW data_view as SELECT * from data
 
 > SHOW INDEXES FROM data_view
-On_name  Key_name  Column_name  Expression  Null  Seq_in_index
+on_name  key_name  column_name  expression  nullable  seq_in_index
 --------------------------------------------------------------
 
 # Views can have default indexes added
 > CREATE DEFAULT INDEX ON data_view
 
 > SHOW INDEXES FROM data_view
-On_name    Key_name               Column_name  Expression  Null   Seq_in_index
+on_name    key_name               column_name  expression  nullable   seq_in_index
 ------------------------------------------------------------------------------
 data_view  data_view_primary_idx  a            <null>      false             1
 data_view  data_view_primary_idx  b            <null>      false             2
@@ -104,7 +104,7 @@ data_view  data_view_primary_idx  mz_obj_no    <null>      false             3
 > CREATE MATERIALIZED VIEW mz_data_view as SELECT * from data
 
 > SHOW INDEXES FROM mz_data_view
-On_name       Key_name                  Column_name  Expression  Null   Seq_in_index
+on_name       key_name                  column_name  expression  nullable   seq_in_index
 ------------------------------------------------------------------------------------
 mz_data_view  mz_data_view_primary_idx  a            <null>      false             1
 mz_data_view  mz_data_view_primary_idx  b            <null>      false             2
@@ -114,7 +114,7 @@ mz_data_view  mz_data_view_primary_idx  mz_obj_no    <null>      false          
 > CREATE DEFAULT INDEX IF NOT EXISTS ON data_view
 
 > SHOW INDEXES FROM data_view
-On_name    Key_name               Column_name  Expression  Null   Seq_in_index
+on_name    key_name               column_name  expression  nullable   seq_in_index
 ------------------------------------------------------------------------------
 data_view  data_view_primary_idx  a            <null>      false             1
 data_view  data_view_primary_idx  b            <null>      false             2
@@ -124,7 +124,7 @@ data_view  data_view_primary_idx  mz_obj_no    <null>      false             3
 > CREATE DEFAULT INDEX IF NOT EXISTS ON matv
 
 > SHOW INDEXES FROM matv
-On_name  Key_name          Column_name  Expression  Null  Seq_in_index
+on_name  key_name          column_name  expression  nullable  seq_in_index
 -----------------------------------------------------------------------
 matv     matv_primary_idx  b            <null>      false             1
 
@@ -132,7 +132,7 @@ matv     matv_primary_idx  b            <null>      false             1
 > CREATE DEFAULT INDEX ON matv
 
 > SHOW INDEXES FROM matv
-On_name  Key_name           Column_name  Expression  Null   Seq_in_index
+on_name  key_name           column_name  expression  nullable   seq_in_index
 ------------------------------------------------------------------------
 matv     matv_primary_idx   b            <null>      false             1
 matv     matv_primary_idx1  b            <null>      false             1
@@ -141,7 +141,7 @@ matv     matv_primary_idx1  b            <null>      false             1
 > CREATE DEFAULT INDEX named_idx ON data_view
 
 > SHOW INDEXES FROM data_view
-On_name    Key_name               Column_name  Expression  Null   Seq_in_index
+on_name    key_name               column_name  expression  nullable   seq_in_index
 ------------------------------------------------------------------------------
 data_view  data_view_primary_idx  a            <null>      false             1
 data_view  data_view_primary_idx  b            <null>      false             2
@@ -157,7 +157,7 @@ data_view  named_idx              mz_obj_no    <null>      false             3
 > CREATE INDEX ON data_view(a)
 
 > SHOW INDEXES FROM data_view
-On_name    Key_name               Column_name  Expression  Null   Seq_in_index
+on_name    key_name               column_name  expression  nullable   seq_in_index
 ------------------------------------------------------------------------------
 data_view  data_view_a_idx        a            <null>      false             1
 
@@ -168,7 +168,7 @@ data_view  data_view_a_idx        a            <null>      false             1
 > CREATE INDEX ON data_view(b - a, a)
 
 > SHOW INDEXES FROM data_view
-On_name    Key_name               Column_name  Expression  Null   Seq_in_index
+on_name    key_name               column_name  expression  nullable   seq_in_index
 ------------------------------------------------------------------------------
 data_view  data_view_b_a_idx      a            <null>      false             2
 data_view  data_view_b_a_idx      b            <null>      false             1
@@ -182,7 +182,7 @@ data_view  data_view_expr_a_idx   a            <null>      false             2
 > CREATE INDEX named_idx ON data_view (b - a, a)
 
 > SHOW INDEXES FROM data_view
-On_name    Key_name    Column_name  Expression  Null   Seq_in_index
+on_name    key_name    column_name  expression  nullable   seq_in_index
 -------------------------------------------------------------------
 data_view  named_idx   <null>       "b - a"     false             1
 data_view  named_idx   a            <null>      false             2
@@ -194,7 +194,7 @@ data_view  named_idx   a            <null>      false             2
 > CREATE DEFAULT INDEX IF NOT EXISTS ON data_view
 
 > SHOW INDEXES FROM data_view
-On_name    Key_name                Column_name  Expression  Null   Seq_in_index
+on_name    key_name                column_name  expression  nullable   seq_in_index
 -------------------------------------------------------------------------------
 data_view  data_view_primary_idx   <null>       "b - a"     false             1
 data_view  data_view_primary_idx   a            <null>      false             2
