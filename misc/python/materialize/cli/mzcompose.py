@@ -28,7 +28,7 @@ from materialize import ui
 announce = ui.speaker("==>")
 say = ui.speaker("")
 
-MIN_COMPOSE_VERSION = (1, 27, 0)
+MIN_COMPOSE_VERSION = (1, 25, 0)
 
 
 def assert_docker_compose_version() -> None:
