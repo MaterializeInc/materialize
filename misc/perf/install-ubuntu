@@ -22,11 +22,11 @@ sudo apt install -y bison \
 # TODO: Accept user's local copy of the linux source tree as input
 # or check for something like "${HOME}/src/linux"
 tmpdir=$(mktemp -d)
-cd "${tmpdir}"
+cd "${tmpdir}" || exit 1
 
 echo "Installing linux source code"
 git clone https://github.com/torvalds/linux --depth 1
-cd linux/tools/perf
+cd linux/tools/perf || exit 1
 make
 
 if [[ -d "${HOME}/bin" ]]; then
