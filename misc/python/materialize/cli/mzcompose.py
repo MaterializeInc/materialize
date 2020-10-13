@@ -20,12 +20,28 @@ import sys
 import yaml
 
 from materialize import errors
-from materialize import ui
 from materialize import mzbuild
+from materialize import spawn
+from materialize import ui
 
 
 announce = ui.speaker("==>")
 say = ui.speaker("")
+
+MIN_COMPOSE_VERSION = (1, 27, 0)
+
+
+def assert_docker_compose_version() -> None:
+    """Check the version of docker-compose installed.
+
+    Raises `MzRuntimeError` if the version is not recent enough.
+    """
+    cmd = ["docker-compose", "version", "--short"]
+    output = spawn.capture(cmd, unicode=True).strip()
+    version = tuple(int(i) for i in output.split("."))
+    if version < MIN_COMPOSE_VERSION:
+        msg = f"Unsupported docker-compose version: {version}, min required: {MIN_COMPOSE_VERSION}"
+        raise errors.MzConfigurationError(msg)
 
 
 def main(argv: List[str]) -> int:
@@ -46,6 +62,8 @@ def main(argv: List[str]) -> int:
 
     if args.command == "gen-shortcuts":
         return gen_shortcuts(repo)
+
+    assert_docker_compose_version()
 
     announce("Collecting mzbuild dependencies")
     composes = []
