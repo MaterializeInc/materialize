@@ -541,6 +541,24 @@ fn cast_uuid_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
     Datum::String(temp_storage.push_string(buf))
 }
 
+/// Casts between two list types by casting each element of `a` ("list1") using
+/// `cast_expr` and collecting the results into a new list ("list2").
+fn cast_list1_to_list2<'a>(
+    a: Datum,
+    cast_expr: &'a ScalarExpr,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut cast_datums = Vec::new();
+    for el in a.unwrap_list().iter() {
+        // `cast_expr` is evaluated as an expression that casts the
+        // first column in `datums` (i.e. `datums[0]`) from the list elements'
+        // current type to a target type.
+        cast_datums.push(cast_expr.eval(&[el], temp_storage)?);
+    }
+
+    Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
+}
+
 fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int32()
         .checked_add(b.unwrap_int32())
@@ -2353,8 +2371,18 @@ pub enum UnaryFunc {
     CastJsonbToFloat64,
     CastJsonbToBool,
     CastUuidToString,
-    CastRecordToString { ty: ScalarType },
-    CastArrayToString { ty: ScalarType },
+    CastRecordToString {
+        ty: ScalarType,
+    },
+    CastArrayToString {
+        ty: ScalarType,
+    },
+    CastList1ToList2 {
+        // List2's type
+        return_ty: ScalarType,
+        // The expression to cast from List1's type to List2's type
+        cast_expr: Box<ScalarExpr>,
+    },
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -2479,6 +2507,9 @@ impl UnaryFunc {
             UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
             UnaryFunc::CastRecordToString { ty } | UnaryFunc::CastArrayToString { ty } => {
                 Ok(cast_collection_to_string(a, ty, temp_storage))
+            }
+            UnaryFunc::CastList1ToList2 { cast_expr, .. } => {
+                cast_list1_to_list2(a, &*cast_expr, temp_storage)
             }
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
@@ -2620,6 +2651,8 @@ impl UnaryFunc {
             CastJsonbToBool => ScalarType::Bool.nullable(true),
 
             CastUuidToString => ScalarType::String.nullable(true),
+
+            CastList1ToList2 { return_ty, .. } => (return_ty.clone()).nullable(false),
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),
@@ -2777,6 +2810,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastUuidToString => f.write_str("uuidtostr"),
             UnaryFunc::CastRecordToString { .. } => f.write_str("recordtostr"),
             UnaryFunc::CastArrayToString { .. } => f.write_str("arraytostr"),
+            UnaryFunc::CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),

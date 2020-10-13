@@ -10,18 +10,22 @@
 //! Maintains a catalog of valid casts between [`repr::ScalarType`]s, as well as
 //! other cast-related functions.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 
 use anyhow::bail;
 use lazy_static::lazy_static;
 
 use expr::VariadicFunc;
-use repr::{ColumnName, Datum, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarType};
 
-use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc};
-use super::query::ExprContext;
+use super::expr::{BinaryFunc, CoercibleScalarExpr, ColumnRef, ScalarExpr, UnaryFunc};
+use super::query::{ExprContext, QueryContext};
+use super::scope::Scope;
 
 /// Describes methods of planning a conversion between [`ScalarType`]s, which
 /// can be invoked with [`CastOp::gen_expr`].
@@ -369,7 +373,8 @@ lazy_static! {
 }
 
 /// Get a cast, if one exists, from a [`ScalarType`] to another, with control
-/// over allowing implicit or explicit casts using [`CastTo`].
+/// over allowing implicit or explicit casts using [`CastTo`]. For casts between
+/// `ScalarType::List`s, see [`plan_cast_between_lists`].
 ///
 /// Use the returned [`CastOp`] with [`CastOp::gen_expr`].
 pub fn get_cast<'a>(from: &ScalarType, cast_to: &CastTo) -> Option<&'a CastOp> {
@@ -651,6 +656,66 @@ pub fn plan_coerce<'a>(
     })
 }
 
+/// Plans a cast between from a [`ScalarType::List`]s to another.
+pub fn plan_cast_between_lists<'a>(
+    caller_name: &str,
+    ecx: &ExprContext<'a>,
+    expr: ScalarExpr,
+    from: &ScalarType,
+    cast_to: CastTo,
+) -> Result<ScalarExpr, anyhow::Error> {
+    let from_element_typ = from.unwrap_list_element_type();
+
+    let cast_to_element_typ = match cast_to {
+        CastTo::Implicit(ScalarType::List(ref elem_typ)) => CastTo::Implicit((**elem_typ).clone()),
+        CastTo::Explicit(ScalarType::List(ref elem_typ)) => CastTo::Explicit((**elem_typ).clone()),
+        _ => panic!("get_cast_between_lists requires cast_to to be a list"),
+    };
+
+    if *from_element_typ == cast_to_element_typ.scalar_type() {
+        return CastOp::F(noop_cast).gen_expr(ecx, expr, cast_to);
+    }
+
+    // Reconstruct an expression context where the expression is evaluated on
+    // the "first column" of some imaginary row.
+    let mut scx = ecx.qcx.scx.clone();
+    scx.param_types = Rc::new(RefCell::new(BTreeMap::new()));
+    let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
+    let relation_type = RelationType {
+        column_types: vec![ColumnType {
+            nullable: true,
+            scalar_type: from_element_typ.clone(),
+        }],
+        keys: vec![vec![0]],
+    };
+    let ecx = ExprContext {
+        qcx: &qcx,
+        name: "plan_cast_between_lists",
+        scope: &Scope::empty(None),
+        relation_type: &relation_type,
+        allow_aggregates: false,
+        allow_subqueries: true,
+    };
+
+    let col_expr = ScalarExpr::Column(ColumnRef {
+        level: 0,
+        column: 0,
+    });
+
+    // Determine the `ScalarExpr` required to cast our column to the target
+    // element type. We'll need to call this on each element of the original
+    // list to perform the cast.
+    let cast_expr = plan_cast(caller_name, &ecx, col_expr, cast_to_element_typ)?;
+
+    Ok(expr.call_unary(UnaryFunc::CastList1ToList2 {
+        return_ty: cast_to.scalar_type(),
+        cast_expr: Box::new(cast_expr
+            .lower_uncorrelated()
+            .expect("lower_uncorrelated should not fail given that there is no correlation in the input col_expr")
+        ),
+    }))
+}
+
 /// Plans a cast between [`ScalarType`]s, specifying which types of casts are
 /// permitted using [`CastTo`].
 ///
@@ -659,28 +724,33 @@ pub fn plan_coerce<'a>(
 /// If a cast between the `ScalarExpr`'s base type and the specified type is:
 /// - Not possible, e.g. `Bytes` to `Decimal`
 /// - Not permitted, e.g. implicitly casting from `Float64` to `Float32`.
+/// - Not implemented yet
 pub fn plan_cast<'a>(
     caller_name: &str,
     ecx: &ExprContext<'a>,
     expr: ScalarExpr,
     cast_to: CastTo,
 ) -> Result<ScalarExpr, anyhow::Error> {
-    let from_scalar_type = ecx.scalar_type(&expr);
-
-    let cast_op = match get_cast(&from_scalar_type, &cast_to) {
-        Some(cast_op) => cast_op,
-        None => bail!(
-            "{} does not support {}casting from {} to {}",
-            caller_name,
-            if let CastTo::Implicit(_) = cast_to {
-                "implicitly "
-            } else {
-                ""
-            },
-            from_scalar_type,
-            cast_to
-        ),
-    };
-
-    cast_op.gen_expr(ecx, expr, cast_to)
+    match (ecx.scalar_type(&expr), cast_to.scalar_type()) {
+        (ScalarType::List(t), ScalarType::List(_)) => {
+            plan_cast_between_lists(caller_name, ecx, expr, &ScalarType::List(t), cast_to)
+        }
+        (from_typ, _) => {
+            let cast_op = match get_cast(&from_typ, &cast_to) {
+                Some(cast_op) => cast_op,
+                None => bail!(
+                    "{} does not support {}casting from {} to {}",
+                    caller_name,
+                    if let CastTo::Implicit(_) = cast_to {
+                        "implicitly "
+                    } else {
+                        ""
+                    },
+                    from_typ,
+                    cast_to
+                ),
+            };
+            cast_op.gen_expr(ecx, expr, cast_to)
+        }
+    }
 }
