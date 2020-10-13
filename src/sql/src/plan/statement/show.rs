@@ -118,7 +118,7 @@ pub fn show_databases<'a>(
     Ok(ShowSelect::new(
         scx,
         format!(
-            "SELECT * FROM (SELECT database AS name FROM mz_catalog.mz_databases) WHERE {}",
+            "SELECT * FROM (SELECT name FROM mz_catalog.mz_databases) WHERE {}",
             filter
         ),
     ))
@@ -168,7 +168,7 @@ fn show_schemas<'a>(
             "SELECT schema AS name
             FROM mz_catalog.mz_schemas
             JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.database = '{}'",
+            WHERE mz_catalog.mz_databases.name = '{}'",
             database_name
         )
     } else if full & !extended {
@@ -176,7 +176,7 @@ fn show_schemas<'a>(
             "SELECT schema AS name, type
             FROM mz_catalog.mz_schemas
             JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.database = '{}'",
+            WHERE mz_catalog.mz_databases.name = '{}'",
             database_name
         )
     } else if !full & extended {
@@ -184,7 +184,7 @@ fn show_schemas<'a>(
             "SELECT schema AS name
             FROM mz_catalog.mz_schemas
             LEFT JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.database IS NULL",
+            WHERE mz_catalog.mz_databases.name = '{}' OR mz_catalog.mz_databases.name IS NULL",
             database_name,
         )
     } else {
@@ -192,7 +192,7 @@ fn show_schemas<'a>(
             "SELECT schema AS name, type
             FROM mz_catalog.mz_schemas
             LEFT JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.database IS NULL",
+            WHERE mz_catalog.mz_databases.name = '{}' OR mz_catalog.mz_databases.name IS NULL",
             database_name,
         )
     };

@@ -267,9 +267,9 @@ lazy_static! {
         name: "mz_databases",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("id", ScalarType::Int64.nullable(false))
-            .with_column("database", ScalarType::String.nullable(false)),
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(2009),
         index_id: GlobalId::System(2010),
     };
@@ -399,7 +399,7 @@ pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog_names AS SELECT
     global_id,
-    coalesce(database || '.', '') || schema || '.' || name AS name
+    coalesce(d.name || '.', '') || schema || '.' || o.name AS name
 FROM mz_catalog.mz_objects o
 JOIN mz_catalog.mz_schemas s ON s.schema_id = o.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
@@ -644,7 +644,7 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_database AS SELECT
     oid,
-    database as datname,
+    name as datname,
     NULL::oid AS datdba,
     6 as encoding,
     'C' as datcollate,

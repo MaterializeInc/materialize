@@ -49,8 +49,8 @@ name
 ----
 materialize
 
-> SELECT id, database FROM mz_catalog.mz_databases
-id          database
+> SELECT id, name FROM mz_catalog.mz_databases
+id          name
 -----------------------
 1           materialize
 
@@ -62,8 +62,8 @@ name
 d
 materialize
 
-> SELECT id, database FROM mz_catalog.mz_databases
-id          database
+> SELECT id, name FROM mz_catalog.mz_databases
+id          name
 -----------------------
 1           materialize
 2           d
@@ -78,7 +78,7 @@ materialize
 > SHOW DATABASES WHERE (SELECT name = name)
 materialize
 d
-> SHOW DATABASES WHERE (name = (SELECT min(database) FROM mz_databases))
+> SHOW DATABASES WHERE (name = (SELECT min(name) FROM mz_databases))
 d
 ! SHOW DATABASES WHERE 7
 WHERE clause must have type bool, not type i32
@@ -144,8 +144,8 @@ Expected end of statement, found: RESTRICT
 name
 ----
 materialize
-> SELECT id, database FROM mz_catalog.mz_databases
-id          database
+> SELECT id, name FROM mz_catalog.mz_databases
+id          name
 -----------------------
 1           materialize
 
@@ -215,8 +215,8 @@ name
 d
 d2
 materialize
-> SELECT id, database FROM mz_catalog.mz_databases
-id          database
+> SELECT id, name FROM mz_catalog.mz_databases
+id          name
 -----------------------
 1           materialize
 2           d
