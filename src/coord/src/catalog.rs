@@ -46,9 +46,6 @@ pub use crate::catalog::config::Config;
 
 const SYSTEM_CONN_ID: u32 = 0;
 
-pub const AMBIENT_DATABASE_ID: i64 = -1;
-pub const AMBIENT_SCHEMA_ID: i64 = -1;
-
 // TODO@jldlaughlin: Better assignment strategy for system type OIDs.
 // https://github.com/MaterializeInc/materialize/pull/4316#discussion_r496238962
 pub const FIRST_USER_OID: u32 = 20_000;

@@ -65,9 +65,7 @@ use crate::catalog::builtin::{
     BUILTINS, MZ_AVRO_OCF_SINKS, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES, MZ_KAFKA_SINKS, MZ_SCHEMAS,
     MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{
-    self, Catalog, CatalogItem, Index, SinkConnectorState, AMBIENT_DATABASE_ID, AMBIENT_SCHEMA_ID,
-};
+use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState};
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
@@ -306,9 +304,6 @@ where
         }
 
         // Insert initial named objects into system tables.
-        let oid = self.catalog.allocate_oid()?;
-        self.report_database_update(oid, AMBIENT_DATABASE_ID, "AMBIENT", 1)
-            .await;
         let dbs: Vec<(
             String,
             i64,
@@ -348,7 +343,7 @@ where
             for (schema_name, schema_id, schema_oid, items) in schemas {
                 self.report_schema_update(
                     schema_oid,
-                    database_id,
+                    Some(database_id),
                     schema_id,
                     &schema_name,
                     "USER",
@@ -390,15 +385,8 @@ where
             })
             .collect();
         for (schema_name, schema_id, schema_oid, items) in ambient_schemas {
-            self.report_schema_update(
-                schema_oid,
-                AMBIENT_DATABASE_ID,
-                schema_id,
-                &schema_name,
-                "SYSTEM",
-                1,
-            )
-            .await;
+            self.report_schema_update(schema_oid, None, schema_id, &schema_name, "SYSTEM", 1)
+                .await;
 
             for (item_name, item_id) in items {
                 if let Some(oid) = tables_to_report.remove(&item_id) {
@@ -416,16 +404,6 @@ where
                 }
             }
         }
-        let oid = self.catalog.allocate_oid()?;
-        self.report_schema_update(
-            oid,
-            AMBIENT_DATABASE_ID,
-            AMBIENT_SCHEMA_ID,
-            "mz_temp",
-            "system",
-            1,
-        )
-        .await;
 
         // Announce primary and foreign key relationships.
         if self.logging_granularity.is_some() {
@@ -1042,7 +1020,7 @@ where
     async fn report_schema_update(
         &mut self,
         oid: u32,
-        database_id: i64,
+        database_id: Option<i64>,
         schema_id: i64,
         schema_name: &str,
         typ: &str,
@@ -1053,7 +1031,10 @@ where
             iter::once((
                 Row::pack(&[
                     Datum::Int32(oid as i32),
-                    Datum::Int64(database_id),
+                    match database_id {
+                        None => Datum::Null,
+                        Some(database_id) => Datum::Int64(database_id),
+                    },
                     Datum::Int64(schema_id),
                     Datum::String(schema_name),
                     Datum::String(typ),
@@ -2427,7 +2408,7 @@ where
                 } => {
                     self.report_schema_update(
                         *oid,
-                        *database_id,
+                        Some(*database_id),
                         *schema_id,
                         schema_name,
                         "USER",
@@ -2521,7 +2502,7 @@ where
                 } => {
                     self.report_schema_update(
                         *oid,
-                        *database_id,
+                        Some(*database_id),
                         *schema_id,
                         schema_name,
                         "USER",

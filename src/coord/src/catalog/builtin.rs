@@ -278,7 +278,7 @@ lazy_static! {
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("database_id", ScalarType::Int64.nullable(false))
+            .with_column("database_id", ScalarType::Int64.nullable(true))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("schema", ScalarType::String.nullable(false))
             .with_column("type", ScalarType::String.nullable(false)),
@@ -399,14 +399,10 @@ pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog_names AS SELECT
     global_id,
-    CASE
-        WHEN d.id = -1
-        THEN schema || '.' || name
-        ELSE database || '.' || schema || '.' || name
-    END AS name
+    coalesce(database || '.', '') || schema || '.' || name AS name
 FROM mz_catalog.mz_objects o
 JOIN mz_catalog.mz_schemas s ON s.schema_id = o.schema_id
-JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
     id: GlobalId::System(3002),
     needs_logs: false,
 };
