@@ -25,16 +25,21 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 `SHOW FULL VIEW`'s output is a table, with this structure:
 
 ```nofmt
- VIEWS | TYPE | MATERIALIZED
+ name  | type | materialized
 -------+------+--------------
  ...   | ...  | ...
 ```
 
 Field | Meaning
 ------|--------
-**VIEWS** | The name of the view
-**TYPE** | Whether the view was created by the user or the system
-**MATERIALIZED** | Does the view have an in-memory index? For more details, see [`CREATE INDEX`](../create-index)
+**name** | The name of the view
+**type** | Whether the view was created by the user or the system
+**materialized** | Does the view have an in-memory index? For more details, see [`CREATE INDEX`](../create-index)
+
+{{< version-changed v0.5.0 >}}
+The `Name`, `Type`, and `Materialized` columns are renamed to lowercase, i.e.,
+`name`, `type`, and `materialized`, respectively.
+{{< /version-changed >}}
 
 ## Examples
 
@@ -44,7 +49,7 @@ Field | Meaning
 SHOW VIEWS;
 ```
 ```nofmt
-         VIEWS
+         name
 -------------------------
  my_nonmaterialized_view
  my_materialized_view
@@ -56,7 +61,7 @@ SHOW VIEWS;
 SHOW MATERIALIZED VIEWS;
 ```
 ```nofmt
-        VIEWS
+        name
 ----------------------
  my_materialized_view
 ```
@@ -67,7 +72,7 @@ SHOW MATERIALIZED VIEWS;
 SHOW FULL VIEWS
 ```
 ```nofmt
-          VIEWS          | TYPE | MATERIALIZED
+          name           | type | materialized
 -------------------------+------+--------------
  my_nonmaterialized_view | USER | f
  my_materialized_view    | USER | t

@@ -7,11 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=1s
+
 # What schemas do we have by default?
 > SHOW SCHEMAS
 public
 > SHOW EXTENDED SCHEMAS
-SCHEMAS
+name
 -------
 public
 mz_catalog
@@ -20,8 +22,8 @@ pg_catalog
 # Creating a schema should be reflected in the output of SHOW SCHEMAS.
 > CREATE SCHEMA s
 > SHOW SCHEMAS
-SCHEMAS
--------
+name
+----
 public
 s
 
@@ -43,7 +45,7 @@ schema 'materialize.s' cannot be dropped without CASCADE while it contains objec
 
 # What databases do we have by default?
 > SHOW DATABASES
-database
+name
 ----
 materialize
 
@@ -55,7 +57,7 @@ id          database
 # Creating a database should be reflected in the output of SHOW DATABASES.
 > CREATE DATABASE d
 > SHOW DATABASES
-database
+name
 ----
 d
 materialize
@@ -73,10 +75,10 @@ id          database
 d
 > SHOW DATABASES LIKE 'mat%'
 materialize
-> SHOW DATABASES WHERE (SELECT database = database)
+> SHOW DATABASES WHERE (SELECT name = name)
 materialize
 d
-> SHOW DATABASES WHERE (id = (SELECT max(id) FROM mz_databases))
+> SHOW DATABASES WHERE (name = (SELECT min(database) FROM mz_databases))
 d
 ! SHOW DATABASES WHERE 7
 WHERE clause must have type bool, not type i32
@@ -87,15 +89,15 @@ database 'd' already exists
 
 # The new database should have a default public schema.
 > SHOW SCHEMAS FROM d
-SCHEMAS
--------
+name
+----
 public
 
 # New schemas in the database should appear in the output of SHOW SCHEMAS FROM.
 > CREATE SCHEMA d.s
 > SHOW SCHEMAS FROM d
-SCHEMAS
--------
+name
+------
 public
 s
 
@@ -104,14 +106,14 @@ s
 > SHOW SCHEMAS LIKE 'pub%'
 public
 > SHOW SCHEMAS LIKE 'private'
-> SHOW SCHEMAS WHERE schema = 'public'
+> SHOW SCHEMAS WHERE name = 'public'
 public
 
 # New views in the database should work.
 > CREATE MATERIALIZED VIEW d.public.v1 AS SELECT 1
 > SHOW VIEWS FROM d.public
-VIEWS
------
+name
+----
 v1
 
 # Setting the session database should update name resolution appropriately.
@@ -139,7 +141,7 @@ Expected end of statement, found: RESTRICT
 > DROP DATABASE d
 # SHOW DATABASES should work, even if the current database has been dropped.
 > SHOW DATABASES
-database
+name
 ----
 materialize
 > SELECT id, database FROM mz_catalog.mz_databases
@@ -208,7 +210,7 @@ unknown database 'noexist_db'
 > CREATE VIEW d2.public.t AS SELECT * FROM d1.public.t;
 > DROP DATABASE d1;
 > SHOW DATABASES
-database
+name
 ----
 d
 d2
@@ -221,8 +223,8 @@ id          database
 4           d2
 
 > SHOW VIEWS FROM d2.public;
- VIEWS
--------
+ name
+------
 
 # Check default sources, tables, and views in mz_catalog.
 
@@ -242,7 +244,7 @@ mz_scheduling_parks
 mz_worker_materialization_frontiers
 
 > SHOW FULL SOURCES FROM mz_catalog
-SOURCES                              TYPE   MATERIALIZED
+name                                 type   materialized
 --------------------------------------------------------
 mz_arrangement_sharing               SYSTEM true
 mz_arrangement_sizes                 SYSTEM true
@@ -273,7 +275,7 @@ mz_sinks
 mz_views
 
 > SHOW FULL TABLES FROM mz_catalog
-TABLES                TYPE
+name                  type
 ----------------------------
 mz_avro_ocf_sinks     SYSTEM
 mz_kafka_sinks        SYSTEM
@@ -317,7 +319,7 @@ mz_records_per_dataflow_operator
 mz_relations
 
 > SHOW FULL VIEWS FROM mz_catalog
-VIEWS                             TYPE   MATERIALIZED
+name                              type   materialized
 -------------------------------------------------------
 mz_addresses_with_unit_length     SYSTEM false
 mz_dataflow_names                 SYSTEM false

@@ -82,6 +82,26 @@ Wrap your release notes at the 80 character mark.
   materialize.io. If a new version is available a warning will be
   logged. This can be disabled with the `--disable-telemetry` option.
 
+- Rename the output columns for `SHOW` statements to match the PostgreSQL
+  convention of using all lowercase characters with words separated by
+  underscores.
+
+  For example, the `SHOW INDEX` command now returns a column named
+  `seq_in_index` rather than `Seq_in_index`. This makes it possible to refer
+  to the column without quoting when supplying a `WHERE` clause.
+
+  The renaminings are described in more detail in the documentation for each
+  `SHOW` command that changed:
+
+    - [`SHOW COLUMNS`](/sql/show-columns)
+    - [`SHOW DATABASES`](/sql/show-databases)
+    - [`SHOW INDEXES`](/sql/show-indexes)
+    - [`SHOW SCHEMAS`](/sql/show-schemas)
+    - [`SHOW SINKS`](/sql/show-sinks)
+    - [`SHOW SOURCES`](/sql/show-sources)
+    - [`SHOW TABLES`](/sql/show-tables)
+    - [`SHOW VIEWS`](/sql/show-views)
+
 {{% version-header v0.4.3 %}}
 
 - Permit adjusting the logical compaction window on a per-index basis via the

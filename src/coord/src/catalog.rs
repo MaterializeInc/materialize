@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::{RelationDesc, Row};
+use repr::RelationDesc;
 use sql::ast::display::AstDisplay;
 use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
@@ -1376,11 +1376,7 @@ impl Catalog {
         pcx: PlanContext,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(create_sql)?.into_element();
-        let params = Params {
-            datums: Row::pack(&[]),
-            types: vec![],
-        };
-        let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &params)?;
+        let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable { table, .. } => CatalogItem::Table(Table {
                 create_sql: table.create_sql,

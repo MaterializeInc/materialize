@@ -37,7 +37,7 @@ Unable to automatically determine a timestamp for your query; this can happen if
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW FULL VIEWS
-VIEWS       TYPE     MATERIALIZED
+name        type     materialized
 ----------------------------------
 data_view   USER     false
 test1       USER     true
@@ -46,7 +46,7 @@ test1       USER     true
 test1
 
 > SHOW FULL MATERIALIZED VIEWS
-VIEWS    TYPE
+name     type
 -------------
 test1    USER
 
@@ -67,7 +67,7 @@ b  sum
 2  1
 
 > SHOW COLUMNS FROM test1
-Field Nullable Type
+field nullable type
 -------------------
 b     NO       int8
 sum   YES      int8
@@ -169,7 +169,7 @@ catalog item 'materialize.public.idx1' is an index and so cannot be depended upo
 > DROP INDEX test5_primary_idx
 
 > SHOW FULL VIEWS LIKE 'test5'
-VIEWS       TYPE     MATERIALIZED
+name        type     materialized
 ----------------------------------
 test5       USER     true
 
@@ -192,7 +192,7 @@ b  c
 Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
 
 > SHOW FULL VIEWS LIKE 'test5'
-VIEWS       TYPE     MATERIALIZED
+name        type     materialized
 ----------------------------------
 test5       USER     false
 

@@ -69,7 +69,7 @@ SELECT 2 * a, sum(b) FROM t GROUP BY 1
 query TTT colnames
 SHOW COLUMNS FROM t
 ----
-Field  Nullable  Type
+field  nullable  type
  a     YES       int4
  b     YES       int4
 
