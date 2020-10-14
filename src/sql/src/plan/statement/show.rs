@@ -229,14 +229,11 @@ fn show_sources<'a>(
         )
     } else if full & !materialized {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type,
-                CASE WHEN count > 0 then true ELSE false END materialized
+            "SELECT
+                name,
+                mz_internal.mz_classify_object_id(global_id) AS type,
+                mz_internal.mz_is_materialized(global_id) AS materialized
             FROM mz_catalog.mz_sources
-            JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
-                  FROM mz_catalog.mz_sources
-                  LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
-                  GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
-                ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
             WHERE schema_id = {}",
             schema_spec.id,
         )
@@ -244,24 +241,14 @@ fn show_sources<'a>(
         format!(
             "SELECT name
             FROM mz_catalog.mz_sources
-            JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
-                  FROM mz_catalog.mz_sources
-                  LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
-                  GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
-                ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
-            WHERE schema_id = {} AND mz_indexes_count.count > 0",
+            WHERE schema_id = {} AND mz_internal.mz_is_materialized(global_id)",
             schema_spec.id,
         )
     } else {
         format!(
             "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type,
             FROM mz_catalog.mz_sources
-            JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
-                  FROM mz_catalog.mz_sources
-                  LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
-                  GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
-                ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
-            WHERE schema_id = {} AND mz_indexes_count.count > 0",
+            WHERE schema_id = {} AND mz_internal.mz_is_materialized(global_id) AS materialized",
             schema_spec.id,
         )
     };
@@ -283,9 +270,7 @@ fn show_views<'a>(
 
     let query = if !full & !materialized {
         format!(
-            "SELECT name
-             FROM mz_catalog.mz_views
-             WHERE mz_catalog.mz_views.schema_id = {}",
+            "SELECT name FROM mz_catalog.mz_views WHERE schema_id = {}",
             schema_spec.id,
         )
     } else if full & !materialized {
@@ -293,40 +278,23 @@ fn show_views<'a>(
             "SELECT
                 name,
                 mz_internal.mz_classify_object_id(global_id) AS type,
-                count > 0 as materialized
-             FROM mz_catalog.mz_views as mz_views
-             JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
-                   FROM mz_views
-                   LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
-                   GROUP BY mz_views.global_id) as mz_indexes_count
-                ON mz_views.global_id = mz_indexes_count.global_id
-             WHERE mz_catalog.mz_views.schema_id = {}",
+                mz_internal.mz_is_materialized(global_id) AS materialized
+             FROM mz_catalog.mz_views
+             WHERE schema_id = {}",
             schema_spec.id,
         )
     } else if !full & materialized {
         format!(
             "SELECT name
              FROM mz_catalog.mz_views
-             JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
-                   FROM mz_views
-                   LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
-                   GROUP BY mz_views.global_id) as mz_indexes_count
-                ON mz_views.global_id = mz_indexes_count.global_id
-             WHERE mz_catalog.mz_views.schema_id = {}
-                AND mz_indexes_count.count > 0",
+             WHERE schema_id = {} AND mz_internal.mz_is_materialized(global_id)",
             schema_spec.id,
         )
     } else {
         format!(
             "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type
              FROM mz_catalog.mz_views
-             JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
-                   FROM mz_views
-                   LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
-                   GROUP BY mz_views.global_id) as mz_indexes_count
-                ON mz_views.global_id = mz_indexes_count.global_id
-             WHERE mz_catalog.mz_views.schema_id = {}
-                AND mz_indexes_count.count > 0",
+             WHERE schema_id = {} AND mz_internal.mz_is_materialized(global_id)",
             schema_spec.id,
         )
     };

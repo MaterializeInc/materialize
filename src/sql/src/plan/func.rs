@@ -1264,6 +1264,9 @@ lazy_static! {
                         WHEN $1 like 't%' THEN 'temp'
                     END"
                 )
+            },
+            "mz_is_materialized" => Scalar {
+                params!(String) => sql_op!("EXISTS (SELECT 1 FROM mz_indexes WHERE on_global_id = $1)")
             }
         }
     };
