@@ -88,10 +88,7 @@ impl ToSql for Numeric {
     }
 
     fn accepts(ty: &Type) -> bool {
-        match *ty {
-            Type::NUMERIC => true,
-            _ => false,
-        }
+        matches!(*ty, Type::NUMERIC)
     }
 
     to_sql_checked!();
@@ -134,9 +131,6 @@ impl<'a> FromSql<'a> for Numeric {
     }
 
     fn accepts(ty: &Type) -> bool {
-        match *ty {
-            Type::NUMERIC => true,
-            _ => false,
-        }
+        matches!(*ty, Type::NUMERIC)
     }
 }

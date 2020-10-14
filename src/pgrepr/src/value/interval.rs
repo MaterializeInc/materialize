@@ -55,10 +55,7 @@ impl ToSql for Interval {
     }
 
     fn accepts(ty: &Type) -> bool {
-        match *ty {
-            Type::INTERVAL => true,
-            _ => false,
-        }
+        matches!(*ty, Type::INTERVAL)
     }
 
     to_sql_checked!();
@@ -75,9 +72,6 @@ impl<'a> FromSql<'a> for Interval {
     }
 
     fn accepts(ty: &Type) -> bool {
-        match *ty {
-            Type::INTERVAL => true,
-            _ => false,
-        }
+        matches!(*ty, Type::INTERVAL)
     }
 }

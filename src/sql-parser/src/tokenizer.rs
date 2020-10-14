@@ -674,10 +674,7 @@ impl Tokenizer {
     fn tokenize_parameter(&self, chars: &mut PeekableChars) -> Result<Option<Token>, String> {
         assert_eq!(Some('$'), chars.next());
 
-        let n = peeking_take_while(chars, |ch| match ch {
-            '0'..='9' => true,
-            _ => false,
-        });
+        let n = peeking_take_while(chars, |ch| matches!(ch, '0'..='9'));
 
         if n.is_empty() {
             chars.next();
@@ -718,10 +715,7 @@ impl Tokenizer {
                     // Consume the negative sign.
                     chars.next();
                 }
-                let e = peeking_take_while(chars, |ch| match ch {
-                    '0'..='9' => true,
-                    _ => false,
-                });
+                let e = peeking_take_while(chars, |ch| matches!(ch, '0'..='9'));
                 s.push_str(&e);
             }
             _ => {}
