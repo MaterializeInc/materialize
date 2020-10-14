@@ -269,6 +269,7 @@ mz_databases
 mz_schemas
 mz_columns
 mz_indexes
+mz_index_columns
 mz_tables
 mz_sources
 mz_sinks

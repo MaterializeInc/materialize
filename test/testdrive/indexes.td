@@ -23,19 +23,19 @@ $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
 > CREATE MATERIALIZED SOURCE mz_data
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
 
-> SELECT field_number FROM mz_indexes WHERE id LIKE '%u%'
-field_number
+> SELECT index_position FROM mz_index_columns WHERE index_id LIKE '%u%'
+index_position
 --------------
-0
 1
 2
+3
 
-> SELECT field_number, name FROM mz_columns where id LIKE '%u%';
-field_number     name
+> SELECT position, name FROM mz_columns where id LIKE '%u%';
+position         name
 ----------------------
-0                a
-1                b
-2                mz_obj_no
+1                a
+2                b
+3                mz_obj_no
 
 > SHOW INDEXES FROM mz_data
 on_name  key_name             seq_in_index  column_name  expression  nullable

@@ -63,8 +63,9 @@ use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES, MZ_KAFKA_SINKS, MZ_SCHEMAS,
-    MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES, MZ_INDEX_COLUMNS,
+    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS,
+    MZ_VIEW_KEYS,
 };
 use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState};
 use crate::command::{
@@ -1060,7 +1061,7 @@ where
                                 .map(|n| n.to_string())
                                 .unwrap_or_else(|| "?column?".to_owned()),
                         ),
-                        Datum::Int64(i as i64),
+                        Datum::Int64(i as i64 + 1),
                         Datum::from(column_type.nullable),
                         Datum::String(pgrepr::Type::from(&column_type.scalar_type).name()),
                     ]),
@@ -1117,6 +1118,20 @@ where
             Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts.unwrap(),
             _ => unreachable!(),
         };
+        self.update_catalog_view(
+            MZ_INDEXES.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String(&global_id.to_string()),
+                    Datum::Int32(oid as i32),
+                    Datum::String(name),
+                    Datum::String(&index.on.to_string()),
+                ]),
+                diff,
+            )),
+        )
+        .await;
+
         for (i, key) in index.keys.iter().enumerate() {
             let nullable = *nullable
                 .get(i)
@@ -1128,23 +1143,20 @@ where
                 .to_string();
             let (field_number, expression) = match key {
                 ScalarExpr::Column(col) => (
-                    Datum::Int64(i64::try_from(*col).expect("invalid index column number")),
+                    Datum::Int64(i64::try_from(*col + 1).expect("invalid index column number")),
                     Datum::Null,
                 ),
                 _ => (Datum::Null, Datum::String(&key_sql)),
             };
             self.update_catalog_view(
-                MZ_INDEXES.id,
+                MZ_INDEX_COLUMNS.id,
                 iter::once((
                     Row::pack(&[
                         Datum::String(&global_id.to_string()),
-                        Datum::Int32(oid as i32),
-                        Datum::String(&index.on.to_string()),
-                        Datum::String(name),
+                        Datum::Int64(seq_in_index),
                         field_number,
                         expression,
                         Datum::from(nullable),
-                        Datum::Int64(seq_in_index),
                     ]),
                     diff,
                 )),
