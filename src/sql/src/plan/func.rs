@@ -1255,6 +1255,15 @@ lazy_static! {
                           CastTo::Explicit(ScalarType::Decimal(10, 0)),
                       )
                 })
+            },
+            "mz_classify_object_id" => Scalar {
+                params!(String) => sql_op!(
+                    "CASE
+                        WHEN $1 LIKE 'u%' THEN 'user'
+                        WHEN $1 LIKE 's%' THEN 'system'
+                        WHEN $1 like 't%' THEN 'temp'
+                    END"
+                )
             }
         }
     };

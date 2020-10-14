@@ -170,17 +170,23 @@ fn show_schemas<'a>(
         )
     } else if full & !extended {
         format!(
-            "SELECT name, type FROM mz_catalog.mz_schemas WHERE database_id = {}",
+            "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
+            FROM mz_catalog.mz_schemas
+            WHERE database_id = {}",
             database_id,
         )
     } else if !full & extended {
         format!(
-            "SELECT name FROM mz_catalog.mz_schemas WHERE database_id = {} OR database_id IS NULL",
+            "SELECT name
+            FROM mz_catalog.mz_schemas
+            WHERE database_id = {} OR database_id IS NULL",
             database_id,
         )
     } else {
         format!(
-            "SELECT name, type FROM mz_catalog.mz_schemas WHERE database_id = {} OR database_id IS NULL",
+            "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
+            FROM mz_catalog.mz_schemas
+            WHERE database_id = {} OR database_id IS NULL",
             database_id,
         )
     };
@@ -212,9 +218,8 @@ fn show_tables<'a>(
 
     let query = if full {
         format!(
-            "SELECT tables AS name, type
+            "SELECT tables AS name, mz_internal.mz_classify_object_id(global_id) AS type
             FROM mz_catalog.mz_tables
-            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_tables.schema_id = mz_catalog.mz_schemas.id
             WHERE schema_id = {} {}
             ORDER BY tables, type",
             schema_spec.id, filter
@@ -255,9 +260,9 @@ fn show_sources<'a>(
         )
     } else if full & !materialized {
         format!(
-            "SELECT sources AS name, type, CASE WHEN count > 0 then true ELSE false END materialized
+            "SELECT sources AS name, mz_internal.mz_classify_object_id(global_id) AS type,
+                CASE WHEN count > 0 then true ELSE false END materialized
             FROM mz_catalog.mz_sources
-            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.id
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
                   FROM mz_catalog.mz_sources
                   LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
@@ -271,21 +276,19 @@ fn show_sources<'a>(
         format!(
             "SELECT sources AS name
             FROM mz_catalog.mz_sources
-            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.id
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
                   FROM mz_catalog.mz_sources
                   LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
                   GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
                 ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
             WHERE schema_id = {} {} AND mz_indexes_count.count > 0
-            ORDER BY sources, type",
+            ORDER BY sources",
             schema_spec.id, filter
         )
     } else {
         format!(
-            "SELECT sources AS name, type
+            "SELECT sources AS name, mz_internal.mz_classify_object_id(global_id) AS type,
             FROM mz_catalog.mz_sources
-            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.id
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
                   FROM mz_catalog.mz_sources
                   LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
@@ -329,10 +332,9 @@ fn show_views<'a>(
         format!(
             "SELECT
                 views AS name,
-                type,
+                mz_internal.mz_classify_object_id(global_id) AS type,
                 count > 0 as materialized
              FROM mz_catalog.mz_views as mz_views
-             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_views.schema_id = mz_catalog.mz_schemas.id
              JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
                    FROM mz_views
                    LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
@@ -358,9 +360,8 @@ fn show_views<'a>(
         )
     } else {
         format!(
-            "SELECT views AS name, type
+            "SELECT views AS name, mz_internal.mz_classify_object_id(global_id) AS type
              FROM mz_catalog.mz_views
-             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_views.schema_id = mz_catalog.mz_schemas.id
              JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
                    FROM mz_views
                    LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
@@ -394,9 +395,8 @@ fn show_sinks<'a>(
 
     let query = if full {
         format!(
-            "SELECT sinks AS name, type
+            "SELECT sinks AS name, mz_classify_object_id(global_id) AS type
             FROM mz_catalog.mz_sinks
-            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sinks.schema_id = mz_catalog.mz_schemas.id
             WHERE schema_id = {} {}
             ORDER BY sinks, type",
             schema_spec.id, filter

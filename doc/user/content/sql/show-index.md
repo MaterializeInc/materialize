@@ -58,8 +58,8 @@ SHOW FULL VIEWS;
 ```nofmt
           name           | type | materialized
 -------------------------+------+ -------------
- my_nonmaterialized_view | USER | f
- my_materialized_view    | USER | t
+ my_nonmaterialized_view | user | f
+ my_materialized_view    | user | t
 ```
 ```sql
 SHOW INDEXES FROM my_materialized_view;

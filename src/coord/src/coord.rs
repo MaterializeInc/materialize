@@ -347,7 +347,6 @@ where
                     schema_oid,
                     Some(database_id),
                     &schema_name,
-                    "USER",
                     1,
                 )
                 .await;
@@ -386,7 +385,7 @@ where
             })
             .collect();
         for (schema_name, schema_id, schema_oid, items) in ambient_schemas {
-            self.report_schema_update(schema_id, schema_oid, None, &schema_name, "SYSTEM", 1)
+            self.report_schema_update(schema_id, schema_oid, None, &schema_name, 1)
                 .await;
 
             for (item_name, item_id) in items {
@@ -1024,7 +1023,6 @@ where
         oid: u32,
         database_id: Option<i64>,
         schema_name: &str,
-        typ: &str,
         diff: isize,
     ) {
         self.update_catalog_view(
@@ -1038,7 +1036,6 @@ where
                         Some(database_id) => Datum::Int64(database_id),
                     },
                     Datum::String(schema_name),
-                    Datum::String(typ),
                 ]),
                 diff,
             )),
@@ -2407,15 +2404,8 @@ where
                     schema_name,
                     oid,
                 } => {
-                    self.report_schema_update(
-                        *schema_id,
-                        *oid,
-                        Some(*database_id),
-                        schema_name,
-                        "USER",
-                        1,
-                    )
-                    .await;
+                    self.report_schema_update(*schema_id, *oid, Some(*database_id), schema_name, 1)
+                        .await;
                 }
                 catalog::OpStatus::CreatedItem {
                     schema_id,
@@ -2506,7 +2496,6 @@ where
                         *oid,
                         Some(*database_id),
                         schema_name,
-                        "USER",
                         -1,
                     )
                     .await;
