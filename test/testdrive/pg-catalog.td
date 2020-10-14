@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 > SHOW COLUMNS FROM pg_namespace
-Field    Nullable  Type
+field    nullable  type
 --------------------------
 oid      NO        oid
 nspname  NO        text
@@ -16,7 +16,7 @@ nspowner YES       oid
 nspacl   YES       _text
 
 > SHOW COLUMNS FROM pg_class
-Field        Nullable  Type
+field        nullable  type
 --------------------------
 oid          NO        oid
 relname      NO        text
@@ -25,7 +25,7 @@ relowner     YES       oid
 relkind      YES       text
 
 > SHOW COLUMNS FROM pg_database
-Field        Nullable  Type
+field        nullable  type
 --------------------------
  oid         NO        oid
  datname     NO        text
@@ -36,18 +36,26 @@ Field        Nullable  Type
  datacl      YES       _text
 
 > SHOW COLUMNS FROM pg_index
-Field        Nullable  Type
+field        nullable  type
 --------------------------
 indexrelid   NO        oid
 indrelid     NO        oid
 
 > SHOW COLUMNS FROM pg_description
-Field        Nullable  Type
+field        nullable  type
 --------------------------
 objoid       NO        oid
 classoid     YES       oid
 objsubid     NO        int4
 description  YES       text
+
+> SHOW COLUMNS FROM pg_attribute
+field        nullable  type
+--------------------------
+attrelid     NO        oid
+attname      NO        text
+attnum       NO        int8
+attnotnull   NO        bool
 
 ! SELECT current_schemas()
 Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;

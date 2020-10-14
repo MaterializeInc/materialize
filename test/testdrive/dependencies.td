@@ -148,13 +148,13 @@ catalog item 'materialize.public.i1' is an index and so cannot be depended upon
 > CREATE INDEX i2 ON v2a(x*2);
 
 > SHOW INDEX in v2a;
-On_name   Key_name          Column_name Expression  Null   Seq_in_index
+on_name   key_name          column_name expression  nullable   seq_in_index
 -----------------------------------------------------------------------
 v2a       i2                <null>      "x * 2"     false  1
 v2a       v2a_primary_idx   x           <null>      false  1
 
 > SHOW INDEX in v2;
-On_name  Key_name        Column_name Expression Null   Seq_in_index
+on_name  key_name        column_name expression nullable   seq_in_index
 -------------------------------------------------------------------
 v2       i1              x           <null>     false  1
 v2       v2_primary_idx  x           <null>     false  1
@@ -167,7 +167,7 @@ v2       v2_primary_idx  x           <null>     false  1
 unknown catalog item 'v2a'
 
 > SHOW INDEX in v2;
-On_name  Key_name           Column_name Expression Null  Seq_in_index
+on_name  key_name           column_name expression nullable  seq_in_index
 ---------------------------------------------------------------------
 v2       i1                 x           <null>     false 1
 v2       v2_primary_idx     x           <null>     false 1
@@ -182,7 +182,7 @@ unknown catalog item 'i2'
 > CREATE INDEX i3 ON v4a(y);
 
 > SHOW INDEX in v4a;
-On_name  Key_name            Column_name Expression Null  Seq_in_index
+on_name  key_name            column_name expression nullable  seq_in_index
 ----------------------------------------------------------------------
 v4a      i3                  y           <null>     false 1
 v4a      v4a_primary_idx     y           <null>     false 1
@@ -190,7 +190,7 @@ v4a      v4a_primary_idx     y           <null>     false 1
 > CREATE INDEX i4 ON v4(x);
 
 > SHOW INDEX in v4;
-On_name  Key_name                           Column_name Expression Null  Seq_in_index
+on_name  key_name                           column_name expression nullable  seq_in_index
 -------------------------------------------------------------------------------------
 v4       i4              x           <null>     false 1
 v4       v4_primary_idx  x           <null>     false 1
@@ -206,7 +206,7 @@ unknown catalog item 'v4a'
 unknown catalog item 'i3'
 
 > SHOW INDEX in v4;
-On_name  Key_name            Column_name Expression Null  Seq_in_index
+on_name  key_name            column_name expression nullable  seq_in_index
 ----------------------------------------------------------------------
 v4       i4                  x           <null>     false 1
 v4       v4_primary_idx      x           <null>     false 1
@@ -217,7 +217,7 @@ v4       v4_primary_idx      y           <null>     false 2
 > CREATE INDEX i5 ON v5(substr);
 
 > SHOW INDEX in v5;
-On_name   Key_name         Column_name Expression Null  Seq_in_index
+on_name   key_name         column_name expression nullable  seq_in_index
 --------------------------------------------------------------------
 v5        i5               substr      <null>     true  1
 v5        v5_primary_idx   substr      <null>     true  1
@@ -225,14 +225,14 @@ v5        v5_primary_idx   substr      <null>     true  1
 > CREATE VIEW multicol AS SELECT 'a' AS a, 'b', 'c', 'd' AS d
 > CREATE INDEX i6 ON multicol (2, a, 4)
 > SHOW INDEX IN multicol
-On_name   Key_name  Column_name  Expression   Null    Seq_in_index
+on_name   key_name  column_name  expression   nullable    seq_in_index
 ------------------------------------------------------------------
 multicol  i6        ?column?     <null>       false   1
 multicol  i6        a            <null>       false   2
 multicol  i6        d            <null>       false   3
 
-> SHOW INDEX IN multicol WHERE Column_name = 'a'
-On_name   Key_name  Column_name  Expression   Null    Seq_in_index
+> SHOW INDEX IN multicol WHERE column_name = 'a'
+on_name   key_name  column_name  expression   nullable    seq_in_index
 ------------------------------------------------------------------
 multicol  i6        a            <null>       false   2
 
@@ -268,7 +268,7 @@ unknown catalog item 'i4'
 > CREATE INDEX j1 on s3(ascii(y))
 
 > SHOW INDEX in s3;
-On_name  Key_name           Column_name Expression     Null  Seq_in_index
+on_name  key_name           column_name expression     nullable  seq_in_index
 -------------------------------------------------------------------------
 s3       j1                 <null>      "ascii(y)" false 1
 s3       s3_primary_idx     x           <null>         false 1
@@ -296,14 +296,14 @@ unknown catalog item 'j1'
 > CREATE INDEX j3 on w(z);
 
 > SHOW INDEX in s4;
-On_name  Key_name           Column_name Expression  Null  Seq_in_index
+on_name  key_name           column_name expression  nullable  seq_in_index
 ----------------------------------------------------------------------
 s4       j2                 <null>      "x + 2" false 1
 s4       s4_primary_idx     x           <null>      false 1
 s4       s4_primary_idx     y           <null>      false 2
 
 > SHOW INDEX in w;
-On_name  Key_name         Column_name Expression Null  Seq_in_index
+on_name  key_name         column_name expression nullable  seq_in_index
 -------------------------------------------------------------------
 w        j3               z           <null>     false 1
 

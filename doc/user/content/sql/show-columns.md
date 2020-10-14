@@ -22,11 +22,11 @@ _item&lowbar;ref_ | The name of the item whose columns you want to view. These c
 
 ### Output format
 
-`SHOW COLUMN`'s output is a table, with this structure:
+`SHOW COLUMNS`'s output is a table, with this structure:
 
 ```nofmt
 +---------+------------+--------+
-| Field   | Nullable   | Type   |
+| field   | nullable   | type   |
 |---------+------------+--------|
 | ...     | ...        | ...    |
 +---------+------------+--------+
@@ -34,14 +34,19 @@ _item&lowbar;ref_ | The name of the item whose columns you want to view. These c
 
 Field | Meaning
 ------|--------
-**Field** | The name of the column
-**Nullable** | Does the column accept `null` values?
-**Type** | The column's [type](../types)
+**field** | The name of the column
+**nullable** | Does the column accept `null` values?
+**type** | The column's [type](../types)
 
 
 {{< version-changed v0.4.2 >}}
 Rows are sorted by the order in which the fields are defined in the targeted
 source, view, or table. Prior versions did not guarantee any particular ordering.
+{{< /version-changed >}}
+
+{{< version-changed v0.5.0 >}}
+The `Field`, `Nullable`, and `Type` columns are renamed to lowercase,
+i.e., `field`, `nullable`, and `type`, respectively.
 {{< /version-changed >}}
 
 ## Examples
@@ -50,7 +55,7 @@ source, view, or table. Prior versions did not guarantee any particular ordering
 SHOW SOURCES;
 ```
 ```nofmt
- SOURCES
+   name
 ----------
 my_sources
 ```
@@ -58,7 +63,7 @@ my_sources
 SHOW COLUMNS FROM my_source;
 ```
 ```nofmt
-  Field  | Nullable | Type
+  field  | nullable | type
 ---------+----------+------
  column1 | NO       | int4
  column2 | YES      | text

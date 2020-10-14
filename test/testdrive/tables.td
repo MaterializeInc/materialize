@@ -29,17 +29,17 @@ cannot CREATE TABLE with duplicate column names
 > SELECT * FROM t;
 
 > SHOW TABLES;
-TABLES
-------
+name
+----
 t
 
 > SHOW SOURCES;
-SOURCES
--------
+name
+----
 
 > SHOW INDEXES FROM t;
-On_name  Key_name       Column_name  Expression  Null   Seq_in_index
---------------------------------------------------------------------
+on_name  key_name       column_name  expression  nullable   seq_in_index
+------------------------------------------------------------------------
 t        t_primary_idx  a            <null>      true   1
 t        t_primary_idx  b            <null>      false  2
 
@@ -47,7 +47,7 @@ t        t_primary_idx  b            <null>      false  2
 cannot drop 'materialize.public.t_primary_idx' as it is the default index for a table
 
 > SHOW COLUMNS in t;
-Field      Nullable  Type
+field      nullable  type
 -------------------------
 a          YES       int4
 b          NO        text
@@ -181,8 +181,8 @@ unknown catalog item 't'
 unknown catalog item 't'
 
 > SHOW TABLES;
-TABLES
-------
+name
+----
 v
 
 > SHOW TABLES LIKE 'foo'
@@ -192,8 +192,8 @@ v
 v
 
 > SHOW SOURCES;
-SOURCES
--------
+name
+----
 
 > CREATE TABLE t (a int, b text NOT NULL)
 

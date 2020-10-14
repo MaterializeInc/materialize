@@ -31,7 +31,7 @@ $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
     SELECT * FROM mz_data
 
 > SHOW INDEXES FROM mz_view
-On_name  Key_name             Column_name  Expression  Null   Seq_in_index
+on_name  key_name             column_name  expression  nullable   seq_in_index
 --------------------------------------------------------------------------
 mz_view  mz_view_primary_idx  a            <null>      false  1
 mz_view  mz_view_primary_idx  b            <null>      false  2
@@ -119,20 +119,20 @@ materialize.public.renamed_sink
 
 # Source was successfully renamed
 > SHOW SOURCES;
-SOURCES
--------
+name
+----
 renamed_mz_data
 
 # Sink was successfully renamed
 > SHOW SINKS
-SINKS
------
+name
+----
 renamed_sink
 
 # View was successfully renamed
 > SHOW VIEWS
-VIEWS
------
+name
+----
 byzantine_view
 dependent_view
 oppositional_view
@@ -146,7 +146,7 @@ materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"re
 
 # Item's indexes are properly re-attributed
 > SHOW INDEXES FROM renamed_mz_view
-On_name          Key_name       Column_name Expression Null  Seq_in_index
+on_name          key_name       column_name expression nullable  seq_in_index
 -------------------------------------------------------------------------
 renamed_mz_view  renamed_index  a           <null>     false            1
 renamed_mz_view  renamed_index  b           <null>     false            2
@@ -737,18 +737,18 @@ materialize.public.count "CREATE VIEW \"materialize\".\"public\".\"count\" AS SE
 > CREATE TABLE j (b int)
 
 > SHOW TABLES
-TABLES
+name
 ----
 j
 
 > ALTER TABLE j RENAME TO renamed_j
 
 > SHOW TABLES
-TABLES
+name
 ----
 renamed_j
 
 > SELECT tables FROM mz_tables WHERE global_id like 'u%';
 tables
-----
+------
 renamed_j

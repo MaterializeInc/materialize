@@ -17,6 +17,16 @@ Field | Use
 ------|-----
 _schema&lowbar;name_ | The schema to show tables from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
+## Details
+
+### Output format
+
+`SHOW TABLES`'s output is a table with one column, `name`.
+
+{{< version-changed v0.5.0 >}}
+The output column is renamed from `TABLES` to `name`.
+{{< /version-changed >}}
+
 ## Examples
 
 ```sql

@@ -12,9 +12,9 @@
 use anyhow::bail;
 
 use ore::collections::CollectionExt;
-use repr::{Datum, Row};
+use repr::{Datum, RelationDesc, Row, ScalarType};
 use sql_parser::ast::{
-    ObjectName, ObjectType, ShowColumnsStatement, ShowCreateIndexStatement,
+    ObjectName, ObjectType, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowStatementFilter, Statement, Value,
@@ -105,26 +105,27 @@ pub fn handle_show_create_index(
     }
 }
 
-pub fn handle_show_databases(
-    scx: &StatementContext,
+pub fn show_databases<'a>(
+    scx: &'a StatementContext<'a>,
     ShowDatabasesStatement { filter }: ShowDatabasesStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<ShowSelect<'a>, anyhow::Error> {
     let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("database LIKE {}", Value::String(like)),
+        Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
         Some(ShowStatementFilter::Where(expr)) => expr.to_string(),
         None => "true".to_owned(),
     };
-    handle_generated_select(
+
+    Ok(ShowSelect::new(
         scx,
         format!(
-            "SELECT database FROM mz_catalog.mz_databases WHERE {}",
+            "SELECT * FROM (SELECT database AS name FROM mz_catalog.mz_databases) WHERE {}",
             filter
         ),
-    )
+    ))
 }
 
-pub fn handle_show_objects(
-    scx: &StatementContext,
+pub fn show_objects<'a>(
+    scx: &'a StatementContext<'a>,
     ShowObjectsStatement {
         extended,
         full,
@@ -133,78 +134,79 @@ pub fn handle_show_objects(
         from,
         filter,
     }: ShowObjectsStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<ShowSelect<'a>, anyhow::Error> {
     match object_type {
-        ObjectType::Schema => handle_show_schemas(scx, extended, full, from, filter),
-        ObjectType::Table => handle_show_tables(scx, extended, full, from, filter),
-        ObjectType::Source => handle_show_sources(scx, full, materialized, from, filter),
-        ObjectType::View => handle_show_views(scx, full, materialized, from, filter),
-        ObjectType::Sink => handle_show_sinks(scx, full, from, filter),
+        ObjectType::Schema => show_schemas(scx, extended, full, from, filter),
+        ObjectType::Table => show_tables(scx, extended, full, from, filter),
+        ObjectType::Source => show_sources(scx, full, materialized, from, filter),
+        ObjectType::View => show_views(scx, full, materialized, from, filter),
+        ObjectType::Sink => show_sinks(scx, full, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }
 
-fn handle_show_schemas(
-    scx: &StatementContext,
+fn show_schemas<'a>(
+    scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<ShowSelect<'a>, anyhow::Error> {
     let database_name = if let Some(from) = from {
         scx.resolve_database(from)?
     } else {
         scx.resolve_default_database()?.to_string()
     };
     let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("AND schema LIKE {}", Value::String(like)),
-        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
-        None => "".to_owned(),
+        Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
+        Some(ShowStatementFilter::Where(expr)) => expr.to_string(),
+        None => "true".to_string(),
     };
 
     let query = if !full & !extended {
         format!(
-            "SELECT schema
+            "SELECT schema AS name
             FROM mz_catalog.mz_schemas
             JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.database = '{}' {}",
-            database_name, filter
+            WHERE mz_catalog.mz_databases.database = '{}'",
+            database_name
         )
     } else if full & !extended {
         format!(
-            "SELECT schema, type
+            "SELECT schema AS name, type
             FROM mz_catalog.mz_schemas
             JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.database = '{}' {}",
-            database_name, filter
+            WHERE mz_catalog.mz_databases.database = '{}'",
+            database_name
         )
     } else if !full & extended {
         format!(
-            "SELECT schema
+            "SELECT schema AS name
             FROM mz_catalog.mz_schemas
             LEFT JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.database IS NULL {}",
-            database_name, filter
+            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.database IS NULL",
+            database_name,
         )
     } else {
         format!(
-            "SELECT schema, type
+            "SELECT schema AS name, type
             FROM mz_catalog.mz_schemas
             LEFT JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
-            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.database IS NULL {}",
-            database_name, filter
+            WHERE mz_catalog.mz_databases.database = '{}' OR mz_catalog.mz_databases.database IS NULL",
+            database_name,
         )
     };
-    handle_generated_select(scx, query)
+    let query = format!("SELECT * FROM ({}) WHERE {}", query, filter);
+    Ok(ShowSelect::new(scx, query))
 }
 
-fn handle_show_tables(
-    scx: &StatementContext,
+fn show_tables<'a>(
+    scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED TABLES");
     }
@@ -222,7 +224,7 @@ fn handle_show_tables(
 
     let query = if full {
         format!(
-            "SELECT tables, type
+            "SELECT tables AS name, type
             FROM mz_catalog.mz_tables
             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_tables.schema_id = mz_catalog.mz_schemas.schema_id
             WHERE schema_id = {} {}
@@ -231,20 +233,20 @@ fn handle_show_tables(
         )
     } else {
         format!(
-            "SELECT tables FROM mz_catalog.mz_tables WHERE schema_id = {} {} ORDER BY tables",
+            "SELECT tables AS name FROM mz_catalog.mz_tables WHERE schema_id = {} {} ORDER BY tables",
             schema_spec.id, filter
         )
     };
-    handle_generated_select(scx, query)
+    Ok(ShowSelect::new(scx, query))
 }
 
-fn handle_show_sources(
-    scx: &StatementContext,
+fn show_sources<'a>(
+    scx: &'a StatementContext<'a>,
     full: bool,
     materialized: bool,
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema_spec = if let Some(from) = from {
         scx.resolve_schema(from)?.1
     } else {
@@ -260,12 +262,12 @@ fn handle_show_sources(
 
     let query = if !full & !materialized {
         format!(
-            "SELECT sources FROM mz_catalog.mz_sources WHERE schema_id = {} {} ORDER BY sources",
+            "SELECT sources AS name FROM mz_catalog.mz_sources WHERE schema_id = {} {} ORDER BY sources",
             schema_spec.id, filter
         )
     } else if full & !materialized {
         format!(
-            "SELECT sources, type, CASE WHEN count > 0 then true ELSE false END materialized
+            "SELECT sources AS name, type, CASE WHEN count > 0 then true ELSE false END materialized
             FROM mz_catalog.mz_sources
             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.schema_id
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
@@ -279,7 +281,7 @@ fn handle_show_sources(
         )
     } else if !full & materialized {
         format!(
-            "SELECT sources
+            "SELECT sources AS name
             FROM mz_catalog.mz_sources
             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.schema_id
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
@@ -293,7 +295,7 @@ fn handle_show_sources(
         )
     } else {
         format!(
-            "SELECT sources, type
+            "SELECT sources AS name, type
             FROM mz_catalog.mz_sources
             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.schema_id
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
@@ -306,16 +308,16 @@ fn handle_show_sources(
             schema_spec.id, filter
         )
     };
-    handle_generated_select(scx, query)
+    Ok(ShowSelect::new(scx, query))
 }
 
-fn handle_show_views(
-    scx: &StatementContext,
+fn show_views<'a>(
+    scx: &'a StatementContext<'a>,
     full: bool,
     materialized: bool,
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema_spec = if let Some(from) = from {
         scx.resolve_schema(from)?.1
     } else {
@@ -329,7 +331,7 @@ fn handle_show_views(
 
     let query = if !full & !materialized {
         format!(
-            "SELECT views
+            "SELECT views AS name
              FROM mz_catalog.mz_views
              WHERE mz_catalog.mz_views.schema_id = {} {}
              ORDER BY views ASC",
@@ -338,7 +340,7 @@ fn handle_show_views(
     } else if full & !materialized {
         format!(
             "SELECT
-                views,
+                views AS name,
                 type,
                 count > 0 as materialized
              FROM mz_catalog.mz_views as mz_views
@@ -354,7 +356,7 @@ fn handle_show_views(
         )
     } else if !full & materialized {
         format!(
-            "SELECT views
+            "SELECT views AS name
              FROM mz_catalog.mz_views
              JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
                    FROM mz_views
@@ -368,7 +370,7 @@ fn handle_show_views(
         )
     } else {
         format!(
-            "SELECT views, type
+            "SELECT views AS name, type
              FROM mz_catalog.mz_views
              JOIN mz_catalog.mz_schemas ON mz_catalog.mz_views.schema_id = mz_catalog.mz_schemas.schema_id
              JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
@@ -382,15 +384,15 @@ fn handle_show_views(
             schema_spec.id, filter
         )
     };
-    handle_generated_select(scx, query)
+    Ok(ShowSelect::new(scx, query))
 }
 
-fn handle_show_sinks(
-    scx: &StatementContext,
+fn show_sinks<'a>(
+    scx: &'a StatementContext<'a>,
     full: bool,
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema_spec = if let Some(from) = from {
         scx.resolve_schema(from)?.1
     } else {
@@ -404,7 +406,7 @@ fn handle_show_sinks(
 
     let query = if full {
         format!(
-            "SELECT sinks, type
+            "SELECT sinks AS name, type
             FROM mz_catalog.mz_sinks
             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sinks.schema_id = mz_catalog.mz_schemas.schema_id
             WHERE schema_id = {} {}
@@ -413,21 +415,21 @@ fn handle_show_sinks(
         )
     } else {
         format!(
-            "SELECT sinks FROM mz_catalog.mz_sinks WHERE schema_id = {} {} ORDER BY sinks",
+            "SELECT sinks AS name FROM mz_catalog.mz_sinks WHERE schema_id = {} {} ORDER BY sinks",
             schema_spec.id, filter
         )
     };
-    handle_generated_select(scx, query)
+    Ok(ShowSelect::new(scx, query))
 }
 
-pub fn handle_show_indexes(
-    scx: &StatementContext,
+pub fn show_indexes<'a>(
+    scx: &'a StatementContext<'a>,
     ShowIndexesStatement {
         extended,
         table_name,
         filter,
     }: ShowIndexesStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED INDEXES")
     }
@@ -479,18 +481,18 @@ pub fn handle_show_indexes(
     } else {
         base_query
     };
-    handle_generated_select(scx, query)
+    Ok(ShowSelect::new(scx, query))
 }
 
-pub fn handle_show_columns(
-    scx: &StatementContext,
+pub fn show_columns<'a>(
+    scx: &'a StatementContext<'a>,
     ShowColumnsStatement {
         extended,
         full,
         table_name,
         filter,
     }: ShowColumnsStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED COLUMNS");
     }
@@ -515,19 +517,29 @@ pub fn handle_show_columns(
          ORDER BY mz_columns.field_number ASC",
         name, filter
     );
-    handle_generated_select(scx, query)
+    Ok(ShowSelect::new(scx, query))
 }
 
-fn handle_generated_select(scx: &StatementContext, query: String) -> Result<Plan, anyhow::Error> {
-    match parse::parse(query)?.into_element() {
-        Statement::Select(select) => super::handle_select(
-            scx,
-            select,
-            &Params {
-                datums: Row::pack(&[]),
-                types: vec![],
-            },
-        ),
-        _ => unreachable!("known to be select statement"),
+pub struct ShowSelect<'a> {
+    scx: &'a StatementContext<'a>,
+    stmt: SelectStatement,
+}
+
+impl<'a> ShowSelect<'a> {
+    fn new(scx: &'a StatementContext, query: String) -> ShowSelect<'a> {
+        let stmts = parse::parse(query).expect("ShowSelect::new called with invalid SQL");
+        let stmt = match stmts.into_element() {
+            Statement::Select(select) => select,
+            _ => panic!("ShowSelect::new called with non-SELECT statement"),
+        };
+        ShowSelect { scx, stmt }
+    }
+
+    pub fn describe(self) -> Result<(Option<RelationDesc>, Vec<ScalarType>), anyhow::Error> {
+        super::describe_statement(self.scx.catalog, Statement::Select(self.stmt), &[])
+    }
+
+    pub fn handle(self) -> Result<Plan, anyhow::Error> {
+        super::handle_select(self.scx, self.stmt, &Params::empty())
     }
 }

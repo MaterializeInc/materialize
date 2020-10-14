@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, RelationExpr, ScalarExpr};
+use expr::{Id, JoinInputMapper, RelationExpr, ScalarExpr};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -82,19 +82,7 @@ impl JoinImplementation {
         } = relation
         {
             // Common information of broad utility.
-            // TODO: Figure out how to package this up for everyone who uses it.
-            let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-            let arities = types
-                .iter()
-                .map(|t| t.column_types.len())
-                .collect::<Vec<_>>();
-
-            let mut offset = 0;
-            let mut prior_arities = Vec::new();
-            for input in 0..inputs.len() {
-                prior_arities.push(offset);
-                offset += arities[input];
-            }
+            let input_mapper = JoinInputMapper::new(inputs);
 
             // The first fundamental question is whether we should employ a delta query or not.
             //
@@ -103,7 +91,7 @@ impl JoinImplementation {
             // with columns present in `indexes`, if it is an `ArrangeBy` with the columns present,
             // or a filter wrapped around either of these.
 
-            let unique_keys = types.iter().map(|t| t.keys.clone()).collect::<Vec<_>>();
+            let unique_keys = inputs.iter().map(|i| i.typ().keys).collect::<Vec<_>>();
             let mut available_arrangements = vec![Vec::new(); inputs.len()];
             for index in 0..inputs.len() {
                 // We can work around filters, as we can lift the predicates into the join execution.
@@ -148,12 +136,7 @@ impl JoinImplementation {
                 // TODO: expand `order_input`
                 available_arrangements[index].retain(|key| {
                     key.iter().all(|k| {
-                        let mut k = k.clone();
-                        k.visit_mut(&mut |e| {
-                            if let ScalarExpr::Column(c) = e {
-                                *c += prior_arities[index]
-                            }
-                        });
+                        let k = input_mapper.map_expr_to_global(k.clone(), index);
                         equivalences
                             .iter()
                             .any(|equivalence| equivalence.contains(&k))
@@ -166,15 +149,13 @@ impl JoinImplementation {
             // but we could imagine wanting the best from each and then comparing the two.
             let delta_query_plan = delta_queries::plan(
                 relation,
-                &arities,
-                &prior_arities,
+                &input_mapper,
                 &available_arrangements,
                 &unique_keys,
             );
             let differential_plan = differential::plan(
                 relation,
-                &arities,
-                &prior_arities,
+                &input_mapper,
                 &available_arrangements,
                 &unique_keys,
             );
@@ -188,15 +169,14 @@ impl JoinImplementation {
 
 mod delta_queries {
 
-    use expr::{JoinImplementation, RelationExpr, ScalarExpr};
+    use expr::{JoinImplementation, JoinInputMapper, RelationExpr, ScalarExpr};
 
     /// Creates a delta query plan, and any predicates that need to be lifted.
     ///
     /// The method returns `None` if it fails to find a sufficiently pleasing plan.
     pub fn plan(
         join: &RelationExpr,
-        arities: &[usize],
-        prior_arities: &[usize],
+        input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<ScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
     ) -> Option<RelationExpr> {
@@ -217,20 +197,9 @@ mod delta_queries {
                 // filters will always be planned as delta queries.
                 return None;
             }
-            let input_relation = arities
-                .iter()
-                .enumerate()
-                .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                .collect::<Vec<_>>();
 
             // Determine a viable order for each relation, or return `None` if none found.
-            let orders = super::optimize_orders(
-                equivalences,
-                available,
-                unique_keys,
-                &input_relation[..],
-                prior_arities,
-            );
+            let orders = super::optimize_orders(equivalences, available, unique_keys, input_mapper);
 
             // A viable delta query requires that, for every order,
             // there is an arrangement for every input except for
@@ -258,7 +227,7 @@ mod delta_queries {
             super::implement_arrangements(
                 inputs,
                 available,
-                prior_arities,
+                input_mapper,
                 orders.iter().flatten(),
                 &mut lifted,
             );
@@ -291,13 +260,12 @@ mod delta_queries {
 
 mod differential {
 
-    use expr::{JoinImplementation, RelationExpr, ScalarExpr};
+    use expr::{JoinImplementation, JoinInputMapper, RelationExpr, ScalarExpr};
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
     pub fn plan(
         join: &RelationExpr,
-        arities: &[usize],
-        prior_arities: &[usize],
+        input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<ScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
     ) -> Option<RelationExpr> {
@@ -315,24 +283,13 @@ mod differential {
             }
             equivalences.sort();
 
-            let input_relation = arities
-                .iter()
-                .enumerate()
-                .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                .collect::<Vec<_>>();
-
             // We prefer a starting point based on the characteristics of the other input arrangements.
             // We could change this preference at any point, but the list of orders should still inform.
             // Important, we should choose something stable under re-ordering, to converge under fixed
             // point iteration; we choose to start with the first input optimizing our criteria, which
             // should remain stable even when promoted to the first position.
-            let mut orders = super::optimize_orders(
-                equivalences,
-                available,
-                unique_keys,
-                &input_relation[..],
-                prior_arities,
-            );
+            let mut orders =
+                super::optimize_orders(equivalences, available, unique_keys, input_mapper);
 
             // For differential join, it is not as important for the starting
             // input to have good characteristics because the other ones
@@ -378,7 +335,7 @@ mod differential {
             super::implement_arrangements(
                 inputs,
                 available,
-                prior_arities,
+                input_mapper,
                 order.iter(),
                 &mut lifted,
             );
@@ -423,7 +380,7 @@ mod differential {
 fn implement_arrangements<'a>(
     inputs: &mut [RelationExpr],
     available_arrangements: &[Vec<Vec<ScalarExpr>>],
-    prior_arities: &[usize],
+    input_mapper: &JoinInputMapper,
     needed_arrangements: impl Iterator<Item = &'a (usize, Vec<ScalarExpr>)>,
     lifted_predicates: &mut Vec<ScalarExpr>,
 ) {
@@ -449,14 +406,11 @@ fn implement_arrangements<'a>(
                 predicates,
             } = &mut inputs[index]
             {
-                lifted_predicates.extend(predicates.drain(..).map(|mut expr| {
-                    expr.visit_mut(&mut |e| {
-                        if let ScalarExpr::Column(c) = e {
-                            *c += prior_arities[index]
-                        }
-                    });
-                    expr
-                }));
+                lifted_predicates.extend(
+                    predicates
+                        .drain(..)
+                        .map(|expr| input_mapper.map_expr_to_global(expr, index)),
+                );
                 inputs[index] = inner.take_dangerous();
             }
         }
@@ -474,16 +428,9 @@ fn optimize_orders(
     equivalences: &[Vec<ScalarExpr>],
     available: &[Vec<Vec<ScalarExpr>>],
     unique_keys: &[Vec<Vec<usize>>],
-    input_relation: &[usize],
-    prior_arities: &[usize],
+    input_mapper: &JoinInputMapper,
 ) -> Vec<Vec<(Characteristics, Vec<ScalarExpr>, usize)>> {
-    let mut orderer = Orderer::new(
-        equivalences,
-        available,
-        unique_keys,
-        input_relation,
-        prior_arities,
-    );
+    let mut orderer = Orderer::new(equivalences, available, unique_keys, input_mapper);
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
         .collect::<Vec<_>>()
@@ -524,8 +471,7 @@ struct Orderer<'a> {
     equivalences: &'a [Vec<ScalarExpr>],
     arrangements: &'a [Vec<Vec<ScalarExpr>>],
     unique_keys: &'a [Vec<Vec<usize>>],
-    input_relation: &'a [usize],
-    prior_arities: &'a [usize],
+    input_mapper: &'a JoinInputMapper,
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
     unique_arrangement: Vec<Vec<bool>>,
 
@@ -542,16 +488,15 @@ impl<'a> Orderer<'a> {
         equivalences: &'a [Vec<ScalarExpr>],
         arrangements: &'a [Vec<Vec<ScalarExpr>>],
         unique_keys: &'a [Vec<Vec<usize>>],
-        input_relation: &'a [usize],
-        prior_arities: &'a [usize],
+        input_mapper: &'a JoinInputMapper,
     ) -> Self {
         let inputs = arrangements.len();
         // A map from inputs to the equivalence classes in which they are referenced.
         let mut reverse_equivalences = vec![Vec::new(); inputs];
         for (index, equivalence) in equivalences.iter().enumerate() {
             for (index2, expr) in equivalence.iter().enumerate() {
-                for column in expr.support() {
-                    reverse_equivalences[input_relation[column]].push((index, index2));
+                for input in input_mapper.lookup_inputs(expr) {
+                    reverse_equivalences[input].push((index, index2));
                 }
             }
         }
@@ -578,8 +523,7 @@ impl<'a> Orderer<'a> {
             equivalences,
             arrangements,
             unique_keys,
-            input_relation,
-            prior_arities,
+            input_mapper,
             reverse_equivalences,
             unique_arrangement,
             order,
@@ -650,50 +594,15 @@ impl<'a> Orderer<'a> {
         // use an arrangement if there exists one that lines up with the keys of
         // the second input
         if let Some((_, key, second)) = self.order.get(0) {
-            // for each element in key ...
+            // for each key of the second input, try to find the corresponding key in
+            // the starting input
             let candidate_start_key = key
                 .iter()
                 .filter_map(|k| {
-                    let mut k = k.clone();
-                    k.visit_mut(&mut |e| {
-                        if let ScalarExpr::Column(c) = e {
-                            *c += self.prior_arities[*second]
-                        }
-                    });
-                    // ... find the equivalence it belongs to ...
-                    if let Some(key_equivalence) = self
-                        .equivalences
-                        .iter()
-                        .position(|e| e.iter().any(|expr| expr == &k))
-                    {
-                        // ... then within that equivalence, find the position
-                        // of an expression that came from start ...
-                        let key_pos =
-                            self.reverse_equivalences[start]
-                                .iter()
-                                .find_map(|(idx, idx2)| {
-                                    if idx == &key_equivalence {
-                                        Some(idx2)
-                                    } else {
-                                        None
-                                    }
-                                });
-                        // ... extract the expression that came from start
-                        // and shift the column numbers
-                        if let Some(key_pos) = key_pos {
-                            let mut result = self.equivalences[key_equivalence][*key_pos].clone();
-                            result.visit_mut(&mut |e| {
-                                if let ScalarExpr::Column(c) = e {
-                                    *c -= self.prior_arities[start]
-                                }
-                            });
-                            Some(result)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
+                    let k = self.input_mapper.map_expr_to_global(k.clone(), *second);
+                    self.input_mapper
+                        .find_bound_expr(&k, &[start], self.equivalences)
+                        .map(|bound_key| self.input_mapper.map_expr_to_local(bound_key))
                 })
                 .collect::<Vec<_>>();
             if candidate_start_key.len() == key.len() {
@@ -727,19 +636,15 @@ impl<'a> Orderer<'a> {
                 // Placing `input` *may* activate the equivalence. Each of its columns
                 // come in to scope, which may result in an expression in `equivalence`
                 // becoming fully defined (when its support is contained in placed inputs)
-                let fully_supported = self.equivalences[*equivalence][*expr_index]
-                    .support()
-                    .iter()
-                    .all(|c| self.placed[self.input_relation[*c]]);
+                let fully_supported = self
+                    .input_mapper
+                    .lookup_inputs(&self.equivalences[*equivalence][*expr_index])
+                    .all(|i| self.placed[i]);
                 if fully_supported {
                     self.equivalences_active[*equivalence] = true;
                     for expr in self.equivalences[*equivalence].iter() {
                         // find the relations that columns in the expression belong to
-                        let rels = expr
-                            .support()
-                            .into_iter()
-                            .map(|c| self.input_relation[c])
-                            .collect::<Vec<_>>();
+                        let mut rels = self.input_mapper.lookup_inputs(&expr);
                         // Skip the expression if
                         // * the expression is a literal -> this would translate
                         //   to `rels` being empty
@@ -748,60 +653,60 @@ impl<'a> Orderer<'a> {
                         //   this case. Arguably, if this happens, it would
                         //   not be unreasonable to ask the user to write the
                         //   query better.
-                        let rel = rels
-                            .get(0)
-                            .filter(|first_rel| rels[1..].iter().all(|rel| *first_rel == rel));
-                        if let Some(rel) = rel {
-                            let mut expr = expr.clone();
-                            expr.visit_mut(&mut |e| {
-                                if let ScalarExpr::Column(c) = e {
-                                    *c -= self.prior_arities[*rel];
-                                }
-                            });
-                            // Update bound columns.
-                            self.bound[*rel].push(expr);
-                            self.bound[*rel].sort();
+                        if let Some(rel) = rels.next() {
+                            if rels.next().is_none() {
+                                let expr = self.input_mapper.map_expr_to_local(expr.clone());
 
-                            // Reconsider all available arrangements.
-                            for (pos, keys) in self.arrangements[*rel].iter().enumerate() {
-                                if !self.arrangement_active[*rel].contains(&pos) {
-                                    // TODO: support the restoration of the
-                                    // following original lines, which have been
-                                    // commented out because Materialize may
-                                    // panic otherwise. The original line and comments
-                                    // here are:
-                                    // Determine if the arrangement is viable, which happens when the
-                                    // support of its keys are all bound.
-                                    // if keys.iter().all(|k| k.support().iter().all(|c| self.bound[*rel].contains(&ScalarExpr::Column(*c))) {
+                                // Update bound columns.
+                                self.bound[rel].push(expr);
+                                self.bound[rel].sort();
 
-                                    // Determine if the arrangement is viable,
-                                    // which happens when all its keys are bound.
-                                    if keys.iter().all(|k| self.bound[*rel].contains(k)) {
-                                        self.arrangement_active[*rel].push(pos);
-                                        // TODO: This could be pre-computed, as it is independent of the order.
-                                        let is_unique = self.unique_arrangement[*rel][pos];
-                                        self.priority_queue.push((
-                                            Characteristics::new(is_unique, keys.len(), true, *rel),
-                                            keys.clone(),
-                                            *rel,
-                                        ));
+                                // Reconsider all available arrangements.
+                                for (pos, keys) in self.arrangements[rel].iter().enumerate() {
+                                    if !self.arrangement_active[rel].contains(&pos) {
+                                        // TODO: support the restoration of the
+                                        // following original lines, which have been
+                                        // commented out because Materialize may
+                                        // panic otherwise. The original line and comments
+                                        // here are:
+                                        // Determine if the arrangement is viable, which happens when the
+                                        // support of its keys are all bound.
+                                        // if keys.iter().all(|k| k.support().iter().all(|c| self.bound[*rel].contains(&ScalarExpr::Column(*c))) {
+
+                                        // Determine if the arrangement is viable,
+                                        // which happens when all its keys are bound.
+                                        if keys.iter().all(|k| self.bound[rel].contains(k)) {
+                                            self.arrangement_active[rel].push(pos);
+                                            // TODO: This could be pre-computed, as it is independent of the order.
+                                            let is_unique = self.unique_arrangement[rel][pos];
+                                            self.priority_queue.push((
+                                                Characteristics::new(
+                                                    is_unique,
+                                                    keys.len(),
+                                                    true,
+                                                    rel,
+                                                ),
+                                                keys.clone(),
+                                                rel,
+                                            ));
+                                        }
                                     }
                                 }
+                                let is_unique = self.unique_keys[rel].iter().any(|cols| {
+                                    cols.iter()
+                                        .all(|c| self.bound[rel].contains(&ScalarExpr::Column(*c)))
+                                });
+                                self.priority_queue.push((
+                                    Characteristics::new(
+                                        is_unique,
+                                        self.bound[rel].len(),
+                                        false,
+                                        rel,
+                                    ),
+                                    self.bound[rel].clone(),
+                                    rel,
+                                ));
                             }
-                            let is_unique = self.unique_keys[*rel].iter().any(|cols| {
-                                cols.iter()
-                                    .all(|c| self.bound[*rel].contains(&ScalarExpr::Column(*c)))
-                            });
-                            self.priority_queue.push((
-                                Characteristics::new(
-                                    is_unique,
-                                    self.bound[*rel].len(),
-                                    false,
-                                    *rel,
-                                ),
-                                self.bound[*rel].clone(),
-                                *rel,
-                            ));
                         }
                     }
                 }

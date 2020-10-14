@@ -32,6 +32,7 @@ use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle;
+use uuid::Uuid;
 
 use dataflow::source::persistence::PersistenceSender;
 use dataflow::{PersistenceMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
@@ -2941,7 +2942,8 @@ where
 }
 
 /// Begins coordinating user requests to the dataflow layer based on the
-/// provided configuration. Returns the thread that hosts the coordinator.
+/// provided configuration. Returns the thread that hosts the coordinator and
+/// the cluster ID.
 ///
 /// To gracefully shut down the coordinator, send a `Message::Shutdown` to the
 /// `cmd_rx` in the configuration, then join on the thread.
@@ -2958,7 +2960,7 @@ pub async fn serve<C>(
         logical_compaction_window,
         experimental_mode,
     }: Config<'_, C>,
-) -> Result<JoinHandle<()>, anyhow::Error>
+) -> Result<(JoinHandle<()>, Uuid), anyhow::Error>
 where
     C: comm::Connection,
 {
@@ -3024,6 +3026,7 @@ where
             enable_logging: logging_granularity.is_some(),
             persistence_directory: persistence_config.map(|pc| pc.path),
         })?;
+        let cluster_id = catalog.cluster_id();
 
         let mut coord = Coordinator {
             broadcast_tx: switchboard.broadcast_tx(dataflow::BroadcastToken),
@@ -3047,10 +3050,10 @@ where
             transient_id_counter: 1,
         };
         coord.bootstrap().await?;
-        Ok(coord)
+        Ok((coord, cluster_id))
     };
-    let coord = match coord.await {
-        Ok(coord) => coord,
+    let (coord, cluster_id) = match coord.await {
+        Ok((coord, cluster_id)) => (coord, cluster_id),
         Err(e) => {
             broadcast(&mut broadcast_tx, SequencedCommand::Shutdown).await;
             return Err(e);
@@ -3064,10 +3067,13 @@ where
     // it holds various non-thread-safe state across await points. This means we
     // can't use `tokio::spawn`, but instead have to spawn a dedicated thread to
     // run the future.
-    Ok(thread::spawn({
-        let executor = Handle::current();
-        move || executor.block_on(coord.serve(cmd_rx, feedback_rx))
-    }))
+    Ok((
+        thread::spawn({
+            let executor = Handle::current();
+            move || executor.block_on(coord.serve(cmd_rx, feedback_rx))
+        }),
+        cluster_id,
+    ))
 }
 
 async fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {

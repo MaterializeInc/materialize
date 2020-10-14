@@ -57,17 +57,7 @@ where
                 equivalence.dedup();
             }
 
-            let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-            let arities = types
-                .iter()
-                .map(|t| t.column_types.len())
-                .collect::<Vec<_>>();
-            let mut offset = 0;
-            let mut prior_arities = Vec::new();
-            for input in 0..inputs.len() {
-                prior_arities.push(offset);
-                offset += arities[input];
-            }
+            let input_mapper = expr::JoinInputMapper::new(inputs);
 
             // Unwrap demand
             // TODO: If we pushed predicates into the operator, we could have a
@@ -79,9 +69,7 @@ where
             let (mut joined, mut errs) = self.collection(&inputs[*start]).unwrap();
 
             // Maintain sources of each in-progress column.
-            let mut source_columns = (prior_arities[*start]
-                ..prior_arities[*start] + arities[*start])
-                .collect::<Vec<_>>();
+            let mut source_columns = input_mapper.global_columns(*start).collect::<Vec<_>>();
 
             let mut predicates = predicates.to_vec();
             if start_arr.is_none() || inputs.len() == 1 {
@@ -100,15 +88,15 @@ where
                 }
             }
 
+            // We track the input relations as they are
+            // added to the join so we can figure out
+            // which expressions have been bound.
+            let mut bound_inputs = vec![*start];
             for (input_index, (input, next_keys)) in order.iter().enumerate() {
-                let mut next_keys_rebased = next_keys.clone();
-                for expr in next_keys_rebased.iter_mut() {
-                    expr.visit_mut(&mut |e| {
-                        if let ScalarExpr::Column(c) = e {
-                            *c += prior_arities[*input];
-                        }
-                    });
-                }
+                let next_keys_rebased = next_keys
+                    .iter()
+                    .map(|k| input_mapper.map_expr_to_global(k.clone(), *input))
+                    .collect::<Vec<_>>();
 
                 // Keys for the next input to be joined must be produced from
                 // ScalarExprs found in `equivalences`, re-written to bind the
@@ -116,26 +104,9 @@ where
                 let prev_keys = next_keys_rebased
                     .iter()
                     .map(|expr| {
-                        // We expect to find `expr` in some `equivalence` which
-                        // has a bound expression. Otherwise, the join plan is
-                        // defective and we should panic.
-                        let equivalence = equivalences
-                            .iter()
-                            .find(|equivs| equivs.contains(expr))
-                            .expect("Expression in join plan is not in an equivalence relation");
-
-                        // We expect to find exactly one bound expression, as
-                        // multiple bound expressions should result in a filter
-                        // and be removed once they have.
-                        let mut bound_expr = equivalence
-                            .iter()
-                            .find(|expr| {
-                                expr.support()
-                                    .into_iter()
-                                    .all(|c| source_columns.contains(&c))
-                            })
-                            .expect("Expression in join plan is not bound at time of use")
-                            .clone();
+                        let mut bound_expr = input_mapper
+                            .find_bound_expr(expr, &bound_inputs, &equivalences)
+                            .expect("Expression in join plan is not bound at time of use");
 
                         bound_expr.visit_mut(&mut |e| {
                             if let ScalarExpr::Column(c) = e {
@@ -168,11 +139,12 @@ where
                 }
                 column_demand.extend(demand.iter().cloned());
 
-                let next_vals = (0..arities[*input])
-                    .filter(|c| column_demand.contains(&(prior_arities[*input] + c)))
+                let next_source_vals = input_mapper
+                    .global_columns(*input)
+                    .filter(|c| column_demand.contains(c))
                     .collect::<Vec<_>>();
 
-                let next_source_vals = next_vals.clone();
+                let next_vals = input_mapper.map_columns_to_local(&next_source_vals);
 
                 // When joining the first input, check to see if there is a
                 // convenient ready-made arrangement
@@ -255,10 +227,7 @@ where
 
                 joined = j;
                 errs = errs.concat(&es);
-                source_columns = prev_vals
-                    .into_iter()
-                    .chain(next_source_vals.iter().map(|i| prior_arities[*input] + *i))
-                    .collect();
+                source_columns = prev_vals.into_iter().chain(next_source_vals).collect();
 
                 let (j, es) = crate::render::delta_join::build_filter(
                     joined,
@@ -270,6 +239,8 @@ where
                 if let Some(es) = es {
                     errs = errs.concat(&es);
                 }
+
+                bound_inputs.push(*input);
             }
 
             // We are obliged to produce demanded columns in order, with dummy data allowed

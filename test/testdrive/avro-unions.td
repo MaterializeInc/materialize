@@ -30,7 +30,7 @@ $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
 
 > SHOW COLUMNS FROM unions
-Field      Nullable  Type
+field      nullable  type
 -------------------------
 a          NO        int8
 b          YES       int8
