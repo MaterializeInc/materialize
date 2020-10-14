@@ -67,10 +67,10 @@ b  sum
 2  1
 
 > SHOW COLUMNS FROM test1
-field nullable type
+name nullable type
 -------------------
-b     NO       int8
-sum   YES      int8
+b     false   int8
+sum   true    int8
 
 > SHOW VIEWS LIKE '%data%'
 data_view

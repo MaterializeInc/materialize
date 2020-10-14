@@ -79,11 +79,10 @@ in the system.
 
 Field            | Meaning
 -----------------|----------
-`qualified_name` | The fully qualified name of the table, source, and view containing the column. E.g., `materialize.public.table`.
-`global_id`      | The unique id of the table, source, and view containing the column.
-`field_number`   | The index of the column in the table, source, and view.
-`field`          | The name of the column, or `?column?` if unknown.
-`nullable`       | Boolean value indicating whether or not the given column can contain a null value.
+`global_id`      | The unique ID of the table, source, or view containing the column.
+`name`           | The name of the column.
+`field_number`   | The index of the column in its containing table, source, or view.
+`nullable`       | Can the column contain a `NULL` value?
 `type`           | The data type of the column.
 
 ### `mz_indexes`

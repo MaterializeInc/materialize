@@ -289,8 +289,8 @@ lazy_static! {
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
             .with_column("field_number", ScalarType::Int64.nullable(false))
-            .with_column("field", ScalarType::String.nullable(false))
             .with_column("nullable", ScalarType::Bool.nullable(false))
             .with_column("type", ScalarType::String.nullable(false)),
         id: GlobalId::System(2013),
@@ -684,7 +684,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_attribute AS SELECT
     oid as attrelid,
-    field as attname,
+    name as attname,
     field_number as attnum,
     NOT nullable as attnotnull
 FROM mz_catalog.mz_tables JOIN mz_catalog.mz_columns ON mz_tables.global_id = mz_columns.global_id",

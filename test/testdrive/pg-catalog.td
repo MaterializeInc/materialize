@@ -8,54 +8,54 @@
 # by the Apache License, Version 2.0.
 
 > SHOW COLUMNS FROM pg_namespace
-field    nullable  type
+name     nullable  type
 --------------------------
-oid      NO        oid
-nspname  NO        text
-nspowner YES       oid
-nspacl   YES       _text
+oid      false     oid
+nspname  false     text
+nspowner true      oid
+nspacl   true      _text
 
 > SHOW COLUMNS FROM pg_class
-field        nullable  type
---------------------------
-oid          NO        oid
-relname      NO        text
-relnamespace NO        oid
-relowner     YES       oid
-relkind      YES       text
+name         nullable  type
+---------------------------
+oid          false     oid
+relname      false     text
+relnamespace false     oid
+relowner     true      oid
+relkind      true      text
 
 > SHOW COLUMNS FROM pg_database
-field        nullable  type
---------------------------
- oid         NO        oid
- datname     NO        text
- datdba      YES       oid
- encoding    NO        int4
- datcollate  NO        text
- datctype    NO        text
- datacl      YES       _text
+name         nullable  type
+---------------------------
+ oid         false     oid
+ datname     false     text
+ datdba      true      oid
+ encoding    false     int4
+ datcollate  false     text
+ datctype    false     text
+ datacl      true      _text
 
 > SHOW COLUMNS FROM pg_index
-field        nullable  type
+name        nullable  type
 --------------------------
-indexrelid   NO        oid
-indrelid     NO        oid
+indexrelid  false     oid
+indrelid    false     oid
 
 > SHOW COLUMNS FROM pg_description
-field        nullable  type
---------------------------
-objoid       NO        oid
-classoid     YES       oid
-objsubid     NO        int4
-description  YES       text
+name         nullable  type
+---------------------------
+objoid       false     oid
+classoid     true      oid
+objsubid     false     int4
+description  true      text
 
 > SHOW COLUMNS FROM pg_attribute
-field        nullable  type
---------------------------
-attrelid     NO        oid
-attname      NO        text
-attnum       NO        int8
-attnotnull   NO        bool
+name         nullable  type
+---------------------------
+attrelid     false     oid
+attname      false     text
+attnum       false     int8
+attnotnull   false     bool
 
 ! SELECT current_schemas()
 Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;

@@ -47,14 +47,14 @@ t        t_primary_idx  b            <null>      false  2
 cannot drop 'materialize.public.t_primary_idx' as it is the default index for a table
 
 > SHOW COLUMNS in t;
-field      nullable  type
+name       nullable  type
 -------------------------
-a          YES       int4
-b          NO        text
-> SHOW COLUMNS in t WHERE Field = 'a'
-a  YES  int4
+a          true       int4
+b          false      text
+> SHOW COLUMNS in t WHERE name = 'a'
+a  true  int4
 > SHOW COLUMNS in t LIKE 'b%'
-b  NO  text
+b  false  text
 
 > INSERT INTO t VALUES (1, 'a');
 

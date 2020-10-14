@@ -438,7 +438,7 @@ pub fn show_indexes<'a>(
         "SELECT
             objs.name AS on_name,
             idxs.indexes AS key_name,
-            cols.field AS column_name,
+            cols.name AS column_name,
             idxs.expression AS expression,
             idxs.nullable AS nullable,
             idxs.seq_in_index AS seq_in_index
@@ -489,21 +489,21 @@ pub fn show_columns<'a>(
     }
 
     let name = scx.resolve_item(table_name)?;
+    let entry = scx.catalog.get_item(&name);
     let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("AND field LIKE {}", Value::String(like)),
+        Some(ShowStatementFilter::Like(like)) => format!("AND name LIKE {}", Value::String(like)),
         Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
         None => "".to_owned(),
     };
     let query = format!(
         "SELECT
-            mz_columns.field,
-            CASE WHEN mz_columns.nullable THEN 'YES' ELSE 'NO' END nullable,
+            mz_columns.name,
+            mz_columns.nullable,
             mz_columns.type
          FROM mz_catalog.mz_columns AS mz_columns
-         JOIN mz_catalog.mz_catalog_names AS mz_catalog_names ON mz_columns.global_id = mz_catalog_names.global_id
-         WHERE mz_catalog_names.name = '{}' {}
+         WHERE mz_columns.global_id = '{}' {}
          ORDER BY mz_columns.field_number ASC",
-        name, filter
+        entry.id(), filter
     );
     Ok(ShowSelect::new(scx, query))
 }
