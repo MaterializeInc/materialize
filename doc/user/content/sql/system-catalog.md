@@ -51,27 +51,6 @@ information about the sinks available in a Materialize.
 The following sections describe the available objects in the `mz_catalog`
 schema.
 
-### `mz_databases`
-
-The `mz_databases` table contains a row for each database in the system.
-
-Field  | Type       | Meaning
--------|------------|--------
-`id`   | [`bigint`] | Materialize's unique ID for the database.
-`oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the database.
-`name` | [`text`]   | The name of the database.
-
-### `mz_schemas`
-
-The `mz_schemas` table contains a row for each schema in the system.
-
-Field         | Type       | Meaning
---------------|------------|--------
-`id`          | [`bigint`] | Materialize's unique ID for the schema.
-`oid`         | [`oid`]    | A [PostgreSQL-compatible oid][oid] for the schema.
-`database_id` | [`bigint`] | The ID of the database containing the schema.
-`name`        | [`text`]   | The name of the schema.
-
 ### `mz_columns`
 
 The `mz_columns` contains a row for each column in each table, source, and view
@@ -84,6 +63,16 @@ Field            | Type        | Meaning
 `field_number`   | [`bigint`]  | The index of the column in its containing table, source, or view.
 `nullable`       | [`boolean`] | Can the column contain a `NULL` value?
 `type`           | [`text`]    | The data type of the column.
+
+### `mz_databases`
+
+The `mz_databases` table contains a row for each database in the system.
+
+Field  | Type       | Meaning
+-------|------------|--------
+`id`   | [`bigint`] | Materialize's unique ID for the database.
+`oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the database.
+`name` | [`text`]   | The name of the database.
 
 ### `mz_indexes`
 
@@ -104,6 +93,19 @@ Field          | Type        | Meaning
 `nullable`     | [`boolean`] | Can this column of the index evaluate to `NULL`?
 `seq_in_index` | [`bigint`]  | The position of this component within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)
 
+### `mz_objects`
+
+The `mz_objects` view contains a row for each table, source, view, sink, and
+index in the system.
+
+Field       | Type       | Meaning
+------------|------------|--------
+`id`        | [`text`]   | Materialize's unique ID for the object.
+`oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the object.
+`schema_id` | [`bigint`] | The ID of the schema to which the object belongs.
+`name`      | [`text`]   | The name of the object.
+`type`      | [`text`]   | The type of the object: either `table`, `source`, `view`, `sink`, or `index`.
+
 ### `mz_relations`
 
 The `mz_relations` view contains a row for each table, source, and view in the
@@ -117,19 +119,16 @@ Field       | Type       | Meaning
 `name`      | [`text`]   | The name of the relation.
 `type`      | [`text`]   | The type of the relation: either `table`, `source`, or `view`.
 
+### `mz_schemas`
 
-### `mz_objects`
+The `mz_schemas` table contains a row for each schema in the system.
 
-The `mz_objects` view contains a row for each table, source, view, sink, and
-index in the system.
-
-Field       | Type       | Meaning
-------------|------------|--------
-`id`        | [`text`]   | Materialize's unique ID for the object.
-`oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the object.
-`schema_id` | [`bigint`] | The ID of the schema to which the object belongs.
-`name`      | [`text`]   | The name of the object.
-`type`      | [`text`]   | The type of the object: either `table`, `source`, `view`, `sink`, or `index`.
+Field         | Type       | Meaning
+--------------|------------|--------
+`id`          | [`bigint`] | Materialize's unique ID for the schema.
+`oid`         | [`oid`]    | A [PostgreSQL-compatible oid][oid] for the schema.
+`database_id` | [`bigint`] | The ID of the database containing the schema.
+`name`        | [`text`]   | The name of the schema.
 
 ### `mz_sinks`
 
