@@ -594,6 +594,8 @@ where
                                     .await?
                             }
 
+                            Plan::SendRows(rows) => send_immediate_rows(rows),
+
                             _ => bail!("unsupported plan"),
                         };
                         Ok(NoSessionExecuteResponse { desc, response })

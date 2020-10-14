@@ -129,6 +129,7 @@ function View(props) {
   const [opers, setOpers] = useState(null);
   const [chans, setChans] = useState(null);
   const [elapsed, setElapsed] = useState(null);
+  const [view, setView] = useState(null);
   const [graph, setGraph] = useState(null);
   const [dot, setDot] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -152,10 +153,11 @@ function View(props) {
         throw `unknown dataflow id ${props.dataflow_id}`;
       }
       const stats_row = stats_table.rows[0];
-      setStats({
+      const stats = {
         name: stats_row[0],
         records: stats_row[1],
-      });
+      };
+      setStats(stats);
 
       // 1) Find the address id's value for this dataflow (innermost subselect).
       // 2) Find all address ids whose first slot value is that (second innermost subselect).
@@ -298,6 +300,14 @@ function View(props) {
       `);
       setElapsed(Object.fromEntries(elapsed_table.rows));
 
+      try {
+        const view = await getCreateView(stats.name);
+        setView(view);
+      } catch (error) {
+        console.debug('could not get create view:', error);
+        setView(null);
+      }
+
       setLoading(false);
     };
     load().catch((error) => {
@@ -395,15 +405,29 @@ function View(props) {
     hpccWasm.graphviz.layout(dot, 'svg', 'dot').then(setGraph);
   }, [loading]);
 
+  let viewText = null;
+  if (view) {
+    viewText = (
+      <div style={{ margin: '1em' }}>
+        View: {view.name}
+        <div style={{ padding: '.5em', backgroundColor: '#f5f5f5' }}>
+          {view.create}
+        </div>
+      </div>
+    );
+  }
+
   let dotLink = null;
   if (dot) {
     const link = new URL('https://materialize.io/memory-visualization/');
     // Pass information as a JSON object to allow for easily extending this in
     // the future. The hash is used instead of search because it reduces privacy
     // concerns and avoids server-side URL size limits.
-    let data = JSON.stringify({
-      dot: dot,
-    });
+    let data = { dot: dot };
+    if (view) {
+      data.view = view;
+    }
+    data = JSON.stringify(data);
     // Compress data and encode as base64 so it's URL-safe.
     data = pako.deflate(data, { to: 'string' });
     link.hash = btoa(data);
@@ -423,11 +447,74 @@ function View(props) {
             {stats.records}
           </h3>
           {dotLink}
+          {viewText}
           <div dangerouslySetInnerHTML={{ __html: graph }}></div>
         </div>
       )}
     </div>
   );
+}
+
+async function getCreateView(dataflow_name) {
+  // dataflow_name is the full name of the dataflow operator. It is generally
+  // of the form "Dataflow: <database>.<schema>.<index name>". We will use a
+  // regex to parse these out and use them to get the fully qualified view name
+  // which we will use with SHOW CREATE VIEW to show the SQL that created this
+  // dataflow.
+  //
+  // There are known problems with this method. It doesn't know anything about
+  // SQL parsing or escaping, assumes the dataflow operator's name is of a very
+  // specific shape, and assumes a CREATE VIEW statement made an index which made
+  // this dataflow. So we assume that problems can happen at any level here and
+  // will cleanly bail if anything doesn't exactly match what we want. In that
+  // case we will not show the SQL. This is intended to be good enough for most
+  // users for now.
+  const match = dataflow_name.match(/^Dataflow: (.*)\.(.*)\.(.*)$/);
+  if (!match) {
+    throw 'unknown dataflow name pattern';
+  }
+  const view_name_table = await query(`
+    SELECT
+      d.name AS database, s.schema, s.view
+    FROM
+      mz_catalog.mz_databases AS d
+      JOIN (
+          SELECT
+            s.database_id, s.name AS schema, v.view
+          FROM
+            mz_catalog.mz_schemas AS s
+            JOIN (
+                SELECT
+                  name AS view, schema_id
+                FROM
+                  mz_catalog.mz_views
+                WHERE
+                  id
+                  = (
+                      SELECT
+                        DISTINCT idx.on_id
+                      FROM
+                        mz_catalog.mz_databases AS db,
+                        mz_catalog.mz_schemas AS sc,
+                        mz_catalog.mz_indexes AS idx
+                      WHERE
+                        db.name = '${match[1]}'
+                        AND sc.name = '${match[2]}'
+                        AND idx.name = '${match[3]}'
+                    )
+              )
+                AS v ON s.id = v.schema_id
+        )
+          AS s ON d.id = s.database_id;
+  `);
+  if (view_name_table.rows.length !== 1) {
+    throw 'could not determine view';
+  }
+  const name = view_name_table.rows[0];
+  const create_table = await query(
+    `SHOW CREATE VIEW "${name[0]}"."${name[1]}"."${name[2]}"`
+  );
+  return { name: create_table.rows[0][0], create: create_table.rows[0][1] };
 }
 
 function makeAddrStr(addrs, id, other) {
