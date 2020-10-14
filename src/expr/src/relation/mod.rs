@@ -300,7 +300,7 @@ impl RelationExpr {
                             let mut new_key: Vec<usize> =
                                 key.iter().cloned().filter(|k| k != &old).collect();
                             new_key.push(new);
-                            new_key.sort();
+                            new_key.sort_unstable();
                             new_keys.push(new_key);
                         }
                     }

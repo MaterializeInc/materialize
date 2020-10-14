@@ -95,10 +95,7 @@ pub enum Datum<'a> {
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {
-        match self {
-            Datum::Null => true,
-            _ => false,
-        }
+        matches!(self, Datum::Null)
     }
 
     /// Unwraps the boolean value within this datum.

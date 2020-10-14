@@ -1539,11 +1539,7 @@ fn handle_explain(
     }: ExplainStatement,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    let is_view = if let Explainee::View(_) = explainee {
-        true
-    } else {
-        false
-    };
+    let is_view = matches!(explainee, Explainee::View(_));
     let (scx, query) = match explainee {
         Explainee::View(name) => {
             let full_name = scx.resolve_item(name.clone())?;

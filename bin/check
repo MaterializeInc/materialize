@@ -120,7 +120,13 @@ disabled_lints=(
     # style with similar blocks of nearby code.
     clippy::match_bool
 
-    # Upsteam description: https://rust-lang.github.io/rust-clippy/master/index.html#needless_lifetimes
+    # Upstream description: https://github.com/rust-lang/rust-clippy/issues/5991
+    #
+    # This lint has too many false positives in Rust v1.47.0.
+    # See: https://github.com/rust-lang/rust-clippy/issues/5991
+    clippy::needless-collect
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#needless_lifetimes
     #
     # Lifetime elision sometimes gives surprising results, and especially in
     # unsafe code it's useful to spell out lifetimes explicitly to be sure.

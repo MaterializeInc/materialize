@@ -505,11 +505,8 @@ impl AggregateFunc {
             AggregateFunc::SumInt32 => ScalarType::Int64,
             _ => input_type.scalar_type,
         };
-        let nullable = match self {
-            AggregateFunc::Count => false,
-            // max/min/sum return null on empty sets
-            _ => true,
-        };
+        // max/min/sum return null on empty sets
+        let nullable = !matches!(self, AggregateFunc::Count);
         scalar_type.nullable(nullable)
     }
 }

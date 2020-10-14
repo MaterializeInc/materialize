@@ -957,10 +957,7 @@ pub fn parse_schema(schema: &str) -> anyhow::Result<Schema> {
 }
 
 fn is_null(schema: &SchemaPieceOrNamed) -> bool {
-    match schema {
-        SchemaPieceOrNamed::Piece(SchemaPiece::Null) => true,
-        _ => false,
-    }
+    matches!(schema, SchemaPieceOrNamed::Piece(SchemaPiece::Null))
 }
 
 fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> anyhow::Result<RowPacker> {
