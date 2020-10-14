@@ -748,7 +748,7 @@ name
 ----
 renamed_j
 
-> SELECT tables FROM mz_tables WHERE global_id like 'u%';
-tables
+> SELECT name FROM mz_tables WHERE global_id like 'u%';
+name
 ------
 renamed_j

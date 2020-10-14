@@ -211,22 +211,22 @@ fn show_tables<'a>(
         scx.resolve_default_schema()?
     };
     let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("AND tables LIKE {}", Value::String(like)),
+        Some(ShowStatementFilter::Like(like)) => format!("AND name LIKE {}", Value::String(like)),
         Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
         None => "".to_owned(),
     };
 
     let query = if full {
         format!(
-            "SELECT tables AS name, mz_internal.mz_classify_object_id(global_id) AS type
+            "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type
             FROM mz_catalog.mz_tables
             WHERE schema_id = {} {}
-            ORDER BY tables, type",
+            ORDER BY name, type",
             schema_spec.id, filter
         )
     } else {
         format!(
-            "SELECT tables AS name FROM mz_catalog.mz_tables WHERE schema_id = {} {} ORDER BY tables",
+            "SELECT name FROM mz_catalog.mz_tables WHERE schema_id = {} {} ORDER BY name",
             schema_spec.id, filter
         )
     };
@@ -247,7 +247,7 @@ fn show_sources<'a>(
     };
     let filter = match filter {
         Some(ShowStatementFilter::Like(like)) => {
-            format!("AND sources LIKE {}", Value::String(like))
+            format!("AND name LIKE {}", Value::String(like))
         }
         Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
         None => "".to_owned(),
@@ -255,12 +255,12 @@ fn show_sources<'a>(
 
     let query = if !full & !materialized {
         format!(
-            "SELECT sources AS name FROM mz_catalog.mz_sources WHERE schema_id = {} {} ORDER BY sources",
+            "SELECT name FROM mz_catalog.mz_sources WHERE schema_id = {} {} ORDER BY name",
             schema_spec.id, filter
         )
     } else if full & !materialized {
         format!(
-            "SELECT sources AS name, mz_internal.mz_classify_object_id(global_id) AS type,
+            "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type,
                 CASE WHEN count > 0 then true ELSE false END materialized
             FROM mz_catalog.mz_sources
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
@@ -269,12 +269,12 @@ fn show_sources<'a>(
                   GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
                 ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
             WHERE schema_id = {} {}
-            ORDER BY sources, type",
+            ORDER BY name, type",
             schema_spec.id, filter
         )
     } else if !full & materialized {
         format!(
-            "SELECT sources AS name
+            "SELECT name
             FROM mz_catalog.mz_sources
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
                   FROM mz_catalog.mz_sources
@@ -282,12 +282,12 @@ fn show_sources<'a>(
                   GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
                 ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
             WHERE schema_id = {} {} AND mz_indexes_count.count > 0
-            ORDER BY sources",
+            ORDER BY name",
             schema_spec.id, filter
         )
     } else {
         format!(
-            "SELECT sources AS name, mz_internal.mz_classify_object_id(global_id) AS type,
+            "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type,
             FROM mz_catalog.mz_sources
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
                   FROM mz_catalog.mz_sources
@@ -295,7 +295,7 @@ fn show_sources<'a>(
                   GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
                 ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
             WHERE schema_id = {} {} AND mz_indexes_count.count > 0
-            ORDER BY sources, type",
+            ORDER BY name, type",
             schema_spec.id, filter
         )
     };
@@ -315,23 +315,23 @@ fn show_views<'a>(
         scx.resolve_default_schema()?
     };
     let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("AND views LIKE {}", Value::String(like)),
+        Some(ShowStatementFilter::Like(like)) => format!("AND name LIKE {}", Value::String(like)),
         Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
         None => "".to_owned(),
     };
 
     let query = if !full & !materialized {
         format!(
-            "SELECT views AS name
+            "SELECT name
              FROM mz_catalog.mz_views
              WHERE mz_catalog.mz_views.schema_id = {} {}
-             ORDER BY views ASC",
+             ORDER BY name",
             schema_spec.id, filter
         )
     } else if full & !materialized {
         format!(
             "SELECT
-                views AS name,
+                name,
                 mz_internal.mz_classify_object_id(global_id) AS type,
                 count > 0 as materialized
              FROM mz_catalog.mz_views as mz_views
@@ -341,12 +341,12 @@ fn show_views<'a>(
                    GROUP BY mz_views.global_id) as mz_indexes_count
                 ON mz_views.global_id = mz_indexes_count.global_id
              WHERE mz_catalog.mz_views.schema_id = {} {}
-             ORDER BY views ASC",
+             ORDER BY name",
             schema_spec.id, filter
         )
     } else if !full & materialized {
         format!(
-            "SELECT views AS name
+            "SELECT name
              FROM mz_catalog.mz_views
              JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
                    FROM mz_views
@@ -355,12 +355,12 @@ fn show_views<'a>(
                 ON mz_views.global_id = mz_indexes_count.global_id
              WHERE mz_catalog.mz_views.schema_id = {}
                 AND mz_indexes_count.count > 0 {}
-             ORDER BY views ASC",
+             ORDER BY name",
             schema_spec.id, filter
         )
     } else {
         format!(
-            "SELECT views AS name, mz_internal.mz_classify_object_id(global_id) AS type
+            "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type
              FROM mz_catalog.mz_views
              JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
                    FROM mz_views
@@ -369,7 +369,7 @@ fn show_views<'a>(
                 ON mz_views.global_id = mz_indexes_count.global_id
              WHERE mz_catalog.mz_views.schema_id = {}
                 AND mz_indexes_count.count > 0 {}
-             ORDER BY views ASC",
+             ORDER BY name",
             schema_spec.id, filter
         )
     };
@@ -395,15 +395,15 @@ fn show_sinks<'a>(
 
     let query = if full {
         format!(
-            "SELECT sinks AS name, mz_classify_object_id(global_id) AS type
+            "SELECT name, mz_classify_object_id(global_id) AS type
             FROM mz_catalog.mz_sinks
             WHERE schema_id = {} {}
-            ORDER BY sinks, type",
+            ORDER BY name, type",
             schema_spec.id, filter
         )
     } else {
         format!(
-            "SELECT sinks AS name FROM mz_catalog.mz_sinks WHERE schema_id = {} {} ORDER BY sinks",
+            "SELECT name FROM mz_catalog.mz_sinks WHERE schema_id = {} {} ORDER BY name",
             schema_spec.id, filter
         )
     };
@@ -437,7 +437,7 @@ pub fn show_indexes<'a>(
     let base_query = format!(
         "SELECT
             objs.name AS on_name,
-            idxs.indexes AS key_name,
+            idxs.name AS key_name,
             cols.name AS column_name,
             idxs.expression AS expression,
             idxs.nullable AS nullable,
@@ -503,7 +503,8 @@ pub fn show_columns<'a>(
          FROM mz_catalog.mz_columns AS mz_columns
          WHERE mz_columns.global_id = '{}' {}
          ORDER BY mz_columns.field_number ASC",
-        entry.id(), filter
+        entry.id(),
+        filter
     );
     Ok(ShowSelect::new(scx, query))
 }

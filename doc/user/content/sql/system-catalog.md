@@ -87,16 +87,66 @@ Field            | Meaning
 
 ### `mz_indexes`
 
-The `mz_indexes` table contains a row for each index in the system.
+The `mz_indexes` table contains a row for each column in each index in the
+system. For example, an index on `(a, b + 1)` would have two rows in this table,
+one for each of the two columns in the index.
+
+For a given row, if `field_number` is null then `expression` will be nonnull, or
+vice-versa.
 
 Field          | Meaning
 ---------------|----------
-`global_id`    | The unique id of the index.
-`on_global_id` | The unique id of the table, source, or view the index is on.
-`field_number` | If not `NULL`, the index of the column in the table, source, and view the index `is` on.
-`expression`   | If not `NULL`, the expression that is evaluated to generate the index value.
-`nullable`     | Boolean value indicating whether or not the given index can contain a null value.
-`seq_in_index` | The index of the index within the list of indexes for a table, source, or view.
+`global_id`    | Materialize's unique ID for the index.
+`oid`          | A [PostgreSQL-compatible OID][oid] for the index.
+`on_global_id` | The ID of the relation on which the index is built.
+`field_number` | If not `NULL`, specifies the column of the relation that this index column references.
+`expression`   | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
+`nullable`     | Can this column of the index evaluate to `NULL`?
+`seq_in_index` | The position of this component within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)
+
+### `mz_sinks`
+
+The `mz_sinks` table contains a row for each sink in the system.
+
+Field          | Meaning
+---------------|----------
+`global_id`    | Materialize's unique ID for the sink.
+`oid`          | A [PostgreSQL-compatible OID][oid] for the sink.
+`schema_id`    | The ID of the schema to which the sink belongs.
+`name`         | The name of the sink.
+
+### `mz_sources`
+
+The `mz_sources` table contains a row for each source in the system.
+
+Field          | Meaning
+---------------|----------
+`global_id`    | Materialize's unique ID for the source.
+`oid`          | A [PostgreSQL-compatible OID][oid] for the source.
+`schema_id`    | The ID of the schema to which the source belongs.
+`name`         | The name of the source.
+
+### `mz_tables`
+
+The `mz_tables` table contains a row for each table in the system.
+
+Field          | Meaning
+---------------|----------
+`global_id`    | Materialize's unique ID for the table.
+`oid`          | A [PostgreSQL-compatible OID][oid] for the table.
+`schema_id`    | The ID of the schema to which the table belongs.
+`name`         | The name of the table.
+
+### `mz_views`
+
+The `mz_views` table contains a row for each view in the system.
+
+Field          | Meaning
+---------------|----------
+`global_id`    | Materialize's unique ID for the view.
+`oid`          | A [PostgreSQL-compatible OID][oid] for the view.
+`schema_id`    | The ID of the schema to which the view belongs.
+`name`         | The name of the view.
 
 ## `pg_catalog`
 

@@ -188,7 +188,7 @@ v
 > SHOW TABLES LIKE 'foo'
 > SHOW TABLES LIKE 'v%'
 v
-> SHOW TABLES WHERE tables = 'v'
+> SHOW TABLES WHERE name = 'v'
 v
 
 > SHOW SOURCES;
@@ -272,8 +272,8 @@ INSERT statement specifies duplicate column
 # Test pg_table_is_visible.
 > CREATE SCHEMA non_default
 > CREATE TABLE non_default.hidden (dummy int)
-> SELECT tables, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 1
-tables  visible
+> SELECT name, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 1
+name    visible
 ---------------
 hidden  false
 j       true
