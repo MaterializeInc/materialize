@@ -65,12 +65,13 @@ Field  | Meaning
 
 The `mz_schemas` table contains a row for each schema in the system.
 
-Field          | Meaning
----------------|----------
-`schema_id`    | The unique ID of the schema.
-`database_id`  | The `global_id` of the database containing the schema.
-`name`         | The name of the schema.
-`type`         | Either `"SYSTEM"` or `"USER"`. `"SYSTEM"` schemas are created and maintained by the Materialize system, and cannot be updated or deleted. `"USER"` schemas were created by a user of the system, and can be updated or deleted.
+Field         | Meaning
+--------------|----------
+`id`          | Materialize's unique ID for the schema.
+`oid`         | A [PostgreSQL-compatible oid][oid] for the schema.
+`database_id` | The ID of the database containing the schema.
+`name`        | The name of the schema.
+`type`        | Either `"SYSTEM"` or `"USER"`. `"SYSTEM"` schemas are created and maintained by the Materialize system, and cannot be updated or deleted. `"USER"` schemas were created by a user of the system, and can be updated or deleted.
 
 ### `mz_columns`
 
