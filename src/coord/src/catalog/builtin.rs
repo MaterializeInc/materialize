@@ -277,10 +277,10 @@ lazy_static! {
         name: "mz_schemas",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
+            .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("database_id", ScalarType::Int64.nullable(true))
-            .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("schema", ScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
             .with_column("type", ScalarType::String.nullable(false)),
         id: GlobalId::System(2011),
         index_id: GlobalId::System(2012),
@@ -399,9 +399,9 @@ pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog_names AS SELECT
     global_id,
-    coalesce(d.name || '.', '') || schema || '.' || o.name AS name
+    coalesce(d.name || '.', '') || s.name || '.' || o.name AS name
 FROM mz_catalog.mz_objects o
-JOIN mz_catalog.mz_schemas s ON s.schema_id = o.schema_id
+JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
     id: GlobalId::System(3002),
     needs_logs: false,
@@ -610,7 +610,7 @@ pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_namespace AS SELECT
 oid,
-schema AS nspname,
+name AS nspname,
 NULL::oid AS nspowner,
 NULL::text[] AS nspacl
 FROM mz_catalog.mz_schemas",
@@ -624,7 +624,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_class AS SELECT
     mz_objects.oid,
-    name AS relname,
+    mz_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
     NULL::oid AS relowner,
     CASE
@@ -634,7 +634,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
         WHEN mz_objects.type = 'view' THEN 'v'
     END relkind
 FROM mz_catalog.mz_objects
-JOIN mz_catalog.mz_schemas ON mz_schemas.schema_id = mz_objects.schema_id",
+JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id",
     id: GlobalId::System(3016),
     needs_logs: false,
 };

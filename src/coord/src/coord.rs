@@ -343,9 +343,9 @@ where
 
             for (schema_name, schema_id, schema_oid, items) in schemas {
                 self.report_schema_update(
+                    schema_id,
                     schema_oid,
                     Some(database_id),
-                    schema_id,
                     &schema_name,
                     "USER",
                     1,
@@ -386,7 +386,7 @@ where
             })
             .collect();
         for (schema_name, schema_id, schema_oid, items) in ambient_schemas {
-            self.report_schema_update(schema_oid, None, schema_id, &schema_name, "SYSTEM", 1)
+            self.report_schema_update(schema_id, schema_oid, None, &schema_name, "SYSTEM", 1)
                 .await;
 
             for (item_name, item_id) in items {
@@ -1020,9 +1020,9 @@ where
 
     async fn report_schema_update(
         &mut self,
+        schema_id: i64,
         oid: u32,
         database_id: Option<i64>,
-        schema_id: i64,
         schema_name: &str,
         typ: &str,
         diff: isize,
@@ -1031,12 +1031,12 @@ where
             MZ_SCHEMAS.id,
             iter::once((
                 Row::pack(&[
+                    Datum::Int64(schema_id),
                     Datum::Int32(oid as i32),
                     match database_id {
                         None => Datum::Null,
                         Some(database_id) => Datum::Int64(database_id),
                     },
-                    Datum::Int64(schema_id),
                     Datum::String(schema_name),
                     Datum::String(typ),
                 ]),
@@ -2408,9 +2408,9 @@ where
                     oid,
                 } => {
                     self.report_schema_update(
+                        *schema_id,
                         *oid,
                         Some(*database_id),
-                        *schema_id,
                         schema_name,
                         "USER",
                         1,
@@ -2502,9 +2502,9 @@ where
                     oid,
                 } => {
                     self.report_schema_update(
+                        *schema_id,
                         *oid,
                         Some(*database_id),
-                        *schema_id,
                         schema_name,
                         "USER",
                         -1,

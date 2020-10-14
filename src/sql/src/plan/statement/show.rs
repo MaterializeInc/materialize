@@ -165,7 +165,7 @@ fn show_schemas<'a>(
 
     let query = if !full & !extended {
         format!(
-            "SELECT schema AS name
+            "SELECT mz_schemas.name
             FROM mz_catalog.mz_schemas
             JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
             WHERE mz_catalog.mz_databases.name = '{}'",
@@ -173,7 +173,7 @@ fn show_schemas<'a>(
         )
     } else if full & !extended {
         format!(
-            "SELECT schema AS name, type
+            "SELECT mz_schemas.name, type
             FROM mz_catalog.mz_schemas
             JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
             WHERE mz_catalog.mz_databases.name = '{}'",
@@ -181,7 +181,7 @@ fn show_schemas<'a>(
         )
     } else if !full & extended {
         format!(
-            "SELECT schema AS name
+            "SELECT mz_schemas.name
             FROM mz_catalog.mz_schemas
             LEFT JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
             WHERE mz_catalog.mz_databases.name = '{}' OR mz_catalog.mz_databases.name IS NULL",
@@ -189,7 +189,7 @@ fn show_schemas<'a>(
         )
     } else {
         format!(
-            "SELECT schema AS name, type
+            "SELECT mz_schemas.name, type
             FROM mz_catalog.mz_schemas
             LEFT JOIN mz_catalog.mz_databases ON mz_catalog.mz_schemas.database_id = mz_catalog.mz_databases.id
             WHERE mz_catalog.mz_databases.name = '{}' OR mz_catalog.mz_databases.name IS NULL",
@@ -226,7 +226,7 @@ fn show_tables<'a>(
         format!(
             "SELECT tables AS name, type
             FROM mz_catalog.mz_tables
-            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_tables.schema_id = mz_catalog.mz_schemas.schema_id
+            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_tables.schema_id = mz_catalog.mz_schemas.id
             WHERE schema_id = {} {}
             ORDER BY tables, type",
             schema_spec.id, filter
@@ -269,7 +269,7 @@ fn show_sources<'a>(
         format!(
             "SELECT sources AS name, type, CASE WHEN count > 0 then true ELSE false END materialized
             FROM mz_catalog.mz_sources
-            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.schema_id
+            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.id
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
                   FROM mz_catalog.mz_sources
                   LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
@@ -283,7 +283,7 @@ fn show_sources<'a>(
         format!(
             "SELECT sources AS name
             FROM mz_catalog.mz_sources
-            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.schema_id
+            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.id
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
                   FROM mz_catalog.mz_sources
                   LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
@@ -297,7 +297,7 @@ fn show_sources<'a>(
         format!(
             "SELECT sources AS name, type
             FROM mz_catalog.mz_sources
-            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.schema_id
+            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sources.schema_id = mz_catalog.mz_schemas.id
             JOIN (SELECT mz_catalog.mz_sources.global_id as global_id, count(mz_catalog.mz_indexes.on_global_id) AS count
                   FROM mz_catalog.mz_sources
                   LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
@@ -344,7 +344,7 @@ fn show_views<'a>(
                 type,
                 count > 0 as materialized
              FROM mz_catalog.mz_views as mz_views
-             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_views.schema_id = mz_catalog.mz_schemas.schema_id
+             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_views.schema_id = mz_catalog.mz_schemas.id
              JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
                    FROM mz_views
                    LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
@@ -372,7 +372,7 @@ fn show_views<'a>(
         format!(
             "SELECT views AS name, type
              FROM mz_catalog.mz_views
-             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_views.schema_id = mz_catalog.mz_schemas.schema_id
+             JOIN mz_catalog.mz_schemas ON mz_catalog.mz_views.schema_id = mz_catalog.mz_schemas.id
              JOIN (SELECT mz_views.global_id as global_id, count(mz_indexes.on_global_id) AS count
                    FROM mz_views
                    LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
@@ -408,7 +408,7 @@ fn show_sinks<'a>(
         format!(
             "SELECT sinks AS name, type
             FROM mz_catalog.mz_sinks
-            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sinks.schema_id = mz_catalog.mz_schemas.schema_id
+            JOIN mz_catalog.mz_schemas ON mz_catalog.mz_sinks.schema_id = mz_catalog.mz_schemas.id
             WHERE schema_id = {} {}
             ORDER BY sinks, type",
             schema_spec.id, filter
