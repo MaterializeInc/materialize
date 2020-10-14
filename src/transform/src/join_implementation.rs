@@ -81,8 +81,9 @@ impl JoinImplementation {
             ..
         } = relation
         {
+            let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
             // Common information of broad utility.
-            let input_mapper = JoinInputMapper::new(inputs);
+            let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
             // The first fundamental question is whether we should employ a delta query or not.
             //
@@ -91,7 +92,10 @@ impl JoinImplementation {
             // with columns present in `indexes`, if it is an `ArrangeBy` with the columns present,
             // or a filter wrapped around either of these.
 
-            let unique_keys = inputs.iter().map(|i| i.typ().keys).collect::<Vec<_>>();
+            let unique_keys = input_types
+                .into_iter()
+                .map(|typ| typ.keys)
+                .collect::<Vec<_>>();
             let mut available_arrangements = vec![Vec::new(); inputs.len()];
             for index in 0..inputs.len() {
                 // We can work around filters, as we can lift the predicates into the join execution.

@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{Id, RelationExpr, ScalarExpr};
+use expr::{Id, JoinInputMapper, RelationExpr, ScalarExpr};
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
@@ -132,37 +132,17 @@ impl NonNullRequirements {
                 ..
             } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                let input_arities = input_types
-                    .iter()
-                    .map(|i| i.column_types.len())
-                    .collect::<Vec<_>>();
 
-                let mut offset = 0;
-                let mut prior_arities = Vec::new();
-                for input in 0..inputs.len() {
-                    prior_arities.push(offset);
-                    offset += input_arities[input];
-                }
+                let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
-                let input_relation = input_arities
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                    .collect::<Vec<_>>();
-
-                let mut new_columns = vec![HashSet::new(); inputs.len()];
-                for column in columns {
-                    let input = input_relation[column];
-                    new_columns[input].insert(column - prior_arities[input]);
-                }
+                let mut new_columns = input_mapper.split_column_set_by_input(&columns);
 
                 // `variable` smears constraints around.
                 // Also, any non-nullable columns impose constraints on their equivalence class.
                 for equivalence in equivalences {
                     let exists_constraint = equivalence.iter().any(|expr| {
                         if let ScalarExpr::Column(c) = expr {
-                            let rel = input_relation[*c];
-                            let col = *c - prior_arities[rel];
+                            let (col, rel) = input_mapper.map_column_to_local(*c);
                             new_columns[rel].contains(&col)
                                 || !input_types[rel].column_types[col].nullable
                         } else {
@@ -173,8 +153,7 @@ impl NonNullRequirements {
                     if exists_constraint {
                         for expr in equivalence.iter() {
                             if let ScalarExpr::Column(c) = expr {
-                                let rel = input_relation[*c];
-                                let col = *c - prior_arities[rel];
+                                let (col, rel) = input_mapper.map_column_to_local(*c);
                                 new_columns[rel].insert(col);
                             }
                         }

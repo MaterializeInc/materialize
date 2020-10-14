@@ -10,6 +10,7 @@
 #![deny(missing_docs)]
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fmt;
 
 use itertools::Itertools;
@@ -338,23 +339,11 @@ impl RelationExpr {
                     .collect::<Vec<_>>();
                 let mut typ = RelationType::new(column_types);
 
-                let input_arities = input_types
-                    .iter()
-                    .map(|i| i.column_types.len())
-                    .collect::<Vec<_>>();
-
-                let mut offset = 0;
-                let mut prior_arities = Vec::new();
-                for input in 0..inputs.len() {
-                    prior_arities.push(offset);
-                    offset += input_arities[input];
-                }
-
-                let input_relation = input_arities
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                    .collect::<Vec<_>>();
+                // It is important the `new_from_input_types` constructor is
+                // used. Otherwise, Materialize may potentially end up in an
+                // infinite loop.
+                let input_mapper =
+                    join_input_mapper::JoinInputMapper::new_from_input_types(&input_types);
 
                 // A relation's uniqueness constraint holds if there is a
                 // sequence of the other relations such that each one has
@@ -363,24 +352,27 @@ impl RelationExpr {
                 //
                 // We are going to use the uniqueness constraints of the
                 // first relation, and attempt to use the presented order.
-                let remains_unique = (1..inputs.len()).all(|index| {
-                    let mut prior_bound = Vec::new();
-                    for equivalence in equivalences {
-                        if equivalence.iter().any(|expr| {
-                            expr.support()
-                                .into_iter()
-                                .all(|i| input_relation[i] < index)
-                        }) {
-                            for expr in equivalence {
-                                if let ScalarExpr::Column(c) = expr {
-                                    prior_bound.push(c);
+                let mut column_with_prior_bound_by_input = vec![HashSet::new(); inputs.len() - 1];
+                for equivalence in equivalences {
+                    let min_bound_input = equivalence
+                        .iter()
+                        .flat_map(|expr| input_mapper.lookup_inputs(expr).max())
+                        .min();
+                    if let Some(min_bound_input) = min_bound_input {
+                        for expr in equivalence {
+                            if let ScalarExpr::Column(c) = expr {
+                                let (col, input) = input_mapper.map_column_to_local(*c);
+                                if input > min_bound_input {
+                                    column_with_prior_bound_by_input[input - 1].insert(col);
                                 }
                             }
                         }
                     }
+                }
+                let remains_unique = (1..inputs.len()).all(|index| {
                     input_types[index].keys.iter().any(|ks| {
                         ks.iter()
-                            .all(|k| prior_bound.contains(&&(prior_arities[index] + k)))
+                            .all(|k| column_with_prior_bound_by_input[index - 1].contains(k))
                     })
                 });
                 if remains_unique && !inputs.is_empty() {
@@ -593,20 +585,13 @@ impl RelationExpr {
     /// let result = joined.project(vec![0, 1, 3]);
     /// ```
     pub fn join(inputs: Vec<RelationExpr>, variables: Vec<Vec<(usize, usize)>>) -> Self {
-        let arities = inputs.iter().map(|input| input.arity()).collect::<Vec<_>>();
-
-        let mut offset = 0;
-        let mut prior_arities = Vec::new();
-        for input in 0..inputs.len() {
-            prior_arities.push(offset);
-            offset += arities[input];
-        }
+        let input_mapper = join_input_mapper::JoinInputMapper::new(&inputs);
 
         let equivalences = variables
             .into_iter()
             .map(|vs| {
                 vs.into_iter()
-                    .map(|(r, c)| ScalarExpr::Column(prior_arities[r] + c))
+                    .map(|(r, c)| input_mapper.map_expr_to_global(ScalarExpr::Column(c), r))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();

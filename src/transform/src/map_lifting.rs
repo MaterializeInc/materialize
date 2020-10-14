@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, RelationExpr, ScalarExpr};
+use expr::{Id, JoinInputMapper, RelationExpr, ScalarExpr};
 use itertools::Itertools;
 
 /// Hoist literal values from maps wherever possible.
@@ -242,6 +242,10 @@ impl LiteralLifting {
                 demand,
                 implementation,
             } => {
+                // before lifting, save the original shape of the inputs
+                let old_input_mapper = JoinInputMapper::new(inputs);
+
+                // lift literals from each input
                 let mut input_literals = Vec::new();
                 for input in inputs.iter_mut() {
                     input_literals.push(self.action(input, gets));
@@ -255,78 +259,51 @@ impl LiteralLifting {
                     // equivalence relations, and then lift all literals
                     // around the join using a project to re-order columns.
 
-                    let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                    let input_arities = input_types
-                        .iter()
-                        .zip(input_literals.iter())
-                        .map(|(i, l)| i.column_types.len() + l.len())
-                        .collect::<Vec<_>>();
-
-                    let mut offset = 0;
-                    let mut prior_arities = Vec::new();
-                    for input in 0..inputs.len() {
-                        prior_arities.push(offset);
-                        offset += input_arities[input];
-                    }
-
-                    let input_relation = input_arities
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                        .collect::<Vec<_>>();
-
                     // Visit each expression in each equivalence class to either
-                    // inline literals or update column references. Each column
-                    // reference should subtract off the total length of literals
-                    // returned for strictly prior input relations.
+                    // inline literals or update column references.
+                    let new_input_mapper = JoinInputMapper::new(inputs);
                     for equivalence in equivalences.iter_mut() {
                         for expr in equivalence.iter_mut() {
                             expr.visit_mut(&mut |e| {
                                 if let ScalarExpr::Column(c) = e {
-                                    let input = input_relation[*c];
-                                    let input_arity = input_types[input].column_types.len();
-                                    if *c >= prior_arities[input] + input_arity {
-                                        // Inline any input literal that has been promoted.
+                                    let (col, input) = old_input_mapper.map_column_to_local(*c);
+                                    if col >= new_input_mapper.input_arity(input) {
+                                        // the column refers to a literal that
+                                        // has been promoted. inline it
                                         *e = input_literals[input]
-                                            [*c - (prior_arities[input] + input_arity)]
-                                            .clone()
+                                            [col - new_input_mapper.input_arity(input)]
+                                        .clone()
                                     } else {
-                                        // Subtract off columns that have been promoted.
-                                        *c -= input_literals[..input]
-                                            .iter()
-                                            .map(|l| l.len())
-                                            .sum::<usize>();
+                                        // localize to the new join
+                                        *c = new_input_mapper.map_column_to_global(col, input);
                                     }
                                 }
                             });
                         }
                     }
 
-                    // We now painfully determine a projection to shovel around all of
+                    // We now determine a projection to shovel around all of
                     // the columns that puts the literals last. Where this is optional
                     // for other operators, it is mandatory here if we want to lift the
                     // literals through the join.
-                    let old_arity = input_arities.iter().sum();
-                    let new_arity =
-                        old_arity - input_literals.iter().map(|l| l.len()).sum::<usize>();
+
+                    // The first literal column number starts at the last column
+                    // of the new join. Increment the column number as literals
+                    // get added.
+                    let mut literal_column_number = new_input_mapper.total_columns();
                     let mut projection = Vec::new();
-                    for column in 0..old_arity {
-                        let input = input_relation[column];
-                        let input_arity = input_types[input].column_types.len();
-                        let prior_literals = input_literals[..input]
-                            .iter()
-                            .map(|l| l.len())
-                            .sum::<usize>();
-                        if column >= prior_arities[input] + input_arity {
-                            projection.push(
-                                new_arity
-                                    + prior_literals
-                                    + ((column - prior_arities[input]) - input_arity),
-                            );
-                        } else {
-                            projection.push(column - prior_literals);
+                    for input in 0..old_input_mapper.total_inputs() {
+                        for column in old_input_mapper.local_columns(input) {
+                            if column >= new_input_mapper.input_arity(input) {
+                                projection.push(literal_column_number);
+                                literal_column_number += 1;
+                            } else {
+                                projection
+                                    .push(new_input_mapper.map_column_to_global(column, input));
+                            }
                         }
                     }
+
                     let literals = input_literals.into_iter().flatten().collect::<Vec<_>>();
                     *relation = relation.take_dangerous().map(literals).project(projection)
                 }
