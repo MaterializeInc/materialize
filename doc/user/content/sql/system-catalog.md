@@ -104,6 +104,33 @@ Field          | Meaning
 `nullable`     | Can this column of the index evaluate to `NULL`?
 `seq_in_index` | The position of this component within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)
 
+### `mz_relations`
+
+The `mz_relations` view contains a row for each table, source, and view in the
+system.
+
+Field       | Meaning
+------------|---------
+`global_id` | Materialize's unique ID for the relation.
+`oid`       | A [PostgreSQL-compatible OID][oid] for the relation.
+`schema_id` | The ID of the schema to which the relation belongs.
+`name`      | The name of the relation.
+`type`      | The type of the relation: either `table`, `source`, or `view`.
+
+
+### `mz_objects`
+
+The `mz_objects` view contains a row for each table, source, view, sink, and
+index in the system.
+
+Field       | Meaning
+------------|---------
+`global_id` | Materialize's unique ID for the object.
+`oid`       | A [PostgreSQL-compatible OID][oid] for the object.
+`schema_id` | The ID of the schema to which the object belongs.
+`name`      | The name of the object.
+`type`      | The type of the object: either `table`, `source`, `view`, `sink`, or `index`.
+
 ### `mz_sinks`
 
 The `mz_sinks` table contains a row for each sink in the system.
