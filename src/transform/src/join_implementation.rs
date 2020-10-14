@@ -238,7 +238,7 @@ mod delta_queries {
                 if let Some(demand) = demand {
                     for expr in lifted.iter() {
                         demand.extend(expr.support());
-                        demand.sort();
+                        demand.sort_unstable();
                         demand.dedup();
                     }
                 }
@@ -346,7 +346,7 @@ mod differential {
                 if let Some(demand) = demand {
                     for expr in lifted.iter() {
                         demand.extend(expr.support());
-                        demand.sort();
+                        demand.sort_unstable();
                         demand.dedup();
                     }
                 }

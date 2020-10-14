@@ -64,12 +64,7 @@ impl NonNullable {
                 monotonic: _,
             } => {
                 if aggregates.iter().any(|a| {
-                    scalar_contains_isnull(&(a).expr)
-                        || if let AggregateFunc::Count = &(a).func {
-                            true
-                        } else {
-                            false
-                        }
+                    scalar_contains_isnull(&(a).expr) || matches!(&(a).func, AggregateFunc::Count)
                 }) {
                     let metadata = input.typ();
                     for aggregate in aggregates.iter_mut() {

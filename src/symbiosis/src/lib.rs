@@ -115,14 +115,12 @@ END $$;
     }
 
     pub fn can_handle(&self, stmt: &Statement) -> bool {
-        match stmt {
+        matches!(stmt,
             Statement::CreateTable { .. }
             | Statement::DropObjects { .. }
             | Statement::Delete { .. }
             | Statement::Insert { .. }
-            | Statement::Update { .. } => true,
-            _ => false,
-        }
+            | Statement::Update { .. })
     }
 
     pub async fn execute(

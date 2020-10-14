@@ -601,26 +601,16 @@ where
         //
         // TODO: Improve collection and arrangement re-use.
         self.collections.retain(|e, _| {
-            if let RelationExpr::Get {
+            matches!(e, RelationExpr::Get {
                 id: Id::Global(_),
                 typ: _,
-            } = e
-            {
-                true
-            } else {
-                false
-            }
+            })
         });
         self.local.retain(|e, _| {
-            if let RelationExpr::Get {
+            matches!(e, RelationExpr::Get {
                 id: Id::Global(_),
                 typ: _,
-            } = e
-            {
-                true
-            } else {
-                false
-            }
+            })
         });
         // We do not install in `context.trace`, and can skip deleting things from it.
     }

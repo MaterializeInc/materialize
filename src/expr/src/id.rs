@@ -69,26 +69,17 @@ pub enum GlobalId {
 impl GlobalId {
     /// Reports whether this ID is in the system namespace.
     pub fn is_system(&self) -> bool {
-        match self {
-            GlobalId::System(_) => true,
-            _ => false,
-        }
+        matches!(self, GlobalId::System(_))
     }
 
     /// Reports whether this ID is in the user namespace.
     pub fn is_user(&self) -> bool {
-        match self {
-            GlobalId::User(_) => true,
-            _ => false,
-        }
+        matches!(self, GlobalId::User(_))
     }
 
     /// Reports whether this ID is in the transient namespace.
     pub fn is_transient(&self) -> bool {
-        match self {
-            GlobalId::Transient(_) => true,
-            _ => false,
-        }
+        matches!(self, GlobalId::Transient(_))
     }
 }
 

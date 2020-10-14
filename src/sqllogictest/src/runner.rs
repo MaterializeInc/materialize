@@ -118,11 +118,7 @@ impl<'a> Outcome<'a> {
     }
 
     fn success(&self) -> bool {
-        if let Outcome::Success = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, Outcome::Success)
     }
 }
 

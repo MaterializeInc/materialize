@@ -1907,11 +1907,19 @@ impl BinaryFunc {
     pub fn output_type(&self, input1_type: ColumnType, input2_type: ColumnType) -> ColumnType {
         use BinaryFunc::*;
         let in_nullable = input1_type.nullable || input2_type.nullable;
-        let is_div_mod = match self {
-            DivInt32 | ModInt32 | DivInt64 | ModInt64 | DivFloat32 | ModFloat32 | DivFloat64
-            | ModFloat64 | DivDecimal | ModDecimal => true,
-            _ => false,
-        };
+        let is_div_mod = matches!(
+            self,
+            DivInt32
+                | ModInt32
+                | DivInt64
+                | ModInt64
+                | DivFloat32
+                | ModFloat32
+                | DivFloat64
+                | ModFloat64
+                | DivDecimal
+                | ModDecimal
+        );
         match self {
             And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
                 ScalarType::Bool.nullable(in_nullable)
@@ -2033,10 +2041,7 @@ impl BinaryFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        match self {
-            BinaryFunc::And | BinaryFunc::Or => false,
-            _ => true,
-        }
+        !matches!(self, BinaryFunc::And | BinaryFunc::Or)
     }
 
     /// Whether the function might return NULL even if none of its inputs are
@@ -2046,57 +2051,56 @@ impl BinaryFunc {
     /// introduces nulls even when it does not.
     pub fn introduces_nulls(&self) -> bool {
         use BinaryFunc::*;
-        match self {
-            And
-            | Or
-            | Eq
-            | NotEq
-            | Lt
-            | Lte
-            | Gt
-            | Gte
-            | AddInt32
-            | AddInt64
-            | AddFloat32
-            | AddFloat64
-            | AddTimestampInterval
-            | AddTimestampTzInterval
-            | AddDateTime
-            | AddDateInterval
-            | AddTimeInterval
-            | AddInterval
-            | SubInterval
-            | AddDecimal
-            | SubInt32
-            | SubInt64
-            | SubFloat32
-            | SubFloat64
-            | SubTimestamp
-            | SubTimestampTz
-            | SubTimestampInterval
-            | SubTimestampTzInterval
-            | SubDate
-            | SubDateInterval
-            | SubTime
-            | SubTimeInterval
-            | SubDecimal
-            | MulInt32
-            | MulInt64
-            | MulFloat32
-            | MulFloat64
-            | MulDecimal
-            | DivInt32
-            | DivInt64
-            | DivFloat32
-            | DivFloat64
-            | DivDecimal
-            | ModInt32
-            | ModInt64
-            | ModFloat32
-            | ModFloat64
-            | ModDecimal => false,
-            _ => true,
-        }
+        !matches!(
+            self,
+            And | Or
+                | Eq
+                | NotEq
+                | Lt
+                | Lte
+                | Gt
+                | Gte
+                | AddInt32
+                | AddInt64
+                | AddFloat32
+                | AddFloat64
+                | AddTimestampInterval
+                | AddTimestampTzInterval
+                | AddDateTime
+                | AddDateInterval
+                | AddTimeInterval
+                | AddInterval
+                | SubInterval
+                | AddDecimal
+                | SubInt32
+                | SubInt64
+                | SubFloat32
+                | SubFloat64
+                | SubTimestamp
+                | SubTimestampTz
+                | SubTimestampInterval
+                | SubTimestampTzInterval
+                | SubDate
+                | SubDateInterval
+                | SubTime
+                | SubTimeInterval
+                | SubDecimal
+                | MulInt32
+                | MulInt64
+                | MulFloat32
+                | MulFloat64
+                | MulDecimal
+                | DivInt32
+                | DivInt64
+                | DivFloat32
+                | DivFloat64
+                | DivDecimal
+                | ModInt32
+                | ModInt64
+                | ModFloat32
+                | ModFloat64
+                | ModDecimal
+        )
     }
 
     pub fn is_infix_op(&self) -> bool {
@@ -2662,10 +2666,7 @@ impl UnaryFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        match self {
-            UnaryFunc::IsNull | UnaryFunc::CastJsonbOrNullToJsonb => false,
-            _ => true,
-        }
+        !matches!(self, UnaryFunc::IsNull | UnaryFunc::CastJsonbOrNullToJsonb)
     }
 
     /// True iff for x != y, we are assured f(x) != f(y).
@@ -2673,28 +2674,28 @@ impl UnaryFunc {
     /// This is most often the case for methods that promote to types that
     /// can contain all the precision of the input type.
     pub fn preserves_uniqueness(&self) -> bool {
-        match self {
+        matches!(
+            self,
             UnaryFunc::Not
-            | UnaryFunc::NegInt32
-            | UnaryFunc::NegInt64
-            | UnaryFunc::NegFloat32
-            | UnaryFunc::NegFloat64
-            | UnaryFunc::NegDecimal
-            | UnaryFunc::CastBoolToStringExplicit
-            | UnaryFunc::CastInt32ToInt64
-            | UnaryFunc::CastInt32ToString
-            | UnaryFunc::CastInt64ToString
-            | UnaryFunc::CastFloat32ToFloat64
-            | UnaryFunc::CastFloat32ToString
-            | UnaryFunc::CastFloat64ToString
-            | UnaryFunc::CastStringToBytes
-            | UnaryFunc::CastDateToTimestamp
-            | UnaryFunc::CastDateToTimestampTz
-            | UnaryFunc::CastDateToString
-            | UnaryFunc::CastTimeToInterval
-            | UnaryFunc::CastTimeToString => true,
-            _ => false,
-        }
+                | UnaryFunc::NegInt32
+                | UnaryFunc::NegInt64
+                | UnaryFunc::NegFloat32
+                | UnaryFunc::NegFloat64
+                | UnaryFunc::NegDecimal
+                | UnaryFunc::CastBoolToStringExplicit
+                | UnaryFunc::CastInt32ToInt64
+                | UnaryFunc::CastInt32ToString
+                | UnaryFunc::CastInt64ToString
+                | UnaryFunc::CastFloat32ToFloat64
+                | UnaryFunc::CastFloat32ToString
+                | UnaryFunc::CastFloat64ToString
+                | UnaryFunc::CastStringToBytes
+                | UnaryFunc::CastDateToTimestamp
+                | UnaryFunc::CastDateToTimestampTz
+                | UnaryFunc::CastDateToString
+                | UnaryFunc::CastTimeToInterval
+                | UnaryFunc::CastTimeToString
+        )
     }
 }
 
@@ -3443,17 +3444,14 @@ impl VariadicFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        match self {
-            VariadicFunc::Coalesce
+        !matches!(self, VariadicFunc::Coalesce
             | VariadicFunc::Concat
             | VariadicFunc::JsonbBuildArray
             | VariadicFunc::JsonbBuildObject
             | VariadicFunc::ListCreate { .. }
             | VariadicFunc::RecordCreate { .. }
             | VariadicFunc::ArrayCreate { .. }
-            | VariadicFunc::ArrayToString { .. } => false,
-            _ => true,
-        }
+            | VariadicFunc::ArrayToString { .. })
     }
 }
 

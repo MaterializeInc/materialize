@@ -242,16 +242,14 @@ impl AstDisplay for Expr {
                 //    (<expr> OP <expr>)::<type>
                 // unless the inner expression is of a type that we know is
                 // safe to follow with a `::` to without wrapping.
-                let needs_wrap = match **expr {
+                let needs_wrap = !matches!(**expr,
                     Expr::Nested(_)
                     | Expr::Value(_)
                     | Expr::Cast { .. }
                     | Expr::Function { .. }
                     | Expr::Identifier { .. }
                     | Expr::Collate { .. }
-                    | Expr::Coalesce { .. } => false,
-                    _ => true,
-                };
+                    | Expr::Coalesce { .. });
                 if needs_wrap {
                     f.write_str('(');
                 }
@@ -387,11 +385,7 @@ impl_display!(Expr);
 
 impl Expr {
     pub fn is_string_literal(&self) -> bool {
-        if let Expr::Value(Value::String(_)) = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, Expr::Value(Value::String(_)))
     }
 
     pub fn null() -> Expr {
