@@ -2377,10 +2377,13 @@ pub enum UnaryFunc {
     CastArrayToString {
         ty: ScalarType,
     },
+    CastListToString {
+        ty: ScalarType,
+    },
     CastList1ToList2 {
         // List2's type
         return_ty: ScalarType,
-        // The expression to cast from List1's type to List2's type
+        // The expression to cast List1's elements to List2's elements' type
         cast_expr: Box<ScalarExpr>,
     },
     CeilFloat32,
@@ -2505,7 +2508,9 @@ impl UnaryFunc {
             UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
             UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
             UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
-            UnaryFunc::CastRecordToString { ty } | UnaryFunc::CastArrayToString { ty } => {
+            UnaryFunc::CastRecordToString { ty }
+            | UnaryFunc::CastArrayToString { ty }
+            | UnaryFunc::CastListToString { ty } => {
                 Ok(cast_collection_to_string(a, ty, temp_storage))
             }
             UnaryFunc::CastList1ToList2 { cast_expr, .. } => {
@@ -2600,6 +2605,7 @@ impl UnaryFunc {
             | CastBytesToString
             | CastRecordToString { .. }
             | CastArrayToString { .. }
+            | CastListToString { .. }
             | TrimWhitespace
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace => ScalarType::String.nullable(in_nullable),
@@ -2810,6 +2816,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastUuidToString => f.write_str("uuidtostr"),
             UnaryFunc::CastRecordToString { .. } => f.write_str("recordtostr"),
             UnaryFunc::CastArrayToString { .. } => f.write_str("arraytostr"),
+            UnaryFunc::CastListToString { .. } => f.write_str("listtostr"),
             UnaryFunc::CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),

@@ -356,6 +356,12 @@ lazy_static! {
                 Ok(e.call_unary(CastArrayToString { ty }))
             }),
 
+            // LIST
+            (List(Box::new(String)), Explicit(String)) => CastOp::F(|ecx, e, _to_type| {
+                let ty = ecx.scalar_type(&e);
+                Ok(e.call_unary(CastListToString { ty }))
+            }),
+
             // JSONB
             (Jsonb, Explicit(Bool)) => CastJsonbToBool,
             (Jsonb, Explicit(Int32)) => CastOp::F(from_jsonb_f64_cast),
