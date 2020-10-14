@@ -311,14 +311,16 @@ INTO AVRO OCF '/path/to/frank-sink-file.ocf;'
 Materialize stores the actual path as a byte array so we need to use the `convert_from` function to convert it to a UTF-8 string.
 
 ```sql
-SELECT global_id, name, convert_from(path, 'utf8') FROM  mz_catalog_names NATURAL JOIN mz_avro_ocf_sinks;
+SELECT sink_id, name, convert_from(path, 'utf8')
+FROM mz_sinks
+JOIN mz_avro_ocf_sinks ON mz_sinks.id = mz_avro_ocf_sinks.sink_id
 ```
 
 ```nofmt
- global_id |                 name                 |                           path
------------+--------------------------------------+----------------------------------------------------------------
- u10       | materialize.public.quotes_sink       | /path/to/sink-file-u10-1586108399-8671224166353132585.ocf
- u11       | materialize.public.frank_quotes_sink | /path/to/frank-sink-file-u11-1586108399-8671224166353132585.ocf
+ sink_id   |        name       |                           path
+-----------+-------------------+----------------------------------------------------------------
+ u10       | quotes_sink       | /path/to/sink-file-u10-1586108399-8671224166353132585.ocf
+ u11       | frank_quotes_sink | /path/to/frank-sink-file-u11-1586108399-8671224166353132585.ocf
 ```
 
 ## Related pages

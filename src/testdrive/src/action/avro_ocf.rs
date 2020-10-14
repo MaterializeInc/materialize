@@ -151,7 +151,8 @@ impl Action for VerifyAction {
             let row = state
                 .pgclient
                 .query_one(
-                    "SELECT path FROM mz_catalog_names NATURAL JOIN mz_avro_ocf_sinks \
+                    "SELECT path FROM mz_catalog_names
+                     JOIN mz_avro_ocf_sinks ON global_id = sink_id
                      WHERE name = $1",
                     &[&self.sink],
                 )
