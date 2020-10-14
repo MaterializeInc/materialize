@@ -370,7 +370,10 @@ function View(props) {
         // Any operator that can have records will have a red border (even if it
         // currently has 0 records). The fill color is a deeper red based on how many
         // records this operator has compared to the operator with the most records.
-        const alpha = ((record_count / max_record_count) * 0xff).toString(16);
+        const pct = record_count
+          ? Math.floor(record_count / max_record_count)
+          : 0;
+        const alpha = (pct * 0xff).toString(16).padStart(2, '0');
         notes.push(`${record_count} records`);
         style = `,style=filled,color=red,fillcolor="#ff0000${alpha}"`;
       }
