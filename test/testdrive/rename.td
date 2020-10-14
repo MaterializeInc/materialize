@@ -748,7 +748,7 @@ name
 ----
 renamed_j
 
-> SELECT name FROM mz_tables WHERE global_id like 'u%';
+> SELECT name FROM mz_tables WHERE id like 'u%';
 name
 ------
 renamed_j

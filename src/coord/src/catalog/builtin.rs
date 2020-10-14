@@ -288,7 +288,7 @@ lazy_static! {
         name: "mz_columns",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("id", ScalarType::String.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("field_number", ScalarType::Int64.nullable(false))
             .with_column("nullable", ScalarType::Bool.nullable(false))
@@ -300,9 +300,9 @@ lazy_static! {
         name: "mz_indexes",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("on_global_id", ScalarType::String.nullable(false))
+            .with_column("on_id", ScalarType::String.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("field_number", ScalarType::Int64.nullable(true))
             .with_column("expression", ScalarType::String.nullable(true))
@@ -315,7 +315,7 @@ lazy_static! {
         name: "mz_tables",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
@@ -326,7 +326,7 @@ lazy_static! {
         name: "mz_sources",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
@@ -337,7 +337,7 @@ lazy_static! {
         name: "mz_sinks",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
@@ -348,7 +348,7 @@ lazy_static! {
         name: "mz_views",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
@@ -360,10 +360,10 @@ lazy_static! {
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_relations (global_id, oid, schema_id, name, type) AS
-      SELECT global_id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
-UNION SELECT global_id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
-UNION SELECT global_id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views",
+    sql: "CREATE VIEW mz_relations (id, oid, schema_id, name, type) AS
+      SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
+UNION SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
+UNION SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views",
     id: GlobalId::System(3000),
     needs_logs: false,
 };
@@ -371,14 +371,14 @@ UNION SELECT global_id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views",
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
     name: "mz_objects",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_objects (global_id, oid, schema_id, name, type) AS
-    SELECT global_id, oid, schema_id, name, type FROM mz_catalog.mz_relations
+    sql: "CREATE VIEW mz_objects (id, oid, schema_id, name, type) AS
+    SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
 UNION
-    SELECT global_id, oid, schema_id, name, 'sink' FROM mz_catalog.mz_sinks
+    SELECT id, oid, schema_id, name, 'sink' FROM mz_catalog.mz_sinks
 UNION
-    SELECT mz_indexes.global_id, mz_indexes.oid, schema_id, mz_indexes.name, 'index'
+    SELECT mz_indexes.id, mz_indexes.oid, schema_id, mz_indexes.name, 'index'
     FROM mz_catalog.mz_indexes
-    JOIN mz_catalog.mz_relations ON mz_indexes.on_global_id = mz_relations.global_id",
+    JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id",
     id: GlobalId::System(3001),
     needs_logs: false,
 };
@@ -397,7 +397,7 @@ pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
     name: "mz_catalog_names",
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog_names AS SELECT
-    global_id,
+    o.id AS global_id,
     coalesce(d.name || '.', '') || s.name || '.' || o.name AS name
 FROM mz_catalog.mz_objects o
 JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
@@ -661,7 +661,7 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     mz_indexes.oid as indexrelid,
     mz_objects.oid as indrelid
 FROM mz_catalog.mz_indexes
-JOIN mz_catalog.mz_objects ON mz_indexes.on_global_id = mz_objects.global_id",
+JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id",
     id: GlobalId::System(3018),
     needs_logs: false,
 };
@@ -687,7 +687,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     mz_columns.name as attname,
     field_number as attnum,
     NOT nullable as attnotnull
-FROM mz_catalog.mz_tables JOIN mz_catalog.mz_columns ON mz_tables.global_id = mz_columns.global_id",
+FROM mz_catalog.mz_tables JOIN mz_catalog.mz_columns ON mz_tables.id = mz_columns.id",
     id: GlobalId::System(3020),
     needs_logs: false,
 };

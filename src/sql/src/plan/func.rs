@@ -1266,7 +1266,7 @@ lazy_static! {
                 )
             },
             "mz_is_materialized" => Scalar {
-                params!(String) => sql_op!("EXISTS (SELECT 1 FROM mz_indexes WHERE on_global_id = $1)")
+                params!(String) => sql_op!("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1)")
             }
         }
     };

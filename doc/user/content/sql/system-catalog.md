@@ -79,7 +79,7 @@ in the system.
 
 Field            | Meaning
 -----------------|----------
-`global_id`      | The unique ID of the table, source, or view containing the column.
+`id`             | The unique ID of the table, source, or view containing the column.
 `name`           | The name of the column.
 `field_number`   | The index of the column in its containing table, source, or view.
 `nullable`       | Can the column contain a `NULL` value?
@@ -96,9 +96,9 @@ vice-versa.
 
 Field          | Meaning
 ---------------|----------
-`global_id`    | Materialize's unique ID for the index.
+`id`           | Materialize's unique ID for the index.
 `oid`          | A [PostgreSQL-compatible OID][oid] for the index.
-`on_global_id` | The ID of the relation on which the index is built.
+`on_id`        | The ID of the relation on which the index is built.
 `field_number` | If not `NULL`, specifies the column of the relation that this index column references.
 `expression`   | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`     | Can this column of the index evaluate to `NULL`?
@@ -111,7 +111,7 @@ system.
 
 Field       | Meaning
 ------------|---------
-`global_id` | Materialize's unique ID for the relation.
+`id`        | Materialize's unique ID for the relation.
 `oid`       | A [PostgreSQL-compatible OID][oid] for the relation.
 `schema_id` | The ID of the schema to which the relation belongs.
 `name`      | The name of the relation.
@@ -125,7 +125,7 @@ index in the system.
 
 Field       | Meaning
 ------------|---------
-`global_id` | Materialize's unique ID for the object.
+`id`        | Materialize's unique ID for the object.
 `oid`       | A [PostgreSQL-compatible OID][oid] for the object.
 `schema_id` | The ID of the schema to which the object belongs.
 `name`      | The name of the object.
@@ -137,7 +137,7 @@ The `mz_sinks` table contains a row for each sink in the system.
 
 Field          | Meaning
 ---------------|----------
-`global_id`    | Materialize's unique ID for the sink.
+`id`           | Materialize's unique ID for the sink.
 `oid`          | A [PostgreSQL-compatible OID][oid] for the sink.
 `schema_id`    | The ID of the schema to which the sink belongs.
 `name`         | The name of the sink.
@@ -148,7 +148,7 @@ The `mz_sources` table contains a row for each source in the system.
 
 Field          | Meaning
 ---------------|----------
-`global_id`    | Materialize's unique ID for the source.
+`id`           | Materialize's unique ID for the source.
 `oid`          | A [PostgreSQL-compatible OID][oid] for the source.
 `schema_id`    | The ID of the schema to which the source belongs.
 `name`         | The name of the source.
@@ -159,7 +159,7 @@ The `mz_tables` table contains a row for each table in the system.
 
 Field          | Meaning
 ---------------|----------
-`global_id`    | Materialize's unique ID for the table.
+`id`           | Materialize's unique ID for the table.
 `oid`          | A [PostgreSQL-compatible OID][oid] for the table.
 `schema_id`    | The ID of the schema to which the table belongs.
 `name`         | The name of the table.
@@ -170,7 +170,7 @@ The `mz_views` table contains a row for each view in the system.
 
 Field          | Meaning
 ---------------|----------
-`global_id`    | Materialize's unique ID for the view.
+`id`           | Materialize's unique ID for the view.
 `oid`          | A [PostgreSQL-compatible OID][oid] for the view.
 `schema_id`    | The ID of the schema to which the view belongs.
 `name`         | The name of the view.

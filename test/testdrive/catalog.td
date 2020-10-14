@@ -294,11 +294,11 @@ mz_views              system
 SHOW EXTENDED TABLES not yet supported
 
 # `SHOW TABLES` and `mz_tables` should agree.
-> SELECT COUNT(*) FROM mz_tables WHERE global_id LIKE 's%'
+> SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
 12
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
-> SELECT COUNT(global_id) FROM mz_indexes WHERE global_id LIKE 's%'
+> SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
 74
 
 > SHOW VIEWS FROM mz_catalog

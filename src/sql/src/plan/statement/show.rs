@@ -195,7 +195,7 @@ fn show_tables<'a>(
 
     let query = if full {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
             FROM mz_catalog.mz_tables
             WHERE schema_id = {}",
             schema_spec.id,
@@ -231,8 +231,8 @@ fn show_sources<'a>(
         format!(
             "SELECT
                 name,
-                mz_internal.mz_classify_object_id(global_id) AS type,
-                mz_internal.mz_is_materialized(global_id) AS materialized
+                mz_internal.mz_classify_object_id(id) AS type,
+                mz_internal.mz_is_materialized(id) AS materialized
             FROM mz_catalog.mz_sources
             WHERE schema_id = {}",
             schema_spec.id,
@@ -241,14 +241,14 @@ fn show_sources<'a>(
         format!(
             "SELECT name
             FROM mz_catalog.mz_sources
-            WHERE schema_id = {} AND mz_internal.mz_is_materialized(global_id)",
+            WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
             schema_spec.id,
         )
     } else {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type,
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type,
             FROM mz_catalog.mz_sources
-            WHERE schema_id = {} AND mz_internal.mz_is_materialized(global_id) AS materialized",
+            WHERE schema_id = {} AND mz_internal.mz_is_materialized(id) AS materialized",
             schema_spec.id,
         )
     };
@@ -277,8 +277,8 @@ fn show_views<'a>(
         format!(
             "SELECT
                 name,
-                mz_internal.mz_classify_object_id(global_id) AS type,
-                mz_internal.mz_is_materialized(global_id) AS materialized
+                mz_internal.mz_classify_object_id(id) AS type,
+                mz_internal.mz_is_materialized(id) AS materialized
              FROM mz_catalog.mz_views
              WHERE schema_id = {}",
             schema_spec.id,
@@ -287,14 +287,14 @@ fn show_views<'a>(
         format!(
             "SELECT name
              FROM mz_catalog.mz_views
-             WHERE schema_id = {} AND mz_internal.mz_is_materialized(global_id)",
+             WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
             schema_spec.id,
         )
     } else {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
              FROM mz_catalog.mz_views
-             WHERE schema_id = {} AND mz_internal.mz_is_materialized(global_id)",
+             WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
             schema_spec.id,
         )
     };
@@ -315,7 +315,7 @@ fn show_sinks<'a>(
 
     let query = if full {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
             FROM mz_catalog.mz_sinks
             WHERE schema_id = {}",
             schema_spec.id,
@@ -363,11 +363,11 @@ pub fn show_indexes<'a>(
             idxs.nullable AS nullable
         FROM
             mz_catalog.mz_indexes AS idxs
-            JOIN mz_catalog.mz_objects AS objs ON idxs.on_global_id = objs.global_id
+            JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
             LEFT JOIN mz_catalog.mz_columns AS cols
-                ON idxs.on_global_id = cols.global_id AND idxs.field_number = cols.field_number
+                ON idxs.on_id = cols.id AND idxs.field_number = cols.field_number
         WHERE
-            objs.global_id = '{}'",
+            objs.id = '{}'",
         from_entry.id(),
     );
     Ok(ShowSelect::new(scx, query, filter))
@@ -398,7 +398,7 @@ pub fn show_columns<'a>(
             mz_columns.nullable,
             mz_columns.type
          FROM mz_catalog.mz_columns AS mz_columns
-         WHERE mz_columns.global_id = '{}'",
+         WHERE mz_columns.id = '{}'",
         entry.id(),
     );
     Ok(ShowSelect::new(scx, query, filter))
