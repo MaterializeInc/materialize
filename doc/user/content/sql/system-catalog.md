@@ -71,7 +71,6 @@ Field         | Meaning
 `oid`         | A [PostgreSQL-compatible oid][oid] for the schema.
 `database_id` | The ID of the database containing the schema.
 `name`        | The name of the schema.
-`type`        | Either `"SYSTEM"` or `"USER"`. `"SYSTEM"` schemas are created and maintained by the Materialize system, and cannot be updated or deleted. `"USER"` schemas were created by a user of the system, and can be updated or deleted.
 
 ### `mz_columns`
 

@@ -280,8 +280,7 @@ lazy_static! {
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("database_id", ScalarType::Int64.nullable(true))
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("type", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(2011),
         index_id: GlobalId::System(2012),
     };
