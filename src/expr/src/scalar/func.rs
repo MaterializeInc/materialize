@@ -1789,6 +1789,7 @@ pub enum BinaryFunc {
     ListIndex,
     ListLengthMax { max_dim: usize },
     ArrayContains,
+    ArrayIndex,
 }
 
 impl BinaryFunc {
@@ -1901,6 +1902,7 @@ impl BinaryFunc {
             BinaryFunc::ListIndex => Ok(eager!(list_index)),
             BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
+            BinaryFunc::ArrayIndex => Ok(eager!(array_index)),
         }
     }
 
@@ -2035,6 +2037,12 @@ impl BinaryFunc {
                 .clone()
                 .nullable(true),
 
+            ArrayIndex => input1_type
+                .scalar_type
+                .unwrap_array_element_type()
+                .clone()
+                .nullable(true),
+
             ListLengthMax { .. } => ScalarType::Int64.nullable(true),
         }
     }
@@ -2164,7 +2172,8 @@ impl BinaryFunc {
             | TextConcat
             | ListIndex
             | MatchRegex { .. }
-            | ArrayContains => true,
+            | ArrayContains
+            | ArrayIndex => true,
             MatchLikePattern
             | ToCharTimestamp
             | ToCharTimestampTz
@@ -2270,6 +2279,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListIndex => f.write_str("list_index"),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
+            BinaryFunc::ArrayIndex => f.write_str("array_index"),
         }
     }
 }
@@ -3277,6 +3287,18 @@ fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         return Datum::Null;
     }
     a.unwrap_list()
+        .iter()
+        .nth(i as usize - 1)
+        .unwrap_or(Datum::Null)
+}
+
+fn array_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Datum::Null;
+    }
+    a.unwrap_array()
+        .elements()
         .iter()
         .nth(i as usize - 1)
         .unwrap_or(Datum::Null)

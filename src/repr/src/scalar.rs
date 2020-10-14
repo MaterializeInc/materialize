@@ -740,6 +740,18 @@ impl<'a> ScalarType {
         dims
     }
 
+    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Array`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Array`].
+    pub fn unwrap_array_element_type(&self) -> &ScalarType {
+        match self {
+            ScalarType::Array(s) => &**s,
+            _ => panic!("ScalarType::unwrap_array_element_type called on {:?}", self),
+        }
+    }
+
     /// Returns a copy of `Self` with any embedded fields "zeroed" out. Meant to
     /// make comparisons easier, allowing you to mimic `std::mem::discriminant`
     /// equality.
