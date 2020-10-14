@@ -39,8 +39,8 @@ Unable to automatically determine a timestamp for your query; this can happen if
 > SHOW FULL VIEWS
 name        type     materialized
 ----------------------------------
-data_view   USER     false
-test1       USER     true
+data_view   user     false
+test1       user     true
 
 > SHOW MATERIALIZED VIEWS
 test1
@@ -48,7 +48,7 @@ test1
 > SHOW FULL MATERIALIZED VIEWS
 name     type
 -------------
-test1    USER
+test1    user
 
 > SELECT * FROM test1
 b  sum
@@ -67,10 +67,10 @@ b  sum
 2  1
 
 > SHOW COLUMNS FROM test1
-field nullable type
+name nullable type
 -------------------
-b     NO       int8
-sum   YES      int8
+b     false   int8
+sum   true    int8
 
 > SHOW VIEWS LIKE '%data%'
 data_view
@@ -171,7 +171,7 @@ catalog item 'materialize.public.idx1' is an index and so cannot be depended upo
 > SHOW FULL VIEWS LIKE 'test5'
 name        type     materialized
 ----------------------------------
-test5       USER     true
+test5       user     true
 
 > SELECT * from test5
 b  c
@@ -194,7 +194,7 @@ Unable to automatically determine a timestamp for your query; this can happen if
 > SHOW FULL VIEWS LIKE 'test5'
 name        type     materialized
 ----------------------------------
-test5       USER     false
+test5       user     false
 
 # Test that materialized views can be even if it requires multiple layers of
 # recursing through the AST to find a source.

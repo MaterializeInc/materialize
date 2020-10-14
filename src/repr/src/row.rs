@@ -9,6 +9,7 @@
 
 use std::borrow::Borrow;
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::convert::TryInto;
 use std::fmt;
 use std::mem::{size_of, transmute};
@@ -140,7 +141,7 @@ struct RowArenaInner {
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
 
 /// A sequence of Datums
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct DatumList<'a> {
     /// Points at the serialized datums
     data: &'a [u8],
@@ -149,6 +150,18 @@ pub struct DatumList<'a> {
 impl<'a> Debug for DatumList<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl Ord for DatumList<'_> {
+    fn cmp(&self, other: &DatumList) -> Ordering {
+        self.iter().cmp(other.iter())
+    }
+}
+
+impl PartialOrd for DatumList<'_> {
+    fn partial_cmp(&self, other: &DatumList) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 

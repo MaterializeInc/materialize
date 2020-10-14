@@ -69,9 +69,9 @@ SELECT 2 * a, sum(b) FROM t GROUP BY 1
 query TTT colnames
 SHOW COLUMNS FROM t
 ----
-field  nullable  type
- a     YES       int4
- b     YES       int4
+name  nullable  type
+ a    true      int4
+ b    true      int4
 
 # avg on an integer column should return a decimal with the default decimal
 # division scale increase.

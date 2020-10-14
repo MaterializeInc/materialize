@@ -30,15 +30,15 @@ $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
 
 > SHOW COLUMNS FROM unions
-field      nullable  type
+name       nullable  type
 -------------------------
-a          NO        int8
-b          YES       int8
-c1         YES       int8
-c2         YES       text
-d1         YES       int8
-d2         YES       text
-mz_obj_no  NO        int8
+a          false     int8
+b          true      int8
+c1         true      int8
+c2         true      text
+d1         true      int8
+d2         true      text
+mz_obj_no  false     int8
 
 > SELECT * FROM unions
 a   b       c1      c2     d1      d2      mz_obj_no

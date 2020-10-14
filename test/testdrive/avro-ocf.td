@@ -30,11 +30,11 @@ a  b  mz_obj_no
 3  4  2
 
 > SHOW COLUMNS FROM basic
-field      nullable  type
+name       nullable  type
 -------------------------
-a          NO        int8
-b          NO        int4
-mz_obj_no  NO        int8
+a          false     int8
+b          false     int4
+mz_obj_no  false     int8
 
 $ avro-ocf-write path=data-no-codec.ocf schema=${writer-schema}
 {"a": 1, "b": 2}
@@ -50,11 +50,11 @@ a  b  mz_obj_no
 3  4  2
 
 > SHOW COLUMNS FROM basic_no_codec
-field      nullable  type
+name       nullable  type
 -------------------------
-a          NO        int8
-b          NO        int4
-mz_obj_no  NO        int8
+a          false     int8
+b          false     int4
+mz_obj_no  false     int8
 
 $ avro-ocf-write path=data-snappy.ocf schema=${writer-schema} codec=snappy
 {"a": 1, "b": 2}
@@ -70,11 +70,11 @@ a  b  mz_obj_no
 3  4  2
 
 > SHOW COLUMNS FROM basic_snappy
-field      nullable  type
+name       nullable  type
 -------------------------
-a          NO        int8
-b          NO        int4
-mz_obj_no  NO        int8
+a          false     int8
+b          false     int4
+mz_obj_no  false     int8
 
 $ set reader-schema={
     "name": "row",
@@ -96,11 +96,11 @@ a  b  mz_obj_no
 3  4  2
 
 > SHOW COLUMNS FROM reader_schema
-field      nullable  type
+name       nullable  type
 -------------------------
-a          NO        int8
-b          NO        int8
-mz_obj_no  NO        int8
+a          false     int8
+b          false     int8
+mz_obj_no  false     int8
 
 ! CREATE MATERIALIZED SOURCE reader_schema
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
@@ -178,12 +178,12 @@ d     ts ts_tz  mz_obj_no
 "2000-01-01" "2000-01-01 10:10:10.000890" "2000-01-01 08:10:10.000857" 2
 
 > SHOW COLUMNS FROM timestamp_source
-field      nullable  type
+name        nullable  type
 -------------------------
-d             NO      date
-ts            NO      timestamp
-ts_tz         NO      timestamp
-mz_obj_no     NO      int8
+d           false     date
+ts          false     timestamp
+ts_tz       false     timestamp
+mz_obj_no   false     int8
 
 > CREATE SINK basic_sink_${testdrive.seed} FROM basic
   INTO AVRO OCF '${testdrive.temp-dir}/basic-sink.ocf'

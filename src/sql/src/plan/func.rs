@@ -912,8 +912,8 @@ lazy_static! {
             },
             "pg_table_is_visible" => Scalar {
                 params!(Oid) => sql_op!(
-                    "(SELECT schema = ANY(current_schemas(true))
-                     FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.schema_id
+                    "(SELECT s.name = ANY(current_schemas(true))
+                     FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
                      WHERE o.oid = $1)"
                 )
             },
@@ -1255,6 +1255,18 @@ lazy_static! {
                           CastTo::Explicit(ScalarType::Decimal(10, 0)),
                       )
                 })
+            },
+            "mz_classify_object_id" => Scalar {
+                params!(String) => sql_op!(
+                    "CASE
+                        WHEN $1 LIKE 'u%' THEN 'user'
+                        WHEN $1 LIKE 's%' THEN 'system'
+                        WHEN $1 like 't%' THEN 'temp'
+                    END"
+                )
+            },
+            "mz_is_materialized" => Scalar {
+                params!(String) => sql_op!("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1)")
             }
         }
     };

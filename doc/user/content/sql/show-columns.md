@@ -26,7 +26,7 @@ _item&lowbar;ref_ | The name of the item whose columns you want to view. These c
 
 ```nofmt
 +---------+------------+--------+
-| field   | nullable   | type   |
+| name    | nullable   | type   |
 |---------+------------+--------|
 | ...     | ...        | ...    |
 +---------+------------+--------+
@@ -34,7 +34,7 @@ _item&lowbar;ref_ | The name of the item whose columns you want to view. These c
 
 Field | Meaning
 ------|--------
-**field** | The name of the column
+**name** | The name of the column
 **nullable** | Does the column accept `null` values?
 **type** | The column's [type](../types)
 
@@ -45,8 +45,8 @@ source, view, or table. Prior versions did not guarantee any particular ordering
 {{< /version-changed >}}
 
 {{< version-changed v0.5.0 >}}
-The `Field`, `Nullable`, and `Type` columns are renamed to lowercase,
-i.e., `field`, `nullable`, and `type`, respectively.
+The `name`, `nullable`, and `type` columns are renamed to `name`, `nullable`,
+and `type`, respectively.
 {{< /version-changed >}}
 
 ## Examples
@@ -63,7 +63,7 @@ my_sources
 SHOW COLUMNS FROM my_source;
 ```
 ```nofmt
-  field  | nullable | type
+  name  | nullable | type
 ---------+----------+------
  column1 | NO       | int4
  column2 | YES      | text

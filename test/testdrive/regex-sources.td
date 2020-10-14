@@ -17,15 +17,15 @@ $ file-append path=request.log
   FORMAT REGEX '(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -'
 
 > SHOW COLUMNS FROM regex_source
-field              nullable  type
+name               nullable  type
 ---------------------------------
-ip                 YES       text
-ts                 YES       text
-path               YES       text
-search_kw          YES       text
-product_detail_id  YES       text
-code               YES       text
-mz_line_no         NO        int8
+ip                 true      text
+ts                 true      text
+path               true      text
+search_kw          true      text
+product_detail_id  true      text
+code               true      text
+mz_line_no         false     int8
 
 > SELECT * FROM regex_source ORDER BY mz_line_no
 ip            ts                      path                                           search_kw           product_detail_id  code  mz_line_no
@@ -44,15 +44,15 @@ helper+ins+hennaed
   FORMAT REGEX '(?P<foo1>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<foo2>[^]]+)\] "(?P<foo3>(?:GET /search/\?kw=(?P<foo4>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<foo5>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<foo6>\d{3}) -'
 
 > SHOW COLUMNS FROM regex_source_named_cols
-field              nullable  type
+name               nullable  type
 ---------------------------------
-ip                 YES       text
-ts                 YES       text
-path               YES       text
-search_kw          YES       text
-product_detail_id  YES       text
-code               YES       text
-mz_line_no         NO        int8
+ip                 true      text
+ts                 true      text
+path               true      text
+search_kw          true      text
+product_detail_id  true      text
+code               true      text
+mz_line_no         false     int8
 
 > SELECT * FROM regex_source_named_cols ORDER BY mz_line_no
 ip            ts                      path                                           search_kw           product_detail_id  code  mz_line_no

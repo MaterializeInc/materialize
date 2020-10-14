@@ -49,8 +49,8 @@ name
 ----
 materialize
 
-> SELECT id, database FROM mz_catalog.mz_databases
-id          database
+> SELECT id, name FROM mz_catalog.mz_databases
+id          name
 -----------------------
 1           materialize
 
@@ -62,8 +62,8 @@ name
 d
 materialize
 
-> SELECT id, database FROM mz_catalog.mz_databases
-id          database
+> SELECT id, name FROM mz_catalog.mz_databases
+id          name
 -----------------------
 1           materialize
 2           d
@@ -78,7 +78,7 @@ materialize
 > SHOW DATABASES WHERE (SELECT name = name)
 materialize
 d
-> SHOW DATABASES WHERE (name = (SELECT min(database) FROM mz_databases))
+> SHOW DATABASES WHERE (name = (SELECT min(name) FROM mz_databases))
 d
 ! SHOW DATABASES WHERE 7
 WHERE clause must have type bool, not type i32
@@ -144,8 +144,8 @@ Expected end of statement, found: RESTRICT
 name
 ----
 materialize
-> SELECT id, database FROM mz_catalog.mz_databases
-id          database
+> SELECT id, name FROM mz_catalog.mz_databases
+id          name
 -----------------------
 1           materialize
 
@@ -215,8 +215,8 @@ name
 d
 d2
 materialize
-> SELECT id, database FROM mz_catalog.mz_databases
-id          database
+> SELECT id, name FROM mz_catalog.mz_databases
+id          name
 -----------------------
 1           materialize
 2           d
@@ -246,19 +246,19 @@ mz_worker_materialization_frontiers
 > SHOW FULL SOURCES FROM mz_catalog
 name                                 type   materialized
 --------------------------------------------------------
-mz_arrangement_sharing               SYSTEM true
-mz_arrangement_sizes                 SYSTEM true
-mz_dataflow_channels                 SYSTEM true
-mz_dataflow_operator_addresses       SYSTEM true
-mz_dataflow_operators                SYSTEM true
-mz_materialization_dependencies      SYSTEM true
-mz_materializations                  SYSTEM true
-mz_peek_active                       SYSTEM true
-mz_peek_durations                    SYSTEM true
-mz_scheduling_elapsed                SYSTEM true
-mz_scheduling_histogram              SYSTEM true
-mz_scheduling_parks                  SYSTEM true
-mz_worker_materialization_frontiers  SYSTEM true
+mz_arrangement_sharing               system true
+mz_arrangement_sizes                 system true
+mz_dataflow_channels                 system true
+mz_dataflow_operator_addresses       system true
+mz_dataflow_operators                system true
+mz_materialization_dependencies      system true
+mz_materializations                  system true
+mz_peek_active                       system true
+mz_peek_durations                    system true
+mz_scheduling_elapsed                system true
+mz_scheduling_histogram              system true
+mz_scheduling_parks                  system true
+mz_worker_materialization_frontiers  system true
 
 > SHOW TABLES FROM mz_catalog
 mz_avro_ocf_sinks
@@ -277,29 +277,29 @@ mz_views
 > SHOW FULL TABLES FROM mz_catalog
 name                  type
 ----------------------------
-mz_avro_ocf_sinks     SYSTEM
-mz_kafka_sinks        SYSTEM
-mz_view_foreign_keys  SYSTEM
-mz_view_keys          SYSTEM
-mz_databases          SYSTEM
-mz_schemas            SYSTEM
-mz_columns            SYSTEM
-mz_indexes            SYSTEM
-mz_tables             SYSTEM
-mz_sinks              SYSTEM
-mz_sources            SYSTEM
-mz_views              SYSTEM
+mz_avro_ocf_sinks     system
+mz_kafka_sinks        system
+mz_view_foreign_keys  system
+mz_view_keys          system
+mz_databases          system
+mz_schemas            system
+mz_columns            system
+mz_indexes            system
+mz_tables             system
+mz_sinks              system
+mz_sources            system
+mz_views              system
 
 ! SHOW EXTENDED TABLES
 SHOW EXTENDED TABLES not yet supported
 
 # `SHOW TABLES` and `mz_tables` should agree.
-> SELECT COUNT(*) FROM mz_tables WHERE global_id LIKE 's%'
+> SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
 12
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
-> SELECT COUNT(global_id) FROM mz_indexes WHERE global_id LIKE 's%'
-75
+> SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
+74
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length
@@ -321,21 +321,21 @@ mz_relations
 > SHOW FULL VIEWS FROM mz_catalog
 name                              type   materialized
 -------------------------------------------------------
-mz_addresses_with_unit_length     SYSTEM false
-mz_dataflow_names                 SYSTEM false
-mz_dataflow_operator_dataflows    SYSTEM false
-mz_materialization_frontiers      SYSTEM false
-mz_objects                        SYSTEM false
-mz_perf_arrangement_records       SYSTEM false
-mz_perf_dependency_frontiers      SYSTEM false
-mz_perf_peek_durations_aggregates SYSTEM false
-mz_perf_peek_durations_bucket     SYSTEM false
-mz_perf_peek_durations_core       SYSTEM false
-mz_records_per_dataflow           SYSTEM false
-mz_records_per_dataflow_global    SYSTEM false
-mz_records_per_dataflow_operator  SYSTEM false
-mz_relations                      SYSTEM false
-mz_catalog_names                  SYSTEM false
+mz_addresses_with_unit_length     system false
+mz_dataflow_names                 system false
+mz_dataflow_operator_dataflows    system false
+mz_materialization_frontiers      system false
+mz_objects                        system false
+mz_perf_arrangement_records       system false
+mz_perf_dependency_frontiers      system false
+mz_perf_peek_durations_aggregates system false
+mz_perf_peek_durations_bucket     system false
+mz_perf_peek_durations_core       system false
+mz_records_per_dataflow           system false
+mz_records_per_dataflow_global    system false
+mz_records_per_dataflow_operator  system false
+mz_relations                      system false
+mz_catalog_names                  system false
 
 > SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active

@@ -286,7 +286,7 @@ where
             }
             match item {
                 CatalogItem::Index(index) => {
-                    self.report_index_update(oid, id, &index, &name.item, 1)
+                    self.report_index_update(id, oid, &index, &name.item, 1)
                         .await
                 }
                 CatalogItem::Table(_) => {
@@ -338,32 +338,31 @@ where
             })
             .collect();
         for (database_name, database_id, database_oid, schemas) in dbs {
-            self.report_database_update(database_oid, database_id, &database_name, 1)
+            self.report_database_update(database_id, database_oid, &database_name, 1)
                 .await;
 
             for (schema_name, schema_id, schema_oid, items) in schemas {
                 self.report_schema_update(
+                    schema_id,
                     schema_oid,
                     Some(database_id),
-                    schema_id,
                     &schema_name,
-                    "USER",
                     1,
                 )
                 .await;
 
                 for (item_name, item_id) in items {
                     if let Some(oid) = tables_to_report.remove(&item_id) {
-                        self.report_table_update(oid, &item_id, schema_id, &item_name, 1)
+                        self.report_table_update(item_id, oid, schema_id, &item_name, 1)
                             .await;
                     } else if let Some(oid) = sources_to_report.remove(&item_id) {
-                        self.report_source_update(oid, &item_id, schema_id, &item_name, 1)
+                        self.report_source_update(item_id, oid, schema_id, &item_name, 1)
                             .await;
                     } else if let Some(oid) = views_to_report.remove(&item_id) {
-                        self.report_view_update(oid, &item_id, schema_id, &item_name, 1)
+                        self.report_view_update(item_id, oid, schema_id, &item_name, 1)
                             .await;
                     } else if let Some(oid) = sinks_to_report.remove(&item_id) {
-                        self.report_sink_update(oid, &item_id, schema_id, &item_name, 1)
+                        self.report_sink_update(item_id, oid, schema_id, &item_name, 1)
                             .await;
                     }
                 }
@@ -386,21 +385,21 @@ where
             })
             .collect();
         for (schema_name, schema_id, schema_oid, items) in ambient_schemas {
-            self.report_schema_update(schema_oid, None, schema_id, &schema_name, "SYSTEM", 1)
+            self.report_schema_update(schema_id, schema_oid, None, &schema_name, 1)
                 .await;
 
             for (item_name, item_id) in items {
                 if let Some(oid) = tables_to_report.remove(&item_id) {
-                    self.report_table_update(oid, &item_id, schema_id, &item_name, 1)
+                    self.report_table_update(item_id, oid, schema_id, &item_name, 1)
                         .await;
                 } else if let Some(oid) = sources_to_report.remove(&item_id) {
-                    self.report_source_update(oid, &item_id, schema_id, &item_name, 1)
+                    self.report_source_update(item_id, oid, schema_id, &item_name, 1)
                         .await;
                 } else if let Some(oid) = views_to_report.remove(&item_id) {
-                    self.report_view_update(oid, &item_id, schema_id, &item_name, 1)
+                    self.report_view_update(item_id, oid, schema_id, &item_name, 1)
                         .await;
                 } else if let Some(oid) = sinks_to_report.remove(&item_id) {
-                    self.report_sink_update(oid, &item_id, schema_id, &item_name, 1)
+                    self.report_sink_update(item_id, oid, schema_id, &item_name, 1)
                         .await;
                 }
             }
@@ -999,8 +998,8 @@ where
 
     async fn report_database_update(
         &mut self,
-        oid: u32,
         database_id: i64,
+        oid: u32,
         name: &str,
         diff: isize,
     ) {
@@ -1008,8 +1007,8 @@ where
             MZ_DATABASES.id,
             iter::once((
                 Row::pack(&[
-                    Datum::Int32(oid as i32),
                     Datum::Int64(database_id),
+                    Datum::Int32(oid as i32),
                     Datum::String(&name),
                 ]),
                 diff,
@@ -1020,25 +1019,23 @@ where
 
     async fn report_schema_update(
         &mut self,
+        schema_id: i64,
         oid: u32,
         database_id: Option<i64>,
-        schema_id: i64,
         schema_name: &str,
-        typ: &str,
         diff: isize,
     ) {
         self.update_catalog_view(
             MZ_SCHEMAS.id,
             iter::once((
                 Row::pack(&[
+                    Datum::Int64(schema_id),
                     Datum::Int32(oid as i32),
                     match database_id {
                         None => Datum::Null,
                         Some(database_id) => Datum::Int64(database_id),
                     },
-                    Datum::Int64(schema_id),
                     Datum::String(schema_name),
-                    Datum::String(typ),
                 ]),
                 diff,
             )),
@@ -1058,12 +1055,12 @@ where
                 iter::once((
                     Row::pack(&[
                         Datum::String(&global_id.to_string()),
-                        Datum::Int64(i as i64),
                         Datum::String(
                             &column_name
                                 .map(|n| n.to_string())
                                 .unwrap_or_else(|| "?column?".to_owned()),
                         ),
+                        Datum::Int64(i as i64),
                         Datum::from(column_type.nullable),
                         Datum::String(pgrepr::Type::from(&column_type.scalar_type).name()),
                     ]),
@@ -1077,15 +1074,15 @@ where
 
     async fn report_index_update(
         &mut self,
-        oid: u32,
         global_id: GlobalId,
+        oid: u32,
         index: &Index,
         name: &str,
         diff: isize,
     ) {
         self.report_index_update_inner(
-            oid,
             global_id,
+            oid,
             index,
             name,
             index
@@ -1106,8 +1103,8 @@ where
     // that computation and provide their own value, instead.
     async fn report_index_update_inner(
         &mut self,
-        oid: u32,
         global_id: GlobalId,
+        oid: u32,
         index: &Index,
         name: &str,
         nullable: Vec<bool>,
@@ -1140,14 +1137,14 @@ where
                 MZ_INDEXES.id,
                 iter::once((
                     Row::pack(&[
-                        Datum::Int32(oid as i32),
                         Datum::String(&global_id.to_string()),
+                        Datum::Int32(oid as i32),
                         Datum::String(&index.on.to_string()),
+                        Datum::String(name),
                         field_number,
                         expression,
                         Datum::from(nullable),
                         Datum::Int64(seq_in_index),
-                        Datum::String(name),
                     ]),
                     diff,
                 )),
@@ -1158,8 +1155,8 @@ where
 
     async fn report_table_update(
         &mut self,
+        global_id: GlobalId,
         oid: u32,
-        global_id: &GlobalId,
         schema_id: i64,
         name: &str,
         diff: isize,
@@ -1168,8 +1165,8 @@ where
             MZ_TABLES.id,
             iter::once((
                 Row::pack(&[
-                    Datum::Int32(oid as i32),
                     Datum::String(&global_id.to_string()),
+                    Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
                     Datum::String(name),
                 ]),
@@ -1181,8 +1178,8 @@ where
 
     async fn report_source_update(
         &mut self,
+        global_id: GlobalId,
         oid: u32,
-        global_id: &GlobalId,
         schema_id: i64,
         name: &str,
         diff: isize,
@@ -1191,8 +1188,8 @@ where
             MZ_SOURCES.id,
             iter::once((
                 Row::pack(&[
-                    Datum::Int32(oid as i32),
                     Datum::String(&global_id.to_string()),
+                    Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
                     Datum::String(name),
                 ]),
@@ -1204,8 +1201,8 @@ where
 
     async fn report_view_update(
         &mut self,
+        global_id: GlobalId,
         oid: u32,
-        global_id: &GlobalId,
         schema_id: i64,
         name: &str,
         diff: isize,
@@ -1214,8 +1211,8 @@ where
             MZ_VIEWS.id,
             iter::once((
                 Row::pack(&[
-                    Datum::Int32(oid as i32),
                     Datum::String(&global_id.to_string()),
+                    Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
                     Datum::String(name),
                 ]),
@@ -1227,8 +1224,8 @@ where
 
     async fn report_sink_update(
         &mut self,
+        global_id: GlobalId,
         oid: u32,
-        global_id: &GlobalId,
         schema_id: i64,
         name: &str,
         diff: isize,
@@ -1237,8 +1234,8 @@ where
             MZ_SINKS.id,
             iter::once((
                 Row::pack(&[
-                    Datum::Int32(oid as i32),
                     Datum::String(&global_id.to_string()),
+                    Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
                     Datum::String(name),
                 ]),
@@ -2398,8 +2395,8 @@ where
         let statuses = self.catalog.transact(ops)?;
         for status in &statuses {
             match status {
-                catalog::OpStatus::CreatedDatabase { name, id, oid } => {
-                    self.report_database_update(*oid, *id, name, 1).await;
+                catalog::OpStatus::CreatedDatabase { id, oid, name } => {
+                    self.report_database_update(*id, *oid, name, 1).await;
                 }
                 catalog::OpStatus::CreatedSchema {
                     database_id,
@@ -2407,15 +2404,8 @@ where
                     schema_name,
                     oid,
                 } => {
-                    self.report_schema_update(
-                        *oid,
-                        Some(*database_id),
-                        *schema_id,
-                        schema_name,
-                        "USER",
-                        1,
-                    )
-                    .await;
+                    self.report_schema_update(*schema_id, *oid, Some(*database_id), schema_name, 1)
+                        .await;
                 }
                 catalog::OpStatus::CreatedItem {
                     schema_id,
@@ -2429,23 +2419,23 @@ where
                     }
                     match item {
                         CatalogItem::Index(index) => {
-                            self.report_index_update(*oid, *id, &index, &name.item, 1)
+                            self.report_index_update(*id, *oid, &index, &name.item, 1)
                                 .await
                         }
                         CatalogItem::Table(_) => {
-                            self.report_table_update(*oid, id, *schema_id, &name.item, 1)
+                            self.report_table_update(*id, *oid, *schema_id, &name.item, 1)
                                 .await
                         }
                         CatalogItem::Source(_) => {
-                            self.report_source_update(*oid, id, *schema_id, &name.item, 1)
+                            self.report_source_update(*id, *oid, *schema_id, &name.item, 1)
                                 .await;
                         }
                         CatalogItem::View(_) => {
-                            self.report_view_update(*oid, id, *schema_id, &name.item, 1)
+                            self.report_view_update(*id, *oid, *schema_id, &name.item, 1)
                                 .await;
                         }
                         CatalogItem::Sink(_) => {
-                            self.report_sink_update(*oid, id, *schema_id, &name.item, 1)
+                            self.report_sink_update(*id, *oid, *schema_id, &name.item, 1)
                                 .await;
                         }
                     }
@@ -2461,39 +2451,39 @@ where
                     // Remove old name and add new name to relevant mz system tables.
                     match item {
                         CatalogItem::Source(_) => {
-                            self.report_source_update(*oid, id, *schema_id, &from_name.item, -1)
+                            self.report_source_update(*id, *oid, *schema_id, &from_name.item, -1)
                                 .await;
-                            self.report_source_update(*oid, id, *schema_id, &to_name.item, 1)
+                            self.report_source_update(*id, *oid, *schema_id, &to_name.item, 1)
                                 .await;
                         }
                         CatalogItem::View(_) => {
-                            self.report_view_update(*oid, id, *schema_id, &from_name.item, -1)
+                            self.report_view_update(*id, *oid, *schema_id, &from_name.item, -1)
                                 .await;
-                            self.report_view_update(*oid, id, *schema_id, &to_name.item, 1)
+                            self.report_view_update(*id, *oid, *schema_id, &to_name.item, 1)
                                 .await;
                         }
                         CatalogItem::Sink(_) => {
-                            self.report_sink_update(*oid, id, *schema_id, &from_name.item, -1)
+                            self.report_sink_update(*id, *oid, *schema_id, &from_name.item, -1)
                                 .await;
-                            self.report_sink_update(*oid, id, *schema_id, &to_name.item, 1)
+                            self.report_sink_update(*id, *oid, *schema_id, &to_name.item, 1)
                                 .await;
                         }
                         CatalogItem::Table(_) => {
-                            self.report_table_update(*oid, id, *schema_id, &from_name.item, -1)
+                            self.report_table_update(*id, *oid, *schema_id, &from_name.item, -1)
                                 .await;
-                            self.report_table_update(*oid, id, *schema_id, &to_name.item, 1)
+                            self.report_table_update(*id, *oid, *schema_id, &to_name.item, 1)
                                 .await;
                         }
                         CatalogItem::Index(index) => {
-                            self.report_index_update(*oid, *id, &index, &from_name.item, -1)
+                            self.report_index_update(*id, *oid, &index, &from_name.item, -1)
                                 .await;
-                            self.report_index_update(*oid, *id, &index, &to_name.item, 1)
+                            self.report_index_update(*id, *oid, &index, &to_name.item, 1)
                                 .await;
                         }
                     }
                 }
-                catalog::OpStatus::DroppedDatabase { name, id, oid } => {
-                    self.report_database_update(*oid, *id, name, -1).await;
+                catalog::OpStatus::DroppedDatabase { id, oid, name } => {
+                    self.report_database_update(*id, *oid, name, -1).await;
                 }
                 catalog::OpStatus::DroppedSchema {
                     database_id,
@@ -2502,11 +2492,10 @@ where
                     oid,
                 } => {
                     self.report_schema_update(
+                        *schema_id,
                         *oid,
                         Some(*database_id),
-                        *schema_id,
                         schema_name,
-                        "USER",
                         -1,
                     )
                     .await;
@@ -2515,8 +2504,8 @@ where
                     CatalogItem::Index(index) => {
                         indexes_to_drop.push(entry.id());
                         self.report_index_update_inner(
-                            entry.oid(),
                             entry.id(),
+                            entry.oid(),
                             index,
                             &entry.name().item,
                             nullable.to_owned(),
@@ -2531,8 +2520,8 @@ where
                         CatalogItem::Table(_) => {
                             sources_to_drop.push(entry.id());
                             self.report_table_update(
+                                entry.id(),
                                 entry.oid(),
-                                &entry.id(),
                                 *schema_id,
                                 &entry.name().item,
                                 -1,
@@ -2542,8 +2531,8 @@ where
                         CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
                             self.report_source_update(
+                                entry.id(),
                                 entry.oid(),
-                                &entry.id(),
                                 *schema_id,
                                 &entry.name().item,
                                 -1,
@@ -2552,8 +2541,8 @@ where
                         }
                         CatalogItem::View(_) => {
                             self.report_view_update(
+                                entry.id(),
                                 entry.oid(),
-                                &entry.id(),
                                 *schema_id,
                                 &entry.name().item,
                                 -1,
@@ -2566,8 +2555,8 @@ where
                         }) => {
                             sinks_to_drop.push(entry.id());
                             self.report_sink_update(
+                                entry.id(),
                                 entry.oid(),
-                                &entry.id(),
                                 *schema_id,
                                 &entry.name().item,
                                 -1,
