@@ -57,7 +57,7 @@ impl Action for VerifyAction {
         let topic_prefix: String = state
             .pgclient
             .query_one(
-                "SELECT topic FROM mz_catalog_names NATURAL JOIN mz_kafka_sinks WHERE name = $1",
+                "SELECT topic FROM mz_catalog_names JOIN mz_kafka_sinks ON global_id = sink_id WHERE name = $1",
                 &[&self.sink],
             )
             .await
