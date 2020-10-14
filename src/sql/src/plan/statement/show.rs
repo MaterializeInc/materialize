@@ -109,19 +109,8 @@ pub fn show_databases<'a>(
     scx: &'a StatementContext<'a>,
     ShowDatabasesStatement { filter }: ShowDatabasesStatement,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
-        Some(ShowStatementFilter::Where(expr)) => expr.to_string(),
-        None => "true".to_owned(),
-    };
-
-    Ok(ShowSelect::new(
-        scx,
-        format!(
-            "SELECT * FROM (SELECT name FROM mz_catalog.mz_databases) WHERE {}",
-            filter
-        ),
-    ))
+    let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
+    Ok(ShowSelect::new(scx, query, filter))
 }
 
 pub fn show_objects<'a>(
@@ -157,12 +146,6 @@ fn show_schemas<'a>(
     } else {
         scx.resolve_default_database()?
     };
-    let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
-        Some(ShowStatementFilter::Where(expr)) => expr.to_string(),
-        None => "true".to_string(),
-    };
-
     let query = if !full & !extended {
         format!(
             "SELECT name FROM mz_catalog.mz_schemas WHERE database_id = {}",
@@ -190,8 +173,7 @@ fn show_schemas<'a>(
             database_id,
         )
     };
-    let query = format!("SELECT * FROM ({}) WHERE {}", query, filter);
-    Ok(ShowSelect::new(scx, query))
+    Ok(ShowSelect::new(scx, query, filter))
 }
 
 fn show_tables<'a>(
@@ -210,27 +192,21 @@ fn show_tables<'a>(
     } else {
         scx.resolve_default_schema()?
     };
-    let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("AND name LIKE {}", Value::String(like)),
-        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
-        None => "".to_owned(),
-    };
 
     let query = if full {
         format!(
             "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type
             FROM mz_catalog.mz_tables
-            WHERE schema_id = {} {}
-            ORDER BY name, type",
-            schema_spec.id, filter
+            WHERE schema_id = {}",
+            schema_spec.id,
         )
     } else {
         format!(
-            "SELECT name FROM mz_catalog.mz_tables WHERE schema_id = {} {} ORDER BY name",
-            schema_spec.id, filter
+            "SELECT name FROM mz_catalog.mz_tables WHERE schema_id = {}",
+            schema_spec.id
         )
     };
-    Ok(ShowSelect::new(scx, query))
+    Ok(ShowSelect::new(scx, query, filter))
 }
 
 fn show_sources<'a>(
@@ -245,18 +221,11 @@ fn show_sources<'a>(
     } else {
         scx.resolve_default_schema()?
     };
-    let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => {
-            format!("AND name LIKE {}", Value::String(like))
-        }
-        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
-        None => "".to_owned(),
-    };
 
     let query = if !full & !materialized {
         format!(
-            "SELECT name FROM mz_catalog.mz_sources WHERE schema_id = {} {} ORDER BY name",
-            schema_spec.id, filter
+            "SELECT name FROM mz_catalog.mz_sources WHERE schema_id = {}",
+            schema_spec.id,
         )
     } else if full & !materialized {
         format!(
@@ -268,9 +237,8 @@ fn show_sources<'a>(
                   LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
                   GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
                 ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
-            WHERE schema_id = {} {}
-            ORDER BY name, type",
-            schema_spec.id, filter
+            WHERE schema_id = {}",
+            schema_spec.id,
         )
     } else if !full & materialized {
         format!(
@@ -281,9 +249,8 @@ fn show_sources<'a>(
                   LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
                   GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
                 ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
-            WHERE schema_id = {} {} AND mz_indexes_count.count > 0
-            ORDER BY name",
-            schema_spec.id, filter
+            WHERE schema_id = {} AND mz_indexes_count.count > 0",
+            schema_spec.id,
         )
     } else {
         format!(
@@ -294,12 +261,11 @@ fn show_sources<'a>(
                   LEFT JOIN mz_catalog.mz_indexes on mz_catalog.mz_sources.global_id = mz_catalog.mz_indexes.on_global_id
                   GROUP BY mz_catalog.mz_sources.global_id) as mz_indexes_count
                 ON mz_catalog.mz_sources.global_id = mz_indexes_count.global_id
-            WHERE schema_id = {} {} AND mz_indexes_count.count > 0
-            ORDER BY name, type",
-            schema_spec.id, filter
+            WHERE schema_id = {} AND mz_indexes_count.count > 0",
+            schema_spec.id,
         )
     };
-    Ok(ShowSelect::new(scx, query))
+    Ok(ShowSelect::new(scx, query, filter))
 }
 
 fn show_views<'a>(
@@ -314,19 +280,13 @@ fn show_views<'a>(
     } else {
         scx.resolve_default_schema()?
     };
-    let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("AND name LIKE {}", Value::String(like)),
-        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
-        None => "".to_owned(),
-    };
 
     let query = if !full & !materialized {
         format!(
             "SELECT name
              FROM mz_catalog.mz_views
-             WHERE mz_catalog.mz_views.schema_id = {} {}
-             ORDER BY name",
-            schema_spec.id, filter
+             WHERE mz_catalog.mz_views.schema_id = {}",
+            schema_spec.id,
         )
     } else if full & !materialized {
         format!(
@@ -340,9 +300,8 @@ fn show_views<'a>(
                    LEFT JOIN mz_indexes on mz_views.global_id = mz_indexes.on_global_id
                    GROUP BY mz_views.global_id) as mz_indexes_count
                 ON mz_views.global_id = mz_indexes_count.global_id
-             WHERE mz_catalog.mz_views.schema_id = {} {}
-             ORDER BY name",
-            schema_spec.id, filter
+             WHERE mz_catalog.mz_views.schema_id = {}",
+            schema_spec.id,
         )
     } else if !full & materialized {
         format!(
@@ -354,9 +313,8 @@ fn show_views<'a>(
                    GROUP BY mz_views.global_id) as mz_indexes_count
                 ON mz_views.global_id = mz_indexes_count.global_id
              WHERE mz_catalog.mz_views.schema_id = {}
-                AND mz_indexes_count.count > 0 {}
-             ORDER BY name",
-            schema_spec.id, filter
+                AND mz_indexes_count.count > 0",
+            schema_spec.id,
         )
     } else {
         format!(
@@ -368,12 +326,11 @@ fn show_views<'a>(
                    GROUP BY mz_views.global_id) as mz_indexes_count
                 ON mz_views.global_id = mz_indexes_count.global_id
              WHERE mz_catalog.mz_views.schema_id = {}
-                AND mz_indexes_count.count > 0 {}
-             ORDER BY name",
-            schema_spec.id, filter
+                AND mz_indexes_count.count > 0",
+            schema_spec.id,
         )
     };
-    Ok(ShowSelect::new(scx, query))
+    Ok(ShowSelect::new(scx, query, filter))
 }
 
 fn show_sinks<'a>(
@@ -387,27 +344,21 @@ fn show_sinks<'a>(
     } else {
         scx.resolve_default_schema()?
     };
-    let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("AND sinks LIKE {}", Value::String(like)),
-        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
-        None => "".to_owned(),
-    };
 
     let query = if full {
         format!(
-            "SELECT name, mz_classify_object_id(global_id) AS type
+            "SELECT name, mz_internal.mz_classify_object_id(global_id) AS type
             FROM mz_catalog.mz_sinks
-            WHERE schema_id = {} {}
-            ORDER BY name, type",
-            schema_spec.id, filter
+            WHERE schema_id = {}",
+            schema_spec.id,
         )
     } else {
         format!(
-            "SELECT name FROM mz_catalog.mz_sinks WHERE schema_id = {} {} ORDER BY name",
-            schema_spec.id, filter
+            "SELECT name FROM mz_catalog.mz_sinks WHERE schema_id = {}",
+            schema_spec.id,
         )
     };
-    Ok(ShowSelect::new(scx, query))
+    Ok(ShowSelect::new(scx, query, filter))
 }
 
 pub fn show_indexes<'a>(
@@ -434,7 +385,7 @@ pub fn show_indexes<'a>(
         );
     }
 
-    let base_query = format!(
+    let query = format!(
         "SELECT
             objs.name AS on_name,
             idxs.name AS key_name,
@@ -448,28 +399,10 @@ pub fn show_indexes<'a>(
             LEFT JOIN mz_catalog.mz_columns AS cols
                 ON idxs.on_global_id = cols.global_id AND idxs.field_number = cols.field_number
         WHERE
-            objs.global_id = '{}'
-        ORDER BY
-            key_name ASC,
-            seq_in_index ASC",
+            objs.global_id = '{}'",
         from_entry.id(),
     );
-
-    let query = if let Some(filter) = filter {
-        let filter = match filter {
-            ShowStatementFilter::Like(like) => format!("key_name LIKE {}", Value::String(like)),
-            ShowStatementFilter::Where(expr) => expr.to_string(),
-        };
-        format!(
-            "SELECT on_name, key_name, seq_in_index, column_name, expression, nullable
-             FROM ({})
-             WHERE {}",
-            base_query, filter,
-        )
-    } else {
-        base_query
-    };
-    Ok(ShowSelect::new(scx, query))
+    Ok(ShowSelect::new(scx, query, filter))
 }
 
 pub fn show_columns<'a>(
@@ -490,32 +423,46 @@ pub fn show_columns<'a>(
 
     let name = scx.resolve_item(table_name)?;
     let entry = scx.catalog.get_item(&name);
-    let filter = match filter {
-        Some(ShowStatementFilter::Like(like)) => format!("AND name LIKE {}", Value::String(like)),
-        Some(ShowStatementFilter::Where(expr)) => format!("AND {}", expr.to_string()),
-        None => "".to_owned(),
-    };
+
     let query = format!(
         "SELECT
             mz_columns.name,
             mz_columns.nullable,
             mz_columns.type
          FROM mz_catalog.mz_columns AS mz_columns
-         WHERE mz_columns.global_id = '{}' {}
-         ORDER BY mz_columns.field_number ASC",
+         WHERE mz_columns.global_id = '{}'",
         entry.id(),
-        filter
     );
-    Ok(ShowSelect::new(scx, query))
+    Ok(ShowSelect::new(scx, query, filter))
 }
 
+/// An intermediate result when planning a `SHOW` query.
+///
+/// Can be interrogated for its columns, or converted into a proper [`Plan`].
 pub struct ShowSelect<'a> {
     scx: &'a StatementContext<'a>,
     stmt: SelectStatement,
 }
 
 impl<'a> ShowSelect<'a> {
-    fn new(scx: &'a StatementContext, query: String) -> ShowSelect<'a> {
+    /// Constructs a new [`ShowSelect`] from a query that provides the base
+    /// data and an optional user-supplied filter on that data.
+    ///
+    /// Note that the query must return a column named `name`, as the filter
+    /// may implicitly reference this column. Any `ORDER BY` in the query is
+    /// ignored. `ShowSelects`s are always ordered in ascending order by all
+    /// columns from left to right.
+    fn new(
+        scx: &'a StatementContext,
+        query: String,
+        filter: Option<ShowStatementFilter>,
+    ) -> ShowSelect<'a> {
+        let filter = match filter {
+            Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
+            Some(ShowStatementFilter::Where(expr)) => expr.to_string(),
+            None => "true".to_string(),
+        };
+        let query = format!("SELECT * FROM ({}) q WHERE {} ORDER BY q.*", query, filter);
         let stmts = parse::parse(query).expect("ShowSelect::new called with invalid SQL");
         let stmt = match stmts.into_element() {
             Statement::Select(select) => select,
@@ -524,10 +471,12 @@ impl<'a> ShowSelect<'a> {
         ShowSelect { scx, stmt }
     }
 
+    /// Computes the shape of this `ShowSelect`.
     pub fn describe(self) -> Result<(Option<RelationDesc>, Vec<ScalarType>), anyhow::Error> {
         super::describe_statement(self.scx.catalog, Statement::Select(self.stmt), &[])
     }
 
+    /// Converts this `ShowSelect` into a [`Plan`].
     pub fn handle(self) -> Result<Plan, anyhow::Error> {
         super::handle_select(self.scx, self.stmt, &Params::empty())
     }
