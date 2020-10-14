@@ -357,15 +357,16 @@ pub fn show_indexes<'a>(
         "SELECT
             objs.name AS on_name,
             idxs.name AS key_name,
-            idxs.seq_in_index AS seq_in_index,
-            cols.name AS column_name,
-            idxs.expression AS expression,
-            idxs.nullable AS nullable
+            idx_cols.index_position AS seq_in_index,
+            obj_cols.name AS column_name,
+            idx_cols.on_expression AS expression,
+            idx_cols.nullable AS nullable
         FROM
             mz_catalog.mz_indexes AS idxs
+            JOIN mz_catalog.mz_index_columns AS idx_cols ON idxs.id = idx_cols.index_id
             JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
-            LEFT JOIN mz_catalog.mz_columns AS cols
-                ON idxs.on_id = cols.id AND idxs.field_number = cols.field_number
+            LEFT JOIN mz_catalog.mz_columns AS obj_cols
+                ON idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         WHERE
             objs.id = '{}'",
         from_entry.id(),

@@ -269,6 +269,7 @@ mz_databases
 mz_schemas
 mz_columns
 mz_indexes
+mz_index_columns
 mz_tables
 mz_sources
 mz_sinks
@@ -285,6 +286,7 @@ mz_databases          system
 mz_schemas            system
 mz_columns            system
 mz_indexes            system
+mz_index_columns      system
 mz_tables             system
 mz_sinks              system
 mz_sources            system
@@ -295,11 +297,11 @@ SHOW EXTENDED TABLES not yet supported
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-12
+13
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-74
+26
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

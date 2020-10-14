@@ -60,7 +60,7 @@ Field            | Type        | Meaning
 -----------------|-------------|--------
 `id`             | [`bigint`]  | The unique ID of the table, source, or view containing the column.
 `name`           | [`text`]    | The name of the column.
-`field_number`   | [`bigint`]  | The index of the column in its containing table, source, or view.
+`position`       | [`bigint`]  | The 1-indexed position of the column in its containing table, source, or view.
 `nullable`       | [`boolean`] | Can the column contain a `NULL` value?
 `type`           | [`text`]    | The data type of the column.
 
@@ -76,22 +76,32 @@ Field  | Type       | Meaning
 
 ### `mz_indexes`
 
-The `mz_indexes` table contains a row for each column in each index in the
+The `mz_indexes` table contains a row for each index in the system.
+
+Field   | Type     | Meaning
+--------|----------|--------
+`id`    | [`text`] | Materialize's unique ID for the index.
+`oid`   | [`oid`]  | A [PostgreSQL-compatible OID][oid] for the index.
+`name`  | [`text`] | The name of the index.
+`on_id` | [`text`] | The ID of the relation on which the index is built.
+
+### `mz_index_columns`
+
+The `mz_index_columns` table contains a row for each column in each index in the
 system. For example, an index on `(a, b + 1)` would have two rows in this table,
 one for each of the two columns in the index.
 
 For a given row, if `field_number` is null then `expression` will be nonnull, or
 vice-versa.
 
-Field          | Type        | Meaning
----------------|-------------|--------
-`id`           | [`text`]    | Materialize's unique ID for the index.
-`oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the index.
-`on_id`        | [`text`]    | The ID of the relation on which the index is built.
-`field_number` | [`bigint`]  | If not `NULL`, specifies the column of the relation that this index column references.
-`expression`   | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
-`nullable`     | [`boolean`] | Can this column of the index evaluate to `NULL`?
-`seq_in_index` | [`bigint`]  | The position of this component within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)
+Field            | Type        | Meaning
+-----------------|-------------|--------
+`index_id`       | [`text`]    | The ID of the index which contains this column.
+`index_position` | [`bigint`]  | The 1-indexed position of this column within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)
+`on_position`    | [`bigint`]  | If not `NULL`, specifies the 1-indexed position of a column in the relation on which this index is built that determines the value of this index column.
+`on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
+`nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
+
 
 ### `mz_objects`
 

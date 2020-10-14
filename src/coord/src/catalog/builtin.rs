@@ -290,7 +290,7 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("field_number", ScalarType::Int64.nullable(false))
+            .with_column("position", ScalarType::Int64.nullable(false))
             .with_column("nullable", ScalarType::Bool.nullable(false))
             .with_column("type", ScalarType::String.nullable(false)),
         id: GlobalId::System(2013),
@@ -302,14 +302,22 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("on_id", ScalarType::String.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("field_number", ScalarType::Int64.nullable(true))
-            .with_column("expression", ScalarType::String.nullable(true))
-            .with_column("nullable", ScalarType::Bool.nullable(false))
-            .with_column("seq_in_index", ScalarType::Int64.nullable(false)),
+            .with_column("on_id", ScalarType::String.nullable(false)),
         id: GlobalId::System(2015),
         index_id: GlobalId::System(2016),
+    };
+    pub static ref MZ_INDEX_COLUMNS: BuiltinTable = BuiltinTable {
+        name: "mz_index_columns",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("index_id", ScalarType::String.nullable(false))
+            .with_column("index_position", ScalarType::Int64.nullable(false))
+            .with_column("on_position", ScalarType::Int64.nullable(true))
+            .with_column("on_expression", ScalarType::String.nullable(true))
+            .with_column("nullable", ScalarType::Bool.nullable(false)),
+        id: GlobalId::System(2017),
+        index_id: GlobalId::System(2018),
     };
     pub static ref MZ_TABLES: BuiltinTable = BuiltinTable {
         name: "mz_tables",
@@ -319,8 +327,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2017),
-        index_id: GlobalId::System(2018),
+        id: GlobalId::System(2019),
+        index_id: GlobalId::System(2020),
     };
     pub static ref MZ_SOURCES: BuiltinTable = BuiltinTable {
         name: "mz_sources",
@@ -330,8 +338,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2019),
-        index_id: GlobalId::System(2020),
+        id: GlobalId::System(2021),
+        index_id: GlobalId::System(2022),
     };
     pub static ref MZ_SINKS: BuiltinTable = BuiltinTable {
         name: "mz_sinks",
@@ -341,8 +349,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2021),
-        index_id: GlobalId::System(2022),
+        id: GlobalId::System(2023),
+        index_id: GlobalId::System(2024),
     };
     pub static ref MZ_VIEWS: BuiltinTable = BuiltinTable {
         name: "mz_views",
@@ -352,8 +360,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2023),
-        index_id: GlobalId::System(2024),
+        id: GlobalId::System(2025),
+        index_id: GlobalId::System(2026),
     };
 }
 
@@ -685,7 +693,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_attribute AS SELECT
     oid as attrelid,
     mz_columns.name as attname,
-    field_number as attnum,
+    position as attnum,
     NOT nullable as attnotnull
 FROM mz_catalog.mz_tables JOIN mz_catalog.mz_columns ON mz_tables.id = mz_columns.id",
     id: GlobalId::System(3020),
@@ -716,6 +724,7 @@ lazy_static! {
             Builtin::Table(&MZ_SCHEMAS),
             Builtin::Table(&MZ_COLUMNS),
             Builtin::Table(&MZ_INDEXES),
+            Builtin::Table(&MZ_INDEX_COLUMNS),
             Builtin::Table(&MZ_TABLES),
             Builtin::Table(&MZ_SOURCES),
             Builtin::Table(&MZ_SINKS),
