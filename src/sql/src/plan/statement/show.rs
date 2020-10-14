@@ -438,10 +438,10 @@ pub fn show_indexes<'a>(
         "SELECT
             objs.name AS on_name,
             idxs.name AS key_name,
+            idxs.seq_in_index AS seq_in_index,
             cols.name AS column_name,
             idxs.expression AS expression,
-            idxs.nullable AS nullable,
-            idxs.seq_in_index AS seq_in_index
+            idxs.nullable AS nullable
         FROM
             mz_catalog.mz_indexes AS idxs
             JOIN mz_catalog.mz_objects AS objs ON idxs.on_global_id = objs.global_id
@@ -461,7 +461,7 @@ pub fn show_indexes<'a>(
             ShowStatementFilter::Where(expr) => expr.to_string(),
         };
         format!(
-            "SELECT on_name, key_name, column_name, expression, nullable, seq_in_index
+            "SELECT on_name, key_name, seq_in_index, column_name, expression, nullable
              FROM ({})
              WHERE {}",
             base_query, filter,

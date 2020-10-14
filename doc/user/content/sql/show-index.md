@@ -26,19 +26,19 @@ _on&lowbar;name_ | The name of the object whose indexes you want to show. This c
 `SHOW INDEX`'s output is a table, with this structure:
 
 ```nofmt
- on_name | key_name | column_name | expression | nullable | seq_in_index
----------+----------+-------------+------------+----------+--------------
- ...     | ...      | ...         | ...        | ...      | ...
+ on_name | key_name | seq_in_index | column_name | expression | nullable |
+---------+----------+--------------+-------------+------------+----------+
+ ...     | ...      | ...          | ...         | ...        | ...
 ```
 
 Field | Meaning
 ------|--------
 **on_name** | The name of the table, source, or view the index belongs to.
 **key_name** | The name of the index.
+**seq_in_index** | The column's position in the index.
 **column_name** | The indexed column.
 **expression** | An expression used to generate the column in the index.
 **null** | Is the column nullable?
-**seq_in_index** | The column's position in the index.
 
 {{< version-changed v0.5.0 >}}
 The output columns are renamed from `On_name`, `Key_name`, `Column_name`,
@@ -65,9 +65,9 @@ SHOW FULL VIEWS;
 SHOW INDEXES FROM my_materialized_view;
 ```
 ```nofmt
- on_name | key_name | column_name | expression | null | seq_in_index
----------+----------+-------------+------------+------+--------------
- ...     | ...      | ...         | ...        | ...  | ...
+ on_name | key_name | seq_in_index | column_name | expression | null
+---------+----------+--------------+-------------+------------+-----
+ ...     | ...      | ...          | ...         | ...        | ...
 ```
 
 ## Related pages

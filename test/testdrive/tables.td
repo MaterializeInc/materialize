@@ -38,10 +38,10 @@ name
 ----
 
 > SHOW INDEXES FROM t;
-on_name  key_name       column_name  expression  nullable   seq_in_index
-------------------------------------------------------------------------
-t        t_primary_idx  a            <null>      true   1
-t        t_primary_idx  b            <null>      false  2
+on_name  key_name       seq_in_index  column_name  expression  nullable
+-----------------------------------------------------------------------
+t        t_primary_idx  1             a            <null>      true
+t        t_primary_idx  2             b            <null>      false
 
 ! DROP INDEX t_primary_idx
 cannot drop 'materialize.public.t_primary_idx' as it is the default index for a table
