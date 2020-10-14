@@ -926,7 +926,10 @@ query error invalid dimension: -1; must use value within \[1, 1\]
 SELECT list_length_max((LIST[1]::INT LIST), LIST[-1][1])
 
 # 🔬 List casts
-# 🔬🔬 Single-dimensional lists
+
+# 🔬🔬 Between lists
+
+# 🔬🔬🔬 Single-dimensional lists
 
 query T
 SELECT LIST['1']::int list
@@ -958,14 +961,16 @@ SELECT NULL::int list
 ----
 NULL
 
-# 🔬🔬🔬 Errors
+# 🔬🔬🔬🔬 Errors
+
 query error invalid input syntax for int4: invalid digit found in string: "dog"
 SELECT LIST['1', 'dog']::int list
 
 query error CAST does not support casting from date to i32
 SELECT LIST[DATE '2008-02-01']::int list
 
-# 🔬🔬 Multi-dimensional and jagged lists
+# 🔬🔬🔬 Multi-dimensional and jagged lists
+
 query T
 SELECT LIST[[1.4::float], [-1.5::float, 2.5::float]]::int list list;
 ----
@@ -976,7 +981,8 @@ SELECT LIST[[1.4::float], [-1.5::float, 2.5::float], NULL::float list]::int list
 ----
 {{1},{-2,3},NULL}
 
-# 🔬🔬 Non-numeric types
+# 🔬🔬🔬 Non-numeric types
+
 query T
 SELECT LIST[TIMESTAMP '2008-02-01 15:04:05', TIMESTAMP '2007-02-01 15:04:05']::date list
 ----
