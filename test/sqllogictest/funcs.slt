@@ -518,7 +518,32 @@ SELECT array_lower(ARRAY[ARRAY[1, 2]], 2)
 ----
 1
 
-# Additional array_lower tests
+query I
+SELECT array_upper(ARRAY['a', 'b'], 1)
+----
+2
+
+query I
+SELECT array_upper(ARRAY['a'], 1)
+----
+1
+
+query I
+SELECT array_upper(ARRAY['a'], 0)
+----
+NULL
+
+query I
+SELECT array_upper(ARRAY['a'], 2)
+----
+NULL
+
+query I
+SELECT array_upper(ARRAY[ARRAY[1, 2]], 2)
+----
+2
+
+# Additional array_lower, array_upper tests
 query I
 SELECT array_lower(ARRAY[[[9]]], 2)
 ----
@@ -531,5 +556,15 @@ SELECT array_lower(ARRAY[[['a', 'b']]], 3)
 
 query I
 SELECT array_lower(ARRAY[[['a', 'b']]], 4)
+----
+NULL
+
+query I
+SELECT array_upper(ARRAY[[[1, 2]]], 3)
+----
+2
+
+query I
+SELECT array_upper(ARRAY[[[1, 2]]], 4)
 ----
 NULL
