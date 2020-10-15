@@ -381,14 +381,19 @@ function View(props) {
         // currently has 0 records). The fill color is a deeper red based on how many
         // records this operator has compared to the operator with the most records.
         const pct = record_count
-          ? Math.floor(record_count / max_record_count)
+          ? Math.floor((record_count / max_record_count) * 0xff)
           : 0;
-        const alpha = (pct * 0xff).toString(16).padStart(2, '0');
+        const alpha = pct.toString(16).padStart(2, '0');
         notes.push(`${record_count} records`);
         style = `,style=filled,color=red,fillcolor="#ff0000${alpha}"`;
       }
-      if (id in elapsed) {
-        notes.push(`${dispNs(elapsed[id])}`);
+      // Only display elapsed time if it's more than 1s.
+      if (id in elapsed && elapsed[id] > 1e9) {
+        notes.push(`${dispNs(elapsed[id])} elapsed`);
+      }
+      const maxLen = 40;
+      if (name.length > maxLen + 3) {
+        name = name.slice(0, maxLen) + '...';
       }
       return `_${id} [label="${name} (${notes.join(', ')})"${style}]`;
     });
