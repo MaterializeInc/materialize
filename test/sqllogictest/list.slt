@@ -924,3 +924,117 @@ SELECT list_length_max((LIST[1]::INT LIST), -1)
 
 query error invalid dimension: -1; must use value within \[1, 1\]
 SELECT list_length_max((LIST[1]::INT LIST), LIST[-1][1])
+
+# 🔬 List casts
+
+# 🔬🔬 Between lists
+
+# 🔬🔬🔬 Single-dimensional lists
+
+query T
+SELECT LIST['1']::int list
+----
+{1}
+
+query T
+SELECT LIST[NULL]::int list
+----
+{NULL}
+
+query T
+SELECT LIST[NULL, '1']::int list
+----
+{NULL,1}
+
+query T
+SELECT LIST[1.4, 1.5]::int list;
+----
+{1,2}
+
+query T
+SELECT LIST[1.4::float, -1.5::float]::int list;
+----
+{1,-2}
+
+query T
+SELECT NULL::int list
+----
+NULL
+
+# 🔬🔬🔬🔬 Errors
+
+query error invalid input syntax for int4: invalid digit found in string: "dog"
+SELECT LIST['1', 'dog']::int list
+
+query error CAST does not support casting from date to i32
+SELECT LIST[DATE '2008-02-01']::int list
+
+# 🔬🔬🔬 Multi-dimensional and jagged lists
+
+query T
+SELECT LIST[[1.4::float], [-1.5::float, 2.5::float]]::int list list;
+----
+{{1},{-2,3}}
+
+query T
+SELECT LIST[[1.4::float], [-1.5::float, 2.5::float], NULL::float list]::int list list;
+----
+{{1},{-2,3},NULL}
+
+# 🔬🔬🔬 Non-numeric types
+
+query T
+SELECT LIST[TIMESTAMP '2008-02-01 15:04:05', TIMESTAMP '2007-02-01 15:04:05']::date list
+----
+{2008-02-01,2007-02-01}
+
+query T
+SELECT LIST[DATE '2008-02-01', DATE '2007-02-01']::timestamp list
+----
+{"2008-02-01 00:00:00","2007-02-01 00:00:00"}
+
+# 🔬🔬 list to text
+
+query T
+SELECT LIST['1']::text
+----
+{1}
+
+query T
+SELECT LIST[NULL]::text
+----
+{NULL}
+
+query T
+SELECT LIST[NULL, '1']::text
+----
+{NULL,1}
+
+query T
+SELECT LIST[NULL, 1]::text
+----
+{NULL,1}
+
+query T
+SELECT LIST[1.4, -1.5]::text
+----
+{1.4,-1.5}
+
+query T
+SELECT LIST[[1.4], [-1.5]]::text
+----
+{{1.4},{-1.5}}
+
+query T
+SELECT LIST[[1.4::float], [-1.5::float, 2.5::float]]::text
+----
+{{1.4},{-1.5,2.5}}
+
+# Show that these are actually strings
+query I
+SELECT length(LIST['1','2']::text)
+----
+5
+
+query error Cannot call function length\(unknown\): length does not support implicitly casting from string list to string
+SELECT length(LIST['1','2'])
