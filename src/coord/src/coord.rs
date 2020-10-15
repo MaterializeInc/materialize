@@ -239,12 +239,13 @@ where
                         // `SequencedCommand::EnableLogging`. Just teach the
                         // coordinator of their existence, without creating a
                         // dataflow for the index.
-                        //
-                        // TODO(benesch): why is this hardcoded to 1000?
-                        // Should it not be the same logical compaction window
-                        // that everything else uses?
-                        self.indexes
-                            .insert(*id, Frontiers::new(self.num_timely_workers, Some(1_000)));
+                        self.indexes.insert(
+                            *id,
+                            Frontiers::new(
+                                self.num_timely_workers,
+                                self.logical_compaction_window_ms,
+                            ),
+                        );
                     } else {
                         self.ship_dataflow(self.build_index_dataflow(*id)).await;
                     }
