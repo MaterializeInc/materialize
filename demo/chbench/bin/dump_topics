@@ -18,7 +18,7 @@ if ! topics=$(kafkacat -L -b localhost:9092 | grep debezium | cut -d '"' -f 2); 
 fi
 
 for topic in $topics; do
-    readonly snapfile="${topic}.snap"
+    snapfile="${topic}.snap"
     if ! kafkacat -C -b 127.0.0.1:9092 -t "${topic}" -e > "${snapfile}"; then
         echo "Failed to dump topic ${topic}"
         exit 1
