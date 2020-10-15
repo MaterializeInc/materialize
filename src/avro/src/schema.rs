@@ -297,17 +297,14 @@ pub enum SchemaPiece {
 impl SchemaPiece {
     /// Returns whether the schema node is "underlyingly" an Int (but possibly a logicalType typedef)
     pub fn is_underlying_int(&self) -> bool {
-        match self {
-            SchemaPiece::Int | SchemaPiece::Date => true,
-            _ => false,
-        }
+        matches!(self, SchemaPiece::Int | SchemaPiece::Date)
     }
     /// Returns whether the schema node is "underlyingly" an Int64 (but possibly a logicalType typedef)
     pub fn is_underlying_long(&self) -> bool {
-        match self {
-            SchemaPiece::Long | SchemaPiece::TimestampMilli | SchemaPiece::TimestampMicro => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            SchemaPiece::Long | SchemaPiece::TimestampMilli | SchemaPiece::TimestampMicro
+        )
     }
 }
 

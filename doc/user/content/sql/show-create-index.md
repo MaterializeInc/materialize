@@ -24,7 +24,7 @@ _index&lowbar;name_ | The index you want use. You can find available index names
 SHOW INDEXES FROM my_view
 ```
 ```nofmt
-   INDEXES
+     name
 -------------
  my_view_idx
 ```

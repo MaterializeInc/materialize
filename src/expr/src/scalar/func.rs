@@ -1789,6 +1789,7 @@ pub enum BinaryFunc {
     ListIndex,
     ListLengthMax { max_dim: usize },
     ArrayContains,
+    ArrayIndex,
 }
 
 impl BinaryFunc {
@@ -1901,17 +1902,26 @@ impl BinaryFunc {
             BinaryFunc::ListIndex => Ok(eager!(list_index)),
             BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
+            BinaryFunc::ArrayIndex => Ok(eager!(array_index)),
         }
     }
 
     pub fn output_type(&self, input1_type: ColumnType, input2_type: ColumnType) -> ColumnType {
         use BinaryFunc::*;
         let in_nullable = input1_type.nullable || input2_type.nullable;
-        let is_div_mod = match self {
-            DivInt32 | ModInt32 | DivInt64 | ModInt64 | DivFloat32 | ModFloat32 | DivFloat64
-            | ModFloat64 | DivDecimal | ModDecimal => true,
-            _ => false,
-        };
+        let is_div_mod = matches!(
+            self,
+            DivInt32
+                | ModInt32
+                | DivInt64
+                | ModInt64
+                | DivFloat32
+                | ModFloat32
+                | DivFloat64
+                | ModFloat64
+                | DivDecimal
+                | ModDecimal
+        );
         match self {
             And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
                 ScalarType::Bool.nullable(in_nullable)
@@ -2027,16 +2037,19 @@ impl BinaryFunc {
                 .clone()
                 .nullable(true),
 
+            ArrayIndex => input1_type
+                .scalar_type
+                .unwrap_array_element_type()
+                .clone()
+                .nullable(true),
+
             ListLengthMax { .. } => ScalarType::Int64.nullable(true),
         }
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        match self {
-            BinaryFunc::And | BinaryFunc::Or => false,
-            _ => true,
-        }
+        !matches!(self, BinaryFunc::And | BinaryFunc::Or)
     }
 
     /// Whether the function might return NULL even if none of its inputs are
@@ -2046,57 +2059,56 @@ impl BinaryFunc {
     /// introduces nulls even when it does not.
     pub fn introduces_nulls(&self) -> bool {
         use BinaryFunc::*;
-        match self {
-            And
-            | Or
-            | Eq
-            | NotEq
-            | Lt
-            | Lte
-            | Gt
-            | Gte
-            | AddInt32
-            | AddInt64
-            | AddFloat32
-            | AddFloat64
-            | AddTimestampInterval
-            | AddTimestampTzInterval
-            | AddDateTime
-            | AddDateInterval
-            | AddTimeInterval
-            | AddInterval
-            | SubInterval
-            | AddDecimal
-            | SubInt32
-            | SubInt64
-            | SubFloat32
-            | SubFloat64
-            | SubTimestamp
-            | SubTimestampTz
-            | SubTimestampInterval
-            | SubTimestampTzInterval
-            | SubDate
-            | SubDateInterval
-            | SubTime
-            | SubTimeInterval
-            | SubDecimal
-            | MulInt32
-            | MulInt64
-            | MulFloat32
-            | MulFloat64
-            | MulDecimal
-            | DivInt32
-            | DivInt64
-            | DivFloat32
-            | DivFloat64
-            | DivDecimal
-            | ModInt32
-            | ModInt64
-            | ModFloat32
-            | ModFloat64
-            | ModDecimal => false,
-            _ => true,
-        }
+        !matches!(
+            self,
+            And | Or
+                | Eq
+                | NotEq
+                | Lt
+                | Lte
+                | Gt
+                | Gte
+                | AddInt32
+                | AddInt64
+                | AddFloat32
+                | AddFloat64
+                | AddTimestampInterval
+                | AddTimestampTzInterval
+                | AddDateTime
+                | AddDateInterval
+                | AddTimeInterval
+                | AddInterval
+                | SubInterval
+                | AddDecimal
+                | SubInt32
+                | SubInt64
+                | SubFloat32
+                | SubFloat64
+                | SubTimestamp
+                | SubTimestampTz
+                | SubTimestampInterval
+                | SubTimestampTzInterval
+                | SubDate
+                | SubDateInterval
+                | SubTime
+                | SubTimeInterval
+                | SubDecimal
+                | MulInt32
+                | MulInt64
+                | MulFloat32
+                | MulFloat64
+                | MulDecimal
+                | DivInt32
+                | DivInt64
+                | DivFloat32
+                | DivFloat64
+                | DivDecimal
+                | ModInt32
+                | ModInt64
+                | ModFloat32
+                | ModFloat64
+                | ModDecimal
+        )
     }
 
     pub fn is_infix_op(&self) -> bool {
@@ -2160,7 +2172,8 @@ impl BinaryFunc {
             | TextConcat
             | ListIndex
             | MatchRegex { .. }
-            | ArrayContains => true,
+            | ArrayContains
+            | ArrayIndex => true,
             MatchLikePattern
             | ToCharTimestamp
             | ToCharTimestampTz
@@ -2266,6 +2279,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListIndex => f.write_str("list_index"),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
+            BinaryFunc::ArrayIndex => f.write_str("array_index"),
         }
     }
 }
@@ -2662,10 +2676,7 @@ impl UnaryFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        match self {
-            UnaryFunc::IsNull | UnaryFunc::CastJsonbOrNullToJsonb => false,
-            _ => true,
-        }
+        !matches!(self, UnaryFunc::IsNull | UnaryFunc::CastJsonbOrNullToJsonb)
     }
 
     /// True iff for x != y, we are assured f(x) != f(y).
@@ -2673,28 +2684,28 @@ impl UnaryFunc {
     /// This is most often the case for methods that promote to types that
     /// can contain all the precision of the input type.
     pub fn preserves_uniqueness(&self) -> bool {
-        match self {
+        matches!(
+            self,
             UnaryFunc::Not
-            | UnaryFunc::NegInt32
-            | UnaryFunc::NegInt64
-            | UnaryFunc::NegFloat32
-            | UnaryFunc::NegFloat64
-            | UnaryFunc::NegDecimal
-            | UnaryFunc::CastBoolToStringExplicit
-            | UnaryFunc::CastInt32ToInt64
-            | UnaryFunc::CastInt32ToString
-            | UnaryFunc::CastInt64ToString
-            | UnaryFunc::CastFloat32ToFloat64
-            | UnaryFunc::CastFloat32ToString
-            | UnaryFunc::CastFloat64ToString
-            | UnaryFunc::CastStringToBytes
-            | UnaryFunc::CastDateToTimestamp
-            | UnaryFunc::CastDateToTimestampTz
-            | UnaryFunc::CastDateToString
-            | UnaryFunc::CastTimeToInterval
-            | UnaryFunc::CastTimeToString => true,
-            _ => false,
-        }
+                | UnaryFunc::NegInt32
+                | UnaryFunc::NegInt64
+                | UnaryFunc::NegFloat32
+                | UnaryFunc::NegFloat64
+                | UnaryFunc::NegDecimal
+                | UnaryFunc::CastBoolToStringExplicit
+                | UnaryFunc::CastInt32ToInt64
+                | UnaryFunc::CastInt32ToString
+                | UnaryFunc::CastInt64ToString
+                | UnaryFunc::CastFloat32ToFloat64
+                | UnaryFunc::CastFloat32ToString
+                | UnaryFunc::CastFloat64ToString
+                | UnaryFunc::CastStringToBytes
+                | UnaryFunc::CastDateToTimestamp
+                | UnaryFunc::CastDateToTimestampTz
+                | UnaryFunc::CastDateToString
+                | UnaryFunc::CastTimeToInterval
+                | UnaryFunc::CastTimeToString
+        )
     }
 }
 
@@ -3281,6 +3292,18 @@ fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         .unwrap_or(Datum::Null)
 }
 
+fn array_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Datum::Null;
+    }
+    a.unwrap_array()
+        .elements()
+        .iter()
+        .nth(i as usize - 1)
+        .unwrap_or(Datum::Null)
+}
+
 fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Datum<'a>, EvalError> {
     fn max_len_on_dim<'a>(d: Datum<'a>, on_dim: i64) -> Option<i64> {
         match d {
@@ -3443,17 +3466,14 @@ impl VariadicFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        match self {
-            VariadicFunc::Coalesce
+        !matches!(self, VariadicFunc::Coalesce
             | VariadicFunc::Concat
             | VariadicFunc::JsonbBuildArray
             | VariadicFunc::JsonbBuildObject
             | VariadicFunc::ListCreate { .. }
             | VariadicFunc::RecordCreate { .. }
             | VariadicFunc::ArrayCreate { .. }
-            | VariadicFunc::ArrayToString { .. } => false,
-            _ => true,
-        }
+            | VariadicFunc::ArrayToString { .. })
     }
 }
 

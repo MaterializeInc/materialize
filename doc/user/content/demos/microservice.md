@@ -222,19 +222,19 @@ writing queries from. Here's its schema:
 SHOW COLUMNS FROM billing_records;
 ```
 ```nofmt
-     Field      | Nullable |    Type
+     name       | nullable |    type
 ----------------+----------+-------------
- id             | YES      | text
- batch_id       | YES      | text
- interval_start | YES      | timestamptz
- interval_end   | YES      | timestamptz
- meter          | YES      | text
- value          | YES      | int4
- client_id      | YES      | int4
- vm_id          | YES      | int4
- cpu_num        | YES      | int4
- memory_gb      | YES      | int4
- disk_gb        | YES      | int4
+ id             | true     | text
+ batch_id       | true     | text
+ interval_start | true     | timestamptz
+ interval_end   | true     | timestamptz
+ meter          | true     | text
+ value          | true     | int4
+ client_id      | true     | int4
+ vm_id          | true     | int4
+ cpu_num        | true     | int4
+ memory_gb      | true     | int4
+ disk_gb        | true     | int4
 ```
 
 ### Other source types
@@ -267,12 +267,12 @@ FORMAT CSV WITH 3 COLUMNS;
 This creates a source with the following columns:
 
 ```nofmt
-   Field    | Nullable | Type
+   name     | nullable | type
 ------------+----------+------
- column1    | NO       | text
- column2    | NO       | text
- column3    | NO       | text
- mz_line_no | YES      | int8
+ column1    | false    | text
+ column2    | false    | text
+ column3    | false    | text
+ mz_line_no | true     | int8
 ```
 
 We'll then create a materialized view for this data, as well as convert its units from seconds to milliseconds. This isn't strictly necessary because we could just `SELECT` from `pricing_source`, but is more performant in our case.

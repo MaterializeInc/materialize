@@ -95,10 +95,7 @@ pub enum Datum<'a> {
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {
-        match self {
-            Datum::Null => true,
-            _ => false,
-        }
+        matches!(self, Datum::Null)
     }
 
     /// Unwraps the boolean value within this datum.
@@ -741,6 +738,18 @@ impl<'a> ScalarType {
         }
 
         dims
+    }
+
+    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Array`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Array`].
+    pub fn unwrap_array_element_type(&self) -> &ScalarType {
+        match self {
+            ScalarType::Array(s) => &**s,
+            _ => panic!("ScalarType::unwrap_array_element_type called on {:?}", self),
+        }
     }
 
     /// Returns a copy of `Self` with any embedded fields "zeroed" out. Meant to

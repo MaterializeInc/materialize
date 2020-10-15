@@ -141,7 +141,7 @@ pub fn collate_stacks(profile: StackProfile) -> WeightedSymbolTrie {
     // Sort so addresses from the same images are together,
     // to avoid thrashing `backtrace::resolve`'s cache of
     // parsed images.
-    all_addrs.sort();
+    all_addrs.sort_unstable();
     all_addrs.dedup();
     let addr_to_symbols = all_addrs
         .into_iter()

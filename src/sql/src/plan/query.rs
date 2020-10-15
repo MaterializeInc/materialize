@@ -1691,8 +1691,9 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
         Expr::SubscriptIndex { expr, subscript } => {
             let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
             let ty = ecx.scalar_type(&expr);
-            match &ty {
-                ScalarType::List(_) => {}
+            let func = match &ty {
+                ScalarType::List(_) => BinaryFunc::ListIndex,
+                ScalarType::Array(_) => BinaryFunc::ArrayIndex,
                 ty => bail!("cannot subscript type {}", ty),
             };
 
@@ -1702,7 +1703,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                     ecx,
                     ScalarType::Int64,
                 )?,
-                BinaryFunc::ListIndex,
+                func,
             )
             .into()
         }

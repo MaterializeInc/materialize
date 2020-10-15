@@ -55,7 +55,7 @@ from materialize.errors import (
 
 
 T = TypeVar("T")
-say = ui.speaker("C>")
+say = ui.speaker("C> ")
 
 _BASHLIKE_ENV_VAR_PATTERN = re.compile(
     r"""\$\{

@@ -29,32 +29,32 @@ cannot CREATE TABLE with duplicate column names
 > SELECT * FROM t;
 
 > SHOW TABLES;
-TABLES
-------
+name
+----
 t
 
 > SHOW SOURCES;
-SOURCES
--------
+name
+----
 
 > SHOW INDEXES FROM t;
-On_name  Key_name       Column_name  Expression  Null   Seq_in_index
---------------------------------------------------------------------
-t        t_primary_idx  a            <null>      true   1
-t        t_primary_idx  b            <null>      false  2
+on_name  key_name       seq_in_index  column_name  expression  nullable
+-----------------------------------------------------------------------
+t        t_primary_idx  1             a            <null>      true
+t        t_primary_idx  2             b            <null>      false
 
 ! DROP INDEX t_primary_idx
 cannot drop 'materialize.public.t_primary_idx' as it is the default index for a table
 
 > SHOW COLUMNS in t;
-Field      Nullable  Type
+name       nullable  type
 -------------------------
-a          YES       int4
-b          NO        text
-> SHOW COLUMNS in t WHERE Field = 'a'
-a  YES  int4
+a          true       int4
+b          false      text
+> SHOW COLUMNS in t WHERE name = 'a'
+a  true  int4
 > SHOW COLUMNS in t LIKE 'b%'
-b  NO  text
+b  false  text
 
 > INSERT INTO t VALUES (1, 'a');
 
@@ -181,19 +181,19 @@ unknown catalog item 't'
 unknown catalog item 't'
 
 > SHOW TABLES;
-TABLES
-------
+name
+----
 v
 
 > SHOW TABLES LIKE 'foo'
 > SHOW TABLES LIKE 'v%'
 v
-> SHOW TABLES WHERE tables = 'v'
+> SHOW TABLES WHERE name = 'v'
 v
 
 > SHOW SOURCES;
-SOURCES
--------
+name
+----
 
 > CREATE TABLE t (a int, b text NOT NULL)
 
@@ -272,8 +272,8 @@ INSERT statement specifies duplicate column
 # Test pg_table_is_visible.
 > CREATE SCHEMA non_default
 > CREATE TABLE non_default.hidden (dummy int)
-> SELECT tables, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 1
-tables  visible
+> SELECT name, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 1
+name    visible
 ---------------
 hidden  false
 j       true

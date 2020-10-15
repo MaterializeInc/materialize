@@ -23,6 +23,7 @@ use crate::id::DummyHumanizer;
 use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
 
 pub mod func;
+pub mod join_input_mapper;
 
 /// An abstract syntax tree which defines a collection.
 ///
@@ -299,7 +300,7 @@ impl RelationExpr {
                             let mut new_key: Vec<usize> =
                                 key.iter().cloned().filter(|k| k != &old).collect();
                             new_key.push(new);
-                            new_key.sort();
+                            new_key.sort_unstable();
                             new_keys.push(new_key);
                         }
                     }

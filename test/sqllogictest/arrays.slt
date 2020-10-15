@@ -65,3 +65,71 @@ true
 
 query error ANY comparison op <= not yet supported
 select 'hello'::text <= ANY(ARRAY['there'::text])
+
+# Duplicates of cockroach/array.slt. todo@jldlaughlin: Remove when we support that file.
+# array subscript access
+
+query T
+SELECT ARRAY['a', 'b', 'c'][-1]
+----
+NULL
+
+query T
+SELECT ARRAY['a', 'b', 'c'][0]
+----
+NULL
+
+query T
+SELECT (ARRAY['a', 'b', 'c'])[2]
+----
+b
+
+query T
+SELECT ARRAY['a', 'b', 'c'][2]
+----
+b
+
+query T
+SELECT ARRAY['a', 'b', 'c'][4]
+----
+NULL
+
+query T
+SELECT ARRAY['a', 'b', 'c'][1.5 + 1.5]
+----
+c
+
+query I
+SELECT ARRAY[1, 2, 3][-1]
+----
+NULL
+
+query I
+SELECT ARRAY[1, 2, 3][0]
+----
+NULL
+
+query I
+SELECT ARRAY[1, 2, 3][2]
+----
+2
+
+query I
+SELECT ARRAY[1, 2, 3][4]
+----
+NULL
+
+query I
+SELECT ARRAY[1, 2, 3][1.5 + 1.5]
+----
+3
+
+# Error different than Cockroach.
+query error cannot subscript type string
+SELECT ARRAY['a', 'b', 'c'][4][2]
+
+# This differs from Cockroach, but matches Postgres.
+query T
+SELECT ARRAY['a', 'b', 'c'][3.5]
+----
+NULL

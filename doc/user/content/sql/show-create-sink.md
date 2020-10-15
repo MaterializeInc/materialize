@@ -22,7 +22,7 @@ _sink&lowbar;name_ | The sink you want use. You can find available sink names th
 SHOW SINKS
 ```
 ```nofmt
-     SINKS
+     name
 --------------
  my_view_sink
 ```

@@ -388,10 +388,7 @@ impl DateTimeToken {
 
     /// Returns whether this token is a fill mode toggle.
     fn is_fill_mode_toggle(&self) -> bool {
-        match self {
-            DateTimeToken::fm | DateTimeToken::FM => true,
-            _ => false,
-        }
+        matches!(self, DateTimeToken::fm | DateTimeToken::FM)
     }
 
     /// Returns how this token affects the ordinal mode, if at all.

@@ -101,7 +101,7 @@ impl RelationType {
 
     /// Adds a new key for the relation.
     pub fn with_key(mut self, mut indices: Vec<usize>) -> Self {
-        indices.sort();
+        indices.sort_unstable();
         if !self.keys.contains(&indices) {
             self.keys.push(indices);
         }

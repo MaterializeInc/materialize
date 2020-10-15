@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::{RelationDesc, Row};
+use repr::RelationDesc;
 use sql::ast::display::AstDisplay;
 use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
@@ -45,9 +45,6 @@ pub mod storage;
 pub use crate::catalog::config::Config;
 
 const SYSTEM_CONN_ID: u32 = 0;
-
-pub const AMBIENT_DATABASE_ID: i64 = -1;
-pub const AMBIENT_SCHEMA_ID: i64 = -1;
 
 // TODO@jldlaughlin: Better assignment strategy for system type OIDs.
 // https://github.com/MaterializeInc/materialize/pull/4316#discussion_r496238962
@@ -1379,11 +1376,7 @@ impl Catalog {
         pcx: PlanContext,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(create_sql)?.into_element();
-        let params = Params {
-            datums: Row::pack(&[]),
-            types: vec![],
-        };
-        let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &params)?;
+        let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable { table, .. } => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
@@ -1701,9 +1694,9 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         &self.database
     }
 
-    fn resolve_database(&self, database_name: &str) -> Result<(), SqlCatalogError> {
+    fn resolve_database(&self, database_name: &str) -> Result<i64, SqlCatalogError> {
         match self.catalog.by_name.get(database_name) {
-            Some(_) => Ok(()),
+            Some(database) => Ok(database.id),
             None => Err(SqlCatalogError::UnknownDatabase(database_name.into())),
         }
     }
