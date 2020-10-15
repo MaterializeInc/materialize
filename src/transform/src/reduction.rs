@@ -270,13 +270,10 @@ impl FoldConstants {
             } => {
                 if inputs.iter().any(|e| e.is_empty()) {
                     relation.take_safely();
-                } else if inputs.iter().all(|i| {
-                    if let RelationExpr::Constant { .. } = i {
-                        true
-                    } else {
-                        false
-                    }
-                }) {
+                } else if inputs
+                    .iter()
+                    .all(|i| matches!(i, RelationExpr::Constant { .. }))
+                {
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
                     // We start with a single 0-ary row.
                     let mut old_rows = vec![(repr::Row::pack::<_, Datum>(None), 1)];

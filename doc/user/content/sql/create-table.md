@@ -73,10 +73,10 @@ TABLES
 t
 
 SHOW COLUMNS IN t;
-Field      Nullable  Type
+name       nullable  type
 -------------------------
-a          YES       int4
-b          NO        text
+a          true      int4
+b          false     text
 ```
 
 ## Related pages

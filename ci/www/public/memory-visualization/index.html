@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <title>materialized memory viewer</title>
     <script src="https://cdn.jsdelivr.net/npm/@hpcc-js/wasm@0.3/dist/index.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pako@1/dist/pako.min.js"></script>
   </head>
   <body>
     <div><button onClick="copy()">copy graph.dot to clipboard</button></div>
@@ -11,7 +12,12 @@
     <script>
       const hpccWasm = window['@hpcc-js/wasm'];
 
-      const hash = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+      // Strip off the initial '#', decode any % that were added, convert from
+      // base64, uncompress, parse as JSON.
+      let hash = decodeURIComponent(location.hash.slice(1));
+      hash = atob(hash);
+      hash = pako.inflate(hash, { to: 'string' });
+      hash = JSON.parse(hash);
       const graph = hash.dot;
 
       hpccWasm.graphviz.layout(graph, 'svg', 'dot').then((svg) => {

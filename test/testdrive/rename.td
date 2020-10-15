@@ -31,11 +31,11 @@ $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
     SELECT * FROM mz_data
 
 > SHOW INDEXES FROM mz_view
-on_name  key_name             column_name  expression  nullable   seq_in_index
---------------------------------------------------------------------------
-mz_view  mz_view_primary_idx  a            <null>      false  1
-mz_view  mz_view_primary_idx  b            <null>      false  2
-mz_view  mz_view_primary_idx  mz_obj_no    <null>      false  3
+on_name  key_name             seq_in_index  column_name  expression  nullable
+-----------------------------------------------------------------------------
+mz_view  mz_view_primary_idx  1             a            <null>      false
+mz_view  mz_view_primary_idx  2             b            <null>      false
+mz_view  mz_view_primary_idx  3             mz_obj_no    <null>      false
 
 > CREATE VIEW dependent_view AS
     SELECT * FROM mz_view;
@@ -146,11 +146,11 @@ materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"re
 
 # Item's indexes are properly re-attributed
 > SHOW INDEXES FROM renamed_mz_view
-on_name          key_name       column_name expression nullable  seq_in_index
--------------------------------------------------------------------------
-renamed_mz_view  renamed_index  a           <null>     false            1
-renamed_mz_view  renamed_index  b           <null>     false            2
-renamed_mz_view  renamed_index  mz_obj_no   <null>     false            3
+on_name          key_name       seq_in_index  column_name expression nullable
+-----------------------------------------------------------------------------
+renamed_mz_view  renamed_index  1             a           <null>     false
+renamed_mz_view  renamed_index  2             b           <null>     false
+renamed_mz_view  renamed_index  3             mz_obj_no   <null>     false
 
 > SHOW CREATE INDEX renamed_index
 Index               "Create Index"
@@ -748,7 +748,7 @@ name
 ----
 renamed_j
 
-> SELECT tables FROM mz_tables WHERE global_id like 'u%';
-tables
+> SELECT name FROM mz_tables WHERE id like 'u%';
+name
 ------
 renamed_j

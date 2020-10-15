@@ -361,10 +361,7 @@ impl<'a> Iterator for LineReader<'a> {
 }
 
 fn should_fold(c: Option<char>) -> bool {
-    match c {
-        Some('$') | Some('>') | Some('!') => true,
-        _ => false,
-    }
+    matches!(c, Some('$') | Some('>') | Some('!'))
 }
 
 struct BuiltinReader<'a> {

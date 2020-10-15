@@ -370,7 +370,10 @@ function View(props) {
         // Any operator that can have records will have a red border (even if it
         // currently has 0 records). The fill color is a deeper red based on how many
         // records this operator has compared to the operator with the most records.
-        const alpha = ((record_count / max_record_count) * 0xff).toString(16);
+        const pct = record_count
+          ? Math.floor(record_count / max_record_count)
+          : 0;
+        const alpha = (pct * 0xff).toString(16).padStart(2, '0');
         notes.push(`${record_count} records`);
         style = `,style=filled,color=red,fillcolor="#ff0000${alpha}"`;
       }
@@ -398,9 +401,12 @@ function View(props) {
     // Pass information as a JSON object to allow for easily extending this in
     // the future. The hash is used instead of search because it reduces privacy
     // concerns and avoids server-side URL size limits.
-    link.hash = JSON.stringify({
+    let data = JSON.stringify({
       dot: dot,
     });
+    // Compress data and encode as base64 so it's URL-safe.
+    data = pako.deflate(data, { to: 'string' });
+    link.hash = btoa(data);
     dotLink = <a href={link}>share</a>;
   }
 

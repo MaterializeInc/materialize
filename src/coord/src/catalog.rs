@@ -1694,9 +1694,9 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         &self.database
     }
 
-    fn resolve_database(&self, database_name: &str) -> Result<(), SqlCatalogError> {
+    fn resolve_database(&self, database_name: &str) -> Result<i64, SqlCatalogError> {
         match self.catalog.by_name.get(database_name) {
-            Some(_) => Ok(()),
+            Some(database) => Ok(database.id),
             None => Err(SqlCatalogError::UnknownDatabase(database_name.into())),
         }
     }

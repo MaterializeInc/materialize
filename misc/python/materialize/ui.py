@@ -36,21 +36,22 @@ class Verbosity:
             cls.quiet = explicit
 
 
-def speaker(prefix: str, for_progress: bool = False) -> Callable[..., None]:
-    """Create a function that will log with a prefix to stderr
+def speaker(prefix: str) -> Callable[..., None]:
+    """Create a function that will log with a prefix to stderr.
 
-    Obeys `Verbosity.quiet`_
+    Obeys `Verbosity.quiet`. Note that you must include any necessary
+    spacing after the prefix.
 
     Example::
 
-        >>> say = speaker("mz")
+        >>> say = speaker("mz> ")
         >>> say("hello")  # doctest: +SKIP
         mz> hello
     """
 
     def say(msg: str) -> None:
         if not Verbosity.quiet:
-            print("{} {}".format(prefix, msg), file=sys.stderr)
+            print(f"{prefix}{msg}", file=sys.stderr)
 
     return say
 
