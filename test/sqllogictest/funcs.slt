@@ -489,3 +489,31 @@ query T
 SELECT pg_catalog.pg_encoding_to_char(7)
 ----
 NULL
+
+# The following tests are taken from cockroach/builtin_function.slt
+# todo@jldlaughlin: remove these duplicates
+
+query I
+SELECT array_lower(ARRAY['a', 'b'], 1)
+----
+1
+
+query I
+SELECT array_lower(ARRAY['a'], 1)
+----
+1
+
+query I
+SELECT array_lower(ARRAY['a'], 0)
+----
+NULL
+
+query I
+SELECT array_lower(ARRAY['a'], 2)
+----
+NULL
+
+query I
+SELECT array_lower(ARRAY[ARRAY[1, 2]], 2)
+----
+1
