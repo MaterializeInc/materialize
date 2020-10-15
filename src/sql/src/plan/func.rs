@@ -707,6 +707,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             ParamType::Plain(List(..)) if matches!(arg_type, List(..)) => return Ok(arg),
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::Any => return Ok(arg),
+            ParamType::ArrayAny if matches!(arg_type, Array(..)) => return Ok(arg),
             ParamType::ArrayAny => CastTo::Explicit(Array(Box::new(String))),
             ParamType::JsonbAny => CastTo::JsonbAny,
             ParamType::StringAny => CastTo::Explicit(String),
@@ -770,6 +771,9 @@ lazy_static! {
                 params!(Decimal(0, 0)) => UnaryFunc::AbsDecimal,
                 params!(Float32) => UnaryFunc::AbsFloat32,
                 params!(Float64) => UnaryFunc::AbsFloat64
+            },
+            "array_lower" => Scalar {
+                params!(ArrayAny, Int64) => BinaryFunc::ArrayLower
             },
             "array_to_string" => Scalar {
                 params!(ArrayAny, String) => variadic_op(array_to_string),
