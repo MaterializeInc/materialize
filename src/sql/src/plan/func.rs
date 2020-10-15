@@ -779,6 +779,9 @@ lazy_static! {
                 params!(ArrayAny, String) => variadic_op(array_to_string),
                 params!(ArrayAny, String, String) => variadic_op(array_to_string)
             },
+            "array_upper" => Scalar {
+                params!(ArrayAny, Int64) => BinaryFunc::ArrayUpper
+            },
             "ascii" => Scalar {
                 params!(String) => UnaryFunc::Ascii
             },
