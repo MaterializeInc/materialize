@@ -707,6 +707,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             ParamType::Plain(List(..)) if matches!(arg_type, List(..)) => return Ok(arg),
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::Any => return Ok(arg),
+            ParamType::ArrayAny if matches!(arg_type, Array(..)) => return Ok(arg),
             ParamType::ArrayAny => CastTo::Explicit(Array(Box::new(String))),
             ParamType::JsonbAny => CastTo::JsonbAny,
             ParamType::StringAny => CastTo::Explicit(String),
@@ -770,6 +771,9 @@ lazy_static! {
                 params!(Decimal(0, 0)) => UnaryFunc::AbsDecimal,
                 params!(Float32) => UnaryFunc::AbsFloat32,
                 params!(Float64) => UnaryFunc::AbsFloat64
+            },
+            "array_lower" => Scalar {
+                params!(ArrayAny, Int64) => BinaryFunc::ArrayLower
             },
             "array_to_string" => Scalar {
                 params!(ArrayAny, String) => variadic_op(array_to_string),
@@ -912,8 +916,8 @@ lazy_static! {
             },
             "pg_table_is_visible" => Scalar {
                 params!(Oid) => sql_op!(
-                    "(SELECT schema = ANY(current_schemas(true))
-                     FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.schema_id
+                    "(SELECT s.name = ANY(current_schemas(true))
+                     FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
                      WHERE o.oid = $1)"
                 )
             },
@@ -1255,6 +1259,18 @@ lazy_static! {
                           CastTo::Explicit(ScalarType::Decimal(10, 0)),
                       )
                 })
+            },
+            "mz_classify_object_id" => Scalar {
+                params!(String) => sql_op!(
+                    "CASE
+                        WHEN $1 LIKE 'u%' THEN 'user'
+                        WHEN $1 LIKE 's%' THEN 'system'
+                        WHEN $1 like 't%' THEN 'temp'
+                    END"
+                )
+            },
+            "mz_is_materialized" => Scalar {
+                params!(String) => sql_op!("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1)")
             }
         }
     };

@@ -626,36 +626,36 @@ fn is_min_or_max(func: &AggregateFunc) -> bool {
 
 /// Is the aggregate function a "min" variant.
 fn is_min(func: &AggregateFunc) -> bool {
-    match func {
+    matches!(
+        func,
         AggregateFunc::MinInt32
-        | AggregateFunc::MinInt64
-        | AggregateFunc::MinFloat32
-        | AggregateFunc::MinFloat64
-        | AggregateFunc::MinDecimal
-        | AggregateFunc::MinBool
-        | AggregateFunc::MinString
-        | AggregateFunc::MinDate
-        | AggregateFunc::MinTimestamp
-        | AggregateFunc::MinTimestampTz => true,
-        _ => false,
-    }
+            | AggregateFunc::MinInt64
+            | AggregateFunc::MinFloat32
+            | AggregateFunc::MinFloat64
+            | AggregateFunc::MinDecimal
+            | AggregateFunc::MinBool
+            | AggregateFunc::MinString
+            | AggregateFunc::MinDate
+            | AggregateFunc::MinTimestamp
+            | AggregateFunc::MinTimestampTz
+    )
 }
 
 /// Is the aggregate function is a "max" variant.
 fn is_max(func: &AggregateFunc) -> bool {
-    match func {
+    matches!(
+        func,
         AggregateFunc::MaxInt32
-        | AggregateFunc::MaxInt64
-        | AggregateFunc::MaxFloat32
-        | AggregateFunc::MaxFloat64
-        | AggregateFunc::MaxDecimal
-        | AggregateFunc::MaxBool
-        | AggregateFunc::MaxString
-        | AggregateFunc::MaxDate
-        | AggregateFunc::MaxTimestamp
-        | AggregateFunc::MaxTimestampTz => true,
-        _ => false,
-    }
+            | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxFloat32
+            | AggregateFunc::MaxFloat64
+            | AggregateFunc::MaxDecimal
+            | AggregateFunc::MaxBool
+            | AggregateFunc::MaxString
+            | AggregateFunc::MaxDate
+            | AggregateFunc::MaxTimestamp
+            | AggregateFunc::MaxTimestampTz
+    )
 }
 
 /// Monoids for in-place compaction of monotonic streams.

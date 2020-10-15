@@ -184,15 +184,15 @@ SHOW COLUMNS FROM requests;
 ```
 ```nofmt
 +-------------------+------------+--------+
-| Field             | Nullable   | Type   |
+| name              | nullable   | type   |
 |-------------------+------------+--------|
-| ip                | YES        | text   |
-| ts                | YES        | text   |
-| path              | YES        | text   |
-| search_kw         | YES        | text   |
-| product_detail_id | YES        | text   |
-| code              | YES        | text   |
-| mz_line_no        | NO         | int8   |
+| ip                | true       | text   |
+| ts                | true       | text   |
+| path              | true       | text   |
+| search_kw         | true       | text   |
+| product_detail_id | true       | text   |
+| code              | true       | text   |
+| mz_line_no        | false      | int8   |
 +-------------------+------------+--------+
 ```
 
@@ -310,15 +310,15 @@ get a chance to see how Materialize can handle queries on our data.
     ```
     ```nofmt
     +-------------------+------------+--------+
-    | Field             | Nullable   | Type   |
+    | name              | nullable   | type   |
     |-------------------+------------+--------|
-    | ip                | YES        | text   |
-    | ts                | YES        | text   |
-    | path              | YES        | text   |
-    | search_kw         | YES        | text   |
-    | product_detail_id | YES        | text   |
-    | code              | YES        | text   |
-    | mz_line_no        | NO         | int8   |
+    | ip                | true       | text   |
+    | ts                | true       | text   |
+    | path              | true       | text   |
+    | search_kw         | true       | text   |
+    | product_detail_id | true       | text   |
+    | code              | true       | text   |
+    | mz_line_no        | false      | int8   |
     +-------------------+------------+--------+
     ```
 

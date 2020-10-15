@@ -13,6 +13,16 @@ instances.
 
 {{< diagram "show-databases.svg" >}}
 
+## Details
+
+### Output format
+
+`SHOW DATABASES`'s output is a table with one column, `name`.
+
+{{< version-changed v0.5.0 >}}
+The output column is renamed from `DATABASES` to `name`.
+{{< /version-changed >}}
+
 ## Examples
 
 ```sql

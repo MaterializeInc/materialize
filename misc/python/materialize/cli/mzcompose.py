@@ -20,12 +20,28 @@ import sys
 import yaml
 
 from materialize import errors
-from materialize import ui
 from materialize import mzbuild
+from materialize import spawn
+from materialize import ui
 
 
-announce = ui.speaker("==>")
+announce = ui.speaker("==> ")
 say = ui.speaker("")
+
+MIN_COMPOSE_VERSION = (1, 25, 0)
+
+
+def assert_docker_compose_version() -> None:
+    """Check the version of docker-compose installed.
+
+    Raises `MzRuntimeError` if the version is not recent enough.
+    """
+    cmd = ["docker-compose", "version", "--short"]
+    output = spawn.capture(cmd, unicode=True).strip()
+    version = tuple(int(i) for i in output.split("."))
+    if version < MIN_COMPOSE_VERSION:
+        msg = f"Unsupported docker-compose version: {version}, min required: {MIN_COMPOSE_VERSION}"
+        raise errors.MzConfigurationError(msg)
 
 
 def main(argv: List[str]) -> int:
@@ -37,15 +53,14 @@ def main(argv: List[str]) -> int:
         config_files = args.file
 
     ui.Verbosity.init_from_env(args.mz_quiet)
-    # TODO: we should propagate this down to subprocesses by explicit command-line flags, probably
-    if ui.Verbosity.quiet:
-        os.environ["MZ_QUIET"] = "yes"
 
     root = Path(os.environ["MZ_ROOT"])
     repo = mzbuild.Repository(root)
 
     if args.command == "gen-shortcuts":
         return gen_shortcuts(repo)
+
+    assert_docker_compose_version()
 
     announce("Collecting mzbuild dependencies")
     composes = []
@@ -74,7 +89,7 @@ def build_compose_file(
     * Replace `mzimage` with fingerprinted image names
     """
     images = []
-    default = os.getenv(f"MZBUILD_DOCKER_TAG", None)
+    default_tag = os.getenv(f"MZBUILD_TAG", None)
     with open(config_file) as f:
         compose = yaml.safe_load(f)
         # strip mzconduct top-level key, if it exists
@@ -87,7 +102,9 @@ def build_compose_file(
                     raise errors.BadSpec(f"mzcompose: unknown image {image_name}")
 
                 image = repo.images[image_name]
-                override_tag = os.getenv(f"MZBUILD_{image.env_var_name()}_TAG", default)
+                override_tag = os.getenv(
+                    f"MZBUILD_{image.env_var_name()}_TAG", default_tag
+                )
                 if override_tag is not None:
                     config["image"] = image.docker_name(override_tag)
                     print(

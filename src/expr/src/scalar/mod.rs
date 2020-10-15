@@ -229,11 +229,7 @@ impl ScalarExpr {
     }
 
     pub fn is_literal(&self) -> bool {
-        if let ScalarExpr::Literal(_, _) = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, ScalarExpr::Literal(_, _))
     }
 
     pub fn is_literal_true(&self) -> bool {
@@ -249,17 +245,11 @@ impl ScalarExpr {
     }
 
     pub fn is_literal_ok(&self) -> bool {
-        match self {
-            ScalarExpr::Literal(Ok(_), _typ) => true,
-            _ => false,
-        }
+        matches!(self, ScalarExpr::Literal(Ok(_), _typ))
     }
 
     pub fn is_literal_err(&self) -> bool {
-        match self {
-            ScalarExpr::Literal(Err(_), _typ) => true,
-            _ => false,
-        }
+        matches!(self, ScalarExpr::Literal(Err(_), _typ))
     }
 
     /// Reduces a complex expression where possible.

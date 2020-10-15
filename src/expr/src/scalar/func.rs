@@ -541,6 +541,24 @@ fn cast_uuid_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
     Datum::String(temp_storage.push_string(buf))
 }
 
+/// Casts between two list types by casting each element of `a` ("list1") using
+/// `cast_expr` and collecting the results into a new list ("list2").
+fn cast_list1_to_list2<'a>(
+    a: Datum,
+    cast_expr: &'a ScalarExpr,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut cast_datums = Vec::new();
+    for el in a.unwrap_list().iter() {
+        // `cast_expr` is evaluated as an expression that casts the
+        // first column in `datums` (i.e. `datums[0]`) from the list elements'
+        // current type to a target type.
+        cast_datums.push(cast_expr.eval(&[el], temp_storage)?);
+    }
+
+    Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
+}
+
 fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int32()
         .checked_add(b.unwrap_int32())
@@ -1789,6 +1807,8 @@ pub enum BinaryFunc {
     ListIndex,
     ListLengthMax { max_dim: usize },
     ArrayContains,
+    ArrayIndex,
+    ArrayLower,
 }
 
 impl BinaryFunc {
@@ -1901,17 +1921,27 @@ impl BinaryFunc {
             BinaryFunc::ListIndex => Ok(eager!(list_index)),
             BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
+            BinaryFunc::ArrayIndex => Ok(eager!(array_index)),
+            BinaryFunc::ArrayLower => Ok(eager!(array_lower)),
         }
     }
 
     pub fn output_type(&self, input1_type: ColumnType, input2_type: ColumnType) -> ColumnType {
         use BinaryFunc::*;
         let in_nullable = input1_type.nullable || input2_type.nullable;
-        let is_div_mod = match self {
-            DivInt32 | ModInt32 | DivInt64 | ModInt64 | DivFloat32 | ModFloat32 | DivFloat64
-            | ModFloat64 | DivDecimal | ModDecimal => true,
-            _ => false,
-        };
+        let is_div_mod = matches!(
+            self,
+            DivInt32
+                | ModInt32
+                | DivInt64
+                | ModInt64
+                | DivFloat32
+                | ModFloat32
+                | DivFloat64
+                | ModFloat64
+                | DivDecimal
+                | ModDecimal
+        );
         match self {
             And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
                 ScalarType::Bool.nullable(in_nullable)
@@ -2027,16 +2057,19 @@ impl BinaryFunc {
                 .clone()
                 .nullable(true),
 
-            ListLengthMax { .. } => ScalarType::Int64.nullable(true),
+            ArrayIndex => input1_type
+                .scalar_type
+                .unwrap_array_element_type()
+                .clone()
+                .nullable(true),
+
+            ListLengthMax { .. } | ArrayLower => ScalarType::Int64.nullable(true),
         }
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        match self {
-            BinaryFunc::And | BinaryFunc::Or => false,
-            _ => true,
-        }
+        !matches!(self, BinaryFunc::And | BinaryFunc::Or)
     }
 
     /// Whether the function might return NULL even if none of its inputs are
@@ -2046,57 +2079,56 @@ impl BinaryFunc {
     /// introduces nulls even when it does not.
     pub fn introduces_nulls(&self) -> bool {
         use BinaryFunc::*;
-        match self {
-            And
-            | Or
-            | Eq
-            | NotEq
-            | Lt
-            | Lte
-            | Gt
-            | Gte
-            | AddInt32
-            | AddInt64
-            | AddFloat32
-            | AddFloat64
-            | AddTimestampInterval
-            | AddTimestampTzInterval
-            | AddDateTime
-            | AddDateInterval
-            | AddTimeInterval
-            | AddInterval
-            | SubInterval
-            | AddDecimal
-            | SubInt32
-            | SubInt64
-            | SubFloat32
-            | SubFloat64
-            | SubTimestamp
-            | SubTimestampTz
-            | SubTimestampInterval
-            | SubTimestampTzInterval
-            | SubDate
-            | SubDateInterval
-            | SubTime
-            | SubTimeInterval
-            | SubDecimal
-            | MulInt32
-            | MulInt64
-            | MulFloat32
-            | MulFloat64
-            | MulDecimal
-            | DivInt32
-            | DivInt64
-            | DivFloat32
-            | DivFloat64
-            | DivDecimal
-            | ModInt32
-            | ModInt64
-            | ModFloat32
-            | ModFloat64
-            | ModDecimal => false,
-            _ => true,
-        }
+        !matches!(
+            self,
+            And | Or
+                | Eq
+                | NotEq
+                | Lt
+                | Lte
+                | Gt
+                | Gte
+                | AddInt32
+                | AddInt64
+                | AddFloat32
+                | AddFloat64
+                | AddTimestampInterval
+                | AddTimestampTzInterval
+                | AddDateTime
+                | AddDateInterval
+                | AddTimeInterval
+                | AddInterval
+                | SubInterval
+                | AddDecimal
+                | SubInt32
+                | SubInt64
+                | SubFloat32
+                | SubFloat64
+                | SubTimestamp
+                | SubTimestampTz
+                | SubTimestampInterval
+                | SubTimestampTzInterval
+                | SubDate
+                | SubDateInterval
+                | SubTime
+                | SubTimeInterval
+                | SubDecimal
+                | MulInt32
+                | MulInt64
+                | MulFloat32
+                | MulFloat64
+                | MulDecimal
+                | DivInt32
+                | DivInt64
+                | DivFloat32
+                | DivFloat64
+                | DivDecimal
+                | ModInt32
+                | ModInt64
+                | ModFloat32
+                | ModFloat64
+                | ModDecimal
+        )
     }
 
     pub fn is_infix_op(&self) -> bool {
@@ -2160,7 +2192,9 @@ impl BinaryFunc {
             | TextConcat
             | ListIndex
             | MatchRegex { .. }
-            | ArrayContains => true,
+            | ArrayContains
+            | ArrayIndex
+            | ArrayLower => true,
             MatchLikePattern
             | ToCharTimestamp
             | ToCharTimestampTz
@@ -2266,6 +2300,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListIndex => f.write_str("list_index"),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
+            BinaryFunc::ArrayIndex => f.write_str("array_index"),
+            BinaryFunc::ArrayLower => f.write_str("array_lower"),
         }
     }
 }
@@ -2353,8 +2389,21 @@ pub enum UnaryFunc {
     CastJsonbToFloat64,
     CastJsonbToBool,
     CastUuidToString,
-    CastRecordToString { ty: ScalarType },
-    CastArrayToString { ty: ScalarType },
+    CastRecordToString {
+        ty: ScalarType,
+    },
+    CastArrayToString {
+        ty: ScalarType,
+    },
+    CastListToString {
+        ty: ScalarType,
+    },
+    CastList1ToList2 {
+        // List2's type
+        return_ty: ScalarType,
+        // The expression to cast List1's elements to List2's elements' type
+        cast_expr: Box<ScalarExpr>,
+    },
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -2477,8 +2526,13 @@ impl UnaryFunc {
             UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
             UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
             UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
-            UnaryFunc::CastRecordToString { ty } | UnaryFunc::CastArrayToString { ty } => {
+            UnaryFunc::CastRecordToString { ty }
+            | UnaryFunc::CastArrayToString { ty }
+            | UnaryFunc::CastListToString { ty } => {
                 Ok(cast_collection_to_string(a, ty, temp_storage))
+            }
+            UnaryFunc::CastList1ToList2 { cast_expr, .. } => {
+                cast_list1_to_list2(a, &*cast_expr, temp_storage)
             }
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
@@ -2569,6 +2623,7 @@ impl UnaryFunc {
             | CastBytesToString
             | CastRecordToString { .. }
             | CastArrayToString { .. }
+            | CastListToString { .. }
             | TrimWhitespace
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace => ScalarType::String.nullable(in_nullable),
@@ -2621,6 +2676,8 @@ impl UnaryFunc {
 
             CastUuidToString => ScalarType::String.nullable(true),
 
+            CastList1ToList2 { return_ty, .. } => (return_ty.clone()).nullable(false),
+
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),
             CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) | SqrtDec(scale) => {
@@ -2662,10 +2719,7 @@ impl UnaryFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        match self {
-            UnaryFunc::IsNull | UnaryFunc::CastJsonbOrNullToJsonb => false,
-            _ => true,
-        }
+        !matches!(self, UnaryFunc::IsNull | UnaryFunc::CastJsonbOrNullToJsonb)
     }
 
     /// True iff for x != y, we are assured f(x) != f(y).
@@ -2673,28 +2727,28 @@ impl UnaryFunc {
     /// This is most often the case for methods that promote to types that
     /// can contain all the precision of the input type.
     pub fn preserves_uniqueness(&self) -> bool {
-        match self {
+        matches!(
+            self,
             UnaryFunc::Not
-            | UnaryFunc::NegInt32
-            | UnaryFunc::NegInt64
-            | UnaryFunc::NegFloat32
-            | UnaryFunc::NegFloat64
-            | UnaryFunc::NegDecimal
-            | UnaryFunc::CastBoolToStringExplicit
-            | UnaryFunc::CastInt32ToInt64
-            | UnaryFunc::CastInt32ToString
-            | UnaryFunc::CastInt64ToString
-            | UnaryFunc::CastFloat32ToFloat64
-            | UnaryFunc::CastFloat32ToString
-            | UnaryFunc::CastFloat64ToString
-            | UnaryFunc::CastStringToBytes
-            | UnaryFunc::CastDateToTimestamp
-            | UnaryFunc::CastDateToTimestampTz
-            | UnaryFunc::CastDateToString
-            | UnaryFunc::CastTimeToInterval
-            | UnaryFunc::CastTimeToString => true,
-            _ => false,
-        }
+                | UnaryFunc::NegInt32
+                | UnaryFunc::NegInt64
+                | UnaryFunc::NegFloat32
+                | UnaryFunc::NegFloat64
+                | UnaryFunc::NegDecimal
+                | UnaryFunc::CastBoolToStringExplicit
+                | UnaryFunc::CastInt32ToInt64
+                | UnaryFunc::CastInt32ToString
+                | UnaryFunc::CastInt64ToString
+                | UnaryFunc::CastFloat32ToFloat64
+                | UnaryFunc::CastFloat32ToString
+                | UnaryFunc::CastFloat64ToString
+                | UnaryFunc::CastStringToBytes
+                | UnaryFunc::CastDateToTimestamp
+                | UnaryFunc::CastDateToTimestampTz
+                | UnaryFunc::CastDateToString
+                | UnaryFunc::CastTimeToInterval
+                | UnaryFunc::CastTimeToString
+        )
     }
 }
 
@@ -2777,6 +2831,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastUuidToString => f.write_str("uuidtostr"),
             UnaryFunc::CastRecordToString { .. } => f.write_str("recordtostr"),
             UnaryFunc::CastArrayToString { .. } => f.write_str("arraytostr"),
+            UnaryFunc::CastListToString { .. } => f.write_str("listtostr"),
+            UnaryFunc::CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
@@ -3281,6 +3337,29 @@ fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         .unwrap_or(Datum::Null)
 }
 
+fn array_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Datum::Null;
+    }
+    a.unwrap_array()
+        .elements()
+        .iter()
+        .nth(i as usize - 1)
+        .unwrap_or(Datum::Null)
+}
+
+fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Datum::Null;
+    }
+    match a.unwrap_array().elements().iter().nth(i as usize - 1) {
+        Some(_) => Datum::Int64(1),
+        None => Datum::Null,
+    }
+}
+
 fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Datum<'a>, EvalError> {
     fn max_len_on_dim<'a>(d: Datum<'a>, on_dim: i64) -> Option<i64> {
         match d {
@@ -3443,17 +3522,14 @@ impl VariadicFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        match self {
-            VariadicFunc::Coalesce
+        !matches!(self, VariadicFunc::Coalesce
             | VariadicFunc::Concat
             | VariadicFunc::JsonbBuildArray
             | VariadicFunc::JsonbBuildObject
             | VariadicFunc::ListCreate { .. }
             | VariadicFunc::RecordCreate { .. }
             | VariadicFunc::ArrayCreate { .. }
-            | VariadicFunc::ArrayToString { .. } => false,
-            _ => true,
-        }
+            | VariadicFunc::ArrayToString { .. })
     }
 }
 

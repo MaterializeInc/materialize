@@ -14,14 +14,17 @@
 use serde::{Deserialize, Serialize};
 
 mod id;
+mod linear;
 mod relation;
 mod scalar;
 
 pub mod explain;
 
 pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId, PartitionId, SourceInstanceId};
+pub use linear::MapFilterProject;
 pub use relation::func::{AggregateFunc, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
+pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
     compare_columns, AggregateExpr, ColumnOrder, IdGen, JoinImplementation, RelationExpr,
     RowSetFinishing,

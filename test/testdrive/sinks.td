@@ -53,7 +53,7 @@ goofus,gallant
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > SHOW SINKS
-SINKS
+name
 ----
 snk1
 snk2
@@ -62,13 +62,13 @@ snk4
 snk5
 
 > SHOW FULL SINKS
-SINKS  TYPE
+name   type
 -----------
-snk1   USER
-snk2   USER
-snk3   USER
-snk4   USER
-snk5   USER
+snk1   user
+snk2   user
+snk3   user
+snk4   user
+snk5   user
 
 $ kafka-verify format=avro sink=materialize.public.snk1
 {"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 2}}}
@@ -157,15 +157,15 @@ $ kafka-verify format=avro sink=materialize.public.sink10
 {"before": null, "after": {"row":{"column1": 3}}}
 
 > SHOW FULL SINKS
-SINKS       TYPE
+name        type
 ----------------
-snk1        USER
-snk2        USER
-snk3        USER
-snk4        USER
-snk5        USER
-snk6        USER
-snk7        USER
-snk8        USER
-sink9       USER
-sink10      USER
+snk1        user
+snk2        user
+snk3        user
+snk4        user
+snk5        user
+snk6        user
+snk7        user
+snk8        user
+sink9       user
+sink10      user

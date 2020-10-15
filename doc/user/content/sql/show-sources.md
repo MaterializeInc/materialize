@@ -19,6 +19,14 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 
 ## Details
 
+### Output format
+
+`SHOW SOURCES`'s output is a table with one column, `name`.
+
+{{< version-changed v0.5.0 >}}
+The output column is renamed from `SOURCES` to `name`.
+{{< /version-changed >}}
+
 ### Internal statistic sources
 
 Materialize comes with a number of sources that contain internal statistics

@@ -64,7 +64,7 @@ async fn test_mpsc_limited_close() -> Result<(), Box<dyn Error>> {
     // expected producers, we'd be here forever waiting for the channel to
     // close.
     let mut msgs = rx.try_collect::<Vec<_>>().await?;
-    msgs.sort();
+    msgs.sort_unstable();
     assert_eq!(msgs, &[1, 2, 3, 4, 5]);
 
     Ok(())

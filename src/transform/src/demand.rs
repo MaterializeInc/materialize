@@ -122,7 +122,7 @@ impl Demand {
                 demand,
             } => {
                 let mut sorted = columns.iter().cloned().collect::<Vec<_>>();
-                sorted.sort();
+                sorted.sort_unstable();
                 *demand = Some(sorted);
                 // A FlatMap which returns zero rows acts like a filter
                 // so we always need to execute it
@@ -187,7 +187,7 @@ impl Demand {
                 // Capture the external demand for the join. Use the permutation to intervene
                 // when an externally demanded column will be replaced with a copy of another.
                 let mut demand_vec = columns.iter().map(|c| permutation[*c]).collect::<Vec<_>>();
-                demand_vec.sort();
+                demand_vec.sort_unstable();
                 *demand = Some(demand_vec);
                 let should_permute = columns.iter().any(|c| permutation[*c] != *c);
 

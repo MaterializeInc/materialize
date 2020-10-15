@@ -24,10 +24,10 @@ $ kafka-ingest format=protobuf topic=messages message=batch timestamp=10
 {"id": "0", "interval_start": "0", "interval_end": "0", "records": []}
 
 > SHOW COLUMNS FROM billing
-id              YES text
-interval_end    YES text
-interval_start  YES text
-records         YES jsonb
+id              true text
+interval_end    true text
+interval_start  true text
+records         true jsonb
 
 > SELECT * FROM billing
 0 0                   0                   []
@@ -62,12 +62,12 @@ user
   FROM billing, jsonb_array_elements(records) AS r
 
 > SHOW COLUMNS FROM billing_records
-id              YES text
-interval_end    YES text
-interval_start  YES text
-measurements    YES jsonb
-meter           YES text
-value           YES int4
+id              true  text
+interval_end    true  text
+interval_start  true  text
+measurements    true  jsonb
+meter           true  text
+value           true  int4
 
 > SELECT id, interval_start, interval_end, value, meter FROM billing_records br
 2 2020-01-01_00:00:10 2020-01-01_00:00:15 25  user
