@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+#!/usr/bin/env bash
+#
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Script to build and install a version of perf that can symbolicate rust
+# binaries in a performant fashion
+
+echo "Installing perf build-time dependencies"
+sudo apt install -y libbfd-dev libiberty-dev
+
+echo "Installing build dependencies to enable majority of perf features"
+sudo apt install -y bison \
+                    flex \
+                    libbabeltrace-ctf-dev \
+                    libcap-dev \
+                    libdw-dev \
+                    libelf-dev \
+                    libgtk2.0-dev \
+                    liblzma-dev \
+                    libnuma-dev \
+                    libslang2-dev \
+                    libunwind-dev \
+                    libzstd-dev \
+                    python-dev \
+                    systemtap-sdt-dev
+
+# TODO: Accept user's local copy of the linux source tree as input
+# or check for something like "${HOME}/src/linux"
+tmpdir=$(mktemp -d)
+cd "${tmpdir}" || exit 1
+
+echo "Installing linux source code"
+git clone https://github.com/torvalds/linux --depth 1
+cd linux/tools/perf || exit 1
+make
+
+if [[ -d "${HOME}/bin" ]]; then
+    echo "Installing perf into ${HOME}/bin"
+    cp perf "${HOME}/bin"
+fi
+
+echo "Giving all users access to run all perf events"
+sudo sh -c 'echo kernel.perf_event_paranoid=-1 > /etc/sysctl.d/60-mtrlz-enable-perf.conf'
+
+echo "You will need to reboot your system before perf will work"
