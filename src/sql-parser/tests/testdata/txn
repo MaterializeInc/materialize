@@ -60,6 +60,14 @@ START TRANSACTION
 =>
 StartTransaction(StartTransactionStatement { modes: [] })
 
+# Semicolon at EOS.
+parse-statement
+BEGIN TRANSACTION;
+----
+START TRANSACTION
+=>
+StartTransaction(StartTransactionStatement { modes: [] })
+
 parse-statement
 START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 ----
@@ -104,7 +112,7 @@ error:
 Parse error:
 START TRANSACTION BAD
                   ^^^
-Expected transaction mode, found: BAD
+Expected end of statement, found: BAD
 
 parse-statement
 START TRANSACTION READ ONLY,
