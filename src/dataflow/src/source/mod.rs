@@ -104,6 +104,17 @@ where
     pub position: Option<i64>,
 }
 
+/// The data that we send from sources to the decode process
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub(crate) struct SourceData {
+    /// The actual value
+    pub(crate) value: Vec<u8>,
+    /// The source's reported position for this record
+    ///
+    /// e.g. kafka offset or file location
+    pub(crate) position: Option<i64>,
+}
+
 impl<K, V> SourceOutput<K, V>
 where
     K: Data,
