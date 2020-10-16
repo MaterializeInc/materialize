@@ -64,7 +64,7 @@ async fn mysql_debezium_kafka(args: Args) -> Result<(), anyhow::Error> {
                            ENVELOPE DEBEZIUM;";
     log::info!("creating source=> {}", src_query);
     // Retry in case the topic has not been created yet.
-    retry::retry_for(Duration::from_secs(30), |_| {
+    retry::retry_for(Duration::from_secs(60), |_| {
         mz_client.execute(&*src_query, &[])
     })
     .await?;
@@ -124,7 +124,7 @@ async fn bytes_to_kafka(args: Args) -> Result<(), anyhow::Error> {
         "materialize.chaos",
         &[("enable.idempotence", "true")],
     )?;
-    retry::retry_for(Duration::from_secs(10), |_| {
+    retry::retry_for(Duration::from_secs(60), |_| {
         kafka_client.create_topic(
             &topic,
             args.kafka_partitions.unwrap_or(1),
