@@ -561,15 +561,17 @@ where
                     // hierarchical aggregations; should that belief be incorrect, we
                     // should certainly revise this implementation.
                     let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
-                    let arena = RowArena::new();
-                    let result = aggr.eval(iter, &arena);
 
-                    for (val, _) in source.iter() {
-                        let datum = val.iter().next().unwrap();
-                        if datum != result {
-                            target.push((row_packer.pack(Some(datum)), 1));
-                        }
-                    }
+                    // We only want to arrange the parts of the input that are not part of the output.
+                    // More specifically, we want to arrange it so that `input.concat(&output.negate())`
+                    // gives us the intended value of this aggregate function.
+                    // Thankfully, we don't have to do a lot to manage that because we assume that
+                    // the output of this aggregation function will be one of the inputs, and we can
+                    // let Differential correctly handle compacting away insertions and deletions to the
+                    // same key.
+
+                    target.push((row_packer.pack(Some(aggr.eval(iter, &RowArena::new()))), -1));
+                    target.extend(source.iter().map(|(val, cnt)| ((*val).clone(), *cnt)));
                 }
             }
         });
