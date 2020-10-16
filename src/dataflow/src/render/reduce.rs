@@ -13,7 +13,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::operators::{Reduce, Threshold};
+use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
@@ -288,7 +288,6 @@ where
                 // `row` contains a single value that can be minimized or
                 // maximized over.
 
-                use differential_dataflow::operators::consolidate::Consolidate;
                 use differential_dataflow::operators::reduce::Count;
                 use timely::dataflow::operators::map::Map;
 
@@ -543,8 +542,9 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    collection
-        .map(move |((key, hash), row)| ((key, hash % modulus), row))
+    let input = collection.map(move |((key, hash), row)| ((key, hash % modulus), row));
+
+    let negated_output = input
         .reduce_named("ReduceHierarchical", {
             let mut row_packer = repr::RowPacker::new();
             move |key, source, target| {
@@ -561,10 +561,20 @@ where
                     // hierarchical aggregations; should that belief be incorrect, we
                     // should certainly revise this implementation.
                     let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
-                    target.push((row_packer.pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
+                    let arena = RowArena::new();
+                    let result = aggr.eval(iter, &arena);
+
+                    for (val, _) in source.iter() {
+                        let datum = val.iter().next().unwrap();
+                        if datum != result {
+                            target.push((row_packer.pack(Some(datum)), 1));
+                        }
+                    }
                 }
             }
-        })
+        });
+
+    negated_output.negate().concat(&input).consolidate()
 }
 
 /// Determines whether a function can be accumulated in an update's "difference" field,
