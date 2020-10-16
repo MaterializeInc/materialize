@@ -680,6 +680,7 @@ impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<Vec<u8>> {
             payload: msg.payload().map(|p| p.to_vec()),
             partition: PartitionId::Kafka(msg.partition()),
             offset: kafka_offset.into(),
+            upstream_time_millis: msg.timestamp().to_millis(),
             key: msg.key().map(|k| k.to_vec()),
         }
     }

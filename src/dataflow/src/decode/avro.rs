@@ -51,7 +51,7 @@ impl AvroDecoderState {
 
 impl DecoderState for AvroDecoderState {
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
-        match block_on(self.decoder.decode(bytes, None)) {
+        match block_on(self.decoder.decode(bytes, None, None)) {
             Ok(diff_pair) => {
                 if let Some(after) = diff_pair.after {
                     self.events_success += 1;
@@ -74,10 +74,11 @@ impl DecoderState for AvroDecoderState {
         key: Row,
         bytes: &[u8],
         coord: Option<i64>,
+        upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     ) {
-        match block_on(self.decoder.decode(bytes, coord)) {
+        match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
             Ok(diff_pair) => {
                 self.events_success += 1;
                 session.give((key, diff_pair.after, time));
@@ -94,10 +95,11 @@ impl DecoderState for AvroDecoderState {
         &mut self,
         bytes: &[u8],
         coord: Option<i64>,
+        upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     ) {
-        match block_on(self.decoder.decode(bytes, coord)) {
+        match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
             Ok(diff_pair) => {
                 self.events_success += 1;
                 if diff_pair.before.is_some() {

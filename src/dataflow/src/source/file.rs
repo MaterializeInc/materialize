@@ -260,6 +260,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
                     let message = SourceMessage {
                         partition: PartitionId::File,
                         offset: self.current_file_offset.into(),
+                        upstream_time_millis: None,
                         key: None,
                         payload: Some(record),
                     };

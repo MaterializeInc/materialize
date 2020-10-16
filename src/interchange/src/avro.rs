@@ -16,7 +16,7 @@ use std::{cell::RefCell, iter, rc::Rc};
 
 use anyhow::{anyhow, bail};
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
-use chrono::Timelike;
+use chrono::{NaiveDateTime, Timelike};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, warn};
@@ -1146,15 +1146,21 @@ pub enum DebeziumDeduplicationStrategy {
 struct DebeziumDeduplicationState {
     /// Last recorded (pos, row, offset) for each MySQL binlog file.
     /// (Or "", in the Postgres case)
-    /// Messages that are not ahead of the last recorded pos/row will be skipped.
+    ///
+    /// [`DebeziumDeduplicationstrategy`] determines whether messages that are not ahead
+    /// of the last recorded pos/row will be skipped.
     binlog_offsets: HashMap<String, (usize, usize, Option<i64>)>,
-    /// Whether or not to track every message we've ever seen
+    /// Whether or not to track every message we've ever seen.
+    ///
+    /// If we track full
     full: TrackFull,
 }
 
 /// If we need to deal debezium possibly going back after it hasn't seen things
 #[derive(Debug)]
 enum TrackFull {
+    /// Trust that Debezium never sends non-duplicate messages that have a lower binlog
+    /// position than its highest-ever sent.
     No,
     /// Track all offsets that have ever been seen
     /// binlog filename to offset
@@ -1179,6 +1185,7 @@ impl DebeziumDeduplicationState {
         file: &str,
         row: RowCoordinates,
         coord: Option<i64>,
+        upstream_time_millis: Option<i64>,
         debug_name: &str,
         worker_idx: usize,
     ) -> bool {
@@ -1228,20 +1235,24 @@ impl DebeziumDeduplicationState {
                         // records will ever be sent with a position below the highest
                         // position ever seen
                         (true, Some(skipinfo)) => {
-                            // TODO: This would be nicer if it included the wall-clock kafka event time
                             warn!(
                                 "Source: {}:{} created a new record behind the highest point in binlog_file={} \
-                                 new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{}",
+                                 new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{} \
+                                 message_time={}",
                                 debug_name, worker_idx, file, pos, row, coord.unwrap_or(-1),
-                                skipinfo.old_max_pos, skipinfo.old_max_row
+                                skipinfo.old_max_pos, skipinfo.old_max_row,
+                                fmt_timestamp(upstream_time_millis)
                             );
                         }
                         // Duplicate item below the highest seen item
                         (false, Some(skipinfo)) => {
                             debug!(
-                                "Source: {}:{} already ingested binlog coordinates {}:{}:{} (old binlog: {}:{} kafka offset: {})",
-                                debug_name, worker_idx, file, pos, row, skipinfo.old_max_pos,
-                                skipinfo.old_max_row, skipinfo.old_offset.unwrap_or(-1)
+                                "Source: {}:{} already ingested binlog coordinates {}:{}:{} old_binlog={}:{} \
+                                 kafka_offset={} message_time={}",
+                                debug_name, worker_idx, file, pos, row,
+                                skipinfo.old_max_pos, skipinfo.old_max_row,
+                                skipinfo.old_offset.unwrap_or(-1),
+                                fmt_timestamp(upstream_time_millis)
                             );
                         }
                         // already exists, but is past the debezium high water mark.
@@ -1250,8 +1261,9 @@ impl DebeziumDeduplicationState {
                         // every time we insert something
                         (false, None) => {
                             error!("We surprisingly are seeing a duplicate record that \
-                                    is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={}",
-                                   file, pos, row, coord.unwrap_or(-1));
+                                    is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={} \
+                                    message_time={}",
+                                   file, pos, row, coord.unwrap_or(-1), fmt_timestamp(upstream_time_millis));
                         }
                     }
 
@@ -1265,6 +1277,13 @@ impl DebeziumDeduplicationState {
             }
         }
     }
+}
+
+fn fmt_timestamp(ts: Option<i64>) -> NaiveDateTime {
+    let (seconds, nanos) = ts
+        .map(|ts| (ts / 1000, (ts % 1000) * 1_000_000))
+        .unwrap_or((0, 0));
+    NaiveDateTime::from_timestamp(seconds, nanos as u32)
 }
 
 /// Additional context needed for decoding
@@ -1347,6 +1366,7 @@ impl DebeziumDecodeState {
         v: Value,
         n: SchemaNode,
         coord: Option<i64>,
+        upstream_time_millis: Option<i64>,
     ) -> anyhow::Result<DiffPair<Row>> {
         fn is_snapshot(v: Value) -> anyhow::Result<Option<bool>> {
             let answer = match v {
@@ -1407,6 +1427,7 @@ impl DebeziumDecodeState {
                             &file_val,
                             RowCoordinates::MySql { pos, row },
                             coord,
+                            upstream_time_millis,
                             &self.debug_name,
                             self.worker_idx,
                         ) {
@@ -1563,6 +1584,7 @@ impl Decoder {
         &mut self,
         bytes: &[u8],
         coord: Option<i64>,
+        upstream_time_millis: Option<i64>,
     ) -> anyhow::Result<DiffPair<Row>> {
         let (mut bytes, resolved_schema) = self.csr_avro.resolve(bytes).await?;
         let result = if self.envelope == EnvelopeType::Debezium {
@@ -1591,6 +1613,7 @@ impl Decoder {
                         file,
                         source.row,
                         coord,
+                        upstream_time_millis,
                         &self.debug_name,
                         self.worker_index,
                     )
