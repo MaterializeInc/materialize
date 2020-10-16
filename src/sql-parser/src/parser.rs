@@ -3117,7 +3117,7 @@ impl Parser {
                 TransactionMode::AccessMode(TransactionAccessMode::ReadOnly)
             } else if self.parse_keywords(vec!["READ", "WRITE"]) {
                 TransactionMode::AccessMode(TransactionAccessMode::ReadWrite)
-            } else if required || self.peek_token().is_some() {
+            } else if required {
                 self.expected(self.peek_range(), "transaction mode", self.peek_token())?
             } else {
                 break;
