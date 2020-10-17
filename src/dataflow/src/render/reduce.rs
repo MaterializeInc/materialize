@@ -13,7 +13,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::operators::{Reduce, Threshold};
+use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
@@ -288,7 +288,6 @@ where
                 // `row` contains a single value that can be minimized or
                 // maximized over.
 
-                use differential_dataflow::operators::consolidate::Consolidate;
                 use differential_dataflow::operators::reduce::Count;
                 use timely::dataflow::operators::map::Map;
 
@@ -543,8 +542,9 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    collection
-        .map(move |((key, hash), row)| ((key, hash % modulus), row))
+    let input = collection.map(move |((key, hash), row)| ((key, hash % modulus), row));
+
+    let negated_output = input
         .reduce_named("ReduceHierarchical", {
             let mut row_packer = repr::RowPacker::new();
             move |key, source, target| {
@@ -561,10 +561,22 @@ where
                     // hierarchical aggregations; should that belief be incorrect, we
                     // should certainly revise this implementation.
                     let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
-                    target.push((row_packer.pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
+
+                    // We only want to arrange the parts of the input that are not part of the output.
+                    // More specifically, we want to arrange it so that `input.concat(&output.negate())`
+                    // gives us the intended value of this aggregate function.
+                    // Thankfully, we don't have to do a lot to manage that because we assume that
+                    // the output of this aggregation function will be one of the inputs, and we can
+                    // let Differential correctly handle compacting away insertions and deletions to the
+                    // same key.
+
+                    target.push((row_packer.pack(Some(aggr.eval(iter, &RowArena::new()))), -1));
+                    target.extend(source.iter().map(|(val, cnt)| ((*val).clone(), *cnt)));
                 }
             }
-        })
+        });
+
+    negated_output.negate().concat(&input).consolidate()
 }
 
 /// Determines whether a function can be accumulated in an update's "difference" field,
