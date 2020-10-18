@@ -218,17 +218,19 @@ where
                                     let batch = &wrapper;
                                     let mut cursor = batch.cursor();
                                     cursor.seek_key(batch, &row);
-                                    while let Some(val) = cursor.get_val(batch) {
-                                        for datum in logic(val) {
-                                            cursor.map_times(batch, |time, diff| {
-                                                session.give((
-                                                    datum.clone(),
-                                                    time.clone(),
-                                                    diff.clone(),
-                                                ));
-                                            });
+                                    if cursor.get_key(batch) == Some(&row) {
+                                        while let Some(val) = cursor.get_val(batch) {
+                                            for datum in logic(val) {
+                                                cursor.map_times(batch, |time, diff| {
+                                                    session.give((
+                                                        datum.clone(),
+                                                        time.clone(),
+                                                        diff.clone(),
+                                                    ));
+                                                });
+                                            }
+                                            cursor.step_val(batch);
                                         }
-                                        cursor.step_val(batch);
                                     }
                                 }
                             });
@@ -263,17 +265,19 @@ where
                                     let batch = &wrapper;
                                     let mut cursor = batch.cursor();
                                     cursor.seek_key(batch, &row);
-                                    while let Some(val) = cursor.get_val(batch) {
-                                        for datum in logic(val) {
-                                            cursor.map_times(batch, |time, diff| {
-                                                session.give((
-                                                    datum.clone(),
-                                                    time.clone(),
-                                                    diff.clone(),
-                                                ));
-                                            });
+                                    if cursor.get_key(batch) == Some(&row) {
+                                        while let Some(val) = cursor.get_val(batch) {
+                                            for datum in logic(val) {
+                                                cursor.map_times(batch, |time, diff| {
+                                                    session.give((
+                                                        datum.clone(),
+                                                        time.clone(),
+                                                        diff.clone(),
+                                                    ));
+                                                });
+                                            }
+                                            cursor.step_val(batch);
                                         }
-                                        cursor.step_val(batch);
                                     }
                                 }
                             });
