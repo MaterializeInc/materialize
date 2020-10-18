@@ -175,9 +175,10 @@ where
     /// required by `self.collection(expr)` when converting data from an
     /// arrangement; if less data are required, the `logic` argument is able
     /// to use a reference and produce the minimal amount of data instead.
-    pub fn flat_map_ref<I, L>(
+    pub fn flat_map_ref<I, L, K>(
         &self,
         relation_expr: &P,
+        mut key_selector: K,
         mut logic: L,
     ) -> Option<(
         Collection<S, I::Item, Diff>,
@@ -187,22 +188,107 @@ where
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&V) -> I + 'static,
+        K: FnMut(&[ScalarExpr]) -> Option<V>,
     {
+        use differential_dataflow::{
+            trace::{BatchReader, Cursor},
+            AsCollection,
+        };
+        use timely::dataflow::channels::pact::Pipeline;
+        use timely::dataflow::operators::Operator;
+
         if let Some((oks, err)) = self.collections.get(relation_expr) {
             Some((oks.flat_map(move |v| logic(&v)), err.clone()))
         } else if let Some(local) = self.local.get(relation_expr) {
-            let (oks, errs) = local.values().next().expect("Empty arrangement");
-            Some((
-                oks.flat_map_ref(move |_k, v| logic(v)),
-                errs.as_collection(|k, _v| k.clone()),
-            ))
+            // Determine a key that is constrained to a literal value.
+            let constrained_key = local
+                .keys()
+                .find_map(|key| key_selector(key).map(|row| (key.clone(), row)));
+            // If we found such a key, use a more advanced implementation.
+            if let Some((key, row)) = constrained_key {
+                let (oks, errs) = &local[&key];
+
+                let result = oks
+                    .stream
+                    .unary(Pipeline, "AsCollection", move |_, _| {
+                        move |input, output| {
+                            input.for_each(|time, data| {
+                                let mut session = output.session(&time);
+                                for wrapper in data.iter() {
+                                    let batch = &wrapper;
+                                    let mut cursor = batch.cursor();
+                                    cursor.seek_key(batch, &row);
+                                    while let Some(val) = cursor.get_val(batch) {
+                                        for datum in logic(val) {
+                                            cursor.map_times(batch, |time, diff| {
+                                                session.give((
+                                                    datum.clone(),
+                                                    time.clone(),
+                                                    diff.clone(),
+                                                ));
+                                            });
+                                        }
+                                        cursor.step_val(batch);
+                                    }
+                                }
+                            });
+                        }
+                    })
+                    .as_collection();
+
+                Some((result, errs.as_collection(|k, _v| k.clone())))
+            } else {
+                let (oks, errs) = local.values().next().expect("Empty arrangement");
+                Some((
+                    oks.flat_map_ref(move |_k, v| logic(v)),
+                    errs.as_collection(|k, _v| k.clone()),
+                ))
+            }
         } else if let Some(trace) = self.trace.get(relation_expr) {
-            let (_id, oks, errs) = trace.values().next().expect("Empty arrangement");
-            Some((
-                // oks.as_collection(|_k, v| v.clone()),
-                oks.flat_map_ref(move |_k, v| logic(v)),
-                errs.as_collection(|k, _v| k.clone()),
-            ))
+            // Determine a key that is constrained to a literal value.
+            let constrained_key = trace
+                .keys()
+                .find_map(|key| key_selector(key).map(|row| (key.clone(), row)));
+            // If we found such a key, use a more advanced implementation.
+            if let Some((key, row)) = constrained_key {
+                let (_id, oks, errs) = &trace[&key];
+
+                let result = oks
+                    .stream
+                    .unary(Pipeline, "AsCollection", move |_, _| {
+                        move |input, output| {
+                            input.for_each(|time, data| {
+                                let mut session = output.session(&time);
+                                for wrapper in data.iter() {
+                                    let batch = &wrapper;
+                                    let mut cursor = batch.cursor();
+                                    cursor.seek_key(batch, &row);
+                                    while let Some(val) = cursor.get_val(batch) {
+                                        for datum in logic(val) {
+                                            cursor.map_times(batch, |time, diff| {
+                                                session.give((
+                                                    datum.clone(),
+                                                    time.clone(),
+                                                    diff.clone(),
+                                                ));
+                                            });
+                                        }
+                                        cursor.step_val(batch);
+                                    }
+                                }
+                            });
+                        }
+                    })
+                    .as_collection();
+
+                Some((result, errs.as_collection(|k, _v| k.clone())))
+            } else {
+                let (_id, oks, errs) = trace.values().next().expect("Empty arrangement");
+                Some((
+                    oks.flat_map_ref(move |_k, v| logic(v)),
+                    errs.as_collection(|k, _v| k.clone()),
+                ))
+            }
         } else {
             None
         }
