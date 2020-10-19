@@ -237,7 +237,7 @@ where
         });
         messages.extend(notices);
         messages.push(BackendMessage::ReadyForQuery(
-            self.coord_client.session().transaction().into(),
+            self.coord_client.session().transaction_status().into(),
         ));
         self.conn.send_all(messages).await?;
         self.flush().await
@@ -555,7 +555,7 @@ where
     async fn sync(&mut self) -> Result<State, comm::Error> {
         self.conn
             .send(BackendMessage::ReadyForQuery(
-                self.coord_client.session().transaction().into(),
+                self.coord_client.session().transaction_status().into(),
             ))
             .await?;
         self.flush().await
@@ -697,6 +697,7 @@ where
                 command_complete!("SET")
             }
             ExecuteResponse::StartedTransaction => command_complete!("BEGIN"),
+            ExecuteResponse::SetTransaction => command_complete!("SET"),
             ExecuteResponse::CommittedTransaction => command_complete!("COMMIT"),
             ExecuteResponse::AbortedTransaction => command_complete!("ROLLBACK"),
             ExecuteResponse::Tailing { rx } => {

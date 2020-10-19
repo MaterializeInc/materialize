@@ -39,8 +39,9 @@ use sql_parser::ast::{
     CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
     DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
     Format, Ident, IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query,
-    SelectStatement, SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption,
-    Statement, TailStatement, Value,
+    SelectStatement, SetTransactionStatement, SetVariableStatement, SetVariableValue,
+    ShowVariableStatement, SqlOption, StartTransactionStatement, Statement, TailStatement,
+    TransactionAccessMode, TransactionIsolationLevel, TransactionMode, Value,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -85,6 +86,7 @@ pub fn describe_statement(
         | Statement::DropObjects(_)
         | Statement::SetVariable(_)
         | Statement::StartTransaction(_)
+        | Statement::SetTransaction(_)
         | Statement::Rollback(_)
         | Statement::Commit(_)
         | Statement::AlterObjectRename(_)
@@ -218,7 +220,6 @@ pub fn describe_statement(
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
         Statement::Copy(_) => bail!("COPY statements are not supported"),
-        Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
     })
 }
 
@@ -271,15 +272,60 @@ pub fn handle_statement(
 
         Statement::Insert(stmt) => handle_insert(scx, stmt, params),
 
-        Statement::StartTransaction(_) => Ok(Plan::StartTransaction),
+        Statement::StartTransaction(stmt) => handle_start_transaction(scx, stmt),
+        Statement::SetTransaction(stmt) => handle_set_transaction(scx, stmt),
         Statement::Rollback(_) => Ok(Plan::AbortTransaction),
         Statement::Commit(_) => Ok(Plan::CommitTransaction),
 
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
         Statement::Copy(_) => bail!("COPY statements are not supported"),
-        Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
     }
+}
+
+fn handle_start_transaction(
+    scx: &StatementContext,
+    StartTransactionStatement { modes }: StartTransactionStatement,
+) -> Result<Plan, anyhow::Error> {
+    let reads = validate_transaction_modes(scx, &modes)?;
+    Ok(Plan::StartTransaction { reads: reads })
+}
+
+fn handle_set_transaction(
+    scx: &StatementContext,
+    SetTransactionStatement { modes }: SetTransactionStatement,
+) -> Result<Plan, anyhow::Error> {
+    let reads = validate_transaction_modes(scx, &modes)?;
+    Ok(Plan::SetTransaction { reads: reads })
+}
+
+fn validate_transaction_modes(
+    scx: &StatementContext,
+    modes: &Vec<TransactionMode>,
+) -> Result<Vec<GlobalId>, anyhow::Error> {
+    let mut read_ids = vec![];
+    for mode in modes {
+        match mode {
+            TransactionMode::AccessMode(mode) => match mode {
+                TransactionAccessMode::ReadOnly => {}
+                _ => bail!("{} not supported", mode),
+            },
+            TransactionMode::IsolationLevel(level) => match level {
+                TransactionIsolationLevel::Serializable => {}
+                _ => bail!("{} not supported", mode),
+            },
+            TransactionMode::WithReadsFrom(reads) => {
+                for obj in reads {
+                    let id = scx.catalog.get_item(&scx.resolve_item(obj.clone())?).id();
+                    if !scx.catalog.is_queryable(id) {
+                        bail!("{} is unqueryable", obj);
+                    }
+                    read_ids.push(id);
+                }
+            }
+        }
+    }
+    Ok(read_ids)
 }
 
 fn handle_set_variable(

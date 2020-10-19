@@ -20,7 +20,8 @@ use std::collections::HashMap;
 
 use anyhow::bail;
 
-use repr::{Datum, Row, ScalarType};
+use expr::GlobalId;
+use repr::{Datum, Row, ScalarType, Timestamp};
 use sql::plan::Params;
 
 use crate::session::statement::{Portal, PreparedStatement};
@@ -118,7 +119,7 @@ pub struct Session {
     transaction_isolation: ServerVar<&'static str>,
     conn_id: u32,
     /// The current state of the the session's transaction
-    transaction: TransactionStatus,
+    pub transaction: Option<Transaction>,
     /// A map from statement names to SQL queries
     prepared_statements: HashMap<String, PreparedStatement>,
     /// Portals associated with the current session
@@ -145,7 +146,7 @@ impl Session {
             timezone: TIMEZONE,
             transaction_isolation: TRANSACTION_ISOLATION,
             conn_id,
-            transaction: TransactionStatus::Idle,
+            transaction: None,
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
         }
@@ -167,7 +168,7 @@ impl Session {
             timezone: TIMEZONE,
             transaction_isolation: TRANSACTION_ISOLATION,
             conn_id: DUMMY_CONNECTION_ID,
-            transaction: TransactionStatus::Idle,
+            transaction: None,
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
         }
@@ -192,7 +193,6 @@ impl Session {
             &self.server_version,
             &self.sql_safe_updates,
             &self.timezone,
-            &self.transaction_isolation,
         ]
     }
 
@@ -350,29 +350,47 @@ impl Session {
     ///
     /// This does not nest, it just keeps us in a transaction even if we were already in
     /// one.
-    pub fn start_transaction(&mut self) {
-        self.transaction = TransactionStatus::InTransaction;
+    pub fn start_transaction(&mut self, reads: Vec<GlobalId>) {
+        if self.transaction.is_none() {
+            let mut txn = Transaction::new();
+            txn.add_reads(reads);
+            self.transaction = Some(txn);
+        }
     }
 
     /// Take the session out of a transaction
     ///
     /// This is fine to do even if we are not in a transaction
     pub fn end_transaction(&mut self) {
-        self.transaction = TransactionStatus::Idle;
+        self.transaction = None;
     }
 
     /// If the session is currenlty in a transaction, mark it failed
     ///
     /// Does nothing in other cases
     pub fn fail_transaction(&mut self) {
-        if self.transaction == TransactionStatus::InTransaction {
-            self.transaction = TransactionStatus::Failed;
+        if let Some(ref mut txn) = self.transaction {
+            txn.failed = true;
         }
     }
 
     /// Get the current transaction status of the session
-    pub fn transaction(&self) -> &TransactionStatus {
-        &self.transaction
+    pub fn transaction_status(&self) -> &TransactionStatus {
+        match &self.transaction {
+            Some(txn) => match txn.failed {
+                true => &TransactionStatus::Failed,
+                false => &TransactionStatus::InTransaction,
+            },
+            None => &TransactionStatus::Idle,
+        }
+    }
+
+    /// TODO: add docs
+    pub fn transaction_has_timestamp(&self) -> bool {
+        match self.transaction {
+            Some(ref txn) => txn.timestamp.is_some(),
+            None => false,
+        }
     }
 
     /// Ensure that the given prepared statement is present in this session
@@ -448,5 +466,36 @@ impl Session {
     /// Get a portal for mutation
     pub fn get_portal_mut(&mut self, portal_name: &str) -> Option<&mut Portal> {
         self.portals.get_mut(portal_name)
+    }
+}
+
+/// Holds state for an active or failed transaction.
+#[derive(Debug)]
+pub struct Transaction {
+    /// Marks the transaction failed.
+    pub failed: bool,
+    /// The timestamp at which the transaction executes.
+    pub timestamp: Option<Timestamp>,
+    /// The set of unique sources from which this transaction can read.
+    pub reads: Vec<GlobalId>,
+}
+
+impl Transaction {
+    fn new() -> Self {
+        Transaction {
+            failed: false,
+            timestamp: None,
+            reads: vec![],
+        }
+    }
+
+    /// Adds reads to self.reads without duplication.
+    pub fn add_reads(&mut self, reads: Vec<GlobalId>) {
+        for read in reads {
+            // Ensure unique read IDs.
+            if !self.reads.contains(&read) {
+                self.reads.push(read);
+            }
+        }
     }
 }

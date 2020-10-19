@@ -47,7 +47,7 @@ use expr::{
 };
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
+use repr::{ColumnName, Datum, RelationDesc, Row, RowPacker, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
@@ -72,7 +72,7 @@ use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
 use crate::persistence::{PersistenceConfig, Persister};
-use crate::session::{PreparedStatement, Session};
+use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::sink_connector;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -161,6 +161,8 @@ where
     /// TODO(justin): this is a hack, and does not work right with TAIL.
     need_advance: bool,
     transient_id_counter: u64,
+    /// Reference counter for transactions.
+    transaction_reads: HashMap<GlobalId, u64>,
 }
 
 impl<C> Coordinator<C>
@@ -468,7 +470,10 @@ where
                                 source,
                                 when,
                                 finishing,
-                            } => self.sequence_peek(conn_id, source, when, finishing).await?,
+                            } => {
+                                self.sequence_peek(Ok(None), conn_id, source, when, finishing)
+                                    .await?
+                            }
 
                             Plan::SendRows(rows) => send_immediate_rows(rows),
 
@@ -641,6 +646,10 @@ where
 
     /// Updates the upper frontier of a named view.
     fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
+        if self.transaction_reads.contains_key(name) {
+            println!("skip update_upper for {}", name);
+            return;
+        }
         if let Some(index_state) = self.indexes.get_mut(name) {
             let changes: Vec<_> = index_state.upper.update_iter(changes.drain()).collect();
             if !changes.is_empty() {
@@ -1143,6 +1152,31 @@ where
         pcx: PlanContext,
         plan: Plan,
     ) {
+        // If we're in a transaction, we only allow Peeks, transaction plans, and
+        // session introspection. This is because other operations (INSERT, constant
+        // row queries (some mz_catalog relations)) don't support an AS OF abstraction,
+        // and so don't execute at the transaction time.
+        if session.transaction.is_some() {
+            match plan {
+                Plan::Peek { .. }
+                | Plan::EmptyQuery
+                | Plan::ShowAllVariables
+                | Plan::ShowVariable(_)
+                | Plan::SetTransaction { .. }
+                | Plan::CommitTransaction
+                | Plan::AbortTransaction
+                | Plan::ExplainPlan { .. } => {}
+                _ => {
+                    tx.send(
+                        Err(anyhow::format_err!(
+                            "within transactions only Peeks supported"
+                        )),
+                        session,
+                    );
+                    return;
+                }
+            }
+        }
         match plan {
             Plan::CreateDatabase {
                 name,
@@ -1265,18 +1299,26 @@ where
                 session,
             ),
 
-            Plan::StartTransaction => {
-                session.start_transaction();
+            Plan::StartTransaction { reads } => {
+                session.start_transaction(reads);
                 tx.send(Ok(ExecuteResponse::StartedTransaction), session)
             }
 
+            Plan::SetTransaction { reads } => {
+                tx.send(self.sequence_set_transaction(&mut session, reads), session)
+            }
+
             Plan::CommitTransaction => {
-                session.end_transaction();
-                tx.send(Ok(ExecuteResponse::CommittedTransaction), session)
+                // COMMIT on a failed transaction is a ROLLBACK.
+                let resp = match self.end_transaction(&mut session) {
+                    true => ExecuteResponse::CommittedTransaction,
+                    false => ExecuteResponse::AbortedTransaction,
+                };
+                tx.send(Ok(resp), session)
             }
 
             Plan::AbortTransaction => {
-                session.end_transaction();
+                self.end_transaction(&mut session);
                 tx.send(Ok(ExecuteResponse::AbortedTransaction), session)
             }
 
@@ -1284,11 +1326,14 @@ where
                 source,
                 when,
                 finishing,
-            } => tx.send(
-                self.sequence_peek(session.conn_id(), source, when, finishing)
-                    .await,
-                session,
-            ),
+            } => {
+                let txn_timestamp = self.transaction_timestamp(&mut session, &source);
+                tx.send(
+                    self.sequence_peek(txn_timestamp, session.conn_id(), source, when, finishing)
+                        .await,
+                    session,
+                )
+            }
 
             Plan::Tail {
                 id,
@@ -1761,14 +1806,111 @@ where
         Ok(ExecuteResponse::SetVariable { name })
     }
 
+    fn sequence_set_transaction(
+        &mut self,
+        session: &mut Session,
+        reads: Vec<GlobalId>,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
+        if session.transaction_status() != &TransactionStatus::InTransaction {
+            bail!("must be in a transaction");
+        }
+        if !reads.is_empty() && session.transaction_has_timestamp() {
+            bail!("cannot add transaction reads: timestamp already set");
+        }
+        if let Some(ref mut txn) = session.transaction {
+            txn.add_reads(reads)
+        }
+        Ok(ExecuteResponse::SetTransaction)
+    }
+
+    /// If there is an active transaction, determine the time at which this query
+    /// should run. The first query in a transaction will generate a timestamp and
+    /// execute all other statements as of it. This function must always be called
+    /// because it also does other tranasction validation.
+    fn transaction_timestamp(
+        &mut self,
+        session: &mut Session,
+        source: &RelationExpr,
+    ) -> Result<Option<Timestamp>, anyhow::Error> {
+        if let Some(ref mut txn) = session.transaction {
+            // Failed transactions should not do anything.
+            if txn.failed {
+                bail!("current transaction is aborted, commands ignored until end of transaction block");
+            }
+
+            if txn.reads.is_empty() {
+                bail!("transaction must have at least 1 read source");
+            }
+
+            // Verify the source's reads are described in the transaction.
+            for read in source.global_uses() {
+                if !txn.reads.contains(&read) {
+                    bail!(
+                        "{} not included in transaction WITH READS FROM",
+                        self.catalog.get_by_id(&read).name()
+                    );
+                }
+            }
+
+            if txn.timestamp.is_none() {
+                // We need to generate a timestamp and prevent the sources from being
+                // compacted.
+                for read in &txn.reads {
+                    let count = self.transaction_reads.entry(*read).or_insert(0);
+                    *count += 1;
+                }
+                let ts = self.determine_timestamp(&txn.reads, PeekWhen::Immediately)?;
+                txn.timestamp = Some(ts)
+            }
+            Ok(txn.timestamp)
+        } else {
+            // Not in a txn.
+            Ok(None)
+        }
+    }
+
+    /// Returns true iff there was an active, non-failed transaction.
+    fn end_transaction(&mut self, session: &mut Session) -> bool {
+        let mut committed = false;
+        if let Some(ref txn) = session.transaction {
+            committed = !txn.failed;
+            // Cleanup read references. These will only have been populated if there's a
+            // timestamp.
+            if txn.timestamp.is_some() {
+                for read in &txn.reads {
+                    let count = self.transaction_reads.get_mut(read).unwrap();
+                    if *count == 1 {
+                        self.transaction_reads.remove(read);
+                    } else {
+                        *count -= 1;
+                    }
+                }
+            }
+        }
+        session.end_transaction();
+        committed
+    }
+
     async fn sequence_peek(
         &mut self,
+        txn_timestamp: Result<Option<Timestamp>, anyhow::Error>,
         conn_id: u32,
         mut source: RelationExpr,
-        when: PeekWhen,
+        mut when: PeekWhen,
         finishing: RowSetFinishing,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        let timestamp = self.determine_timestamp(&source, when)?;
+        // If this is not an AS OF query and we are in a transaction, use the
+        // transaction's timestamp.
+        if let PeekWhen::Immediately = when {
+            match txn_timestamp? {
+                Some(ts) => {
+                    when = PeekWhen::AtTimestamp(ts);
+                }
+                None => {}
+            }
+        }
+
+        let timestamp = self.determine_timestamp(&source.global_uses(), when)?;
 
         // See if the query is introspecting its own logical timestamp, and
         // install the determined timestamp if so.
@@ -1960,9 +2102,9 @@ where
     /// which is possible due to the restricted validity of traces (each has a `since`
     /// and `upper` frontier, and are only valid after `since` and sure to be available
     /// not after `upper`).
-    fn determine_timestamp(
+    pub fn determine_timestamp(
         &mut self,
-        source: &RelationExpr,
+        uses_ids: &Vec<GlobalId>,
         when: PeekWhen,
     ) -> Result<Timestamp, anyhow::Error> {
         // Each involved trace has a validity interval `[since, upper)`.
@@ -1976,7 +2118,6 @@ where
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-        let uses_ids = &source.global_uses();
         let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
 
         // Determine the valid lower bound of times that can produce correct outputs.
@@ -2081,14 +2222,9 @@ where
     ) -> Result<Antichain<u64>, anyhow::Error> {
         let frontier = if let Some(ts) = as_of {
             // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(self.determine_timestamp(
-                &RelationExpr::Get {
-                    id: Id::Global(source_id),
-                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
-                    typ: RelationType::empty(),
-                },
-                PeekWhen::AtTimestamp(ts),
-            )?)
+            Antichain::from_elem(
+                self.determine_timestamp(&vec![source_id], PeekWhen::AtTimestamp(ts))?,
+            )
         }
         // TODO: The logic that follows is at variance from PEEK logic which consults the
         // "queryable" state of its inputs. We might want those to line up, but it is only
@@ -2928,6 +3064,7 @@ where
             last_op_was_read: false,
             need_advance: true,
             transient_id_counter: 1,
+            transaction_reads: HashMap::new(),
         };
         coord.bootstrap(initial_catalog_events).await?;
         Ok((coord, cluster_id))

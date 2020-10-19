@@ -1031,6 +1031,7 @@ impl_display!(SqlOption);
 pub enum TransactionMode {
     AccessMode(TransactionAccessMode),
     IsolationLevel(TransactionIsolationLevel),
+    WithReadsFrom(Vec<ObjectName>),
 }
 
 impl AstDisplay for TransactionMode {
@@ -1041,6 +1042,10 @@ impl AstDisplay for TransactionMode {
             IsolationLevel(iso_level) => {
                 f.write_str("ISOLATION LEVEL ");
                 f.write_node(iso_level);
+            }
+            WithReadsFrom(reads) => {
+                f.write_str("WITH READS FROM ");
+                f.write_node(&display::comma_separated(reads));
             }
         }
     }

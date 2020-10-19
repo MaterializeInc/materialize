@@ -145,6 +145,8 @@ pub enum ExecuteResponse {
     SetVariable {
         name: String,
     },
+    /// The current transaction had characteristics set.
+    SetTransaction,
     /// A new transaction was started.
     StartedTransaction,
     /// Updates to the requested source or view will be streamed to the

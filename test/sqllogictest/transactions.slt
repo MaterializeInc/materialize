@@ -7,18 +7,27 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-mode cockroach
-
 statement ok
 CREATE TABLE t (a int)
 
 statement ok
 INSERT INTO t (a) VALUES (1)
 
-#### next transaction
-
+# Must specify read tables.
 statement ok
 BEGIN
+
+query error t not included in transaction WITH READS FROM
+SELECT * FROM t
+----
+1
+
+statement ok
+COMMIT
+
+# Specify read table.
+statement ok
+BEGIN WITH READS FROM t
 
 query I rowsort
 SELECT * FROM t
@@ -28,23 +37,12 @@ SELECT * FROM t
 statement ok
 COMMIT
 
-#### next transaction
-
+# Can also use SET.
 statement ok
 BEGIN
 
-query I rowsort
-SELECT * FROM t
-----
-1
-
 statement ok
-ROLLBACK
-
-#### next transaction
-
-statement ok
-START TRANSACTION
+SET TRANSACTION WITH READS FROM t
 
 query I rowsort
 SELECT * FROM t
@@ -54,15 +52,37 @@ SELECT * FROM t
 statement ok
 COMMIT
 
-#### next transaction
-
+# Can't SET after query.
 statement ok
-START TRANSACTION
+BEGIN WITH READS FROM t
 
 query I rowsort
 SELECT * FROM t
 ----
 1
 
+statement error timestamp already set
+SET TRANSACTION WITH READS FROM t
+
 statement ok
-ROLLBACK
+COMMIT
+
+# No mutations.
+statement ok
+BEGIN
+
+statement error within transactions only Peeks supported
+INSERT INTO t VALUES (1)
+
+statement ok
+COMMIT
+
+# Enforce that at least 1 read source exists.
+statement ok
+BEGIN
+
+query error transaction must have at least 1 read source
+SELECT 1
+
+statement ok
+COMMIT

@@ -3117,6 +3117,14 @@ impl Parser {
                 TransactionMode::AccessMode(TransactionAccessMode::ReadOnly)
             } else if self.parse_keywords(vec!["READ", "WRITE"]) {
                 TransactionMode::AccessMode(TransactionAccessMode::ReadWrite)
+            } else if self.parse_keywords(vec!["WITH", "READS", "FROM"]) {
+                TransactionMode::WithReadsFrom(
+                    self.parse_comma_separated(Parser::parse_object_name)?,
+                )
+            } else if self.parse_keywords(vec!["AS", "OF"]) {
+                TransactionMode::WithReadsFrom(
+                    self.parse_comma_separated(Parser::parse_object_name)?,
+                )
             } else if required {
                 self.expected(self.peek_range(), "transaction mode", self.peek_token())?
             } else {

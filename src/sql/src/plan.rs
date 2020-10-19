@@ -119,7 +119,12 @@ pub enum Plan {
         name: String,
         value: String,
     },
-    StartTransaction,
+    StartTransaction {
+        reads: Vec<GlobalId>,
+    },
+    SetTransaction {
+        reads: Vec<GlobalId>,
+    },
     CommitTransaction,
     AbortTransaction,
     Peek {
