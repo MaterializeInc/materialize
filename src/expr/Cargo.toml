@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-aho-corasick = "0.7.13"
+aho-corasick = "0.7.14"
 anyhow = "1.0"
 chrono = "0.4"
 csv = "1.1"
