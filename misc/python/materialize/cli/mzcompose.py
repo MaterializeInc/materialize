@@ -28,7 +28,7 @@ from materialize import ui
 announce = ui.speaker("==> ")
 say = ui.speaker("")
 
-MIN_COMPOSE_VERSION = (1, 25, 0)
+MIN_COMPOSE_VERSION = (1, 24, 0)
 
 
 def assert_docker_compose_version() -> None:
@@ -40,8 +40,10 @@ def assert_docker_compose_version() -> None:
     output = spawn.capture(cmd, unicode=True).strip()
     version = tuple(int(i) for i in output.split("."))
     if version < MIN_COMPOSE_VERSION:
-        msg = f"Unsupported docker-compose version: {version}, min required: {MIN_COMPOSE_VERSION}"
-        raise errors.MzConfigurationError(msg)
+        this_version = ".".join(str(p) for p in version)
+        min_version = ".".join(str(p) for p in MIN_COMPOSE_VERSION)
+        msg = f"WARNING: Unsupported docker-compose version: {this_version} min officially supported: {min_version}"
+        print(msg, file=sys.stderr)
 
 
 def main(argv: List[str]) -> int:
