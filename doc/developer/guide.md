@@ -25,6 +25,30 @@ better availability and durability story.
 
 ## Installing
 
+### C components
+
+Materialize depends on several components that are written in C, so you'll need
+a working C compiler. You'll also need to install the [CMake] build system.
+
+On macOS, if you install [Homebrew], you'll be guided through the process of
+installing Apple's developer tools, which includes a C compiler. Then it's a
+cinch to install CMake:
+
+```
+brew install cmake
+```
+
+On Debian-based Linux variants, it's even easier:
+
+```shell
+sudo apt update
+sudo apt install build-essential cmake
+```
+
+On other platforms, you'll have to figure out how to get these tools yourself.
+
+[CMake]: https://cmake.org
+
 ### Rust
 
 Install Rust via [rustup]:
@@ -35,6 +59,10 @@ curl https://sh.rustup.rs -sSf | sh
 
 Rustup will automatically select the correct toolchain version specified in
 [materialize/rust-toolchain](/rust-toolchain).
+
+We recommend that you do _not_ install Rust via your system's package manager.
+We closely track the most recent version of Rust. The version of Rust in your
+package manager is likely too old to build Materialize.
 
 [rustup]: https://www.rust-lang.org/tools/install
 
