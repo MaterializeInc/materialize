@@ -526,12 +526,14 @@ fn adjust_rlimits() {
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
 /// Attempts to increase the soft nofile rlimit to the maximum possible value.
 fn adjust_rlimits() {
+    use rlimit::{Resource, Rlim};
+
     // getrlimit/setrlimit can have surprisingly different behavior across
     // platforms, even with the rlimit wrapper crate that we use. This function
     // is chattier than normal at the trace log level in an attempt to ease
     // debugging of such differences.
 
-    let (soft, hard) = match rlimit::Resource::NOFILE.get() {
+    let (soft, hard) = match Resource::NOFILE.get() {
         Ok(limits) => limits,
         Err(e) => {
             trace!("unable to read initial nofile rlimit: {}", e);
@@ -542,6 +544,7 @@ fn adjust_rlimits() {
 
     #[cfg(target_os = "macos")]
     let hard = {
+        use ore::cast::CastFrom;
         use std::cmp;
         use sysctl::Sysctl;
 
@@ -553,7 +556,7 @@ fn adjust_rlimits() {
             .and_then(|ctl| ctl.value())
             .map_err(|e| e.to_string())
             .and_then(|v| match v {
-                sysctl::CtlValue::Int(v) => Ok(v as u64),
+                sysctl::CtlValue::Int(v) => Ok(Rlim::from_usize(usize::cast_from(v))),
                 o => Err(format!("unexpected sysctl value type: {:?}", o)),
             });
         match res {
@@ -569,14 +572,14 @@ fn adjust_rlimits() {
     };
 
     trace!("attempting to adjust nofile rlimit to ({0}, {0})", hard);
-    if let Err(e) = rlimit::Resource::NOFILE.set(hard, hard) {
+    if let Err(e) = Resource::NOFILE.set(hard, hard) {
         trace!("error adjusting nofile rlimit: {}", e);
         return;
     }
 
     // Check whether getrlimit reflects the limit we installed with setrlimit.
     // Some platforms will silently ignore invalid values in setrlimit.
-    let (soft, hard) = match rlimit::Resource::NOFILE.get() {
+    let (soft, hard) = match Resource::NOFILE.get() {
         Ok(limits) => limits,
         Err(e) => {
             trace!("unable to read adjusted nofile rlimit: {}", e);
@@ -585,11 +588,11 @@ fn adjust_rlimits() {
     };
     trace!("adjusted nofile rlimit: ({}, {})", soft, hard);
 
-    const RECOMMENDED_SOFT_LIMIT: u64 = 1024;
-    if soft < RECOMMENDED_SOFT_LIMIT {
+    let recommended_soft = Rlim::from_usize(1024);
+    if soft < recommended_soft {
         warn!(
             "soft nofile rlimit ({}) is dangerously low; at least {} is recommended",
-            soft, RECOMMENDED_SOFT_LIMIT
+            soft, recommended_soft
         )
     }
 }
