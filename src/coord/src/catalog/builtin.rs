@@ -247,7 +247,7 @@ lazy_static! {
         name: "mz_kafka_sinks",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("sink_id", ScalarType::String.nullable(false))
             .with_column("topic", ScalarType::String.nullable(false))
             .with_key(vec![0]),
         id: GlobalId::System(2005),
@@ -257,7 +257,7 @@ lazy_static! {
         name: "mz_avro_ocf_sinks",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("global_id", ScalarType::String.nullable(false))
+            .with_column("sink_id", ScalarType::String.nullable(false))
             .with_column("path", ScalarType::Bytes.nullable(false))
             .with_key(vec![0]),
         id: GlobalId::System(2007),

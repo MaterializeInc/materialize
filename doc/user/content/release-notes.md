@@ -102,6 +102,10 @@ Wrap your release notes at the 80 character mark.
     - [`SHOW TABLES`](/sql/show-tables)
     - [`SHOW VIEWS`](/sql/show-views)
 
+- Rename the `global_id` column of the [`mz_avro_ocf_sinks`](/sql/system-catalog#mz_avro_ocf_sinks)
+  and [`mz_kafka_sinks`](/sql/system-catalog#mz_kafka_sinks) tables to `sink_id`, for better
+  consistency with the other system catalog tables.
+
 {{% version-header v0.4.3 %}}
 
 - Permit adjusting the logical compaction window on a per-index basis via the

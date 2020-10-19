@@ -51,6 +51,16 @@ information about the sinks available in a Materialize.
 The following sections describe the available objects in the `mz_catalog`
 schema.
 
+### `mz_avro_ocf_sinks`
+
+The `mz_avro_ocf_sinks` table contains a row for each Avro OCF sink in the
+system.
+
+Field     | Type     | Meaning
+----------|----------|--------
+`sink_id` | [`text`] | The ID of the sink.
+`path`    | `bytea`  | The path to the Avro OCF file into which the sink is writing.
+
 ### `mz_columns`
 
 The `mz_columns` contains a row for each column in each table, source, and view
@@ -102,6 +112,15 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
+
+### `mz_kafka_sinks`
+
+The `mz_kafka_sinks` table contains a row for each Kafka sink in the system.
+
+Field     | Type     | Meaning
+----------|----------|--------
+`sink_id` | [`text`] | The ID of the sink.
+`topic`   | [`text`] | The name of the Kafka topic into which the sink is writing.
 
 ### `mz_objects`
 
