@@ -122,7 +122,12 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, InputEr
                 pos,
             });
         }
-        args.insert(pieces[0].to_owned(), pieces[1].to_owned());
+        if let Some(original) = args.insert(pieces[0].to_owned(), pieces[1].to_owned()) {
+            return Err(InputError {
+                msg: format!("argument '{}' specified twice", original),
+                pos,
+            });
+        };
     }
     Ok(BuiltinCommand {
         name,
