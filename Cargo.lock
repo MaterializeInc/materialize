@@ -1884,7 +1884,6 @@ dependencies = [
  "serde_json",
  "sql",
  "sql-parser",
- "stream-cancel",
  "sysctl",
  "tempfile",
  "tokio",
@@ -3791,18 +3790,6 @@ name = "stdweb-internal-runtime"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "213701ba3370744dcd1a12960caa4843b3d68b4d1c0a5d575e0d65b2ee9d16c0"
-
-[[package]]
-name = "stream-cancel"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c701433009034f047e385aa930890e6c1d717c7e6374bbd9b81795dee55aff72"
-dependencies = [
- "futures-core",
- "futures-util",
- "pin-project",
- "tokio",
-]
 
 [[package]]
 name = "stringprep"
