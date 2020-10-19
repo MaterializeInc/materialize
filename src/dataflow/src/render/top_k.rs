@@ -135,16 +135,16 @@ where
                 // such that `input.concat(&negated_output.negate())` yields the correct TopK
                 let negated_output = input.reduce_named("TopK", {
                     move |_key, source, target: &mut Vec<(Row, isize)>| {
-                        // First go ahead and emit all records
-                        for (row, diff) in source.iter() {
-                            target.push(((*row).clone(), diff.clone()));
-                        }
                         // Determine if we must actually shrink the result set.
                         let must_shrink = offset > 0
                             || limit
                                 .map(|l| source.iter().map(|(_, d)| *d).sum::<isize>() as usize > l)
                                 .unwrap_or(false);
                         if must_shrink {
+                            // First go ahead and emit all records
+                            for (row, diff) in source.iter() {
+                                target.push(((*row).clone(), diff.clone()));
+                            }
                             // local copies that may count down to zero.
                             let mut offset = offset;
                             let mut limit = limit;
@@ -194,12 +194,6 @@ where
                                         target.push((row.clone(), -diff));
                                     }
                                 }
-                            }
-                        } else {
-                            for (row, diff) in source.iter() {
-                                // Emit retractions for the elements actually part of
-                                // the set of TopK elements.
-                                target.push(((*row).clone(), -diff.clone()));
                             }
                         }
                     }
