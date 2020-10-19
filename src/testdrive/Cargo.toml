@@ -26,7 +26,7 @@ mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
 parse_duration = "2.1.0"
 pgrepr = { path = "../pgrepr" }
-tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4", "with-serde_json-1"] }
+tokio-postgres = { version = "0.6", features = ["with-chrono-0_4", "with-serde_json-1"] }
 postgres_array = "0.10.0"
 protobuf = { version = "2.17", features = ["with-serde"] }
 rand = "0.7.3"
@@ -34,17 +34,17 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 regex = "1"
 repr = { path = "../repr" }
 reqwest = { version = "0.10.8", features = ["native-tls-vendored"] }
-rusoto_core = "0.45.0"
-rusoto_credential = "0.45.0"
-rusoto_kinesis = "0.45.0"
-rusoto_sts = "0.45.0"
+rusoto_core = { git = "https://github.com/MaterializeInc/rusoto.git" }
+rusoto_credential = { git = "https://github.com/MaterializeInc/rusoto.git" }
+rusoto_kinesis = { git = "https://github.com/MaterializeInc/rusoto.git" }
+rusoto_sts = { git = "https://github.com/MaterializeInc/rusoto.git" }
 serde = "1.0.116"
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
 serde_json = "1.0.58"
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.1"
 termcolor = "1.1.0"
-tokio = "0.2"
+tokio = "0.3"
 url = "2.1.0"
 uuid = "0.8"
 

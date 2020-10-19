@@ -13,7 +13,7 @@ lazy_static = "1.4.0"
 libc = "0.2.79"
 log = "0.4.11"
 smallvec = "1.4"
-tokio = { version = "0.2", features = ["io-util", "rt-threaded", "tcp", "time"] }
+tokio = { version = "0.3", features = ["io-util", "rt-multi-thread", "net", "time"] }
 tracing-subscriber = "0.2.7"
 
 [dev-dependencies]

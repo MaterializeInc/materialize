@@ -21,7 +21,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::ready;
-use tokio::io::{self, AsyncRead};
+use tokio::io::{self, AsyncRead, ReadBuf};
 
 /// A future which reads exactly enough bytes to fill a buffer, unless EOF is
 /// reached first.
@@ -62,7 +62,9 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         while self.pos < self.buf.len() {
             let me = &mut *self;
-            let n = ready!(Pin::new(&mut me.reader).poll_read(cx, &mut me.buf[me.pos..]))?;
+            let mut buf = ReadBuf::new(&mut me.buf[me.pos..]);
+            ready!(Pin::new(&mut me.reader).poll_read(cx, &mut buf))?;
+            let n = buf.filled().len();
             self.pos += n;
             if n == 0 {
                 break;

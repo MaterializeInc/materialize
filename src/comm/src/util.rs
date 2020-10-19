@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use tokio::io;
-use tokio::time::{Delay, Duration, Instant, Timeout};
+use tokio::time::{self, Sleep, Duration, Instant, Timeout};
 
 use crate::protocol;
 
@@ -98,7 +98,7 @@ where
 
 enum TryConnectFutureState<C> {
     Connecting(Timeout<Pin<Box<dyn Future<Output = Result<C, io::Error>> + Send>>>),
-    Sleeping(Delay),
+    Sleeping(Sleep),
 }
 
 impl<C> TryConnectFutureState<C>
@@ -106,7 +106,7 @@ where
     C: protocol::Connection,
 {
     fn connect(addr: C::Addr, deadline: Instant) -> TryConnectFutureState<C> {
-        let future = tokio::time::timeout_at(deadline, C::connect(addr));
+        let future = time::timeout_at(deadline, C::connect(addr));
         TryConnectFutureState::Connecting(future)
     }
 
@@ -115,7 +115,7 @@ where
         if when > deadline {
             when = deadline;
         }
-        TryConnectFutureState::Sleeping(tokio::time::delay_until(when))
+        TryConnectFutureState::Sleeping(time::sleep_until(when))
     }
 }
 

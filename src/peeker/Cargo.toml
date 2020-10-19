@@ -13,9 +13,9 @@ hyper = "0.13"
 lazy_static = "1.4"
 log = "0.4.11"
 ore = { path = "../ore" }
-postgres = "0.17.5"
+postgres = "0.18"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
 regex = "1.4.0"
 serde = { version = "1.0.116", features = ["derive"] }
-tokio = { version = "0.2.22", features = ["rt-threaded"] }
+tokio = { version = "0.3", features = ["rt-multi-thread"] }
 toml = "0.5.7"

@@ -12,7 +12,7 @@ jemalloc-ctl = { version = "0.3", features = ["use_std"], optional = true }
 lazy_static = "1.4.0"
 pprof = "0.3.18"
 tempfile = "3.1"
-tokio = { version = "0.2", features = ["time"] }
+tokio = { version = "0.3", features = ["time"] }
 
 [features]
 # Whether to enable profiling features that depend on jemalloc.

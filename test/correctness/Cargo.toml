@@ -19,11 +19,11 @@ lazy_static = "1.4"
 log = "0.4.11"
 ore = { path = "../../src/ore" }
 pgrepr = { path = "../../src/pgrepr" }
-postgres = "0.17"
+postgres = "0.18"
 postgres-types = "0.1.1"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
 regex = "1.4.0"
 serde = { version = "1.0.116", features = ["derive"] }
-tokio = { version = "0.2.22", features = ["rt-threaded"] }
-tokio-postgres = "0.5.5"
+tokio = { version = "0.3", features = ["rt-multi-thread"] }
+tokio-postgres = "0.6"
 toml = "0.5.7"

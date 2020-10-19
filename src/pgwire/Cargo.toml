@@ -22,11 +22,11 @@ openssl = { version = "0.10.30", features = ["vendored"] }
 ordered-float = { version = "2.0.0", features = ["serde"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
+postgres = "0.18"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
 rand = "0.7"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
-tokio = "0.2"
+tokio = "0.3"
 tokio-openssl = "0.4.0"
 tokio-util = { version = "0.3", features = ["codec"] }
-postgres = "0.17.5"

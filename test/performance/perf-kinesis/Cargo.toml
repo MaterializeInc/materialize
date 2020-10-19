@@ -16,10 +16,10 @@ futures-channel = "0.3.5"
 log = "0.4.11"
 ore = { path = "../../../src/ore" }
 rand = "0.7.3"
-rusoto_core = "0.45.0"
-rusoto_credential = "0.45.0"
-rusoto_kinesis = "0.45.0"
+rusoto_core = { git = "https://github.com/MaterializeInc/rusoto.git" }
+rusoto_credential = { git = "https://github.com/MaterializeInc/rusoto.git" }
+rusoto_kinesis = { git = "https://github.com/MaterializeInc/rusoto.git" }
 structopt = "0.3.19"
-tokio = { version = "0.2.22", features = ["full"] }
-tokio-postgres = "0.5.5"
+tokio = { version = "0.3", features = ["full"] }
+tokio-postgres = "0.6"
 test-util = { path = "../../test-util" }

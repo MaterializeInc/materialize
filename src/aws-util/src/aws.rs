@@ -14,6 +14,7 @@ use std::time::Duration;
 use rusoto_core::Region;
 use rusoto_credential::{AwsCredentials, ChainProvider, ProvideAwsCredentials};
 use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient};
+use tokio::time::error::Elapsed;
 
 /// Fetches the AWS account number of the caller via AWS Security Token Service.
 ///
@@ -23,7 +24,7 @@ pub async fn account(timeout: Duration) -> Result<String, anyhow::Error> {
     let get_identity = sts_client.get_caller_identity(GetCallerIdentityRequest {});
     let account = tokio::time::timeout(timeout, get_identity)
         .await
-        .map_err(|e: tokio::time::Elapsed| {
+        .map_err(|e: Elapsed| {
             anyhow::Error::new(e)
                 .context("timeout while retrieving AWS account number from STS".to_owned())
         })?
