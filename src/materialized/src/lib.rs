@@ -22,10 +22,11 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use compile_time_run::run_command_str;
 use futures::channel::mpsc;
+use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
-use stream_cancel::{StreamExt as _, Trigger, Tripwire};
 use tokio::io;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 
 use comm::Switchboard;
 use coord::PersistenceConfig;
@@ -210,8 +211,8 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     // requires that new system (i.e., switchboard) connections continue to be
     // routed whiles draining. The shutdown trigger indicates that draining is
     // complete, so switchboard traffic can cease and the task can exit.
-    let (drain_trigger, drain_tripwire) = Tripwire::new();
-    let (shutdown_trigger, shutdown_tripwire) = Tripwire::new();
+    let (drain_trigger, drain_tripwire) = oneshot::channel();
+    let (shutdown_trigger, shutdown_tripwire) = oneshot::channel();
     tokio::spawn({
         let switchboard = switchboard.clone();
         async move {
@@ -229,14 +230,14 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                     start_time,
                     &num_timely_workers.to_string(),
                 ));
-                mux.serve(incoming.take_until_if(drain_tripwire)).await;
+                mux.serve(incoming.take_until(drain_tripwire)).await;
             }
 
             // Draining primaries and non-primary servers are only responsible
             // for switchboard traffic.
             let mut mux = Mux::new();
             mux.add_handler(switchboard.clone());
-            mux.serve(incoming.take_until_if(shutdown_tripwire)).await
+            mux.serve(incoming.take_until(shutdown_tripwire)).await
         }
     });
 
@@ -307,10 +308,10 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
 pub struct Server {
     local_addr: SocketAddr,
     // Drop order matters for these fields.
-    _drain_trigger: Trigger,
+    _drain_trigger: oneshot::Sender<()>,
     _dataflow_guard: Box<dyn Any>,
     _coord_thread: Option<JoinOnDropHandle<()>>,
-    _shutdown_trigger: Trigger,
+    _shutdown_trigger: oneshot::Sender<()>,
 }
 
 impl Server {
