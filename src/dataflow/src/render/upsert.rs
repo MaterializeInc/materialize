@@ -23,7 +23,7 @@ use repr::{Datum, RelationType, Row, RowArena, Timestamp};
 
 use crate::decode::decode_upsert;
 use crate::operator::StreamExt;
-use crate::source::SourceOutput;
+use crate::source::{SourceData, SourceOutput};
 
 /// Entrypoint to the upsert-specific transformations involved
 /// in rendering a stream that came from an upsert source.
@@ -111,7 +111,7 @@ where
 /// occur at the same moment and so are not distinguishable.
 fn prepare_upsert_by_max_offset<G>(
     stream: &Stream<G, (SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)>,
-) -> Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>
+) -> Stream<G, ((Vec<u8>, SourceData), Timestamp)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -119,7 +119,7 @@ where
         Exchange::new(move |x: &(SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)| x.0.key.hashed()),
         "UpsertCompaction",
         |_cap, _info| {
-            let mut values = HashMap::<_, HashMap<_, (Vec<u8>, Option<i64>)>>::new();
+            let mut values = HashMap::<_, HashMap<_, SourceData>>::new();
             let mut vector = Vec::new();
 
             move |input, output| {
@@ -142,12 +142,18 @@ where
                             .or_insert_with(Default::default);
 
                         if let Some(new_offset) = position {
-                            if let Some(offset) = value.1 {
+                            if let Some(offset) = value.position {
                                 if offset < new_offset {
-                                    *value = (val, position);
+                                    *value = SourceData {
+                                        value: val,
+                                        position: Some(offset),
+                                    };
                                 }
                             } else {
-                                *value = (val, position);
+                                *value = SourceData {
+                                    value: val,
+                                    position: Some(new_offset),
+                                };
                             }
                         }
                     }
