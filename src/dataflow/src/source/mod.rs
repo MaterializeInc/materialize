@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
@@ -378,6 +378,18 @@ pub struct SourceMessage<Out> {
     pub key: Option<Vec<u8>>,
     /// Optional payload
     pub payload: Option<Out>,
+}
+
+impl<Out> fmt::Debug for SourceMessage<Out> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SourceMessage")
+            .field("partition", &self.partition)
+            .field("offset", &self.offset)
+            .field("upstream_time_millis", &self.upstream_time_millis)
+            .field("key[present]", &self.key.is_some())
+            .field("payload[present]", &self.payload.is_some())
+            .finish()
+    }
 }
 
 /// Consistency information. Each partition contains information about
