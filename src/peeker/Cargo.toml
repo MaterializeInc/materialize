@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 chrono = "0.4.19"
-env_logger = "0.7.1"
+env_logger = "0.8.1"
 getopts = "0.2"
 hyper = "0.13"
 lazy_static = "1.4"
