@@ -1149,23 +1149,38 @@ struct DebeziumDeduplicationState {
     /// Messages that are not ahead of the last recorded pos/row will be skipped.
     binlog_offsets: HashMap<String, (usize, usize, Option<i64>)>,
     /// Whether or not to track every message we've ever seen
-    full: TrackFull,
+    full: Option<TrackFull>,
 }
 
 /// If we need to deal debezium possibly going back after it hasn't seen things
 #[derive(Debug)]
-enum TrackFull {
-    No,
-    /// Track all offsets that have ever been seen
+struct TrackFull {
     /// binlog filename to offset
-    SeenOffsets(HashMap<String, HashSet<(usize, usize)>>),
+    seen_offsets: HashMap<String, HashSet<(usize, usize)>>,
+    seen_snapshot_keys: HashMap<String, HashSet<Row>>,
+    key_indices: Option<Vec<usize>>,
+    key_buf: RowPacker,
+}
+
+impl TrackFull {
+    fn from_keys(mut key_indices: Option<Vec<usize>>) -> Self {
+        if let Some(key_indices) = key_indices.as_mut() {
+            key_indices.sort_unstable();
+        }
+        Self {
+            seen_offsets: Default::default(),
+            seen_snapshot_keys: Default::default(),
+            key_indices,
+            key_buf: Default::default(),
+        }
+    }
 }
 
 impl DebeziumDeduplicationState {
-    fn new(strat: DebeziumDeduplicationStrategy) -> Self {
+    fn new(strat: DebeziumDeduplicationStrategy, key_indices: Option<Vec<usize>>) -> Self {
         let full = match strat {
-            DebeziumDeduplicationStrategy::Ordered => TrackFull::No,
-            DebeziumDeduplicationStrategy::Full => TrackFull::SeenOffsets(Default::default()),
+            DebeziumDeduplicationStrategy::Ordered => None,
+            DebeziumDeduplicationStrategy::Full => Some(TrackFull::from_keys(key_indices)),
         };
         DebeziumDeduplicationState {
             binlog_offsets: Default::default(),
@@ -1181,6 +1196,8 @@ impl DebeziumDeduplicationState {
         coord: Option<i64>,
         debug_name: &str,
         worker_idx: usize,
+        is_snapshot: bool,
+        update: &DiffPair<Row>,
     ) -> bool {
         let (pos, row) = match row {
             RowCoordinates::MySql { pos, row } => (pos, row),
@@ -1191,76 +1208,121 @@ impl DebeziumDeduplicationState {
             old_max_row: &'a usize,
             old_offset: &'a Option<i64>,
         }
-        let should_skip = match self.binlog_offsets.get_mut(file) {
-            Some((old_max_pos, old_max_row, old_offset)) => {
-                if (*old_max_pos, *old_max_row) >= (pos, row) {
-                    Some(SkipInfo {
-                        old_max_pos,
-                        old_max_row,
-                        old_offset,
-                    })
-                } else {
-                    // update the debezium high water mark
-                    *old_max_pos = pos;
-                    *old_max_row = row;
-                    *old_offset = coord;
+        let should_skip = if is_snapshot {
+            None
+        } else {
+            match self.binlog_offsets.get_mut(file) {
+                Some((old_max_pos, old_max_row, old_offset)) => {
+                    if (*old_max_pos, *old_max_row) >= (pos, row) {
+                        Some(SkipInfo {
+                            old_max_pos,
+                            old_max_row,
+                            old_offset,
+                        })
+                    } else {
+                        // update the debezium high water mark
+                        *old_max_pos = pos;
+                        *old_max_row = row;
+                        *old_offset = coord;
+                        None
+                    }
+                }
+                None => {
+                    // The extra lookup is fine - this is the cold path.
+                    self.binlog_offsets
+                        .insert(file.to_owned(), (pos, row, coord));
                     None
                 }
-            }
-            None => {
-                // The extra lookup is fine - this is the cold path.
-                self.binlog_offsets
-                    .insert(file.to_owned(), (pos, row, coord));
-                None
             }
         };
 
         match &mut self.full {
-            TrackFull::No => should_skip.is_none(),
-            TrackFull::SeenOffsets(seen_offsets) => {
-                if let Some(seen_offsets) = seen_offsets.get_mut(file) {
-                    let is_new = seen_offsets.insert((pos, row));
+            None => is_snapshot || should_skip.is_none(),
+            Some(TrackFull {
+                seen_offsets,
+                seen_snapshot_keys,
+                key_indices,
+                key_buf,
+            }) => {
+                if is_snapshot {
+                    let key_indices = match key_indices.as_ref() {
+                        None => {
+                            // No keys, so we can't do anything sensible for snapshots. Return "all OK" and hope their data isn't corrupted.
+                            return true;
+                        }
+                        Some(ki) => ki,
+                    };
+                    let mut row_iter = match update.after.as_ref() {
+                        None => {
+                            error!("Snapshot row was unexpectedly not an insert.");
+                            return false;
+                        }
+                        Some(r) => r.iter(),
+                    };
+                    let key = {
+                        let mut cumsum = 0;
+                        for k in key_indices.iter() {
+                            let adjusted_idx = *k - cumsum;
+                            cumsum += adjusted_idx + 1;
+                            key_buf.push(row_iter.nth(adjusted_idx).unwrap());
+                        }
+                        key_buf.finish_and_reuse()
+                    };
 
-                    match (is_new, should_skip) {
-                        // new item that correctly is past the highest item we've ever seen
-                        (true, None) => {}
-                        // new item that violates Debezium "guarantee" that the no new
-                        // records will ever be sent with a position below the highest
-                        // position ever seen
-                        (true, Some(skipinfo)) => {
-                            // TODO: This would be nicer if it included the wall-clock kafka event time
-                            warn!(
+                    if let Some(seen_keys) = seen_snapshot_keys.get_mut(file) {
+                        let is_new = seen_keys.insert(key);
+                        is_new
+                    } else {
+                        let mut hs = HashSet::new();
+                        hs.insert(key);
+                        seen_snapshot_keys.insert(file.to_owned(), hs);
+                        true
+                    }
+                } else {
+                    if let Some(seen_offsets) = seen_offsets.get_mut(file) {
+                        let is_new = seen_offsets.insert((pos, row));
+
+                        match (is_new, should_skip) {
+                            // new item that correctly is past the highest item we've ever seen
+                            (true, None) => {}
+                            // new item that violates Debezium "guarantee" that the no new
+                            // records will ever be sent with a position below the highest
+                            // position ever seen
+                            (true, Some(skipinfo)) => {
+                                // TODO: This would be nicer if it included the wall-clock kafka event time
+                                warn!(
                                 "Source: {}:{} created a new record behind the highest point in binlog_file={} \
                                  new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{}",
                                 debug_name, worker_idx, file, pos, row, coord.unwrap_or(-1),
                                 skipinfo.old_max_pos, skipinfo.old_max_row
                             );
-                        }
-                        // Duplicate item below the highest seen item
-                        (false, Some(skipinfo)) => {
-                            debug!(
+                            }
+                            // Duplicate item below the highest seen item
+                            (false, Some(skipinfo)) => {
+                                debug!(
                                 "Source: {}:{} already ingested binlog coordinates {}:{}:{} (old binlog: {}:{} kafka offset: {})",
                                 debug_name, worker_idx, file, pos, row, skipinfo.old_max_pos,
                                 skipinfo.old_max_row, skipinfo.old_offset.unwrap_or(-1)
                             );
-                        }
-                        // already exists, but is past the debezium high water mark.
-                        //
-                        // This should be impossible because we set the high-water mark
-                        // every time we insert something
-                        (false, None) => {
-                            error!("We surprisingly are seeing a duplicate record that \
+                            }
+                            // already exists, but is past the debezium high water mark.
+                            //
+                            // This should be impossible because we set the high-water mark
+                            // every time we insert something
+                            (false, None) => {
+                                error!("We surprisingly are seeing a duplicate record that \
                                     is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={}",
                                    file, pos, row, coord.unwrap_or(-1));
+                            }
                         }
-                    }
 
-                    is_new
-                } else {
-                    let mut hs = HashSet::new();
-                    hs.insert((pos, row));
-                    seen_offsets.insert(file.to_owned(), hs);
-                    true
+                        is_new
+                    } else {
+                        let mut hs = HashSet::new();
+                        hs.insert((pos, row));
+                        seen_offsets.insert(file.to_owned(), hs);
+                        true
+                    }
                 }
             }
         }
@@ -1335,7 +1397,7 @@ impl DebeziumDecodeState {
         Some(Self {
             before_idx,
             after_idx,
-            dedup: DebeziumDeduplicationState::new(dedup_strat),
+            dedup: DebeziumDeduplicationState::new(dedup_strat, None),
             binlog_schema_indices,
             debug_name,
             worker_idx,
@@ -1409,6 +1471,11 @@ impl DebeziumDecodeState {
                             coord,
                             &self.debug_name,
                             self.worker_idx,
+                            false,
+                            &DiffPair {
+                                before: None,
+                                after: None,
+                            },
                         ) {
                             return Ok(DiffPair {
                                 before: None,
@@ -1538,12 +1605,14 @@ impl Decoder {
         debug_name: String,
         worker_index: usize,
         debezium_dedup: Option<DebeziumDeduplicationStrategy>,
+        key_indices: Option<Vec<usize>>,
     ) -> anyhow::Result<Decoder> {
         assert!(
             (envelope == EnvelopeType::Debezium && debezium_dedup.is_some())
                 || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none())
         );
-        let debezium_dedup = debezium_dedup.map(DebeziumDeduplicationState::new);
+        let debezium_dedup =
+            debezium_dedup.map(|strat| DebeziumDeduplicationState::new(strat, key_indices));
         let csr_avro = ConfluentAvroResolver::new(reader_schema, schema_registry)?;
 
         Ok(Decoder {
@@ -1577,6 +1646,7 @@ impl Decoder {
             // Unwrap is OK: we assert in Decoder::new that this is non-none when envelope == dbz.
             let dedup = self.debezium_dedup.as_mut().unwrap();
             let (diff, coords) = dsr.deserialize(&mut bytes, dec)?;
+            let ss;
             let should_use = if let Some(source) = coords {
                 // This would have ideally been `Option<&str>`,
                 // but that can't be used to lookup in a `HashMap` of `Option<String>` without cloning.
@@ -1586,20 +1656,24 @@ impl Decoder {
                     RowCoordinates::MySql { .. } => std::str::from_utf8(&self.buf2)?,
                     RowCoordinates::Postgres { .. } => "",
                 };
-                source.snapshot
-                    || dedup.should_use_record(
-                        file,
-                        source.row,
-                        coord,
-                        &self.debug_name,
-                        self.worker_index,
-                    )
+                ss = source.snapshot;
+                dedup.should_use_record(
+                    file,
+                    source.row,
+                    coord,
+                    &self.debug_name,
+                    self.worker_index,
+                    source.snapshot,
+                    &diff,
+                )
             } else {
+                ss = false;
                 true
             };
             if should_use {
                 diff
             } else {
+                eprintln!("Skipping diff: {:?}, ss {}", diff, ss);
                 DiffPair {
                     before: None,
                     after: None,

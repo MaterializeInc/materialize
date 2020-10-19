@@ -292,6 +292,7 @@ where
                 format!("{}-values", debug_name),
                 worker_index,
                 None,
+                None,
             )
             .expect(avro_err),
             &op_name,
@@ -307,6 +308,7 @@ where
                 format!("{}-values", debug_name),
                 worker_index,
                 None,
+                None,
             )
             .expect(avro_err),
             &op_name,
@@ -321,6 +323,7 @@ where
                 format!("{}-keys", debug_name),
                 worker_index,
                 None,
+                None,
             )
             .expect(avro_err),
             avro::AvroDecoderState::new(
@@ -330,6 +333,7 @@ where
                 false,
                 format!("{}-values", debug_name),
                 worker_index,
+                None,
                 None,
             )
             .expect(avro_err),
@@ -480,6 +484,11 @@ where
 {
     let op_name = format!("{}Decode", encoding.op_name());
     let worker_index = stream.scope().index();
+    let key_indices = encoding
+        .desc(envelope)
+        .ok()
+        .and_then(|desc| desc.typ().keys.get(0).cloned());
+    eprintln!("key_indices: {:#?}", key_indices);
     match (encoding, envelope) {
         (_, Envelope::Upsert(_)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
@@ -501,6 +510,7 @@ where
                 Envelope::Debezium(ds) => *ds,
                 _ => unreachable!(),
             };
+
             (
                 decode_values_inner(
                     stream,
@@ -512,6 +522,7 @@ where
                         debug_name.to_string(),
                         worker_index,
                         Some(dedup_strat),
+                        key_indices,
                     )
                     .expect("Failed to create Avro decoder"),
                     &op_name,
@@ -531,6 +542,7 @@ where
                     debug_name.to_string(),
                     worker_index,
                     None,
+                    key_indices,
                 )
                 .expect("Failed to create Avro decoder"),
                 &op_name,
