@@ -62,7 +62,7 @@ where
                     // but the CsvReader *itself* searches for line breaks.
                     // This is mainly an aesthetic/performance-golfing
                     // issue as I doubt it will ever be a bottleneck.
-                    for SourceOutput { key: _, value: line, position: line_no } in &*lines {
+                    for SourceOutput { key: _, value: line, position: line_no , upstream_time_millis: _ } in &*lines {
                         // We only want to process utf8 strings, as this ensures that all fields
                         // will be utf8 as well, allowing some unsafe shenanigans.
                         if std::str::from_utf8(line.as_slice()).is_err() {

@@ -36,7 +36,7 @@ where
             move |input, output| {
                 input.for_each(|cap, lines| {
                     let mut session = output.session(&cap);
-                    for SourceOutput {key: _, value: line, position: line_no} in &*lines {
+                    for SourceOutput {key: _, value: line, position: line_no, upstream_time_millis: _ } in &*lines {
                         let line = match str::from_utf8(&line) {
                             Ok(line) => line,
                             _ => {

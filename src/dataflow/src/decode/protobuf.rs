@@ -58,6 +58,7 @@ impl DecoderState for ProtobufDecoderState {
         key: Row,
         bytes: &[u8],
         _: Option<i64>,
+        _upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     ) {
@@ -77,6 +78,7 @@ impl DecoderState for ProtobufDecoderState {
     fn give_value<'a>(
         &mut self,
         bytes: &[u8],
+        _: Option<i64>,
         _: Option<i64>,
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,

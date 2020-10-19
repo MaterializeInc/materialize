@@ -318,7 +318,7 @@ a b
 
 $ kafka-create-topic topic=misordered-dbz-data
 
-$ kafka-ingest format=avro topic=misordered-dbz-data schema=${new-dbz-schema} timestamp=1
+$ kafka-ingest format=avro topic=misordered-dbz-data schema=${new-dbz-schema} timestamp=1600000000000
 {"before": null, "after": {"row":{"a": 1, "b": 1}}, "source": {"file": "binlog", "pos": 2, "row": 0, "snapshot": {"string": "false"}}}
 {"before": null, "after": {"row":{"a": 2, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "false"}}}
 {"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"string": "false"}}}

@@ -301,6 +301,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                                 //TODO: should MzOffset be modified to be a string?
                                 offset: self.processed_message_count,
                             },
+                            upstream_time_millis: None,
                             key: None,
                             payload: Some(data),
                         };

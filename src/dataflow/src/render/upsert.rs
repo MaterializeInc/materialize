@@ -131,6 +131,7 @@ where
                             key,
                             value: val,
                             position,
+                            upstream_time_millis,
                         },
                         time,
                     ) in vector.drain(..)
@@ -147,12 +148,14 @@ where
                                     *value = SourceData {
                                         value: val,
                                         position: Some(offset),
+                                        upstream_time_millis,
                                     };
                                 }
                             } else {
                                 *value = SourceData {
                                     value: val,
                                     position: Some(new_offset),
+                                    upstream_time_millis,
                                 };
                             }
                         }

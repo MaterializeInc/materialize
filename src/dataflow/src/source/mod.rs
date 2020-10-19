@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
@@ -102,6 +102,8 @@ where
     pub value: V,
     /// The position in the source, if such a concept exists (e.g., Kafka offset, file line number)
     pub position: Option<i64>,
+    /// The time the record was created in the upstream systsem, as milliseconds since the epoch
+    pub upstream_time_millis: Option<i64>,
 }
 
 /// The data that we send from sources to the decode process
@@ -113,6 +115,11 @@ pub(crate) struct SourceData {
     ///
     /// e.g. kafka offset or file location
     pub(crate) position: Option<i64>,
+
+    /// The time that the upstream source believes that the message was created
+    ///
+    /// Currently only applies to Kafka
+    pub(crate) upstream_time_millis: Option<i64>,
 }
 
 impl<K, V> SourceOutput<K, V>
@@ -121,11 +128,17 @@ where
     V: Data,
 {
     /// Build a new SourceOutput
-    pub fn new(key: K, value: V, position: Option<i64>) -> SourceOutput<K, V> {
+    pub fn new(
+        key: K,
+        value: V,
+        position: Option<i64>,
+        upstream_time_millis: Option<i64>,
+    ) -> SourceOutput<K, V> {
         SourceOutput {
             key,
             value,
             position,
+            upstream_time_millis,
         }
     }
 }
@@ -357,10 +370,26 @@ pub struct SourceMessage<Out> {
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
     pub offset: MzOffset,
+    /// The time that an external system first observed the message
+    ///
+    /// Milliseconds since the unix epoch
+    pub upstream_time_millis: Option<i64>,
     /// Optional key
     pub key: Option<Vec<u8>>,
     /// Optional payload
     pub payload: Option<Out>,
+}
+
+impl<Out> fmt::Debug for SourceMessage<Out> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SourceMessage")
+            .field("partition", &self.partition)
+            .field("offset", &self.offset)
+            .field("upstream_time_millis", &self.upstream_time_millis)
+            .field("key[present]", &self.key.is_some())
+            .field("payload[present]", &self.payload.is_some())
+            .finish()
+    }
 }
 
 /// Consistency information. Each partition contains information about
@@ -860,9 +889,12 @@ where
                     let ts = consistency_info.find_matching_rt_timestamp();
                     let ts_cap = cap.delayed(&ts);
                     for m in msgs {
-                        output
-                            .session(&ts_cap)
-                            .give(Ok(SourceOutput::new(m.0, m.1, Some(m.3))));
+                        output.session(&ts_cap).give(Ok(SourceOutput::new(
+                            m.0,
+                            m.1,
+                            Some(m.3),
+                            None, // upstream timestamps are normalized before they are persisted
+                        )));
                     }
 
                     // Yield to give downstream operators time to handle this data.
@@ -952,6 +984,7 @@ where
                                     key,
                                     out,
                                     Some(offset.offset),
+                                    message.upstream_time_millis,
                                 )));
 
                                 // Update ingestion metrics

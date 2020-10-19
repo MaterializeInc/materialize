@@ -72,6 +72,7 @@ where
             SourceOutput {
                 value,
                 position: index,
+                upstream_time_millis,
                 key: _,
             },
             r,
@@ -87,7 +88,7 @@ where
                 }
                 Envelope::Debezium(_) => {
                     if let Some(dbz_state) = dbz_state.as_mut() {
-                        dbz_state.extract(value, top_node, index)
+                        dbz_state.extract(value, top_node, index, upstream_time_millis)
                     } else {
                         Err(anyhow!(
                             "No debezium schema information -- could not decode row"
@@ -127,6 +128,7 @@ pub trait DecoderState {
         key: Row,
         bytes: &[u8],
         aux_num: Option<i64>,
+        upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     );
@@ -135,6 +137,7 @@ pub trait DecoderState {
         &mut self,
         bytes: &[u8],
         aux_num: Option<i64>,
+        upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     );
@@ -183,6 +186,7 @@ where
         key: Row,
         bytes: &[u8],
         line_no: Option<i64>,
+        _upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     ) {
@@ -198,6 +202,7 @@ where
         &mut self,
         bytes: &[u8],
         line_no: Option<i64>,
+        _upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     ) {
@@ -233,21 +238,21 @@ where
             move |input, output| {
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
-                    for ((key, source_data), time) in data.iter() {
-                        let (payload, aux_num) = (&source_data.value, source_data.position);
+                    for ((key, data), time) in data.iter() {
                         if key.is_empty() {
                             error!("{}", "Encountered empty key");
                             continue;
                         }
                         match key_decoder_state.decode_key(key) {
                             Ok(key) => {
-                                if payload.is_empty() {
+                                if data.value.is_empty() {
                                     session.give((key, None, *cap.time()));
                                 } else {
                                     value_decoder_state.give_key_value(
                                         key,
-                                        payload,
-                                        aux_num,
+                                        &data.value,
+                                        data.position,
+                                        data.upstream_time_millis,
                                         &mut session,
                                         *time,
                                     );
@@ -384,12 +389,14 @@ where
                     key: _,
                     value: payload,
                     position: aux_num,
+                    upstream_time_millis,
                 } in data.iter()
                 {
                     if !payload.is_empty() {
                         value_decoder_state.give_value(
                             payload,
                             *aux_num,
+                            *upstream_time_millis,
                             &mut session,
                             *cap.time(),
                         );
