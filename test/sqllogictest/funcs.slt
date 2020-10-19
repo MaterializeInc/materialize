@@ -517,3 +517,19 @@ query I
 SELECT array_lower(ARRAY[ARRAY[1, 2]], 2)
 ----
 1
+
+# Additional array_lower tests
+query I
+SELECT array_lower(ARRAY[[[9]]], 2)
+----
+1
+
+query I
+SELECT array_lower(ARRAY[[['a', 'b']]], 3)
+----
+1
+
+query I
+SELECT array_lower(ARRAY[[['a', 'b']]], 4)
+----
+NULL
