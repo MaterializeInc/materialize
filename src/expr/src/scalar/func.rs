@@ -3354,7 +3354,7 @@ fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     if i < 1 {
         return Datum::Null;
     }
-    match a.unwrap_array().elements().iter().nth(i as usize - 1) {
+    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
         Some(_) => Datum::Int64(1),
         None => Datum::Null,
     }
