@@ -1809,6 +1809,7 @@ pub enum BinaryFunc {
     ArrayContains,
     ArrayIndex,
     ArrayLower,
+    ArrayUpper,
 }
 
 impl BinaryFunc {
@@ -1923,6 +1924,7 @@ impl BinaryFunc {
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
             BinaryFunc::ArrayIndex => Ok(eager!(array_index)),
             BinaryFunc::ArrayLower => Ok(eager!(array_lower)),
+            BinaryFunc::ArrayUpper => Ok(eager!(array_upper)),
         }
     }
 
@@ -2063,7 +2065,7 @@ impl BinaryFunc {
                 .clone()
                 .nullable(true),
 
-            ListLengthMax { .. } | ArrayLower => ScalarType::Int64.nullable(true),
+            ListLengthMax { .. } | ArrayLower | ArrayUpper => ScalarType::Int64.nullable(true),
         }
     }
 
@@ -2194,7 +2196,8 @@ impl BinaryFunc {
             | MatchRegex { .. }
             | ArrayContains
             | ArrayIndex
-            | ArrayLower => true,
+            | ArrayLower
+            | ArrayUpper => true,
             MatchLikePattern
             | ToCharTimestamp
             | ToCharTimestampTz
@@ -2302,6 +2305,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
             BinaryFunc::ArrayIndex => f.write_str("array_index"),
             BinaryFunc::ArrayLower => f.write_str("array_lower"),
+            BinaryFunc::ArrayUpper => f.write_str("array_upper"),
         }
     }
 }
@@ -3356,6 +3360,17 @@ fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
     match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
         Some(_) => Datum::Int64(1),
+        None => Datum::Null,
+    }
+}
+
+fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Datum::Null;
+    }
+    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
+        Some(dim) => Datum::Int64(dim.length as i64),
         None => Datum::Null,
     }
 }
