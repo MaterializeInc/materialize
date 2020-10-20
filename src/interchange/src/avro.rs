@@ -1154,13 +1154,17 @@ struct DebeziumDeduplicationState {
     full: Option<TrackFull>,
 }
 
-/// If we need to deal debezium possibly going back after it hasn't seen things
+/// If we need to deal with debezium possibly going back after it hasn't seen things.
+/// During normal (non-snapshot) operation, we deduplicate based on binlog position: (pos, row), for MySQL.
+/// During the initial snapshot, (pos, row) values are all the same, but primary keys
+/// are unique and thus we can get deduplicate based on those.
 #[derive(Debug)]
 struct TrackFull {
     /// binlog filename to offset
     seen_offsets: HashMap<String, HashSet<(usize, usize)>>,
     seen_snapshot_keys: HashMap<String, HashSet<Row>>,
     key_indices: Option<Vec<usize>>,
+    /// Optimization to avoid re-allocating the row packer over and over when extracting the key..
     key_buf: RowPacker,
 }
 
@@ -1212,6 +1216,7 @@ impl DebeziumDeduplicationState {
             old_max_row: &'a usize,
             old_offset: &'a Option<i64>,
         }
+        // If in the initial snapshot, binlog (pos, row) is meaningless for detecting duplicates, since it is always the same.
         let should_skip = if is_snapshot {
             None
         } else {
@@ -1241,7 +1246,7 @@ impl DebeziumDeduplicationState {
         };
 
         match &mut self.full {
-            None => is_snapshot || should_skip.is_none(),
+            None => should_skip.is_none(), // Always none if in snapshot, see comment above where `should_skip` is bound.
             Some(TrackFull {
                 seen_offsets,
                 seen_snapshot_keys,
@@ -1258,7 +1263,7 @@ impl DebeziumDeduplicationState {
                     };
                     let mut row_iter = match update.after.as_ref() {
                         None => {
-                            error!("Snapshot row was unexpectedly not an insert.");
+                            error!("Snapshot row at pos {:?}, time {:?} was unexpectedly not an insert.", coord, upstream_time_millis);
                             return false;
                         }
                         Some(r) => r.iter(),
@@ -1666,7 +1671,6 @@ impl Decoder {
             // Unwrap is OK: we assert in Decoder::new that this is non-none when envelope == dbz.
             let dedup = self.debezium_dedup.as_mut().unwrap();
             let (diff, coords) = dsr.deserialize(&mut bytes, dec)?;
-            let ss;
             let should_use = if let Some(source) = coords {
                 // This would have ideally been `Option<&str>`,
                 // but that can't be used to lookup in a `HashMap` of `Option<String>` without cloning.
@@ -1676,7 +1680,6 @@ impl Decoder {
                     RowCoordinates::MySql { .. } => std::str::from_utf8(&self.buf2)?,
                     RowCoordinates::Postgres { .. } => "",
                 };
-                ss = source.snapshot;
                 dedup.should_use_record(
                     file,
                     source.row,
@@ -1688,13 +1691,11 @@ impl Decoder {
                     &diff,
                 )
             } else {
-                ss = false;
                 true
             };
             if should_use {
                 diff
             } else {
-                eprintln!("Skipping diff: {:?}, ss {}", diff, ss);
                 DiffPair {
                     before: None,
                     after: None,

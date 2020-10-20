@@ -497,7 +497,6 @@ where
         .desc(envelope)
         .ok()
         .and_then(|desc| desc.typ().keys.get(0).cloned());
-    eprintln!("key_indices: {:#?}", key_indices);
     match (encoding, envelope) {
         (_, Envelope::Upsert(_)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
