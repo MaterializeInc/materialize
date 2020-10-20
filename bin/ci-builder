@@ -86,6 +86,7 @@ case "$cmd" in
     run)
         args=(
             --rm --interactive
+            --init
             --volume "$(pwd):$(pwd)"
             --workdir "$(pwd)"
             --env AWS_ACCESS_KEY_ID
