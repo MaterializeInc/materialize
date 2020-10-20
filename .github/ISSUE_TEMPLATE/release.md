@@ -107,10 +107,10 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 - [ ] Let the tests run for at least 24 hours, with the following success criteria:
 
-  - [ ] Chbench should not have slower ingest than the previous release.
-  - [ ] The billing-demo container should run and finish without error.
-  - [ ] The "Time behind external source" dashboard panel in Grafana should have
-    remained at 0ms or similar for the entirety of the run.
+  - [ ] chbench: The ingest rate should not be slower than the previous release.
+  - [ ] billing-demo: The container should run and finish without error.
+  - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
+    have remained at 0ms or similar for the entirety of the run.
 
 - [ ] Let the chaos tests run for 24 hours, with the following success criteria:
 
