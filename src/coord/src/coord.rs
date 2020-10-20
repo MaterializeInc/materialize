@@ -105,6 +105,7 @@ pub enum Message {
 #[derive(Clone, Debug)]
 pub struct LoggingConfig {
     pub granularity: Duration,
+    pub log_logging: bool,
 }
 
 pub struct Config<'a, C>
@@ -2993,6 +2994,7 @@ where
                     .logs()
                     .map(|src| (src.variant.clone(), src.index_id))
                     .collect(),
+                log_logging: config.log_logging,
             }),
         )
         .await;

@@ -19,6 +19,8 @@ use repr::{RelationDesc, ScalarType};
 pub struct LoggingConfig {
     pub granularity_ns: u128,
     pub active_logs: HashMap<LogVariant, GlobalId>,
+    // Whether we should report logs for the log-processing dataflows
+    pub log_logging: bool,
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
