@@ -96,6 +96,7 @@ fn run() -> Result<(), anyhow::Error> {
         "dataflow logging granularity (default 1s)",
         "DURATION/\"off\"",
     );
+    opts.optflag("", "debug-timely-logging", "(internal use only)");
     opts.optopt(
         "",
         "logical-compaction-window",
@@ -236,6 +237,7 @@ fn run() -> Result<(), anyhow::Error> {
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
     };
+    let log_logging = popts.opt_present("debug-timely-logging");
     let logical_compaction_window = match popts.opt_str("logical-compaction-window").as_deref() {
         None => Some(Duration::from_secs(60)),
         Some("off") => None,
@@ -287,7 +289,10 @@ fn run() -> Result<(), anyhow::Error> {
         None
     };
 
-    let logging = logging_granularity.map(|granularity| coord::LoggingConfig { granularity });
+    let logging = logging_granularity.map(|granularity| coord::LoggingConfig {
+        granularity,
+        log_logging,
+    });
 
     // If --disable-telemetry is present, disable telemetry. Otherwise, if a
     // MZ_TELEMETRY_URL environment variable is set, use that as the telemetry

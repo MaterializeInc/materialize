@@ -75,7 +75,10 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
     let inner = runtime.block_on(materialized::serve(materialized::Config {
         logging: config
             .logging_granularity
-            .map(|granularity| coord::LoggingConfig { granularity }),
+            .map(|granularity| coord::LoggingConfig {
+                granularity,
+                log_logging: false,
+            }),
         timestamp_frequency: Duration::from_millis(10),
         persistence: None,
         logical_compaction_window: None,
