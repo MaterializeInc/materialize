@@ -1419,8 +1419,9 @@ where
                 id,
                 ts,
                 with_snapshot,
+                format,
             } => tx.send(
-                self.sequence_tail(session.conn_id(), id, with_snapshot, ts)
+                self.sequence_tail(session.conn_id(), id, with_snapshot, ts, format)
                     .await,
                 session,
             ),
@@ -2024,6 +2025,7 @@ where
         source_id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
+        format: pgrepr::Format,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
@@ -2049,7 +2051,7 @@ where
             }),
         ))
         .await;
-        Ok(ExecuteResponse::Tailing { rx })
+        Ok(ExecuteResponse::Tailing { rx, format })
     }
 
     /// Extracts an optional projection around an optional filter.

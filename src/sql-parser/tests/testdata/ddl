@@ -682,28 +682,44 @@ TAIL foo.bar
 ----
 TAIL foo.bar WITH SNAPSHOT
 =>
-Tail(TailStatement { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: true, as_of: None })
+Tail(TailStatement { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: true, as_of: None, format: Text })
 
 parse-statement
 TAIL foo.bar AS OF 123
 ----
 TAIL foo.bar WITH SNAPSHOT AS OF 123
 =>
-Tail(TailStatement { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: true, as_of: Some(Value(Number("123"))) })
+Tail(TailStatement { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: true, as_of: Some(Value(Number("123"))), format: Text })
 
 parse-statement
 TAIL foo.bar AS OF now()
 ----
 TAIL foo.bar WITH SNAPSHOT AS OF now()
 =>
-Tail(TailStatement { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: true, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) })
+Tail(TailStatement { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: true, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })), format: Text })
 
 parse-statement
 TAIL foo.bar WITHOUT SNAPSHOT AS OF now()
 ----
 TAIL foo.bar WITHOUT SNAPSHOT AS OF now()
 =>
-Tail(TailStatement { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: false, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) })
+Tail(TailStatement { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: false, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })), format: Text })
+
+parse-statement
+TAIL foo.bar WITHOUT SNAPSHOT AS OF 1 + 1 FORMAT BINARY
+----
+TAIL foo.bar WITHOUT SNAPSHOT AS OF 1 + 1
+=>
+Tail(TailStatement { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: false, as_of: Some(BinaryOp { left: Value(Number("1")), op: Plus, right: Value(Number("1")) }), format: Binary })
+
+parse-statement
+TAIL foo.bar FORMAT blah
+----
+error:
+Parse error:
+TAIL foo.bar FORMAT blah
+                    ^^^^
+Expected one of TEXT or BINARY, found: blah
 
 parse-statement
 CREATE TABLE public.customer (

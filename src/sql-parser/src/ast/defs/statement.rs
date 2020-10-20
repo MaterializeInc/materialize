@@ -907,6 +907,7 @@ pub struct TailStatement {
     pub name: ObjectName,
     pub with_snapshot: bool,
     pub as_of: Option<Expr>,
+    pub format: TailFormat,
 }
 
 impl AstDisplay for TailStatement {
@@ -926,6 +927,12 @@ impl AstDisplay for TailStatement {
     }
 }
 impl_display!(TailStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TailFormat {
+    Text,
+    Binary,
+}
 
 /// `EXPLAIN ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

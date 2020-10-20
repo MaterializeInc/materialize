@@ -132,6 +132,7 @@ pub enum Plan {
         id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
+        format: pgrepr::Format,
     },
     SendRows(Vec<Row>),
     ExplainPlan {

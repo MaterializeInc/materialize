@@ -151,6 +151,7 @@ pub enum ExecuteResponse {
     /// contained receiver.
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
+        format: pgrepr::Format,
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),

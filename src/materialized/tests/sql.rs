@@ -23,6 +23,9 @@ use std::thread;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use postgres::binary_copy::BinaryCopyOutIter;
+use postgres::fallible_iterator::FallibleIterator;
+use postgres::types::Type;
 
 pub mod util;
 
@@ -118,7 +121,7 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
     fn extract_ts(data: &[u8]) -> Result<u64, Box<dyn Error>> {
         Ok(str::from_utf8(data)?
             .split_whitespace()
-            .last()
+            .next()
             .unwrap()
             .parse()?)
     }
@@ -139,17 +142,17 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
 
     append(b"City 1,ST,00001\n")?;
     let next = tail_reader.next().unwrap()?;
-    assert!(next.starts_with(&b"City 1\tST\t00001\t1\tDiff: 1 at "[..]));
+    assert!(next.ends_with(&b"City 1\tST\t00001\t1\t1"[..]));
     events.push((extract_ts(&next).unwrap(), next.clone()));
 
     append(b"City 2,ST,00002\n")?;
     let next = tail_reader.next().unwrap()?;
-    assert!(next.starts_with(&b"City 2\tST\t00002\t2\tDiff: 1 at "[..]));
+    assert!(next.ends_with(&b"City 2\tST\t00002\t2\t1"[..]));
     events.push((extract_ts(&next).unwrap(), next.clone()));
 
     append(b"City 3,ST,00003\n")?;
     let next = tail_reader.next().unwrap()?;
-    assert!(next.starts_with(&b"City 3\tST\t00003\t3\tDiff: 1 at "[..]));
+    assert!(next.ends_with(&b"City 3\tST\t00003\t3\t1"[..]));
     events.push((extract_ts(&next).unwrap(), next.clone()));
 
     // The tail won't end until a cancellation request is sent.
@@ -208,6 +211,49 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
     thread::sleep(Duration::from_millis(100));
     append(b"Glendale,AZ,85310\n")?;
     thread::sleep(Duration::from_millis(100));
+    Ok(())
+}
+
+#[test]
+fn test_tail_binary() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default();
+    let (server, mut client) = util::start_server(config)?;
+
+    let mut insert_client = server.connect()?;
+    insert_client.batch_execute(
+        "
+        CREATE TABLE cities (name text, pop int8);
+        INSERT INTO cities VALUES ('New York, NY', 8336817::int8)
+    ",
+    )?;
+
+    // Test the TAIL SQL command on the tailed file source. This is end-to-end
+    // tailing: changes to the file will propagate through Materialize and
+    // into the user's SQL console.
+    let cancel_token = client.cancel_token();
+    let mut tail_reader = BinaryCopyOutIter::new(
+        client.copy_out("TAIL cities FORMAT BINARY")?,
+        &[Type::INT8, Type::TEXT, Type::INT8, Type::INT8],
+    );
+
+    let row = tail_reader.next()?.unwrap();
+    assert_eq!(row.get::<String>(1), "New York, NY");
+    assert_eq!(row.get::<i64>(2), 8336817);
+    assert_eq!(row.get::<i64>(3), 1); // diff
+
+    insert_client.batch_execute("INSERT INTO cities VALUES ('Rochester, NY', 206284::int8)")?;
+    let row = tail_reader.next()?.unwrap();
+    assert_eq!(row.get::<String>(1), "Rochester, NY");
+    assert_eq!(row.get::<i64>(2), 206284);
+    assert_eq!(row.get::<i64>(3), 1); // diff
+
+    // The tail won't end until a cancellation request is sent.
+    cancel_token.cancel_query(postgres::NoTls)?;
+
+    drop(tail_reader);
+
     Ok(())
 }
 
@@ -272,13 +318,13 @@ fn test_tail_unmaterialized() -> Result<(), Box<dyn Error>> {
     assert!(tail_reader
         .next()
         .unwrap()?
-        .starts_with(&b"City 1\tST\t00001\t1\tDiff: 1 at "[..]));
+        .ends_with(&b"City 1\tST\t00001\t1\t1"[..]));
 
     append(b"City 2,ST,00002\n")?;
     assert!(tail_reader
         .next()
         .unwrap()?
-        .starts_with(&b"City 2\tST\t00002\t2\tDiff: 1 at "[..]));
+        .ends_with(&b"City 2\tST\t00002\t2\t1"[..]));
 
     // The tail won't end until a cancellation request is sent.
     cancel_token.cancel_query(postgres::NoTls)?;

@@ -3170,10 +3170,20 @@ impl Parser {
             true
         };
         let as_of = self.parse_optional_as_of()?;
+        let format = if self.parse_keyword("FORMAT") {
+            match self.expect_one_of_keywords(&["TEXT", "BINARY"])? {
+                "TEXT" => TailFormat::Text,
+                "BINARY" => TailFormat::Binary,
+                _ => unreachable!(),
+            }
+        } else {
+            TailFormat::Text
+        };
         Ok(Statement::Tail(TailStatement {
             name,
             with_snapshot,
             as_of,
+            format,
         }))
     }
 

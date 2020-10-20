@@ -699,10 +699,10 @@ where
             ExecuteResponse::StartedTransaction => command_complete!("BEGIN"),
             ExecuteResponse::CommittedTransaction => command_complete!("COMMIT"),
             ExecuteResponse::AbortedTransaction => command_complete!("ROLLBACK"),
-            ExecuteResponse::Tailing { rx } => {
+            ExecuteResponse::Tailing { rx, format } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::Tailing");
-                self.stream_rows(row_desc, rx).await
+                self.stream_rows(row_desc, rx, format).await
             }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
@@ -798,14 +798,15 @@ where
         &mut self,
         row_desc: RelationDesc,
         mut rx: comm::mpsc::Receiver<Vec<Update>>,
+        format: pgrepr::Format,
     ) -> Result<State, comm::Error> {
         let typ = row_desc.typ();
-        let column_formats = iter::repeat(pgrepr::Format::Text)
-            .take(typ.column_types.len())
+        let column_formats = iter::repeat(format)
+            .take(typ.column_types.len() + 2)
             .collect();
         self.conn
             .send(BackendMessage::CopyOutResponse {
-                overall_format: pgrepr::Format::Text,
+                overall_format: format,
                 column_formats,
             })
             .await?;
@@ -815,14 +816,26 @@ where
             match time::timeout(Duration::from_secs(1), rx.next()).await {
                 Ok(None) => break,
                 Ok(Some(updates)) => {
-                    let updates = updates?;
-                    count += updates.len();
-                    for update in updates {
-                        self.conn
-                            .send(BackendMessage::CopyData(message::encode_update(
-                                update, typ,
-                            )))
-                            .await?;
+                    for update in updates? {
+                        let data = match format {
+                            pgrepr::Format::Text => message::encode_update_text(update, typ),
+                            pgrepr::Format::Binary => {
+                                let mut data = vec![];
+                                if count == 0 {
+                                    // The first tuple must be preceded by the
+                                    // file header. Ideally we'd send this
+                                    // separately but for consistency with
+                                    // Postgres we need to shove it into the
+                                    // first CopyData message.
+                                    data.extend(b"PGCOPY\n\xff\r\n\0\0\0\0\0\0\0\0\0");
+                                }
+                                data.extend(message::encode_update_binary(update, typ));
+                                println!("data is {:?}", data);
+                                data
+                            }
+                        };
+                        self.conn.send(BackendMessage::CopyData(data)).await?;
+                        count += 1;
                     }
                 }
                 Err(time::Elapsed { .. }) => {
@@ -848,6 +861,11 @@ where
                 }
             }
             self.conn.flush().await?;
+        }
+
+        if let pgrepr::Format::Binary = format {
+            let trailer = (-1_i16).to_be_bytes().into();
+            self.conn.send(BackendMessage::CopyData(trailer)).await?;
         }
 
         let tag = format!("COPY {}", count);

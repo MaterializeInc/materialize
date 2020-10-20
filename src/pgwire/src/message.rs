@@ -7,11 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use bytes::BytesMut;
+use std::iter;
+
+use bytes::{BufMut, BytesMut};
 use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
 use dataflow_types::Update;
+use pgrepr::{Type, Value};
 use repr::{ColumnName, RelationDesc, RelationType, ScalarType};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -317,10 +320,13 @@ pub struct FieldDescription {
     pub format: pgrepr::Format,
 }
 
-pub fn encode_update(update: Update, typ: &RelationType) -> Vec<u8> {
+pub fn encode_update_text(update: Update, typ: &RelationType) -> Vec<u8> {
     let mut out = Vec::new();
     let mut buf = BytesMut::new();
-    for field in pgrepr::values_from_row(update.row, typ) {
+    let fields = iter::once(Some(Value::Int8(update.timestamp as i64)))
+        .chain(pgrepr::values_from_row(update.row, typ))
+        .chain(iter::once(Some(Value::Int8(update.diff as i64))));
+    for field in fields {
         match field {
             None => out.extend(b"\\N"),
             Some(field) => {
@@ -339,8 +345,35 @@ pub fn encode_update(update: Update, typ: &RelationType) -> Vec<u8> {
         }
         out.push(b'\t');
     }
-    out.extend(format!("Diff: {} at {}\n", update.diff, update.timestamp).bytes());
+    *out.last_mut().unwrap() = b'\n';
     out
+}
+
+pub fn encode_update_binary(update: Update, typ: &RelationType) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+    let fields = iter::once(Some(Value::Int8(update.timestamp as i64)))
+        .chain(pgrepr::values_from_row(update.row, typ))
+        .chain(iter::once(Some(Value::Int8(update.diff as i64))));
+    buf.put_i16((typ.column_types.len() + 2) as i16);
+    let typ = iter::once(Type::Int8)
+        .chain(
+            typ.column_types
+                .iter()
+                .map(|ty| pgrepr::Type::from(&ty.scalar_type)),
+        )
+        .chain(iter::once(Type::Int8));
+    for (field, ty) in fields.zip(typ) {
+        if let Some(field) = field {
+            let base = buf.len();
+            buf.put_u32(0);
+            field.encode_binary(&ty, &mut buf).unwrap();
+            let len = (buf.len() - base - 4) as i32;
+            buf[base..base + 4].copy_from_slice(&len.to_be_bytes());
+        } else {
+            buf.put_i32(-1);
+        }
+    }
+    buf.to_vec()
 }
 
 pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {

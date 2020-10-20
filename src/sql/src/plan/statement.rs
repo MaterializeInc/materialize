@@ -40,7 +40,7 @@ use sql_parser::ast::{
     DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
     Format, Ident, IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query,
     SelectStatement, SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption,
-    Statement, TailStatement, Value,
+    Statement, TailFormat, TailStatement, Value,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -320,6 +320,7 @@ fn handle_tail(
         name,
         as_of,
         with_snapshot,
+        format,
     }: TailStatement,
 ) -> Result<Plan, anyhow::Error> {
     let from = scx.resolve_item(name)?;
@@ -332,6 +333,10 @@ fn handle_tail(
                 id: entry.id(),
                 ts,
                 with_snapshot,
+                format: match format {
+                    TailFormat::Text => pgrepr::Format::Text,
+                    TailFormat::Binary => pgrepr::Format::Binary,
+                },
             })
         }
         CatalogItemType::Index | CatalogItemType::Sink => bail!(
