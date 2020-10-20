@@ -287,6 +287,8 @@ fn run() -> Result<(), anyhow::Error> {
         None
     };
 
+    let logging = logging_granularity.map(|granularity| coord::LoggingConfig { granularity });
+
     // If --disable-telemetry is present, disable telemetry. Otherwise, if a
     // MZ_TELEMETRY_URL environment variable is set, use that as the telemetry
     // URL. Otherwise (the defaults), enable the production server for release mode
@@ -397,7 +399,7 @@ environment:{}",
         threads,
         process,
         addresses,
-        logging_granularity,
+        logging,
         logical_compaction_window,
         timestamp_frequency,
         persistence,

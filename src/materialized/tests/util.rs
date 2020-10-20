@@ -73,7 +73,9 @@ impl Config {
 pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
     let mut runtime = Runtime::new()?;
     let inner = runtime.block_on(materialized::serve(materialized::Config {
-        logging_granularity: config.logging_granularity,
+        logging: config
+            .logging_granularity
+            .map(|granularity| coord::LoggingConfig { granularity }),
         timestamp_frequency: Duration::from_millis(10),
         persistence: None,
         logical_compaction_window: None,
