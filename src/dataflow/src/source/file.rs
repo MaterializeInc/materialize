@@ -339,12 +339,20 @@ pub fn read_file_task<Ctor, I, Out, Err>(
                 let mut w = match notify::RecommendedWatcher::new_raw(notice_tx) {
                     Ok(w) => w,
                     Err(err) => {
-                        error!("file source: failed to create notify watcher: {}", err);
+                        error!(
+                            "file source: failed to create notify watcher: {:#} (path: {})",
+                            err,
+                            path.display()
+                        );
                         return;
                     }
                 };
                 if let Err(err) = w.watch(&path, RecursiveMode::NonRecursive) {
-                    error!("file source: failed to add watch: {}", err);
+                    error!(
+                        "file source: failed to add watch for file: {:#} (path: {})",
+                        err,
+                        path.display()
+                    );
                     return;
                 }
                 (notice_rx, w)
