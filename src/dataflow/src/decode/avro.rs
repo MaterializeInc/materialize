@@ -24,6 +24,7 @@ pub struct AvroDecoderState {
 }
 
 impl AvroDecoderState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reader_schema: &str,
         schema_registry_config: Option<ccsr::ClientConfig>,
