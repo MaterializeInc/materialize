@@ -225,7 +225,6 @@ mzconduct:
           port: 6875
         - step: wait-for-mysql
           user: root
-          password: debezium
           timeout_secs: 30
         - step: drop-kafka-topics
           kafka-container: chbench_kafka_1
