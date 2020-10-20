@@ -10,7 +10,6 @@
 #![deny(missing_docs)]
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
 use std::fmt;
 
 use itertools::Itertools;
@@ -345,40 +344,16 @@ impl RelationExpr {
                 let input_mapper =
                     join_input_mapper::JoinInputMapper::new_from_input_types(&input_types);
 
-                // A relation's uniqueness constraint holds if there is a
-                // sequence of the other relations such that each one has
-                // a uniqueness constraint whose columns are used in join
-                // constraints with relations prior in the sequence.
-                //
-                // We are going to use the uniqueness constraints of the
-                // first relation, and attempt to use the presented order.
-                let mut column_with_prior_bound_by_input = vec![HashSet::new(); inputs.len() - 1];
-                for equivalence in equivalences {
-                    let min_bound_input = equivalence
+                let global_keys = input_mapper.global_keys(
+                    &input_types
                         .iter()
-                        .flat_map(|expr| input_mapper.lookup_inputs(expr).max())
-                        .min();
-                    if let Some(min_bound_input) = min_bound_input {
-                        for expr in equivalence {
-                            if let ScalarExpr::Column(c) = expr {
-                                let (col, input) = input_mapper.map_column_to_local(*c);
-                                if input > min_bound_input {
-                                    column_with_prior_bound_by_input[input - 1].insert(col);
-                                }
-                            }
-                        }
-                    }
-                }
-                let remains_unique = (1..inputs.len()).all(|index| {
-                    input_types[index].keys.iter().any(|ks| {
-                        ks.iter()
-                            .all(|k| column_with_prior_bound_by_input[index - 1].contains(k))
-                    })
-                });
-                if remains_unique && !inputs.is_empty() {
-                    for keys in input_types[0].keys.iter() {
-                        typ = typ.with_key(keys.clone());
-                    }
+                        .map(|t| t.keys.clone())
+                        .collect::<Vec<_>>(),
+                    equivalences,
+                );
+
+                for keys in global_keys {
+                    typ = typ.with_key(keys.clone());
                 }
                 typ
             }

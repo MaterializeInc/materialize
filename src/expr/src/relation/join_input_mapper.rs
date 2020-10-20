@@ -81,6 +81,67 @@ impl JoinInputMapper {
         self.arities.len()
     }
 
+    /// Using the keys that came from each local input,
+    /// figures out which keys remain unique in the larger join
+    /// Currently, we only figure out a small subset of the keys that
+    /// can remain unique.
+    pub fn global_keys(
+        &self,
+        local_keys: &[Vec<Vec<usize>>],
+        equivalences: &[Vec<ScalarExpr>],
+    ) -> Vec<Vec<usize>> {
+        // A relation's uniqueness constraint holds if there is a
+        // sequence of the other relations such that each one has
+        // a uniqueness constraint whose columns are used in join
+        // constraints with relations prior in the sequence.
+        //
+        // Currently, we only:
+        // 1. test for whether the uniqueness constraints for the first input will hold
+        // 2. try one sequence, namely the inputs in order
+        // 3. check that the column themselves are used in the join constraints
+        //    Technically uniqueness constraint would still hold if a 1-to-1
+        //    expression on a unique key is used in the join constraint.
+
+        // for inputs `1..self.total_inputs()`, store a set of columns from that
+        // input that exist in join constraints that have expressions belonging to
+        // earlier inputs.
+        let mut column_with_prior_bound_by_input = vec![HashSet::new(); self.total_inputs() - 1];
+        for equivalence in equivalences {
+            // do a scan to find the first input represented in the constraint
+            let min_bound_input = equivalence
+                .iter()
+                .flat_map(|expr| self.lookup_inputs(expr).max())
+                .min();
+            if let Some(min_bound_input) = min_bound_input {
+                for expr in equivalence {
+                    // then store all columns in the constraint that don't come
+                    // from the first input
+                    if let ScalarExpr::Column(c) = expr {
+                        let (col, input) = self.map_column_to_local(*c);
+                        if input > min_bound_input {
+                            column_with_prior_bound_by_input[input - 1].insert(col);
+                        }
+                    }
+                }
+            }
+        }
+
+        // for inputs `1..self.total_inputs()`, checks the keys belong to each
+        // input against the storage of columns that exist in join constraints
+        // that have expressions belonging to earlier inputs.
+        let remains_unique = local_keys.iter().skip(1).enumerate().all(|(index, keys)| {
+            keys.iter().any(|ks| {
+                ks.iter()
+                    .all(|k| column_with_prior_bound_by_input[index].contains(k))
+            })
+        });
+
+        if remains_unique && self.total_inputs() > 0 {
+            return local_keys[0].clone();
+        }
+        vec![]
+    }
+
     /// returns the arity for a particular input
     #[inline]
     pub fn input_arity(&self, index: usize) -> usize {
