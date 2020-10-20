@@ -1191,6 +1191,7 @@ impl DebeziumDeduplicationState {
     }
 
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     fn should_use_record(
         &mut self,
         file: &str,
