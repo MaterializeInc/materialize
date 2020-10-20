@@ -321,14 +321,14 @@ $ kafka-create-topic topic=misordered-dbz-data
 $ set new-dbz-key-schema={"type": "record", "name": "row", "fields": [{"name": "a", "type": "long"}]}
 
 $ kafka-ingest format=avro key-format=avro topic=misordered-dbz-data schema=${new-dbz-schema} key-schema=${new-dbz-key-schema} timestamp=1 publish=true
+{"a": 5} {"before": null, "after": {"row":{"a": 5, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "true"}}}
+{"a": 5} {"before": null, "after": {"row":{"a": 5, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "true"}}}
 {"a": 1} {"before": null, "after": {"row":{"a": 1, "b": 1}}, "source": {"file": "binlog", "pos": 2, "row": 0, "snapshot": {"string": "false"}}}
 {"a": 2} {"before": null, "after": {"row":{"a": 2, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "false"}}}
 {"a": -1} {"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"string": "false"}}}
 {"a": 2} {"before": null, "after": {"row":{"a": 2, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "false"}}}
 {"a": 1} {"before": null, "after": {"row":{"a": 1, "b": 1}}, "source": {"file": "binlog", "pos": 2, "row": 0, "snapshot": {"string": "false"}}}
 {"a": 3} {"before": null, "after": {"row":{"a": 3, "b": 4}}, "source": {"file": "binlog2", "pos": 2, "row": 0, "snapshot": {"string": "false"}}}
-{"a": 5} {"before": null, "after": {"row":{"a": 5, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "true"}}}
-{"a": 5} {"before": null, "after": {"row":{"a": 5, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "true"}}}
 
 > CREATE MATERIALIZED SOURCE misordered_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-misordered-dbz-data-${testdrive.seed}'
