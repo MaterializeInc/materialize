@@ -22,5 +22,10 @@
 
 > CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')
 
-> SELECT * from v
+> SELECT * FROM v
 4 values hashing to 7dd470c8470b085df13552e191a244ab
+
+> VALUES ('row', 1), ('row', 2)
+row 1
+# inline comment
+row 2

@@ -262,9 +262,13 @@ fn slurp_all(line_reader: &mut LineReader) -> Vec<String> {
 }
 
 fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
-    if let Some((_, line)) = line_reader.peek() {
+    while let Some((_, line)) = line_reader.peek() {
         match line.chars().next() {
-            Some('$') | Some('>') | Some('!') | Some('#') => return None,
+            Some('#') => {
+                // Comment line. Skip.
+                let _ = line_reader.next();
+            }
+            Some('$') | Some('>') | Some('!') => return None,
             Some('\\') => {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);
