@@ -72,15 +72,33 @@ curl -L https://downloads.mtrlz.dev/materialized-{{< version >}}-x86_64-unknown-
 
 ## Build from source
 
-Materialize is written in Rust and requires a recent Rust toolchain to build
-from source. Follow [Rust's getting started
-guide](https://www.rust-lang.org/learn/get-started) if you don't already have
-Rust installed.
+Materialize is written primarily in Rust, but incorporates several components
+written in C. To build Materialize, you will need to acquire the following
+tools:
 
-Then, to build your own `materialized` binary, you can clone the
-[`MaterializeInc/materialize` repo from GitHub](https://github.com/MaterializeInc/materialize),
-and build it using `cargo build`. Be sure to check out the tag for the correct
-release.
+  * A recent version of Git
+
+  * A C compiler that supports C11
+
+  * CMake v3.2+
+
+  * Rust v{{< rust-version >}}+
+
+Your system's package manager, like Homebrew on macOS or APT on Debian, likely
+contains sufficiently recent versions of Git, a C compiler, and CMake. However,
+we recommend installing Rust via [rustup]. rustup configures your system so that
+running `cargo build` in the Materialize repository will automatically download
+and use the correct version of Rust.
+
+{{< warning >}}
+Materialize requires a very recent version of Rust. The version of Rust
+available in your package manager is likely too old.
+{{< /warning >}}
+
+Once you've installed the prerequisites, to build your own `materialized`
+binary, you can clone the [`MaterializeInc/materialize` repo from
+GitHub][mz-repo], and build it using `cargo build`. Be sure to check out the tag
+for the correct release.
 
 ```shell
 git clone https://github.com/MaterializeInc/materialize.git
@@ -112,3 +130,6 @@ For more information, see [CLI Connections](/connect/cli/).
 {{< cta href="/get-started" >}}
 Next, let's get started with Materialize →
 {{</ cta >}}
+
+[Rustup]: https://rustup.rs
+[mz-repo]: https://github.com/MaterializeInc/materialize
