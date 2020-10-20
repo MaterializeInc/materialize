@@ -212,8 +212,12 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_class`](https://www.postgresql.org/docs/current/catalog-pg-class.html)
   * [`pg_database`](https://www.postgresql.org/docs/current/catalog-pg-database.html)
   * [`pg_description`](https://www.postgresql.org/docs/current/catalog-pg-description.html)
+  * [`pg_enum`](https://www.postgresql.org/docs/current/catalog-pg-enum.html)
   * [`pg_index`](https://www.postgresql.org/docs/current/catalog-pg-index.html)
   * [`pg_namespace`](https://www.postgresql.org/docs/current/catalog-pg-namespace.html)
+  * [`pg_proc`](https://www.postgresql.org/docs/current/catalog-pg-proc.html)
+  * [`pg_range`](https://www.postgresql.org/docs/current/catalog-pg-range.html)
+  * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
 
 These compatibility shims are largely incomplete. Most are lacking some columns
 that are present in PostgreSQL, or if they do include the column the result set

@@ -693,10 +693,65 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_attribute AS SELECT
     oid as attrelid,
     mz_columns.name as attname,
+    NULL::oid AS atttypid,
     position as attnum,
-    NOT nullable as attnotnull
+    NOT nullable as attnotnull,
+    FALSE as attisdropped
 FROM mz_catalog.mz_tables JOIN mz_catalog.mz_columns ON mz_tables.id = mz_columns.id",
     id: GlobalId::System(3020),
+    needs_logs: false,
+};
+
+pub const PG_TYPE: BuiltinView = BuiltinView {
+    name: "pg_type",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_type AS SELECT
+    NULL::oid AS oid,
+    NULL::text AS typname,
+    NULL::oid AS typnamespace,
+    NULL::text AS typtype,
+    NULL::oid AS typrelid,
+    NULL::oid AS typelem,
+    NULL::oid AS typreceive,
+    NULL::bool AS typnotnull,
+    NULL::oid AS typbasetype
+    WHERE false",
+    id: GlobalId::System(3021),
+    needs_logs: false,
+};
+
+pub const PG_PROC: BuiltinView = BuiltinView {
+    name: "pg_proc",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_proc AS SELECT
+    NULL::oid AS oid,
+    NULL::text AS proname
+    WHERE false",
+    id: GlobalId::System(3022),
+    needs_logs: false,
+};
+
+pub const PG_RANGE: BuiltinView = BuiltinView {
+    name: "pg_range",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_range AS SELECT
+    NULL::oid AS rngtypid,
+    NULL::oid AS rngsubtype
+    WHERE false",
+    id: GlobalId::System(3023),
+    needs_logs: false,
+};
+
+pub const PG_ENUM: BuiltinView = BuiltinView {
+    name: "pg_enum",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_enum AS SELECT
+    NULL::oid AS oid,
+    NULL::oid AS enumtypid,
+    NULL::float AS enumsortorder,
+    NULL::text AS enumlabel
+    WHERE false",
+    id: GlobalId::System(3024),
     needs_logs: false,
 };
 
@@ -750,6 +805,10 @@ lazy_static! {
             Builtin::View(&PG_INDEX),
             Builtin::View(&PG_DESCRIPTION),
             Builtin::View(&PG_ATTRIBUTE),
+            Builtin::View(&PG_TYPE),
+            Builtin::View(&PG_PROC),
+            Builtin::View(&PG_RANGE),
+            Builtin::View(&PG_ENUM),
         ];
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
