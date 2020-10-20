@@ -237,8 +237,8 @@ In a future iteration, we'll make this demo more interactive.
 
 ### Preparing the environment
 
-1. Start the Docker daemon for your machine, and [follow our Docker integration
-   guide](/third-party/docker).
+1. [Set up Docker and Docker compose](/third-party/docker), if you haven't
+   already.
 
 1. Verify that you have Python 3 or greater installed.
 
@@ -250,7 +250,7 @@ In a future iteration, we'll make this demo more interactive.
 1. Clone the Materialize repo:
 
     ```shell
-    git clone git@github.com:MaterializeInc/materialize.git
+    git clone https://github.com/MaterializeInc/materialize.git
     ```
 
 1. Move to the `demo/http_logs` dir:
@@ -262,15 +262,14 @@ In a future iteration, we'll make this demo more interactive.
     You can also find the demo's code on
     [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/http_logs).
 
-1. Deploy and start all of the components we've listed above.
+1. Download and start all of the components we've listed above by running:
 
-    Note that pulling down all of the Docker images necessary for the demo takes
-    some time (upwards of 3 minutes, even on very fast connections).
+   ```shell
+   ./mzcompose up
+   ```
 
-    ```shell
-    # Deploy the web server, load generator, and Materialize
-    ./mzcompose up
-    ```
+   Note that downloading the Docker images necessary for the demo can take quite
+   a bit of time (upwards of 3 minutes, even on very fast connections).
 
 ### Understanding sources & views
 

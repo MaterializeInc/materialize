@@ -111,31 +111,31 @@ Putting this all together, our deployment looks like this:
 
 ### Preparing the environment
 
-1. Start the Docker daemon for your machine, and [follow our Docker
-   configuration guide](/third-party/docker).
+1. [Set up Docker and Docker compose](/third-party/docker), if you haven't
+   already.
 
    **Note for macOS users:** Be sure to [increase Docker
    resources](/third-party/docker/#increase-docker-resources) to at least 2 CPUs
    and 8GB memory. Running Docker for Mac with less resources may cause the demo
    to fail.
 
-1. Clone the Materialize repo:
+1. Clone the Materialize repository:
 
     ```shell
-    git clone git@github.com:MaterializeInc/materialize.git
+    git clone https://github.com/MaterializeInc/materialize.git
     ```
 
-1. Deploy and start all of the components we've listed above.
+   You can also view the demo's code on
+   [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/chbench).
 
-    Note that pulling down all of the Docker images necessary for the demo takes
-    quite a bit of time (up to 10 minutes, even on very fast connections).
+1. Download and start all of the components we've listed above by running:
 
-    ```shell
-    bin/mzconduct run chbench --workflow demo-load
-    ```
+   ```shell
+   bin/mzconduct run chbench --workflow demo-load
+   ```
 
-    you can also find the demo's code on
-    [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/chbench).
+   Note that downloading the Docker images necessary for the demo can take quite
+   a bit of time (upwards of 10 minutes, even on very fast connections).
 
 ### Define sources & views
 
