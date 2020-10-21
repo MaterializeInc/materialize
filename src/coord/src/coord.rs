@@ -2406,13 +2406,13 @@ where
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
 
-        let statuses = self.catalog.transact(ops)?;
-        for status in &statuses {
-            match status {
-                catalog::OpStatus::CreatedDatabase { id, oid, name } => {
+        let events = self.catalog.transact(ops)?;
+        for event in &events {
+            match event {
+                catalog::Event::CreatedDatabase { id, oid, name } => {
                     self.report_database_update(*id, *oid, name, 1).await;
                 }
-                catalog::OpStatus::CreatedSchema {
+                catalog::Event::CreatedSchema {
                     database_id,
                     schema_id,
                     schema_name,
@@ -2421,7 +2421,7 @@ where
                     self.report_schema_update(*schema_id, *oid, Some(*database_id), schema_name, 1)
                         .await;
                 }
-                catalog::OpStatus::CreatedItem {
+                catalog::Event::CreatedItem {
                     schema_id,
                     id,
                     oid,
@@ -2454,7 +2454,7 @@ where
                         }
                     }
                 }
-                catalog::OpStatus::UpdatedItem {
+                catalog::Event::UpdatedItem {
                     schema_id,
                     id,
                     oid,
@@ -2496,10 +2496,10 @@ where
                         }
                     }
                 }
-                catalog::OpStatus::DroppedDatabase { id, oid, name } => {
+                catalog::Event::DroppedDatabase { id, oid, name } => {
                     self.report_database_update(*id, *oid, name, -1).await;
                 }
-                catalog::OpStatus::DroppedSchema {
+                catalog::Event::DroppedSchema {
                     database_id,
                     schema_id,
                     schema_name,
@@ -2514,7 +2514,7 @@ where
                     )
                     .await;
                 }
-                catalog::OpStatus::DroppedIndex { entry, nullable } => match entry.item() {
+                catalog::Event::DroppedIndex { entry, nullable } => match entry.item() {
                     CatalogItem::Index(index) => {
                         indexes_to_drop.push(entry.id());
                         self.report_index_update_inner(
@@ -2529,7 +2529,7 @@ where
                     }
                     _ => unreachable!("DroppedIndex for non-index item"),
                 },
-                catalog::OpStatus::DroppedItem { schema_id, entry } => {
+                catalog::Event::DroppedItem { schema_id, entry } => {
                     match entry.item() {
                         CatalogItem::Table(_) => {
                             sources_to_drop.push(entry.id());

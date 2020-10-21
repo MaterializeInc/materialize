@@ -791,7 +791,7 @@ impl Catalog {
         oid: u32,
         name: FullName,
         item: CatalogItem,
-    ) -> OpStatus {
+    ) -> Event {
         if !item.is_placeholder() {
             info!("create {} {} ({})", item.type_string(), name, id);
         }
@@ -834,7 +834,7 @@ impl Catalog {
         schema.items.insert(entry.name.item.clone(), entry.id);
         self.by_id.insert(entry.id, entry);
 
-        OpStatus::CreatedItem {
+        Event::CreatedItem {
             schema_id,
             id,
             oid,
@@ -944,7 +944,7 @@ impl Catalog {
         Ok(temporary_ids)
     }
 
-    pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<OpStatus>, Error> {
+    pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<Event>, Error> {
         trace!("transact: {:?}", ops);
 
         #[derive(Debug, Clone)]
@@ -1172,7 +1172,7 @@ impl Catalog {
                             schemas: BTreeMap::new(),
                         },
                     );
-                    OpStatus::CreatedDatabase { name, id, oid }
+                    Event::CreatedDatabase { name, id, oid }
                 }
 
                 Action::CreateSchema {
@@ -1191,7 +1191,7 @@ impl Catalog {
                             items: BTreeMap::new(),
                         },
                     );
-                    OpStatus::CreatedSchema {
+                    Event::CreatedSchema {
                         database_id: db.id,
                         schema_id: id,
                         schema_name,
@@ -1207,12 +1207,12 @@ impl Catalog {
                 } => self.insert_item(id, oid, name, item),
 
                 Action::DropDatabase { name } => match self.by_name.remove(&name) {
-                    Some(db) => OpStatus::DroppedDatabase {
+                    Some(db) => Event::DroppedDatabase {
                         name,
                         id: db.id,
                         oid: db.oid,
                     },
-                    None => OpStatus::NoOp,
+                    None => Event::NoOp,
                 },
 
                 Action::DropSchema {
@@ -1221,13 +1221,13 @@ impl Catalog {
                 } => {
                     let db = self.by_name.get_mut(&database_name).unwrap();
                     match db.schemas.remove(&schema_name) {
-                        Some(schema) => OpStatus::DroppedSchema {
+                        Some(schema) => Event::DroppedSchema {
                             database_id: db.id,
                             schema_id: schema.id,
                             schema_name,
                             oid: schema.oid,
                         },
-                        None => OpStatus::NoOp,
+                        None => Event::NoOp,
                     }
                 }
 
@@ -1274,13 +1274,13 @@ impl Catalog {
                                     .nullable
                             })
                             .collect();
-                        OpStatus::DroppedIndex {
+                        Event::DroppedIndex {
                             entry: metadata,
                             nullable,
                         }
                     } else {
                         self.indexes.remove(&id);
-                        OpStatus::DroppedItem {
+                        Event::DroppedItem {
                             schema_id,
                             entry: metadata,
                         }
@@ -1314,7 +1314,7 @@ impl Catalog {
                     self.by_id.insert(id, entry);
 
                     match from_name {
-                        Some(from_name) => OpStatus::UpdatedItem {
+                        Some(from_name) => Event::UpdatedItem {
                             schema_id,
                             id,
                             oid,
@@ -1322,7 +1322,7 @@ impl Catalog {
                             to_name,
                             item,
                         },
-                        None => OpStatus::NoOp, // If name didn't change, don't update system tables.
+                        None => Event::NoOp, // If name didn't change, don't update system tables.
                     }
                 }
             })
@@ -1565,7 +1565,7 @@ pub enum Op {
 }
 
 #[derive(Debug, Clone)]
-pub enum OpStatus {
+pub enum Event {
     CreatedDatabase {
         name: String,
         id: i64,
