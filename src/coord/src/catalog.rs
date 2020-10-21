@@ -345,10 +345,11 @@ impl CatalogEntry {
 }
 
 impl Catalog {
-    /// Opens or creates a `Catalog` that stores data at `path`. The
-    /// `initialize` callback will be invoked after database and schemas are
-    /// loaded but before any persisted user items are loaded.
-    pub fn open(config: Config) -> Result<Catalog, Error> {
+    /// Opens or creates a catalog that stores data at `path`.
+    ///
+    /// Returns the catalog and a list of events that describe the initial state
+    /// of the catalog.
+    pub fn open(config: Config) -> Result<(Catalog, Vec<Event>), Error> {
         let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
 
         let mut catalog = Catalog {
@@ -365,42 +366,49 @@ impl Catalog {
             oid_counter: FIRST_USER_OID,
             persistence_directory: config.persistence_directory,
         };
+        let mut events = vec![];
+
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
 
         let databases = catalog.storage().load_databases()?;
         for (id, name) in databases {
             let oid = catalog.allocate_oid()?;
             catalog.by_name.insert(
-                name,
+                name.clone(),
                 Database {
                     id,
                     oid,
                     schemas: BTreeMap::new(),
                 },
             );
+            events.push(Event::CreatedDatabase { name, id, oid });
         }
 
         let schemas = catalog.storage().load_schemas()?;
         for (id, database_name, schema_name) in schemas {
             let oid = catalog.allocate_oid()?;
-            let schemas = match database_name {
-                Some(database_name) => {
-                    &mut catalog
-                        .by_name
-                        .get_mut(&database_name)
-                        .expect("catalog out of sync")
-                        .schemas
-                }
-                None => &mut catalog.ambient_schemas,
+            let (database_id, schemas) = match database_name {
+                Some(database_name) => catalog
+                    .by_name
+                    .get_mut(&database_name)
+                    .map(|db| (Some(db.id), &mut db.schemas))
+                    .expect("catalog out of sync"),
+                None => (None, &mut catalog.ambient_schemas),
             };
             schemas.insert(
-                schema_name,
+                schema_name.clone(),
                 Schema {
                     id,
                     oid,
                     items: BTreeMap::new(),
                 },
             );
+            events.push(Event::CreatedSchema {
+                database_id,
+                schema_id: id,
+                schema_name,
+                oid,
+            })
         }
 
         for builtin in BUILTINS.values() {
@@ -413,7 +421,7 @@ impl Catalog {
                 Builtin::Log(log) if config.enable_logging => {
                     let index_name = format!("{}_primary_idx", log.name);
                     let oid = catalog.allocate_oid()?;
-                    catalog.insert_item(
+                    events.push(catalog.insert_item(
                         log.id,
                         oid,
                         name.clone(),
@@ -423,32 +431,34 @@ impl Catalog {
                             connector: dataflow_types::SourceConnector::Local,
                             desc: log.variant.desc(),
                         }),
-                    );
+                    ));
                     let oid = catalog.allocate_oid()?;
-                    catalog.insert_item(
-                        log.index_id,
-                        oid,
-                        FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: MZ_CATALOG_SCHEMA.into(),
-                            item: index_name.clone(),
-                        },
-                        CatalogItem::Index(Index {
-                            on: log.id,
-                            keys: log
-                                .variant
-                                .index_by()
-                                .into_iter()
-                                .map(ScalarExpr::Column)
-                                .collect(),
-                            create_sql: super::coord::index_sql(
-                                index_name,
-                                name,
-                                &log.variant.desc(),
-                                &log.variant.index_by(),
-                            ),
-                            plan_cx: PlanContext::default(),
-                        }),
+                    events.push(
+                        catalog.insert_item(
+                            log.index_id,
+                            oid,
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: MZ_CATALOG_SCHEMA.into(),
+                                item: index_name.clone(),
+                            },
+                            CatalogItem::Index(Index {
+                                on: log.id,
+                                keys: log
+                                    .variant
+                                    .index_by()
+                                    .into_iter()
+                                    .map(ScalarExpr::Column)
+                                    .collect(),
+                                create_sql: super::coord::index_sql(
+                                    index_name,
+                                    name,
+                                    &log.variant.desc(),
+                                    &log.variant.index_by(),
+                                ),
+                                plan_cx: PlanContext::default(),
+                            }),
+                        ),
                     );
                 }
 
@@ -462,7 +472,7 @@ impl Catalog {
                         &index_columns,
                     );
                     let oid = catalog.allocate_oid()?;
-                    catalog.insert_item(
+                    events.push(catalog.insert_item(
                         table.id,
                         oid,
                         name.clone(),
@@ -471,25 +481,27 @@ impl Catalog {
                             plan_cx: PlanContext::default(),
                             desc: table.desc.clone(),
                         }),
-                    );
+                    ));
                     let oid = catalog.allocate_oid()?;
-                    catalog.insert_item(
-                        table.index_id,
-                        oid,
-                        FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: MZ_CATALOG_SCHEMA.into(),
-                            item: index_name,
-                        },
-                        CatalogItem::Index(Index {
-                            on: table.id,
-                            keys: index_columns
-                                .iter()
-                                .map(|i| ScalarExpr::Column(*i))
-                                .collect(),
-                            create_sql: index_sql,
-                            plan_cx: PlanContext::default(),
-                        }),
+                    events.push(
+                        catalog.insert_item(
+                            table.index_id,
+                            oid,
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: MZ_CATALOG_SCHEMA.into(),
+                                item: index_name,
+                            },
+                            CatalogItem::Index(Index {
+                                on: table.id,
+                                keys: index_columns
+                                    .iter()
+                                    .map(|i| ScalarExpr::Column(*i))
+                                    .collect(),
+                                create_sql: index_sql,
+                                plan_cx: PlanContext::default(),
+                            }),
+                        ),
                     );
                 }
 
@@ -506,7 +518,7 @@ impl Catalog {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
-                    catalog.insert_item(view.id, oid, name, item);
+                    events.push(catalog.insert_item(view.id, oid, name, item));
                 }
 
                 _ => (),
@@ -537,10 +549,10 @@ impl Catalog {
                 }
             };
             let oid = catalog.allocate_oid()?;
-            catalog.insert_item(id, oid, name, item);
+            events.push(catalog.insert_item(id, oid, name, item));
         }
 
-        Ok(catalog)
+        Ok((catalog, events))
     }
 
     pub fn for_session(&self, session: &Session) -> ConnCatalog {
@@ -688,14 +700,6 @@ impl Catalog {
         &self.by_id[id]
     }
 
-    pub fn databases(&self) -> impl Iterator<Item = (&String, &Database)> {
-        self.by_name.iter()
-    }
-
-    pub fn ambient_schemas(&self) -> impl Iterator<Item = (&String, &Schema)> {
-        self.ambient_schemas.iter()
-    }
-
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
     pub fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
@@ -785,13 +789,14 @@ impl Catalog {
         }
     }
 
+    #[must_use]
     pub fn insert_item(
         &mut self,
         id: GlobalId,
         oid: u32,
         name: FullName,
         item: CatalogItem,
-    ) -> OpStatus {
+    ) -> Event {
         if !item.is_placeholder() {
             info!("create {} {} ({})", item.type_string(), name, id);
         }
@@ -834,7 +839,7 @@ impl Catalog {
         schema.items.insert(entry.name.item.clone(), entry.id);
         self.by_id.insert(entry.id, entry);
 
-        OpStatus::CreatedItem {
+        Event::CreatedItem {
             schema_id,
             id,
             oid,
@@ -944,7 +949,7 @@ impl Catalog {
         Ok(temporary_ids)
     }
 
-    pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<OpStatus>, Error> {
+    pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<Event>, Error> {
         trace!("transact: {:?}", ops);
 
         #[derive(Debug, Clone)]
@@ -1172,7 +1177,7 @@ impl Catalog {
                             schemas: BTreeMap::new(),
                         },
                     );
-                    OpStatus::CreatedDatabase { name, id, oid }
+                    Event::CreatedDatabase { name, id, oid }
                 }
 
                 Action::CreateSchema {
@@ -1191,8 +1196,8 @@ impl Catalog {
                             items: BTreeMap::new(),
                         },
                     );
-                    OpStatus::CreatedSchema {
-                        database_id: db.id,
+                    Event::CreatedSchema {
+                        database_id: Some(db.id),
                         schema_id: id,
                         schema_name,
                         oid,
@@ -1207,12 +1212,12 @@ impl Catalog {
                 } => self.insert_item(id, oid, name, item),
 
                 Action::DropDatabase { name } => match self.by_name.remove(&name) {
-                    Some(db) => OpStatus::DroppedDatabase {
+                    Some(db) => Event::DroppedDatabase {
                         name,
                         id: db.id,
                         oid: db.oid,
                     },
-                    None => OpStatus::NoOp,
+                    None => Event::NoOp,
                 },
 
                 Action::DropSchema {
@@ -1221,13 +1226,13 @@ impl Catalog {
                 } => {
                     let db = self.by_name.get_mut(&database_name).unwrap();
                     match db.schemas.remove(&schema_name) {
-                        Some(schema) => OpStatus::DroppedSchema {
+                        Some(schema) => Event::DroppedSchema {
                             database_id: db.id,
                             schema_id: schema.id,
                             schema_name,
                             oid: schema.oid,
                         },
-                        None => OpStatus::NoOp,
+                        None => Event::NoOp,
                     }
                 }
 
@@ -1274,13 +1279,13 @@ impl Catalog {
                                     .nullable
                             })
                             .collect();
-                        OpStatus::DroppedIndex {
+                        Event::DroppedIndex {
                             entry: metadata,
                             nullable,
                         }
                     } else {
                         self.indexes.remove(&id);
-                        OpStatus::DroppedItem {
+                        Event::DroppedItem {
                             schema_id,
                             entry: metadata,
                         }
@@ -1314,7 +1319,7 @@ impl Catalog {
                     self.by_id.insert(id, entry);
 
                     match from_name {
-                        Some(from_name) => OpStatus::UpdatedItem {
+                        Some(from_name) => Event::UpdatedItem {
                             schema_id,
                             id,
                             oid,
@@ -1322,7 +1327,7 @@ impl Catalog {
                             to_name,
                             item,
                         },
-                        None => OpStatus::NoOp, // If name didn't change, don't update system tables.
+                        None => Event::NoOp, // If name didn't change, don't update system tables.
                     }
                 }
             })
@@ -1422,11 +1427,6 @@ impl Catalog {
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })
-    }
-
-    /// Iterates over the items in the catalog in order of increasing ID.
-    pub fn iter(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.by_id.iter().map(|(_id, entry)| entry)
     }
 
     /// Returns a mapping that indicates all indices that are available for
@@ -1565,14 +1565,14 @@ pub enum Op {
 }
 
 #[derive(Debug, Clone)]
-pub enum OpStatus {
+pub enum Event {
     CreatedDatabase {
         name: String,
         id: i64,
         oid: u32,
     },
     CreatedSchema {
-        database_id: i64,
+        database_id: Option<i64>,
         schema_id: i64,
         schema_name: String,
         oid: u32,
@@ -1652,7 +1652,7 @@ impl From<PlanContext> for SerializedPlanContext {
 /// that the serialized state for two identical catalogs will compare
 /// identically.
 pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
-    let catalog = Catalog::open(Config {
+    let (catalog, _events) = Catalog::open(Config {
         path: Some(path),
         enable_logging: true,
         experimental_mode: None,
