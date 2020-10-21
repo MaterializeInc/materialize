@@ -1263,7 +1263,7 @@ impl DebeziumDeduplicationState {
                     };
                     let mut row_iter = match update.after.as_ref() {
                         None => {
-                            error!("Snapshot row at pos {:?}, time {:?} was unexpectedly not an insert.", coord, upstream_time_millis);
+                            error!("Snapshot row at pos {:?}, message_time={} in {} was unexpectedly not an insert.", coord, fmt_timestamp(upstream_time_millis), debug_name);
                             return false;
                         }
                         Some(r) => r.iter(),
@@ -1279,7 +1279,19 @@ impl DebeziumDeduplicationState {
                     };
 
                     if let Some(seen_keys) = seen_snapshot_keys.get_mut(file) {
-                        let is_new = seen_keys.insert(key);
+                        // Your reaction on reading this code might be:
+                        // "Ugh, we are cloning the key row just to support logging a warning!"
+                        // But don't worry -- since `Row`s use a 16-byte smallvec, the clone
+                        // won't involve an extra allocation unless the key overflows that.
+                        //
+                        // Anyway, TODO: avoid this via `get_or_insert` once rust-lang/#60896 is resolved.
+                        let is_new = seen_keys.insert(key.clone());
+                        if !is_new {
+                            warn!(
+                                "Snapshot row with key {:?} in {} seen multiple times (most recent message_time={})",
+                                key, debug_name, fmt_timestamp(upstream_time_millis)
+                            );
+                        }
                         is_new
                     } else {
                         let mut hs = HashSet::new();
