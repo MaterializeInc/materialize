@@ -713,6 +713,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "datadriven"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d7337e53bfa2d8e547c582c1141882bc3b500904bab157fca7b4fa6b6a5ff5a"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
@@ -1852,7 +1861,7 @@ dependencies = [
  "comm",
  "compile-time-run",
  "coord",
- "datadriven",
+ "datadriven 0.3.0",
  "dataflow",
  "dataflow-types",
  "fallible-iterator",
@@ -2563,7 +2572,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
- "datadriven",
+ "datadriven 0.3.0",
  "fallible-iterator",
  "getopts",
  "postgres",
@@ -3678,7 +3687,7 @@ name = "sql-parser"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "datadriven",
+ "datadriven 0.3.0",
  "lazy_static",
  "log",
  "matches",
@@ -4404,7 +4413,7 @@ name = "transform"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "datadriven",
+ "datadriven 0.4.0",
  "dataflow-types",
  "expr",
  "itertools",
@@ -4540,7 +4549,7 @@ name = "walkabout"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "datadriven",
+ "datadriven 0.3.0",
  "fstrings",
  "ore",
  "quote",

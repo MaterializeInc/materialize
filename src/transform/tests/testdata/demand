@@ -1,0 +1,87 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [bool bool])
+----
+ok
+
+build apply=Demand
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #2]])
+  [#1])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+| Project (#0)
+| Map dummy
+| Project (#0, #1)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| | demand = (#1)
+| Project (#1)
+----
+----
+
+build apply=Demand
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #3]])
+  [#1])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+| Project (#1)
+| Map dummy
+| Project (#1, #0)
+
+%2 =
+| Join %0 %1 (= #0 #3)
+| | implementation = Unimplemented
+| | demand = (#1)
+| Project (#1)
+----
+----
+
+opt
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #3]])
+  [#1])
+----
+----
+%0 =
+| Get x (u0)
+| ArrangeBy (#0)
+
+%1 =
+| Get x (u0)
+| Map dummy
+
+%2 =
+| Join %0 %1 (= #0 #3)
+| | implementation = Differential %1 %0.(#0)
+| Map dummy
+| Project (#1)
+----
+----

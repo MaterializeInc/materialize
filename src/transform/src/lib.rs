@@ -36,6 +36,7 @@ pub mod inline_let;
 pub mod join_elision;
 pub mod join_implementation;
 pub mod map_lifting;
+pub mod mfp_pushdown;
 pub mod nonnull_requirements;
 pub mod nonnullable;
 pub mod predicate_pushdown;
