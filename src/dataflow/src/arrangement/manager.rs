@@ -69,12 +69,12 @@ impl MaintenanceMetrics {
             doing_maintenance: DeleteOnDropGauge::new_with_error_handler(
                 DOING_MAINTENANCE.with_label_values(labels),
                 &DOING_MAINTENANCE,
-                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
             total_maintenance_time: DeleteOnDropCounter::new_with_error_handler(
                 TOTAL_MAINTENANCE_TIME.with_label_values(labels),
                 &TOTAL_MAINTENANCE_TIME,
-                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
         }
     }

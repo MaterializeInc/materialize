@@ -767,22 +767,22 @@ impl PartitionMetrics {
             offset_ingested: DeleteOnDropGauge::new_with_error_handler(
                 OFFSET_INGESTED.with_label_values(labels),
                 &OFFSET_INGESTED,
-                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
             offset_received: DeleteOnDropGauge::new_with_error_handler(
                 OFFSET_RECEIVED.with_label_values(labels),
                 &OFFSET_RECEIVED,
-                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
             closed_ts: DeleteOnDropGauge::new_with_error_handler(
                 CLOSED_TS.with_label_values(labels),
                 &CLOSED_TS,
-                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
             messages_ingested: DeleteOnDropCounter::new_with_error_handler(
                 MESSAGES_INGESTED.with_label_values(labels),
                 &MESSAGES_INGESTED,
-                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
         }
     }
