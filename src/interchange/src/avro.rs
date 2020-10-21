@@ -1263,7 +1263,7 @@ impl DebeziumDeduplicationState {
                     };
                     let mut row_iter = match update.after.as_ref() {
                         None => {
-                            error!("Snapshot row at pos {:?}, time {:?} in {} was unexpectedly not an insert.", coord, upstream_time_millis, debug_name);
+                            error!("Snapshot row at pos {:?}, time {} in {} was unexpectedly not an insert.", coord, fmt_timestamp(upstream_time_millis), debug_name);
                             return false;
                         }
                         Some(r) => r.iter(),
@@ -1288,8 +1288,8 @@ impl DebeziumDeduplicationState {
                         let is_new = seen_keys.insert(key.clone());
                         if !is_new {
                             warn!(
-                                "Snapshot row with key {:?} in {} seen multiple times",
-                                key, debug_name
+                                "Snapshot row with key {:?} in {} seen multiple times (most recently {})",
+                                key, debug_name, fmt_timestamp(upstream_time_millis)
                             );
                         }
                         is_new
