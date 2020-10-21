@@ -336,23 +336,23 @@ where
         let m_linked = std::rc::Rc::new(EventLink::new());
         let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
 
-        let mut t_traces = None;
-        let mut d_traces = None;
-        let mut m_traces = None;
+        let mut t_traces = HashMap::new();
+        let mut d_traces = HashMap::new();
+        let mut m_traces = HashMap::new();
 
         if !logging.log_logging {
             // Construct logging dataflows and endpoints before registering any.
-            t_traces = Some(logging::timely::construct(
+            t_traces.extend(logging::timely::construct(
                 &mut self.timely_worker,
                 logging,
                 t_linked.clone(),
             ));
-            d_traces = Some(logging::differential::construct(
+            d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
                 d_linked.clone(),
             ));
-            m_traces = Some(logging::materialized::construct(
+            m_traces.extend(logging::materialized::construct(
                 &mut self.timely_worker,
                 logging,
                 m_linked.clone(),
@@ -396,17 +396,17 @@ where
         if logging.log_logging {
             // Create log processing dataflows after registering logging so we can log the
             // logging.
-            t_traces = Some(logging::timely::construct(
+            t_traces.extend(logging::timely::construct(
                 &mut self.timely_worker,
                 logging,
                 t_linked,
             ));
-            d_traces = Some(logging::differential::construct(
+            d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
                 d_linked,
             ));
-            m_traces = Some(logging::materialized::construct(
+            m_traces.extend(logging::materialized::construct(
                 &mut self.timely_worker,
                 logging,
                 m_linked,
@@ -414,7 +414,7 @@ where
         }
 
         // Install traces as maintained indexes
-        for (log, (_, trace)) in t_traces.expect("known to exist") {
+        for (log, (_, trace)) in t_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
@@ -422,7 +422,7 @@ where
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace)) in d_traces.expect("known to exist") {
+        for (log, (_, trace)) in d_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
@@ -430,7 +430,7 @@ where
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
-        for (log, (_, trace)) in m_traces.expect("known to exist") {
+        for (log, (_, trace)) in m_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
