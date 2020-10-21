@@ -1146,9 +1146,29 @@ fn handle_create_source(
                 Some(Value::String(s)) => match s.as_str() {
                     "full" => DebeziumDeduplicationStrategy::Full,
                     "ordered" => DebeziumDeduplicationStrategy::Ordered,
-                    _ => bail!("deduplication must be either 'full' or 'ordered'."),
+                    "full_in_range" => {
+                        match (
+                            with_options.remove("deduplication_start"),
+                            with_options.remove("deduplication_end"),
+                        ) {
+                            (Some(Value::String(start)), Some(Value::String(end))) => {
+                                DebeziumDeduplicationStrategy::full_in_range(&start, &end).map_err(
+                                    |e| anyhow!("Unable to create deduplication strategy: {}", e),
+                                )?
+                            }
+                            (_, _) => bail!(
+                                "deduplication full_in_range requires both \
+                                 'deduplication_start' and 'deduplication_end' parameters"
+                            ),
+                        }
+                    }
+                    _ => {
+                        bail!("deduplication must be one of 'ordered' 'full', or 'full_in_range'.")
+                    }
                 },
-                _ => bail!("deduplication must be either 'full' or 'ordered'."),
+                _ => bail!(
+                    "deduplication must be either one of 'ordered', 'full' or 'full_in_range'."
+                ),
             };
             dataflow_types::Envelope::Debezium(dedup_strat)
         }
