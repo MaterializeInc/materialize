@@ -206,23 +206,24 @@ where
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
-    async fn bootstrap(&mut self) -> Result<(), anyhow::Error> {
-        let catalog_entries: Vec<_> = self
-            .catalog
+    async fn bootstrap(&mut self, events: Vec<catalog::Event>) -> Result<(), anyhow::Error> {
+        let items: Vec<_> = events
             .iter()
-            .map(|entry| {
-                (
-                    entry.id(),
-                    entry.oid(),
-                    entry.name().clone(),
-                    entry.item().clone(),
-                )
+            .filter_map(|event| match event {
+                catalog::Event::CreatedItem {
+                    id,
+                    oid,
+                    name,
+                    item,
+                    ..
+                } => Some((id, oid, name, item)),
+                _ => None,
             })
             .collect();
 
         // Sources and indexes may be depended upon by other catalog items,
         // insert them first.
-        for (id, _, _, item) in &catalog_entries {
+        for &(id, _, _, item) in &items {
             match item {
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
@@ -253,7 +254,7 @@ where
             }
         }
 
-        for (id, oid, name, item) in &catalog_entries {
+        for &(id, oid, name, item) in &items {
             match item {
                 CatalogItem::Table(_) | CatalogItem::View(_) => (),
                 CatalogItem::Sink(sink) => {
@@ -277,134 +278,7 @@ where
             }
         }
 
-        let mut tables_to_report = HashMap::new();
-        let mut sources_to_report = HashMap::new();
-        let mut views_to_report = HashMap::new();
-        let mut sinks_to_report = HashMap::new();
-        for (id, oid, name, item) in catalog_entries {
-            if let Ok(desc) = item.desc(&name) {
-                self.report_column_updates(desc, id, 1).await?;
-            }
-            match item {
-                CatalogItem::Index(index) => {
-                    self.report_index_update(id, oid, &index, &name.item, 1)
-                        .await
-                }
-                CatalogItem::Table(_) => {
-                    tables_to_report.insert(id, oid);
-                }
-                CatalogItem::Source(_) => {
-                    sources_to_report.insert(id, oid);
-                }
-                CatalogItem::View(_) => {
-                    views_to_report.insert(id, oid);
-                }
-                CatalogItem::Sink(_) => {
-                    sinks_to_report.insert(id, oid);
-                }
-            }
-        }
-
-        // Insert initial named objects into system tables.
-        let dbs: Vec<(
-            String,
-            i64,
-            u32,
-            Vec<(String, i64, u32, Vec<(String, GlobalId)>)>,
-        )> = self
-            .catalog
-            .databases()
-            .map(|(name, database)| {
-                (
-                    name.to_string(),
-                    database.id,
-                    database.oid,
-                    database
-                        .schemas
-                        .iter()
-                        .map(|(schema_name, schema)| {
-                            (
-                                schema_name.to_string(),
-                                schema.id,
-                                schema.oid,
-                                schema
-                                    .items
-                                    .iter()
-                                    .map(|(name, id)| (name.clone(), *id))
-                                    .collect(),
-                            )
-                        })
-                        .collect(),
-                )
-            })
-            .collect();
-        for (database_name, database_id, database_oid, schemas) in dbs {
-            self.report_database_update(database_id, database_oid, &database_name, 1)
-                .await;
-
-            for (schema_name, schema_id, schema_oid, items) in schemas {
-                self.report_schema_update(
-                    schema_id,
-                    schema_oid,
-                    Some(database_id),
-                    &schema_name,
-                    1,
-                )
-                .await;
-
-                for (item_name, item_id) in items {
-                    if let Some(oid) = tables_to_report.remove(&item_id) {
-                        self.report_table_update(item_id, oid, schema_id, &item_name, 1)
-                            .await;
-                    } else if let Some(oid) = sources_to_report.remove(&item_id) {
-                        self.report_source_update(item_id, oid, schema_id, &item_name, 1)
-                            .await;
-                    } else if let Some(oid) = views_to_report.remove(&item_id) {
-                        self.report_view_update(item_id, oid, schema_id, &item_name, 1)
-                            .await;
-                    } else if let Some(oid) = sinks_to_report.remove(&item_id) {
-                        self.report_sink_update(item_id, oid, schema_id, &item_name, 1)
-                            .await;
-                    }
-                }
-            }
-        }
-        let ambient_schemas: Vec<(String, i64, u32, Vec<(String, GlobalId)>)> = self
-            .catalog
-            .ambient_schemas()
-            .map(|(schema_name, schema)| {
-                (
-                    schema_name.to_string(),
-                    schema.id,
-                    schema.oid,
-                    schema
-                        .items
-                        .iter()
-                        .map(|(name, id)| (name.clone(), *id))
-                        .collect(),
-                )
-            })
-            .collect();
-        for (schema_name, schema_id, schema_oid, items) in ambient_schemas {
-            self.report_schema_update(schema_id, schema_oid, None, &schema_name, 1)
-                .await;
-
-            for (item_name, item_id) in items {
-                if let Some(oid) = tables_to_report.remove(&item_id) {
-                    self.report_table_update(item_id, oid, schema_id, &item_name, 1)
-                        .await;
-                } else if let Some(oid) = sources_to_report.remove(&item_id) {
-                    self.report_source_update(item_id, oid, schema_id, &item_name, 1)
-                        .await;
-                } else if let Some(oid) = views_to_report.remove(&item_id) {
-                    self.report_view_update(item_id, oid, schema_id, &item_name, 1)
-                        .await;
-                } else if let Some(oid) = sinks_to_report.remove(&item_id) {
-                    self.report_sink_update(item_id, oid, schema_id, &item_name, 1)
-                        .await;
-                }
-            }
-        }
+        self.process_catalog_events(events).await?;
 
         // Announce primary and foreign key relationships.
         if self.logging_granularity.is_some() {
@@ -2402,11 +2276,18 @@ where
     }
 
     async fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), anyhow::Error> {
+        let events = self.catalog.transact(ops)?;
+        self.process_catalog_events(events).await
+    }
+
+    async fn process_catalog_events(
+        &mut self,
+        events: Vec<catalog::Event>,
+    ) -> Result<(), anyhow::Error> {
         let mut sources_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
 
-        let events = self.catalog.transact(ops)?;
         for event in &events {
             match event {
                 catalog::Event::CreatedDatabase { id, oid, name } => {
@@ -2418,7 +2299,7 @@ where
                     schema_name,
                     oid,
                 } => {
-                    self.report_schema_update(*schema_id, *oid, Some(*database_id), schema_name, 1)
+                    self.report_schema_update(*schema_id, *oid, *database_id, schema_name, 1)
                         .await;
                 }
                 catalog::Event::CreatedItem {
@@ -3023,7 +2904,7 @@ where
         };
 
         let catalog_path = data_directory.map(|d| d.join("catalog"));
-        let catalog = Catalog::open(catalog::Config {
+        let (catalog, initial_catalog_events) = Catalog::open(catalog::Config {
             path: catalog_path.as_deref(),
             experimental_mode: Some(experimental_mode),
             enable_logging: logging_granularity.is_some(),
@@ -3052,7 +2933,7 @@ where
             need_advance: true,
             transient_id_counter: 1,
         };
-        coord.bootstrap().await?;
+        coord.bootstrap(initial_catalog_events).await?;
         Ok((coord, cluster_id))
     };
     let (coord, cluster_id) = match coord.await {
