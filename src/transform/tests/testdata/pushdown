@@ -1,0 +1,501 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [bool bool])
+----
+ok
+
+cat
+(defsource y [bool bool bool bool])
+----
+ok
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(filter (get y) [true]) (filter (get y) [true])]
+    [[#1 #5]])
+  [#1 #0 #3])
+----
+----
+%0 =
+| Get y (u1)
+| Project (#0, #1, #3)
+| Filter true
+
+%1 =
+| Get y (u1)
+| Project (#1)
+| Filter true
+
+%2 =
+| Join %0 %1 (= #1 #3)
+| | implementation = Unimplemented
+| Project (#1, #0, #2)
+----
+----
+
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #3]])
+  [#1])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 #3)
+| | implementation = Unimplemented
+| Project (#1)
+----
+----
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #2]])
+  [#0 #2])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #2)
+----
+----
+
+# It should consolidate projects above an operator.
+
+build apply=ProjectionPushdown
+(project
+  (project
+    (get x)
+    [#0])
+  [#0])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+
+# Map
+
+build apply=ProjectionPushdown
+(project
+  (map
+    (get x)
+    [#1])
+  [#0])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+
+build apply=ProjectionPushdown
+(project
+  (map
+    (get x)
+    [#1])
+  [#0 #2])
+----
+%0 =
+| Get x (u0)
+| Map #1
+| Project (#0, #2)
+
+build apply=ProjectionPushdown
+(project
+  (map
+    (get x)
+    [#0])
+  [#0 #2])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| Map #0
+
+# Filter
+
+build apply=ProjectionPushdown
+(project
+  (filter
+    (get x)
+    [#0])
+  [#0])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| Filter #0
+
+build apply=ProjectionPushdown
+(project
+  (filter
+    (get x)
+    [#1])
+  [#1])
+----
+%0 =
+| Get x (u0)
+| Project (#1)
+| Filter #0
+
+build apply=ProjectionPushdown
+(project
+  (filter
+    (get x)
+    [#1])
+  [#0])
+----
+%0 =
+| Get x (u0)
+| Filter #1
+| Project (#0)
+
+# Constant
+
+build apply=ProjectionPushdown
+(project
+  (constant
+    [[1 2 3]
+     [4 5 6]]
+    [int64 int64 int64])
+  [#0])
+----
+%0 =
+| Constant (1) (4)
+
+# Union
+
+build apply=ProjectionPushdown
+(project
+  (union
+    [(get x)
+     (get x)])
+  [#0])
+----
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+
+%1 =
+| Get x (u0)
+| Project (#0)
+
+%2 =
+| Union %0 %1
+----
+----
+
+# FlatMap
+
+build apply=ProjectionPushdown
+(project
+  (flat-map
+    (get x)
+    generate_series_int32
+    [#0 #1])
+  [#1 #0]))
+----
+%0 =
+| Get x (u0)
+| FlatMap generate_series(#0, #1)
+| Project (#1, #0)
+
+build apply=ProjectionPushdown
+(project
+  (flat-map
+    (get x)
+    generate_series_int32
+    [#0 #0])
+  [#0]))
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| FlatMap generate_series(#0, #0)
+| Project (#0)
+
+build apply=ProjectionPushdown
+(project
+  (flat-map
+    (get x)
+    generate_series_int32
+    [#0 #0])
+  [#0 #2]))
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| FlatMap generate_series(#0, #0)
+
+# Join
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #2]])
+  [#0 #2])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #2)
+----
+----
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #2]])
+  [#1 #0 #2])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#1, #0, #2)
+----
+----
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #2]])
+  [#0 #2])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #2)
+----
+----
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x)
+     (union [(get x) (get x)])]
+    [[#0 #2]])
+  [#1 #0 #2])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+| Project (#0)
+
+%2 =
+| Get x (u0)
+| Project (#0)
+
+%3 =
+| Union %1 %2
+
+%4 =
+| Join %0 %3 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#1, #0, #2)
+----
+----
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #2]])
+  [#0 #2])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#0, #2)
+----
+----
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get y) (get y)]
+    [[#1 #4]])
+  [#0 #1 #3 #4])
+----
+----
+%0 =
+| Get y (u1)
+
+%1 =
+| Get y (u1)
+
+%2 =
+| Join %0 %1 (= #1 #4)
+| | implementation = Unimplemented
+| Project (#0, #1, #3, #4)
+----
+----
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #3]])
+  [#1])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 #3)
+| | implementation = Unimplemented
+| Project (#1)
+----
+----
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (get x) (get x)]
+    [[#0 #3 #5]])
+  [#1])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Get x (u0)
+
+%3 =
+| Join %0 %1 %2 (= #0 #3 #5)
+| | implementation = Unimplemented
+| Project (#1)
+----
+----
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (filter (get y) [true])]
+    [[#1 #4]])
+  [#1 #3])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get y (u1)
+| Project (#1, #2)
+| Filter true
+
+%2 =
+| Join %0 %1 (= #1 #3)
+| | implementation = Unimplemented
+| Project (#1, #2)
+----
+----
+
+# Reduce
+
+build apply=ProjectionPushdown
+(project
+  (reduce
+    (get x)
+    [#1]
+    [(sum_int32 #0)])
+  [#0 #1])
+----
+%0 =
+| Get x (u0)
+| Reduce group=(#1)
+| | agg sum(#0)
+
+build apply=ProjectionPushdown
+(project
+  (reduce
+    (get x)
+    [#0]
+    [(sum_int32 #0)])
+  [#0 #1])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| Reduce group=(#0)
+| | agg sum(#0)
+
+build apply=ProjectionPushdown
+(project
+  (reduce
+    (get x)
+    [#0]
+    [(sum_int32 #0)])
+  [#0])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| Reduce group=(#0)
+| | agg sum(#0)
+| Project (#0)

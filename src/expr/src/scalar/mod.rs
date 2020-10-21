@@ -193,6 +193,16 @@ impl ScalarExpr {
         });
     }
 
+    /// Rewrites column indices to the value that maps to them in `permutation`. `permutation` must
+    /// be sorted.
+    pub fn unpermute(&mut self, permutation: &[usize]) {
+        self.visit_mut(&mut |e| {
+            if let ScalarExpr::Column(old_i) = e {
+                *old_i = permutation.binary_search(old_i).unwrap();
+            }
+        });
+    }
+
     pub fn support(&self) -> HashSet<usize> {
         let mut support = HashSet::new();
         self.visit(&mut |e| {

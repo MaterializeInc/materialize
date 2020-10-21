@@ -90,7 +90,7 @@ impl JoinImplementation {
             // Here we conservatively use the rule that if sufficient arrangements exist we will
             // use a delta query. An arrangement is considered available if it is a global get
             // with columns present in `indexes`, if it is an `ArrangeBy` with the columns present,
-            // or a filter wrapped around either of these.
+            // or a filter or projection wrapped around either of these.
 
             let unique_keys = input_types
                 .into_iter()
@@ -100,12 +100,29 @@ impl JoinImplementation {
             for index in 0..inputs.len() {
                 // We can work around filters, as we can lift the predicates into the join execution.
                 let mut input = &mut inputs[index];
-                while let RelationExpr::Filter {
-                    input: inner,
-                    predicates: _,
-                } = input
-                {
-                    input = inner;
+                // while let RelationExpr::Filter {
+                //     input: inner,
+                //     predicates: _,
+                // } = input
+                // {
+                //     input = inner;
+                // }
+                loop {
+                    match input {
+                        RelationExpr::Filter {
+                            input: inner,
+                            predicates: _,
+                        } => {
+                            input = inner;
+                        }
+                        RelationExpr::Project {
+                            input: inner,
+                            outputs: _,
+                        } => {
+                            input = inner;
+                        }
+                        _ => break,
+                    }
                 }
                 // Get and ArrangeBy expressions contribute arrangements.
                 match input {
@@ -397,6 +414,7 @@ fn implement_arrangements<'a>(
     // Transform inputs[index] based on needed and available arrangements.
     // Specifically, lift intervening predicates if all arrangements exist.
     for (index, needed) in needed.iter_mut().enumerate() {
+        // needed is the set of arrangements we need for the input `index`
         needed.sort();
         needed.dedup();
         // We should lift any predicates, iff all arrangements are otherwise available.

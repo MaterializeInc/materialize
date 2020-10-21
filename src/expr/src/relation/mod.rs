@@ -476,17 +476,25 @@ impl RelationExpr {
 
     /// Retains only the columns specified by `output`.
     pub fn project(self, outputs: Vec<usize>) -> Self {
-        RelationExpr::Project {
-            input: Box::new(self),
-            outputs,
+        if outputs.len() == self.arity() && outputs.iter().enumerate().all(|(i, j)| i == *j) {
+            self
+        } else {
+            RelationExpr::Project {
+                input: Box::new(self),
+                outputs,
+            }
         }
     }
 
     /// Append to each row the results of applying elements of `scalar`.
     pub fn map(self, scalars: Vec<ScalarExpr>) -> Self {
-        RelationExpr::Map {
-            input: Box::new(self),
-            scalars,
+        if scalars.is_empty() {
+            self
+        } else {
+            RelationExpr::Map {
+                input: Box::new(self),
+                scalars,
+            }
         }
     }
 
@@ -505,9 +513,14 @@ impl RelationExpr {
     where
         I: IntoIterator<Item = ScalarExpr>,
     {
-        RelationExpr::Filter {
-            input: Box::new(self),
-            predicates: predicates.into_iter().collect(),
+        let preds: Vec<ScalarExpr> = predicates.into_iter().collect();
+        if preds.is_empty() {
+            self
+        } else {
+            RelationExpr::Filter {
+                input: Box::new(self),
+                predicates: preds,
+            }
         }
     }
 
@@ -602,6 +615,27 @@ impl RelationExpr {
             group_key: group_key.into_iter().map(ScalarExpr::Column).collect(),
             aggregates,
             monotonic: false,
+            expected_group_size,
+        }
+    }
+
+    /// Perform a key-wise reduction / aggregation.
+    ///
+    /// The `group_key` argument indicates columns in the input collection that should
+    /// be grouped, and `aggregates` lists aggregation functions each of which produces
+    /// one output column in addition to the keys.
+    pub fn reduce_scalars(
+        self,
+        group_key: Vec<ScalarExpr>,
+        aggregates: Vec<AggregateExpr>,
+        monotonic: bool,
+        expected_group_size: Option<usize>,
+    ) -> Self {
+        RelationExpr::Reduce {
+            input: Box::new(self),
+            group_key,
+            aggregates,
+            monotonic,
             expected_group_size,
         }
     }
