@@ -321,23 +321,23 @@ pub enum ParamType {
 impl ParamType {
     /// Does `self` accept arguments of type `t` without casting?
     fn accepts_type_directly(&self, t: &ScalarType) -> bool {
-        match (self, t) {
-            (ParamType::Plain(s), o) => *s == o.desaturate(),
-            (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => true,
-            (ParamType::ArrayAny, ScalarType::Array(_)) => true,
-            (ParamType::ArrayAny, _) => false,
+        use ParamType::*;
+        match self {
+            Any => true,
+            ArrayAny => matches!(t, ScalarType::Array(..)),
+            JsonbAny => matches!(t, ScalarType::Jsonb),
+            Plain(s) => *s == t.desaturate(),
+            StringAny => matches!(t, ScalarType::String),
         }
     }
 
-    /// Does `self` accept arguments of type `t` with an implicitly allowed cast?
-    fn accepts_type_implicitly(&self, from_type: &ScalarType) -> bool {
-        let cast_to = match self {
-            ParamType::Plain(s) => CastTo::Implicit(s.clone()),
-            ParamType::Any | ParamType::JsonbAny | ParamType::StringAny => return true,
-            ParamType::ArrayAny => return matches!(from_type, ScalarType::Array(_)),
-        };
-
-        typeconv::get_cast(from_type, &cast_to).is_some()
+    /// Does `self` accept arguments of type `t` with an implicitly allowed
+    /// cast?
+    fn accepts_type_implicitly(&self, t: &ScalarType) -> bool {
+        match self.get_cast_to_for_type(t) {
+            Ok(cast_to) => typeconv::get_cast(t, &cast_to).is_some(),
+            Err(..) => false,
+        }
     }
 
     /// Does `self` accept arguments of category `c`?
@@ -367,6 +367,30 @@ impl ParamType {
         } else {
             false
         }
+    }
+
+    /// Determines which, if any, [`CastTo`] value is appropriate to cast
+    /// `arg_type` to a [`ScalarType`] compatible with `self`.
+    fn get_cast_to_for_type(&self, arg_type: &ScalarType) -> Result<CastTo, anyhow::Error> {
+        use ParamType::*;
+        use ScalarType::*;
+
+        Ok(match self {
+            Plain(Decimal(..)) if matches!(arg_type, Decimal(..)) => {
+                CastTo::Implicit(arg_type.clone())
+            }
+            Plain(List(..)) if matches!(arg_type, List(..)) => CastTo::Implicit(arg_type.clone()),
+            Plain(s) => CastTo::Implicit(s.clone()),
+            // Reflexive cast because `self` accepts any type.
+            Any => CastTo::Implicit(arg_type.clone()),
+            JsonbAny => CastTo::JsonbAny,
+            StringAny => CastTo::Explicit(ScalarType::String),
+            ArrayAny if matches!(arg_type, Array(..)) => CastTo::Implicit(arg_type.clone()),
+            _ => bail!(
+                "arguments cannot be implicitly cast to any implementation's parameters; \
+                 try providing explicit casts"
+            ),
+        })
     }
 }
 
@@ -702,16 +726,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         };
         let arg = typeconv::plan_coerce(self.ecx, arg, coerce_to)?;
         let arg_type = self.ecx.scalar_type(&arg);
-        let cast_to = match typ {
-            ParamType::Plain(Decimal(..)) if matches!(arg_type, Decimal(..)) => return Ok(arg),
-            ParamType::Plain(List(..)) if matches!(arg_type, List(..)) => return Ok(arg),
-            ParamType::Plain(s) => CastTo::Implicit(s.clone()),
-            ParamType::Any => return Ok(arg),
-            ParamType::ArrayAny if matches!(arg_type, Array(..)) => return Ok(arg),
-            ParamType::ArrayAny => CastTo::Explicit(Array(Box::new(String))),
-            ParamType::JsonbAny => CastTo::JsonbAny,
-            ParamType::StringAny => CastTo::Explicit(String),
-        };
+        let cast_to = typ.get_cast_to_for_type(&arg_type)?;
         typeconv::plan_cast(self.ident, self.ecx, arg, cast_to)
     }
 }
