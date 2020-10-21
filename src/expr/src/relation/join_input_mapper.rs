@@ -107,6 +107,11 @@ impl JoinInputMapper {
             .collect()
     }
 
+    /// Remap column numbers from the local to the global context.
+    pub fn map_column_to_global(&self, column: usize, index: usize) -> usize {
+        column + self.prior_arities[index]
+    }
+
     /// Find the sorted, dedupped set of inputs an expression references
     pub fn lookup_inputs(&self, expr: &ScalarExpr) -> impl Iterator<Item = usize> {
         expr.support()

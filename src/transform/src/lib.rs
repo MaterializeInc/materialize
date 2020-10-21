@@ -41,6 +41,7 @@ pub mod nonnullable;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod projection_lifting;
+pub mod projection_pushdown;
 pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;
@@ -238,13 +239,13 @@ impl Default for Optimizer {
             Box::new(crate::reduction::FoldConstants),
             // TODO (wangandi): materialize#616 the FilterEqualLiteral transform
             // exists but is currently unevaluated with the new join implementations.
-
             // Implementation transformations
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::join_implementation::JoinImplementation),
+                    Box::new(crate::projection_pushdown::ProjectionPushdown),
                     Box::new(crate::fusion::filter::Filter),
                     Box::new(crate::demand::Demand),
                     Box::new(crate::map_lifting::LiteralLifting),
@@ -253,6 +254,7 @@ impl Default for Optimizer {
             Box::new(crate::reduction_pushdown::ReductionPushdown),
             Box::new(crate::cse::map::Map),
             Box::new(crate::projection_lifting::ProjectionLifting),
+            Box::new(crate::projection_pushdown::ProjectionPushdown),
             Box::new(crate::join_implementation::JoinImplementation),
             Box::new(crate::fusion::project::Project),
             Box::new(crate::reduction::FoldConstants),

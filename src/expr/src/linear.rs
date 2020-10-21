@@ -146,6 +146,11 @@ impl MapFilterProject {
         self
     }
 
+    pub fn apply(self, other: &MapFilterProject) -> MapFilterProject {
+        let (m, f, p) = other.as_map_filter_project();
+        self.map(m).filter(f).project(p)
+    }
+
     /// As the arguments to `Map`, `Filter`, and `Project` operators.
     ///
     /// In principle, this operator can be implemented as a sequence of
@@ -159,6 +164,10 @@ impl MapFilterProject {
             .collect::<Vec<_>>();
         let project = self.projection.clone();
         (map, filter, project)
+    }
+
+    pub fn arity(&self) -> usize {
+        self.projection.len()
     }
 
     /// Optimize the internal expression evaluation order.

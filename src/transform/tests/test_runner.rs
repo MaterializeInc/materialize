@@ -15,7 +15,6 @@ use anyhow::{anyhow, Error};
 /// various optimizations on them. It uses datadriven, so the output of each test can be rewritten
 /// by setting the REWRITE environment variable.
 /// TODO(justin):
-/// * It's currently missing a mechanism to run just a single test file
 /// * There is some duplication between this and the SQL planner
 /// * Not all operators supported (Reduce)
 
@@ -81,6 +80,7 @@ impl SexpParser {
             || ch == '-'
             || ch == '_'
             || ch == '#'
+            || ch == '+'
     }
 
     fn parse(&mut self) -> Result<Sexp, Error> {
@@ -130,7 +130,10 @@ impl SexpParser {
 mod tests {
     use super::{Sexp, SexpParser};
     use anyhow::{anyhow, bail, Error};
-    use expr::{GlobalId, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, ScalarExpr};
+    use expr::{
+        AggregateExpr, AggregateFunc, BinaryFunc, GlobalId, Id, IdHumanizer, JoinImplementation,
+        LocalId, RelationExpr, ScalarExpr, TableFunc,
+    };
     use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
     use std::collections::HashMap;
     use std::fmt::Write;
@@ -283,6 +286,13 @@ mod tests {
                     body: Box::new(body),
                 })
             }
+            // (flat-map <input> <func> [arguments])
+            "flat-map" => Ok(RelationExpr::FlatMap {
+                input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
+                func: get_table_func(&nth(&s, 2)?)?,
+                exprs: build_scalar_list(nth(&s, 3)?)?,
+                demand: None,
+            }),
             // (map <input> [expressions])
             "map" => Ok(RelationExpr::Map {
                 input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
@@ -387,6 +397,16 @@ mod tests {
                     .map(build_scalar_list)
                     .collect::<Result<Vec<Vec<ScalarExpr>>, Error>>()?,
             }),
+            // (reduce <input> [<grouping-exprs>] [<aggregations>])
+            "reduce" => Ok(RelationExpr::Reduce {
+                input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
+                group_key: build_scalar_list(nth(&s, 2)?)?,
+                aggregates: try_list(nth(&s, 3)?)?
+                    .into_iter()
+                    .map(build_aggregate)
+                    .collect::<Result<Vec<AggregateExpr>, Error>>()?,
+                monotonic: false,
+            }),
             // TODO(justin): add the rest of the operators.
             name => Err(anyhow!("expected {} to be a relational operator", name)),
         }
@@ -397,6 +417,18 @@ mod tests {
             .into_iter()
             .map(build_scalar)
             .collect::<Result<Vec<ScalarExpr>, Error>>()
+    }
+
+    fn build_aggregate(s: Sexp) -> Result<AggregateExpr, Error> {
+        // TODO(justin): support distinct.
+        let list = try_list(s)?;
+        let func = get_aggregate(&list[0])?;
+        let expr = build_scalar(list[1].clone())?;
+        Ok(AggregateExpr {
+            func,
+            expr,
+            distinct: false,
+        })
     }
 
     // TODO(justin): is there some way to re-use the sql parser/builder for this?
@@ -436,7 +468,14 @@ mod tests {
                     }
                 }
             },
-            s => Err(anyhow!("expected {} to be a scalar", s)),
+            Sexp::List(l) => match try_atom(&l[0])?.as_str() {
+                "+" => Ok(ScalarExpr::CallBinary {
+                    func: BinaryFunc::AddInt32,
+                    expr1: Box::new(build_scalar(l[1].clone())?),
+                    expr2: Box::new(build_scalar(l[2].clone())?),
+                }),
+                _ => Err(anyhow!("couldn't parse scalar: {:?}", l)),
+            },
         }
     }
 
@@ -454,6 +493,22 @@ mod tests {
             .collect::<Result<Vec<ColumnType>, Error>>()?;
 
         Ok(RelationType::new(col_types))
+    }
+
+    fn get_table_func(s: &Sexp) -> Result<TableFunc, Error> {
+        // TODO(justin): can this delegate to the planner?
+        match try_atom(s)?.as_str() {
+            "generate_series_int32" => Ok(TableFunc::GenerateSeriesInt32),
+            _ => Err(anyhow!("unknown table func {}", s)),
+        }
+    }
+
+    fn get_aggregate(s: &Sexp) -> Result<AggregateFunc, Error> {
+        // TODO(justin): can this delegate to the planner?
+        match try_atom(s)?.as_str() {
+            "sum_int32" => Ok(AggregateFunc::SumInt32),
+            _ => Err(anyhow!("unknown table func {}", s)),
+        }
     }
 
     fn handle_cat(s: Sexp, cat: &mut TestCatalog) -> Result<(), Error> {
@@ -567,6 +622,10 @@ mod tests {
         // transforms?
         match name {
             "PredicatePushdown" => Ok(Box::new(transform::predicate_pushdown::PredicatePushdown)),
+            "ProjectionPushdown" => {
+                Ok(Box::new(transform::projection_pushdown::ProjectionPushdown))
+            }
+            "Demand" => Ok(Box::new(transform::demand::Demand)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name
