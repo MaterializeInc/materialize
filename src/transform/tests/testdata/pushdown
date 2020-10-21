@@ -1,0 +1,213 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [bool bool])
+----
+ok
+
+# It should consolidate projects above an operator.
+
+build apply=ProjectionPushdown
+(project
+  (project
+    (get x)
+    [#0])
+  [#0])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+
+# Map
+
+build apply=ProjectionPushdown
+(project
+  (map
+    (get x)
+    [#1])
+  [#0])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+
+build apply=ProjectionPushdown
+(project
+  (map
+    (get x)
+    [#1])
+  [#0 #2])
+----
+%0 =
+| Get x (u0)
+| Map #1
+| Project (#0, #2)
+
+build apply=ProjectionPushdown
+(project
+  (map
+    (get x)
+    [#0])
+  [#0 #2])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| Map #0
+
+# Filter
+
+build apply=ProjectionPushdown
+(project
+  (filter
+    (get x)
+    [#0])
+  [#0])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| Filter #0
+
+build apply=ProjectionPushdown
+(project
+  (filter
+    (get x)
+    [#1])
+  [#0])
+----
+%0 =
+| Get x (u0)
+| Filter #1
+| Project (#0)
+
+# Constant
+
+build apply=ProjectionPushdown
+(project
+  (constant
+    [[1 2 3]
+     [4 5 6]]
+    [int64 int64 int64])
+  [#0])
+----
+%0 =
+| Constant (1) (4)
+
+# Union
+
+build apply=ProjectionPushdown
+(project
+  (union
+    [(get x)
+     (get x)])
+  [#0])
+----
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+
+%1 =
+| Get x (u0)
+| Project (#0)
+
+%2 =
+| Union %0 %1
+----
+----
+
+# FlatMap
+
+build apply=ProjectionPushdown
+(project
+  (flat-map
+    (get x)
+    generate_series_int32
+    [#0 #1])
+  [#1 #0]))
+----
+%0 =
+| Get x (u0)
+| FlatMap generate_series(#0, #1)
+| Project (#1, #0)
+
+build apply=ProjectionPushdown
+(project
+  (flat-map
+    (get x)
+    generate_series_int32
+    [#0 #0])
+  [#0]))
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| FlatMap generate_series(#0, #0)
+| Project (#0)
+
+build apply=ProjectionPushdown
+(project
+  (flat-map
+    (get x)
+    generate_series_int32
+    [#0 #0])
+  [#0 #2]))
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| FlatMap generate_series(#0, #0)
+
+# Join
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #2]])
+  [#0 #2])
+----
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+
+%1 =
+| Get x (u0)
+| Project (#0)
+
+%2 =
+| Join %0 %1 (= #0 #1)
+| | implementation = Unimplemented
+----
+----
+
+build apply=ProjectionPushdown
+(project
+  (join
+    [(get x) (get x)]
+    [[#0 #2]])
+  [#1 #0 #2])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+| Project (#0)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+| Project (#1, #0, #2)
+----
+----

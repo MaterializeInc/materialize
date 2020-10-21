@@ -41,6 +41,7 @@ pub mod nonnullable;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod projection_lifting;
+pub mod projection_pushdown;
 pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;

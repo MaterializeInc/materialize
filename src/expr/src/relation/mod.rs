@@ -507,17 +507,25 @@ impl RelationExpr {
 
     /// Retains only the columns specified by `output`.
     pub fn project(self, outputs: Vec<usize>) -> Self {
-        RelationExpr::Project {
-            input: Box::new(self),
-            outputs,
+        if outputs.len() == self.arity() && outputs.iter().enumerate().all(|(i, j)| i == *j) {
+            self
+        } else {
+            RelationExpr::Project {
+                input: Box::new(self),
+                outputs,
+            }
         }
     }
 
     /// Append to each row the results of applying elements of `scalar`.
     pub fn map(self, scalars: Vec<ScalarExpr>) -> Self {
-        RelationExpr::Map {
-            input: Box::new(self),
-            scalars,
+        if scalars.is_empty() {
+            self
+        } else {
+            RelationExpr::Map {
+                input: Box::new(self),
+                scalars,
+            }
         }
     }
 
@@ -536,9 +544,14 @@ impl RelationExpr {
     where
         I: IntoIterator<Item = ScalarExpr>,
     {
-        RelationExpr::Filter {
-            input: Box::new(self),
-            predicates: predicates.into_iter().collect(),
+        let preds: Vec<ScalarExpr> = predicates.into_iter().collect();
+        if preds.is_empty() {
+            self
+        } else {
+            RelationExpr::Filter {
+                input: Box::new(self),
+                predicates: preds,
+            }
         }
     }
 

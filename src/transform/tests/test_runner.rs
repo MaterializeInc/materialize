@@ -81,6 +81,7 @@ impl SexpParser {
             || ch == '-'
             || ch == '_'
             || ch == '#'
+            || ch == '+'
     }
 
     fn parse(&mut self) -> Result<Sexp, Error> {
@@ -130,7 +131,10 @@ impl SexpParser {
 mod tests {
     use super::{Sexp, SexpParser};
     use anyhow::{anyhow, bail, Error};
-    use expr::{GlobalId, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, ScalarExpr};
+    use expr::{
+        BinaryFunc, GlobalId, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
+        ScalarExpr, TableFunc,
+    };
     use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
     use std::collections::HashMap;
     use std::fmt::Write;
@@ -283,6 +287,13 @@ mod tests {
                     body: Box::new(body),
                 })
             }
+            // (flat-map <input> <func> [arguments])
+            "flat-map" => Ok(RelationExpr::FlatMap {
+                input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
+                func: get_table_func(&nth(&s, 2)?)?,
+                exprs: build_scalar_list(nth(&s, 3)?)?,
+                demand: None,
+            }),
             // (map <input> [expressions])
             "map" => Ok(RelationExpr::Map {
                 input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
@@ -436,7 +447,14 @@ mod tests {
                     }
                 }
             },
-            s => Err(anyhow!("expected {} to be a scalar", s)),
+            Sexp::List(l) => match try_atom(&l[0])?.as_str() {
+                "+" => Ok(ScalarExpr::CallBinary {
+                    func: BinaryFunc::AddInt32,
+                    expr1: Box::new(build_scalar(l[1].clone())?),
+                    expr2: Box::new(build_scalar(l[2].clone())?),
+                }),
+                _ => Err(anyhow!("couldn't parse scalar: {:?}", l)),
+            },
         }
     }
 
@@ -454,6 +472,14 @@ mod tests {
             .collect::<Result<Vec<ColumnType>, Error>>()?;
 
         Ok(RelationType::new(col_types))
+    }
+
+    fn get_table_func(s: &Sexp) -> Result<TableFunc, Error> {
+        // TODO(justin): can this delegate to the planner?
+        match try_atom(s)?.as_str() {
+            "generate_series_int32" => Ok(TableFunc::GenerateSeriesInt32),
+            _ => Err(anyhow!("unknown table func {}", s)),
+        }
     }
 
     fn handle_cat(s: Sexp, cat: &mut TestCatalog) -> Result<(), Error> {
@@ -567,6 +593,10 @@ mod tests {
         // transforms?
         match name {
             "PredicatePushdown" => Ok(Box::new(transform::predicate_pushdown::PredicatePushdown)),
+            "ProjectionPushdown" => {
+                Ok(Box::new(transform::projection_pushdown::ProjectionPushdown))
+            }
+            "Demand" => Ok(Box::new(transform::demand::Demand)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name
