@@ -39,6 +39,8 @@
 //! [eqf]: https://www.postgresql.org/docs/12/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
 //! [m]: https://www.postgresql.org/docs/12/protocol-message-formats.html#Parse
 
+use std::fmt;
+
 use repr::{RelationDesc, Row};
 use sql::ast::Statement;
 use sql::plan::Params;
@@ -93,7 +95,6 @@ impl PreparedStatement {
 }
 
 /// A portal represents the execution state of a running or runnable query.
-#[derive(Debug)]
 pub struct Portal {
     /// The name of the prepared statement that is bound to this portal.
     pub statement_name: String,
@@ -103,12 +104,34 @@ pub struct Portal {
     pub result_formats: Vec<pgrepr::Format>,
     /// The rows that have yet to be delivered to the client, if the portal is
     /// partially executed.
-    pub remaining_rows: Option<Vec<Row>>,
+    pub remaining_rows:
+        Option<Box<dyn futures::Stream<Item = Result<Vec<Row>, comm::Error>> + Send + Unpin>>,
 }
 
 impl Portal {
     /// Sets the remaining rows for this portal.
-    pub fn set_remaining_rows(&mut self, rows: Vec<Row>) {
+    pub fn set_remaining_rows(
+        &mut self,
+        rows: Box<dyn futures::Stream<Item = Result<Vec<Row>, comm::Error>> + Send + Unpin>,
+    ) {
         self.remaining_rows = Some(rows);
+    }
+}
+
+impl fmt::Debug for Portal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // self.remaining_rows does not implement Debug, so do a simple implementation
+        // ourselves.
+        let remaining_rows = if self.remaining_rows.is_some() {
+            Some("Stream")
+        } else {
+            None
+        };
+        f.debug_struct("Portal")
+            .field("statement_name", &self.statement_name)
+            .field("parameters", &self.parameters)
+            .field("result_formats", &self.result_formats)
+            .field("remaining_rows", &remaining_rows)
+            .finish()
     }
 }
