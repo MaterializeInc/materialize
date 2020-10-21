@@ -48,39 +48,55 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.5.0 %}}
 
-- Support [`CREATE TABLE`](/sql/create-table), [`DROP TABLE`](/sql/drop-table),
-  [`INSERT`](/sql/insert) and [`SHOW CREATE TABLE`](/sql/show-create-table).
+- Support tables via the new [`CREATE TABLE`](/sql/create-table), [`DROP
+  TABLE`](/sql/drop-table), [`INSERT`](/sql/insert) and [`SHOW CREATE
+  TABLE`](/sql/show-create-table) statements. Tables are conceptually similar to
+  a [source](/sql/create-source), but the data in a table is managed by
+  Materialize, rather than by Kafka or a filesystem.
+
+  Note that table data is currently ephemeral: data inserted into a table does
+  not persist across restarts. We expect to add support for persistent table
+  data in a future release.
 
 - Generate a persistent, unique identifier associated with each cluster. This
   can be retrieved using the new [`mz_cluster_id`](/sql/functions#uuid-func) SQL
   function.
 
-- Permit qualifying function names in SQL queries with the name of the schema
-  and optionally the database to which the function belongs, as in
-  `pg_catalog.abs(-1)` {{% gh 4293 %}}.
+- Automatically check for new versions of Materialize on server startup. If a
+  new version is available, a warning will be logged encouraging you to upgrade.
 
-  While presently all built-in functions belong to the system `mz_catalog` or
-  `pg_catalog` schemas, this support improves compatibility with various
-  PostgreSQL tools that generate SQL queries with qualified function references.
+  This version check involves reporting the cluster ID and current version to a
+  server operated by Materialize Inc. To disable telemetry of this sort, use the
+  new [`--disable-telemetry` command-line option](/cli/).
 
-- Add support for the following psql meta commands: `\l`, `\d`, `\dv`, `\dt`, `\di`.
+- Add a web-based, interactive [memory usage visualization](/ops/monitoring#memory-usage-visualization) to aid in understanding and diagnosing
+  unexpected memory consumption.
 
-- Add support for the [`oid`](/sql/types/oid) type to represent PostgreSQL object IDs.
+- Add the [`lpad`](/sql/functions/#string-func) function, which extends a
+  string to a given length by prepending characters.
 
-- Add support for [array types](/sql/types/array) for compatibility with
-  PostgreSQL.
+- Improve PostgreSQL compatibility:
 
-- Add the [`lpad`](/sql/functions/#string-func) function, which prepends
-  characters to fill a string to a given length.
+  - Permit qualifying function names in SQL queries with the name of the schema
+    and optionally the database to which the function belongs, as in
+    `pg_catalog.abs(-1)` {{% gh 4293 %}}.
 
-- Add `ENVELOPE MATERIALIZE`, which implements the [new CDC protocol](https://materialize.io/change-data-capture-part-1/).
+    Presently all built-in functions belong to the system `mz_catalog` or
+    `pg_catalog` schemas.
+
+  - Add an [`oid` type](/sql/types/oid) to represent PostgreSQL object IDs.
+
+  - Add basic support for [array types](/sql/types/array), including the new
+    [`array_to_string` function](/sql/functions#array-func).
+
+  - Add the  `current_schemas`, `obj_description`, `pg_table_is_visible`, and
+    `pg_encoding_to_char` [compatibility functions](/sql/functions#postgresql-compatibility-func).
+
+  Together these changes enable the `\l`, `\d`, `\dv`, `\dt`, `\di` commands
+  in the [psql terminal](/connect/cli).
 
 - Correct a query optimization that could misplan queries that referenced the
   same relation multiple times with varying filters {{% gh 4361 %}}.
-
-- Report the current version to a central server operated by
-  materialize.io. If a new version is available a warning will be
-  logged. This can be disabled with the `--disable-telemetry` option.
 
 - Rename the output columns for `SHOW` statements to match the PostgreSQL
   convention of using all lowercase characters with words separated by
@@ -90,7 +106,7 @@ Wrap your release notes at the 80 character mark.
   `seq_in_index` rather than `Seq_in_index`. This makes it possible to refer
   to the column without quoting when supplying a `WHERE` clause.
 
-  The renaminings are described in more detail in the documentation for each
+  The renamings are described in more detail in the documentation for each
   `SHOW` command that changed:
 
     - [`SHOW COLUMNS`](/sql/show-columns)
@@ -102,9 +118,18 @@ Wrap your release notes at the 80 character mark.
     - [`SHOW TABLES`](/sql/show-tables)
     - [`SHOW VIEWS`](/sql/show-views)
 
-- Rename the `global_id` column of the [`mz_avro_ocf_sinks`](/sql/system-catalog#mz_avro_ocf_sinks)
-  and [`mz_kafka_sinks`](/sql/system-catalog#mz_kafka_sinks) tables to `sink_id`, for better
-  consistency with the other system catalog tables.
+- Expose metadata about the running Materialize instance in the new
+  [system catalog](/sql/system-catalog), which contains various sources, tables,
+  and views that can be queried via SQL.
+
+- Rename the `global_id` column of the
+  [`mz_avro_ocf_sinks`](/sql/system-catalog#mz_avro_ocf_sinks) and
+  [`mz_kafka_sinks`](/sql/system-catalog#mz_kafka_sinks) tables
+  to `sink_id`, for better consistency with the other system catalog tables.
+
+- Support [Kafka sources](/sql/create-source/avro-kafka) on topics
+  that use [Zstandard compression](https://facebook.github.io/zstd/)
+  {{% gh 4342 %}}.
 
 {{% version-header v0.4.3 %}}
 

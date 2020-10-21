@@ -314,5 +314,28 @@
 - type: Table
   description: Table functions evaluate to a set of rows, rather than a single expression.
   functions:
-  - signature: 'generate_series (start: int, stop: int) -> Col<int>'
+  - signature: 'generate_series(start: int, stop: int) -> Col<int>'
     description: Generate all integer values between `start` and `stop`, inclusive.
+
+- type: Array
+  functions:
+  - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
+    description: >-
+      Concatenates the elements of `array` together separated by `sep`.
+      Null elements are omitted unless `ifnull` is non-null, in which case
+      null elements are replaced with the value of `ifnull`.
+
+- type: PostgreSQL compatibility
+  description: Functions whose primary purpose is to facilitate compatibility with PostgreSQL tools
+  functions:
+  - signature: 'current_schemas(include_implicit: bool) -> text[]'
+    description: >-
+      Returns the names of the schemas on the search path.
+      The `include_implicit` parameter controls whether implicit schemas like
+      `mz_catalog` and `pg_catalog` are included in the output.
+  - signature: 'obj_description(oid: oid, catalog: text) -> text'
+    description: PostgreSQL compatibility shim. Currently always returns `NULL`.
+  - signature: 'pg_table_is_visible(relation: oid) -> boolean'
+    description: Reports whether the relation with the specified OID is visible in the search path.
+  - signature: 'pg_encoding_to_char(encoding_id: integer) -> text'
+    description: PostgreSQL compatibility shim. Not intended for direct use.

@@ -14,7 +14,7 @@ Flag | Default | Modifies
 [`--address-file`](#horizontally-scaled-clusters) | N/A |  Address of all coordinating Materialize nodes
 [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
-[`--disable-telemetry`](#telemetry) | N/A |  Disables any telemetry reporting.
+[`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
 [`--experimental`](#experimental-mode) | Disabled | Get more details [here](#experimental-mode)
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements

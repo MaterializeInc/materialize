@@ -3,11 +3,8 @@
 
 {{ if not (isset $.Params 0) }}
 
-<h3>
-  <a class="headline-hash" href="#{{ lower .type }}-func">
-    {{.type}}
-  </a>
-  <a name="{{ lower .type }}-func"></a>
+<h3 id="{{ lower .type | replaceRE "[^a-zA-Z0-9]+" "-" }}-func">
+  {{.type}}
 </h3>
 
 <p>{{ if .description }} {{ .description | $.Page.RenderString }} {{ end }}</p>
