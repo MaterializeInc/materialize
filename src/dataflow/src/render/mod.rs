@@ -770,8 +770,8 @@ where
             let (ok_collection, mut err_collection) = self
                 .flat_map_ref(&input, {
                     let mut row_packer = repr::RowPacker::new();
-                    let temp_storage = RowArena::new();
                     move |row| {
+                        let temp_storage = RowArena::new();
                         mfp.evaluate(&mut row.unpack(), &temp_storage, &mut row_packer)
                             .map_err(|e| e.into())
                             .transpose()
