@@ -1143,12 +1143,42 @@ fn handle_create_source(
         sql_parser::ast::Envelope::Debezium => {
             let dedup_strat = match with_options.remove("deduplication") {
                 None => DebeziumDeduplicationStrategy::Ordered,
-                Some(Value::String(s)) => match s.as_str() {
-                    "full" => DebeziumDeduplicationStrategy::Full,
-                    "ordered" => DebeziumDeduplicationStrategy::Ordered,
-                    _ => bail!("deduplication must be either 'full' or 'ordered'."),
-                },
-                _ => bail!("deduplication must be either 'full' or 'ordered'."),
+                Some(Value::String(s)) => {
+                    match s.as_str() {
+                        "full" => DebeziumDeduplicationStrategy::Full,
+                        "ordered" => DebeziumDeduplicationStrategy::Ordered,
+                        "full_in_range" => {
+                            match (
+                                with_options.remove("deduplication_start"),
+                                with_options.remove("deduplication_end"),
+                            ) {
+                                (Some(Value::String(start)), Some(Value::String(end))) => {
+                                    let deduplication_pad_start = match with_options.remove("deduplication_pad_start") {
+                                        Some(Value::String(start)) => Some(start),
+                                        Some(v) => bail!("Expected string for deduplication_pad_start, got: {:?}", v),
+                                        None => None
+                                    };
+                                    DebeziumDeduplicationStrategy::full_in_range(
+                                        &start,
+                                        &end,
+                                        deduplication_pad_start.as_deref(),
+                                    )
+                                    .map_err(|e| {
+                                        anyhow!("Unable to create deduplication strategy: {}", e)
+                                    })?
+                                }
+                                (_, _) => bail!(
+                                    "deduplication full_in_range requires both \
+                                 'deduplication_start' and 'deduplication_end' parameters"
+                                ),
+                            }
+                        }
+                        _ => bail!(
+                            "deduplication must be one of 'ordered' 'full', or 'full_in_range'."
+                        ),
+                    }
+                }
+                _ => bail!("deduplication must be one of 'ordered', 'full' or 'full_in_range'."),
             };
             dataflow_types::Envelope::Debezium(dedup_strat)
         }

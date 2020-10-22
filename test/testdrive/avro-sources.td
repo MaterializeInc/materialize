@@ -345,6 +345,80 @@ a b
 3 4
 5 3
 
+# Test that deduplication=full_in_range accepts mis-ordered debezium data in the range
+
+$ kafka-create-topic topic=misordered-dbz-in-range-data
+
+# timestamps:
+# * 1599990000000 = 2020-09-13 09:40 -- more than an hour before the duplicate items
+# * 1599999600000 = 2020-09-13 12:20 -- in the hard-coded padding window
+# * 1600000000000 = 2020-09-13 12:26 -- duplicate items
+# * 1600005000000 = 2020-09-13 13:50 -- no longer possibly duplicate
+
+$ kafka-ingest format=avro topic=misordered-dbz-in-range-data schema=${new-dbz-schema} timestamp=1599990000000
+{"before": null, "after": {"row":{"a": 1, "b": 0}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "false"}}}
+
+# padding window
+$ kafka-ingest format=avro topic=misordered-dbz-in-range-data schema=${new-dbz-schema} timestamp=1599999600000
+{"before": null, "after": {"row":{"a": 4, "b": 0}}, "source": {"file": "binlog", "pos": 4, "row": 0, "snapshot": {"string": "false"}}}
+
+$ kafka-ingest format=avro topic=misordered-dbz-in-range-data schema=${new-dbz-schema} timestamp=1600000000000
+{"before": null, "after": {"row":{"a": 3, "b": 1}}, "source": {"file": "binlog", "pos": 3, "row": 0, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": 4, "b": 0}}, "source": {"file": "binlog", "pos": 4, "row": 0, "snapshot": {"string": "false"}}}
+
+# full dedupe catches reversed, invalid data
+$ kafka-ingest format=avro topic=misordered-dbz-in-range-data schema=${new-dbz-schema} timestamp=1600000000000
+{"before": null, "after": {"row":{"a": 6, "b": 0}}, "source": {"file": "binlog", "pos": 6, "row": 0, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": 5, "b": 0}}, "source": {"file": "binlog", "pos": 5, "row": 0, "snapshot": {"string": "false"}}}
+
+# return to just binlog-based deduplication, item 7 will be stripped because it is out of order!
+$ kafka-ingest format=avro topic=misordered-dbz-in-range-data schema=${new-dbz-schema} timestamp=1600005000000
+{"before": null, "after": {"row":{"a": 8, "b": 0}}, "source": {"file": "binlog", "pos": 8, "row": 0, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": 7, "b": 0}}, "source": {"file": "binlog", "pos": 7, "row": 0, "snapshot": {"string": "false"}}}
+
+> CREATE MATERIALIZED SOURCE misordered_dbz_in_range
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-misordered-dbz-in-range-data-${testdrive.seed}'
+  WITH (
+      deduplication = 'full_in_range',
+      deduplication_start = '2020-09-13 12:26:00',
+      deduplication_end = '2020-09-13 13:00:00'
+  )
+  FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM misordered_dbz_in_range
+a b
+---
+1 0
+4 0
+3 1
+6 0
+5 0
+8 0
+
+# same thing, but with an explicit pad start
+> CREATE MATERIALIZED SOURCE misordered_dbz_in_range_with_start
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-misordered-dbz-in-range-data-${testdrive.seed}'
+  WITH (
+      deduplication = 'full_in_range',
+      deduplication_pad_start = '2020-09-13 10:00:00',
+      deduplication_start = '2020-09-13 12:26:00',
+      deduplication_end = '2020-09-13 13:00:00'
+  )
+  FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM misordered_dbz_in_range_with_start
+a b
+---
+1 0
+4 0
+3 1
+6 0
+5 0
+8 0
+
+
 ! CREATE SOURCE recurisve
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'ignored'
   FORMAT AVRO USING SCHEMA '{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}'

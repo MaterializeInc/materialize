@@ -1139,6 +1139,56 @@ pub enum DebeziumDeduplicationStrategy {
     Ordered,
     /// We need to store some piece of state for every message
     Full,
+    FullInRange {
+        pad_start: Option<NaiveDateTime>,
+        start: NaiveDateTime,
+        end: NaiveDateTime,
+    },
+}
+
+impl DebeziumDeduplicationStrategy {
+    /// Create a deduplication strategy with start and end times
+    ///
+    /// Returns an error if either datetime does not parse, or if there is no time in between them
+    pub fn full_in_range(
+        start: &str,
+        end: &str,
+        pad_start: Option<&str>,
+    ) -> anyhow::Result<DebeziumDeduplicationStrategy> {
+        let fallback_parse = |s: &str| {
+            for format in &["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+                if let Ok(dt) = NaiveDateTime::parse_from_str(s, format) {
+                    return Ok(dt);
+                }
+            }
+            if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                return Ok(d.and_hms(0, 0, 0));
+            }
+
+            bail!(
+                "UTC DateTime specifier '{}' should match 'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS' or \
+                   'YYYY-MM-DD HH:MM:SS.FF",
+                s
+            )
+        };
+
+        let start = fallback_parse(start)?;
+        let end = fallback_parse(end)?;
+        let pad_start = pad_start.map(fallback_parse).transpose()?;
+
+        if start >= end {
+            bail!(
+                "Debezium deduplication start {} is not before end {}",
+                start,
+                end
+            );
+        }
+        Ok(DebeziumDeduplicationStrategy::FullInRange {
+            start,
+            end,
+            pad_start,
+        })
+    }
 }
 
 /// Track whether or not we should skip a specific debezium message
@@ -1166,6 +1216,47 @@ struct TrackFull {
     key_indices: Option<Vec<usize>>,
     /// Optimization to avoid re-allocating the row packer over and over when extracting the key..
     key_buf: RowPacker,
+    range: Option<TrackRange>,
+}
+
+/// When to start and end full-range tracking
+///
+/// All values are milliseconds since the unix epoch and are meant to be compared to the
+/// `upstream_time_millis` argument to [`DebeziumDeduplicationState::should_use_record`].
+///
+/// We throw away all tracking data after we see the first record past `end`.
+#[derive(Debug)]
+struct TrackRange {
+    /// Start pre-filling the seen data before we start trusting it
+    ///
+    /// At some point we need to start trusting the [`TrackFull::seen_offsets`] map more
+    /// than we trust the Debezium high water mark. In order to do that, the
+    /// `seen_offsets` map must have some data, otherwise all records would show up as
+    /// new immediately at the phase transition.
+    ///
+    /// For example, consider the following series of records, presented vertically in
+    /// the order that they were received:
+    ///
+    /// ```text
+    /// ts  val
+    /// -------
+    /// 1   a
+    /// 2   b
+    /// 1   a
+    /// ```
+    ///
+    /// If we start tracking at ts 2 and immediately start trusting the hashmap more than
+    /// the Debezium high water mark then ts 1 will be falsely double-inserted. So we
+    /// need to start building a buffer before we can start trusting it.
+    ///
+    /// `pad_start` is the upstream_time_millis at we we start building the buffer, and
+    /// [`TrackRange::start`] is the point at which we start trusting the buffer.
+    /// Currently `pad_start` defaults to 1 hour (wall clock time) before `start`,
+    /// as a value that seems overwhelmingly likely to cause the buffer to always have
+    /// enough data that it doesn't give incorrect answers.
+    pad_start: i64,
+    start: i64,
+    end: i64,
 }
 
 impl TrackFull {
@@ -1178,7 +1269,26 @@ impl TrackFull {
             seen_snapshot_keys: Default::default(),
             key_indices,
             key_buf: Default::default(),
+            range: None,
         }
+    }
+
+    fn from_keys_in_range(
+        key_indices: Option<Vec<usize>>,
+        start: NaiveDateTime,
+        end: NaiveDateTime,
+        pad_start: Option<NaiveDateTime>,
+    ) -> Self {
+        let mut tracker = Self::from_keys(key_indices);
+        let pad_start = pad_start
+            .unwrap_or_else(|| (start - chrono::Duration::hours(1)))
+            .timestamp_millis();
+        tracker.range = Some(TrackRange {
+            pad_start,
+            start: start.timestamp_millis(),
+            end: end.timestamp_millis(),
+        });
+        tracker
     }
 }
 
@@ -1187,6 +1297,16 @@ impl DebeziumDeduplicationState {
         let full = match strat {
             DebeziumDeduplicationStrategy::Ordered => None,
             DebeziumDeduplicationStrategy::Full => Some(TrackFull::from_keys(key_indices)),
+            DebeziumDeduplicationStrategy::FullInRange {
+                start,
+                end,
+                pad_start,
+            } => Some(TrackFull::from_keys_in_range(
+                key_indices,
+                start,
+                end,
+                pad_start,
+            )),
         };
         DebeziumDeduplicationState {
             binlog_offsets: Default::default(),
@@ -1216,7 +1336,8 @@ impl DebeziumDeduplicationState {
             old_max_row: &'a usize,
             old_offset: &'a Option<i64>,
         }
-        // If in the initial snapshot, binlog (pos, row) is meaningless for detecting duplicates, since it is always the same.
+        // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
+        // duplicates, since it is always the same.
         let should_skip = if is_snapshot {
             None
         } else {
@@ -1245,13 +1366,15 @@ impl DebeziumDeduplicationState {
             }
         };
 
-        match &mut self.full {
+        let mut delete_full = false;
+        let should_use = match &mut self.full {
             None => should_skip.is_none(), // Always none if in snapshot, see comment above where `should_skip` is bound.
             Some(TrackFull {
                 seen_offsets,
                 seen_snapshot_keys,
                 key_indices,
                 key_buf,
+                range,
             }) => {
                 if is_snapshot {
                     let key_indices = match key_indices.as_ref() {
@@ -1301,6 +1424,25 @@ impl DebeziumDeduplicationState {
                     }
                 } else {
                     if let Some(seen_offsets) = seen_offsets.get_mut(file) {
+                        // first check if we are in a special case of range-bounded track full
+                        if let Some(range) = range {
+                            if let Some(upstream_time_millis) = upstream_time_millis {
+                                if upstream_time_millis < range.pad_start {
+                                    return should_skip.is_none();
+                                }
+                                if upstream_time_millis < range.start {
+                                    seen_offsets.insert((pos, row));
+                                    return should_skip.is_none();
+                                }
+                                if upstream_time_millis > range.end {
+                                    // don't abort early, but we will clean up after this validation
+                                    delete_full = true;
+                                }
+                            }
+                        }
+
+                        // Now we know that we are in either trackfull or a range-bounded trackfull
+
                         let is_new = seen_offsets.insert((pos, row));
 
                         match (is_new, should_skip) {
@@ -1352,7 +1494,12 @@ impl DebeziumDeduplicationState {
                     }
                 }
             }
+        };
+
+        if delete_full {
+            self.full = None;
         }
+        should_use
     }
 }
 
