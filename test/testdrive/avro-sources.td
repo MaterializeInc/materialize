@@ -396,6 +396,29 @@ a b
 5 0
 8 0
 
+# same thing, but with an explicit pad start
+> CREATE MATERIALIZED SOURCE misordered_dbz_in_range_with_start
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-misordered-dbz-in-range-data-${testdrive.seed}'
+  WITH (
+      deduplication = 'full_in_range',
+      deduplication_pad_start = '2020-09-13 10:00:00',
+      deduplication_start = '2020-09-13 12:26:00',
+      deduplication_end = '2020-09-13 13:00:00'
+  )
+  FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM misordered_dbz_in_range_with_start
+a b
+---
+1 0
+4 0
+3 1
+6 0
+5 0
+8 0
+
+
 ! CREATE SOURCE recurisve
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'ignored'
   FORMAT AVRO USING SCHEMA '{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}'

@@ -1140,6 +1140,7 @@ pub enum DebeziumDeduplicationStrategy {
     /// We need to store some piece of state for every message
     Full,
     FullInRange {
+        pad_start: Option<NaiveDateTime>,
         start: NaiveDateTime,
         end: NaiveDateTime,
     },
@@ -1149,7 +1150,11 @@ impl DebeziumDeduplicationStrategy {
     /// Create a deduplication strategy with start and end times
     ///
     /// Returns an error if either datetime does not parse, or if there is no time in between them
-    pub fn full_in_range(start: &str, end: &str) -> anyhow::Result<DebeziumDeduplicationStrategy> {
+    pub fn full_in_range(
+        start: &str,
+        end: &str,
+        pad_start: Option<&str>,
+    ) -> anyhow::Result<DebeziumDeduplicationStrategy> {
         let fallback_parse = |s: &str| {
             for format in &["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
                 if let Ok(dt) = NaiveDateTime::parse_from_str(s, format) {
@@ -1169,6 +1174,7 @@ impl DebeziumDeduplicationStrategy {
 
         let start = fallback_parse(start)?;
         let end = fallback_parse(end)?;
+        let pad_start = pad_start.map(fallback_parse).transpose()?;
 
         if start >= end {
             bail!(
@@ -1177,7 +1183,11 @@ impl DebeziumDeduplicationStrategy {
                 end
             );
         }
-        Ok(DebeziumDeduplicationStrategy::FullInRange { start, end })
+        Ok(DebeziumDeduplicationStrategy::FullInRange {
+            start,
+            end,
+            pad_start,
+        })
     }
 }
 
@@ -1237,10 +1247,14 @@ impl TrackFull {
         key_indices: Option<Vec<usize>>,
         start: NaiveDateTime,
         end: NaiveDateTime,
+        pad_start: Option<NaiveDateTime>,
     ) -> Self {
         let mut tracker = Self::from_keys(key_indices);
+        let pad_start = pad_start
+            .unwrap_or_else(|| (start - chrono::Duration::hours(1)))
+            .timestamp_millis();
         tracker.range = Some(TrackRange {
-            pad_start: (start - chrono::Duration::hours(1)).timestamp_millis(),
+            pad_start,
             start: start.timestamp_millis(),
             end: end.timestamp_millis(),
         });
@@ -1253,9 +1267,16 @@ impl DebeziumDeduplicationState {
         let full = match strat {
             DebeziumDeduplicationStrategy::Ordered => None,
             DebeziumDeduplicationStrategy::Full => Some(TrackFull::from_keys(key_indices)),
-            DebeziumDeduplicationStrategy::FullInRange { start, end } => {
-                Some(TrackFull::from_keys_in_range(key_indices, start, end))
-            }
+            DebeziumDeduplicationStrategy::FullInRange {
+                start,
+                end,
+                pad_start,
+            } => Some(TrackFull::from_keys_in_range(
+                key_indices,
+                start,
+                end,
+                pad_start,
+            )),
         };
         DebeziumDeduplicationState {
             binlog_offsets: Default::default(),
