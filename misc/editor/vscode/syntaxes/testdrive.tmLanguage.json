@@ -19,7 +19,7 @@
             "patterns": [{
                 "name": "meta.command",
                 "begin": "^(\\$)\\s*(\\S+)?",
-                "end": "^(?=[^ ])",
+                "while": "^(?= )",
                 "beginCaptures": {
                     "1": { "name": "keyword.operator.testdrive" },
                     "2": { "name": "storage.type.testdrive" }
@@ -56,23 +56,23 @@
         "sql": {
             "patterns": [{
                 "begin": "^(>|!)",
-                "end": "^(?=[^ ])",
+                "while": "^(?= )",
                 "beginCaptures": {
                     "1": { "name": "keyword.operator.testdrive" }
                 },
                 "patterns": [{ "include": "source.mzsql" }]
             }]
         },
-		"string": {
-			"name": "string.quoted.double.testdrive",
-			"begin": "\"",
-			"end": "\"",
-			"patterns": [
-				{
-					"name": "constant.character.escape.testdrive",
-					"match": "\\\\(\"|n|t|r|0)"
-				}
-			]
+        "string": {
+          "name": "string.quoted.double.testdrive",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.testdrive",
+              "match": "\\\\(\"|n|t|r|0)"
+            }
+          ]
         },
         "symbol": {
             "name": "string.unquoted.testdrive",
