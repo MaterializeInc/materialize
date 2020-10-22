@@ -19,10 +19,8 @@ SELECT array_to_string(ARRAY['a', 'b,', 'c'], NULL), array_to_string(ARRAY['a', 
 ----
 NULL  afoob,foozerpfooc
 
-query TT
+query error Cannot call function array_to_string\(unknown, unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
-----
-NULL  NULL
 
 query B
 SELECT 1 = ANY(ARRAY[1, 2])
@@ -42,7 +40,7 @@ true
 query error ANY operand array must have type i32\[\], not type string\[\]
 SELECT 1 = ANY(ARRAY['hi'::text])
 
-query error cannot evaluate ANY for element type string and array type i32
+query error invalid input syntax for int4: invalid digit found in string: "hi"
 select 'hi' = any(array[1]);
 
 query B

@@ -1036,5 +1036,5 @@ SELECT length(LIST['1','2']::text)
 ----
 5
 
-query error Cannot call function length\(unknown\): length does not support implicitly casting from string list to string
+query error Cannot call function length\(string list\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT length(LIST['1','2'])

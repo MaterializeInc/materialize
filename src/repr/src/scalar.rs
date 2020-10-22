@@ -752,6 +752,26 @@ impl<'a> ScalarType {
         }
     }
 
+    /// Returns inner-most [`ScalarType::Array`] element of `self`, which is the
+    /// type the array would have in PostgreSQL.
+    ///
+    /// For example, for an `int[][][]`, it returns `int[]`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a `ScalarType::Array`.
+    pub fn unwrap_pg_array_type(&self) -> &ScalarType {
+        let mut pg_array_type = self;
+        let mut descender = self.unwrap_array_element_type();
+
+        while let ScalarType::Array(s) = descender {
+            pg_array_type = descender;
+            descender = s;
+        }
+
+        pg_array_type
+    }
+
     /// Returns a copy of `Self` with any embedded fields "zeroed" out. Meant to
     /// make comparisons easier, allowing you to mimic `std::mem::discriminant`
     /// equality.
