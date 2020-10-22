@@ -73,11 +73,26 @@ several non-free Confluent tools, like the [Confluent Schema Registry] and
 [Control Center]. For local development, the [Confluent CLI] allows easy
 management of these services
 
-On macOS, the easiest installation method is to use [Homebrew]:
+#### macOS
+
+You will need JDK 8 or 11. The easiest way to install this is via homebrew:
 
 ```shell
-brew install confluent-platform
+brew cask install homebrew/cask-versions/adoptopenjdk8
 ```
+
+Homebrew no longer contains confluent packages, so you'll need to follow the
+[manual instructions][confluent-install].
+
+At the time of this writing, that means:
+
+```shell
+curl -O http://packages.confluent.io/archive/6.0/confluent-6.0.0.tar.gz
+tar -xf confluent-6.0.0.tar.gz
+CONFLUENT_HOME=./confluent-6.0.0 ./confluent-6.0.0/bin/confluent local services start
+```
+
+#### Linux
 
 On Debian-based Linux variants, it's a tad more involved:
 
@@ -90,8 +105,7 @@ sudo apt install openjdk-8-jre-headless confluent-community-2.12
 
 On other Linux variants, you'll need to make your own way through [Confluent's
 installation instructions][confluent-install]. Note that, at the time of
-writing, Java 8 is a strict requirement. Later versions of Java are not
-supported.
+writing, only Java 8 and 11 are supported.
 
 On Linux, you might want to consider using [nix]. It is a purely functional
 package manager, which is appealing because bits and pieces of state usually
@@ -103,7 +117,7 @@ nix-shell
 ```
 
 This will start a new shell with all the necessary dependencies available and
-pinned to the correct version. Reach out to @jamii for more information.
+pinned to the correct version.
 
 [Homebrew]: https://brew.sh
 [confluent-install]: https://docs.confluent.io/current/installation/installing_cp/index.html
