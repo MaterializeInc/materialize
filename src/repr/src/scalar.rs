@@ -778,10 +778,7 @@ impl<'a> ScalarType {
     /// [`ScalarType::List`] or [`ScalarType::Array`], irrespective of its
     /// element type.
     pub fn is_vec(&self) -> bool {
-        match self {
-            ScalarType::List(_) | ScalarType::Array(_) => true,
-            _ => false,
-        }
+        matches!(self, ScalarType::List(_) | ScalarType::Array(_))
     }
 }
 
