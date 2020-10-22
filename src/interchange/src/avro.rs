@@ -1221,9 +1221,39 @@ struct TrackFull {
 
 /// When to start and end full-range tracking
 ///
-/// All values are milliseconds since the unix epoch
+/// All values are milliseconds since the unix epoch and are meant to be compared to the
+/// `upstream_time_millis` argument to [`DebeziumDeduplicationState::should_use_record`].
+///
+/// We throw away all tracking data after we see the first record past `end`.
 #[derive(Debug)]
 struct TrackRange {
+    /// Start pre-filling the seen data before we start trusting it
+    ///
+    /// At some point we need to start trusting the [`TrackFull::seen_offsets`] map more
+    /// than we trust the Debezium high water mark. In order to do that, the
+    /// `seen_offsets` map must have some data, otherwise all records would show up as
+    /// new immediately at the phase transition.
+    ///
+    /// For example, consider the following series of records, presented vertically in
+    /// the order that they were received:
+    ///
+    /// ```text
+    /// ts  val
+    /// -------
+    /// 1   a
+    /// 2   b
+    /// 1   a
+    /// ```
+    ///
+    /// If we start tracking at ts 2 and immediately start trusting the hashmap more than
+    /// the Debezium high water mark then ts 1 will be falsely double-inserted. So we
+    /// need to start building a buffer before we can start trusting it.
+    ///
+    /// `pad_start` is the upstream_time_millis at we we start building the buffer, and
+    /// [`TrackRange::start`] is the point at which we start trusting the buffer.
+    /// Currently `pad_start` defaults to 1 hour (wall clock time) before `start`,
+    /// as a value that seems overwhelmingly likely to cause the buffer to always have
+    /// enough data that it doesn't give incorrect answers.
     pad_start: i64,
     start: i64,
     end: i64,
@@ -1382,6 +1412,7 @@ impl DebeziumDeduplicationState {
                     }
                 } else {
                     if let Some(seen_offsets) = seen_offsets.get_mut(file) {
+                        // first check if we are in a special case of range-bounded track full
                         if let Some(range) = range {
                             if let Some(upstream_time_millis) = upstream_time_millis {
                                 if upstream_time_millis < range.pad_start {
@@ -1401,7 +1432,7 @@ impl DebeziumDeduplicationState {
                             }
                         }
 
-                        // now we know that we are in either trackfull, or inside the range of trackfull
+                        // Now we know that we are in either trackfull or a range-bounded trackfull
 
                         let is_new = seen_offsets.insert((pos, row));
 
