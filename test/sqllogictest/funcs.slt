@@ -569,12 +569,6 @@ SELECT array_upper(ARRAY[[[1, 2]]], 4)
 ----
 NULL
 
-# This result diverges from Postgres #4549
-query I
-SELECT array_upper(NULL, 1)
-----
-NULL
-
 query I
 SELECT array_upper(ARRAY[NULL], 1)
 ----
@@ -584,3 +578,11 @@ query I
 SELECT array_upper(ARRAY[1], NULL)
 ----
 NULL
+
+query I
+SELECT array_upper(NULL::text[], 1)
+----
+NULL
+
+query error Cannot call function array_upper\(unknown, i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT array_upper(NULL, 1)
