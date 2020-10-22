@@ -36,7 +36,7 @@ use uuid::Uuid;
 
 use dataflow::source::persistence::PersistenceSender;
 use dataflow::{PersistenceMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
-use dataflow_types::logging::LoggingConfig;
+use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, SinkConnector,
     SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
@@ -102,6 +102,12 @@ pub enum Message {
     Shutdown,
 }
 
+#[derive(Clone, Debug)]
+pub struct LoggingConfig {
+    pub granularity: Duration,
+    pub log_logging: bool,
+}
+
 pub struct Config<'a, C>
 where
     C: comm::Connection,
@@ -110,7 +116,7 @@ where
     pub cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
     pub num_timely_workers: usize,
     pub symbiosis_url: Option<&'a str>,
-    pub logging_granularity: Option<Duration>,
+    pub logging: Option<LoggingConfig>,
     pub data_directory: Option<&'a Path>,
     pub timestamp: TimestampConfig,
     pub persistence: Option<PersistenceConfig>,
@@ -2837,7 +2843,7 @@ pub async fn serve<C>(
         cmd_rx,
         num_timely_workers,
         symbiosis_url,
-        logging_granularity,
+        logging,
         data_directory,
         timestamp: timestamp_config,
         persistence: persistence_config,
@@ -2860,15 +2866,16 @@ where
     )
     .await;
 
-    if let Some(granularity) = logging_granularity {
+    if let Some(config) = &logging {
         broadcast(
             &mut broadcast_tx,
-            SequencedCommand::EnableLogging(LoggingConfig {
-                granularity_ns: granularity.as_nanos(),
+            SequencedCommand::EnableLogging(DataflowLoggingConfig {
+                granularity_ns: config.granularity.as_nanos(),
                 active_logs: BUILTINS
                     .logs()
                     .map(|src| (src.variant.clone(), src.index_id))
                     .collect(),
+                log_logging: config.log_logging,
             }),
         )
         .await;
@@ -2907,7 +2914,7 @@ where
         let (catalog, initial_catalog_events) = Catalog::open(catalog::Config {
             path: catalog_path.as_deref(),
             experimental_mode: Some(experimental_mode),
-            enable_logging: logging_granularity.is_some(),
+            enable_logging: logging.is_some(),
             persistence_directory: persistence_config.map(|pc| pc.path),
         })?;
         let cluster_id = catalog.cluster_id();
@@ -2922,7 +2929,7 @@ where
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
-            logging_granularity: logging_granularity.and_then(|c| c.as_millis().try_into().ok()),
+            logging_granularity: logging.and_then(|c| c.granularity.as_millis().try_into().ok()),
             timestamp_config,
             logical_compaction_window_ms: logical_compaction_window
                 .map(duration_to_timestamp_millis),

@@ -336,10 +336,28 @@ where
         let m_linked = std::rc::Rc::new(EventLink::new());
         let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
 
-        // Construct logging dataflows and endpoints before registering any.
-        let t_traces = logging::timely::construct(&mut self.timely_worker, logging, t_linked);
-        let d_traces = logging::differential::construct(&mut self.timely_worker, logging, d_linked);
-        let m_traces = logging::materialized::construct(&mut self.timely_worker, logging, m_linked);
+        let mut t_traces = HashMap::new();
+        let mut d_traces = HashMap::new();
+        let mut m_traces = HashMap::new();
+
+        if !logging.log_logging {
+            // Construct logging dataflows and endpoints before registering any.
+            t_traces.extend(logging::timely::construct(
+                &mut self.timely_worker,
+                logging,
+                t_linked.clone(),
+            ));
+            d_traces.extend(logging::differential::construct(
+                &mut self.timely_worker,
+                logging,
+                d_linked.clone(),
+            ));
+            m_traces.extend(logging::materialized::construct(
+                &mut self.timely_worker,
+                logging,
+                m_linked.clone(),
+            ));
+        }
 
         // Register each logger endpoint.
         self.timely_worker.log_register().insert_logger(
@@ -374,6 +392,26 @@ where
             .log_register()
             .get("materialized")
             .unwrap();
+
+        if logging.log_logging {
+            // Create log processing dataflows after registering logging so we can log the
+            // logging.
+            t_traces.extend(logging::timely::construct(
+                &mut self.timely_worker,
+                logging,
+                t_linked,
+            ));
+            d_traces.extend(logging::differential::construct(
+                &mut self.timely_worker,
+                logging,
+                d_linked,
+            ));
+            m_traces.extend(logging::materialized::construct(
+                &mut self.timely_worker,
+                logging,
+                m_linked,
+            ));
+        }
 
         // Install traces as maintained indexes
         for (log, (_, trace)) in t_traces {

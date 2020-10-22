@@ -387,7 +387,7 @@ impl State {
             num_timely_workers: NUM_TIMELY_WORKERS,
             symbiosis_url: Some("postgres://"),
             data_directory: None,
-            logging_granularity: None,
+            logging: None,
             timestamp: TimestampConfig {
                 frequency: Duration::from_millis(10),
             },

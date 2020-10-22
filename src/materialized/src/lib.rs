@@ -29,7 +29,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use comm::Switchboard;
-use coord::PersistenceConfig;
+use coord::{LoggingConfig, PersistenceConfig};
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use ore::tokio::net::TcpStreamExt;
 
@@ -97,9 +97,7 @@ pub struct Config {
     pub addresses: Vec<SocketAddr>,
 
     // === Performance tuning options. ===
-    /// The interval at which the internal Timely cluster should publish updates
-    /// about its state.
-    pub logging_granularity: Option<Duration>,
+    pub logging: Option<LoggingConfig>,
     /// The historical window in which distinctions are maintained for
     /// arrangements.
     ///
@@ -271,7 +269,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             cmd_rx,
             num_timely_workers,
             symbiosis_url: config.symbiosis_url.as_deref(),
-            logging_granularity: config.logging_granularity,
+            logging: config.logging,
             data_directory: config.data_directory.as_deref(),
             timestamp: coord::TimestampConfig {
                 frequency: config.timestamp_frequency,
