@@ -939,6 +939,10 @@ lazy_static! {
                      WHERE o.oid = $1)"
                 )
             },
+            "regexp_match" => Scalar {
+                params!(String, String) => VariadicFunc::RegexpMatch,
+                params!(String, String, String) => VariadicFunc::RegexpMatch
+            },
             "replace" => Scalar {
                 params!(String, String, String) => VariadicFunc::Replace
             },

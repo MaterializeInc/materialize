@@ -145,8 +145,12 @@
   - signature: 'octet_length(b: bytea) -> int'
     description: Number of bytes in `b`
 
-  - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
-    description: Values of the capture groups of `regex` as matched in `haystack`
+  - signature: 'regexp_match(haystack: str, needle: str [, flags: str]]) -> str[]'
+    description: >-
+      Matches the regular expression `needle` against haystack, returning a
+      string array that contains the value of each capture group specified in
+      `needle`, in order. If `flags` is set to the string `i` matches
+      case-insensitively.
 
   - signature: 'replace(s: str, f: str, r: str) -> str'
     description: "`s` with all instances of `f` replaced with `r`"
@@ -316,6 +320,8 @@
   functions:
   - signature: 'generate_series(start: int, stop: int) -> Col<int>'
     description: Generate all integer values between `start` and `stop`, inclusive.
+  - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
+    description: Values of the capture groups of `regex` as matched in `haystack`
 
 - type: Array
   functions:
