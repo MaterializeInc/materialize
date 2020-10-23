@@ -1619,21 +1619,8 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 CoercibleScalarExpr::Parameter(*n)
             }
         }
-        Expr::Array(exprs) => {
-            ecx.qcx.scx.require_experimental_mode("ARRAY")?;
-            let mut out = vec![];
-            for e in exprs {
-                out.push(plan_expr(ecx, e)?);
-            }
-            CoercibleScalarExpr::LiteralArray(out)
-        }
-        Expr::List(exprs) => {
-            let mut out = vec![];
-            for e in exprs {
-                out.push(plan_expr(ecx, e)?);
-            }
-            CoercibleScalarExpr::LiteralList(out)
-        }
+        Expr::Array(exprs) => plan_array(ecx, exprs, None)?,
+        Expr::List(exprs) => plan_list(ecx, exprs, None)?,
         Expr::Row { exprs } => {
             let mut out = vec![];
             for e in exprs {
@@ -1647,7 +1634,19 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
         Expr::BinaryOp { op, left, right } => func::plan_binary_op(ecx, op, left, right)?.into(),
         Expr::Cast { expr, data_type } => {
             let to_scalar_type = scalar_type_from_sql(data_type)?;
-            let expr = plan_expr(ecx, expr)?;
+            let expr = match &**expr {
+                // Special case a direct cast of an ARRAY or LIST expression so
+                // we can pass in the target type as a type hint. This is
+                // a limited form of the coercion that we do for string literals
+                // via CoercibleScalarExpr. We used to let CoercibleScalarExpr
+                // handle ARRAY/LIST coercion too, but doing so causes
+                // PostgreSQL compatibility trouble.
+                //
+                // See: https://github.com/postgres/postgres/blob/31f403e95/src/backend/parser/parse_expr.c#L2762-L2768
+                Expr::Array(exprs) => plan_array(ecx, exprs, Some(to_scalar_type.clone()))?,
+                Expr::List(exprs) => plan_list(ecx, exprs, Some(to_scalar_type.clone()))?,
+                _ => plan_expr(ecx, expr)?,
+            };
             let expr = typeconv::plan_coerce(ecx, expr, CoerceTo::Plain(to_scalar_type.clone()))?;
             typeconv::plan_cast("CAST", ecx, expr, CastTo::Explicit(to_scalar_type))?.into()
         }
@@ -1847,7 +1846,12 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
     })
 }
 
-/// Plans a list of expressions.
+/// Plans a slice of expressions.
+///
+/// This function is a simple convenience function for mapping [`plan_expr`]
+/// over a slice of expressions. The planned expressions are returned in the
+/// same order as the input. If any of the expressions fail to plan, returns an
+/// error instead.
 fn plan_exprs<E>(ecx: &ExprContext, exprs: &[E]) -> Result<Vec<CoercibleScalarExpr>, anyhow::Error>
 where
     E: std::borrow::Borrow<Expr>,
@@ -1857,6 +1861,77 @@ where
         out.push(plan_expr(ecx, expr.borrow())?);
     }
     Ok(out)
+}
+
+fn plan_array(
+    ecx: &ExprContext,
+    exprs: &[Expr],
+    type_hint: Option<ScalarType>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    ecx.qcx.scx.require_experimental_mode("ARRAY")?;
+    let (elem_type, exprs) = if exprs.is_empty() {
+        if let Some(ScalarType::Array(elem_type)) = type_hint {
+            (*elem_type, vec![])
+        } else {
+            bail!("cannot determine type of empty array");
+        }
+    } else {
+        let mut out = vec![];
+        for expr in exprs {
+            out.push(match expr {
+                // Special case nested ARRAY expressions so we can plumb
+                // the type hint through.
+                Expr::Array(exprs) => plan_array(ecx, exprs, type_hint.clone())?,
+                _ => plan_expr(ecx, expr)?,
+            });
+        }
+        let type_hint = match type_hint {
+            Some(ScalarType::Array(elem_type)) => Some(*elem_type),
+            _ => None,
+        };
+        let out = coerce_homogeneous_exprs("ARRAY expression", ecx, out, type_hint)?;
+        (ecx.scalar_type(&out[0]), out)
+    };
+    Ok(ScalarExpr::CallVariadic {
+        func: VariadicFunc::ArrayCreate { elem_type },
+        exprs,
+    }
+    .into())
+}
+
+fn plan_list(
+    ecx: &ExprContext,
+    exprs: &[Expr],
+    type_hint: Option<ScalarType>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
+    let (elem_type, exprs) = if exprs.is_empty() {
+        if let Some(ScalarType::List(elem_type)) = type_hint {
+            (*elem_type, vec![])
+        } else {
+            bail!("cannot determine type of empty list");
+        }
+    } else {
+        let type_hint = match type_hint {
+            Some(ScalarType::List(elem_type)) => Some(*elem_type),
+            _ => None,
+        };
+        let mut out = vec![];
+        for expr in exprs {
+            out.push(match expr {
+                // Special case nested LIST expressions so we can plumb
+                // the type hint through.
+                Expr::List(exprs) => plan_list(ecx, exprs, type_hint.clone())?,
+                _ => plan_expr(ecx, expr)?,
+            });
+        }
+        let out = coerce_homogeneous_exprs("LIST expression", ecx, out, type_hint)?;
+        (ecx.scalar_type(&out[0]), out)
+    };
+    Ok(ScalarExpr::CallVariadic {
+        func: VariadicFunc::ListCreate { elem_type },
+        exprs,
+    }
+    .into())
 }
 
 /// Coerces a list of expressions such that all input expressions will be cast
