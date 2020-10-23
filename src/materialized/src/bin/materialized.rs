@@ -73,13 +73,13 @@ fn run() -> Result<(), anyhow::Error> {
     opts.optopt(
         "p",
         "process",
-        "identity of this process (default 0)",
+        "identity of this node when coordinating with other nodes (default 0)",
         "INDEX",
     );
     opts.optopt(
         "n",
         "processes",
-        "total number of processes (default 1)",
+        "total number of coordinating nodes (default 1)",
         "N",
     );
     opts.optopt(
