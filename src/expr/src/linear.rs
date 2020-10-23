@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{scalar::EvalError, ScalarExpr};
+use crate::{scalar::EvalError, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 /// A compound operator that can be applied row-by-row.
@@ -56,6 +56,14 @@ impl MapFilterProject {
             projection: (0..input_arity).collect(),
             input_arity,
         }
+    }
+
+    /// True if the operator describes the identity transformation.
+    pub fn is_identity(&self) -> bool {
+        self.expressions.is_empty()
+            && self.predicates.is_empty()
+            && self.projection.len() == self.input_arity
+            && self.projection.iter().enumerate().all(|(i, p)| i == *p)
     }
 
     /// Evaluates the linear operator on a supplied list of datums.
@@ -183,6 +191,32 @@ impl MapFilterProject {
             }
         }
         None
+    }
+
+    /// Extracts any MapFilterProject at the root of the expression.
+    ///
+    /// The expression will be modified to extract any maps, filters, and
+    /// projections, which will be return as `Self`. If there are no maps,
+    /// filters, or projections the method will return an identity operator.
+    pub fn extract_from_expression(expr: &RelationExpr) -> (Self, &RelationExpr) {
+        // TODO: This could become iterative rather than recursive if
+        // we were able to fuse MFP operators from below, rather than
+        // from above.
+        match expr {
+            RelationExpr::Map { input, scalars } => {
+                let (mfp, expr) = Self::extract_from_expression(input);
+                (mfp.map(scalars.iter().cloned()), expr)
+            }
+            RelationExpr::Filter { input, predicates } => {
+                let (mfp, expr) = Self::extract_from_expression(input);
+                (mfp.filter(predicates.iter().cloned()), expr)
+            }
+            RelationExpr::Project { input, outputs } => {
+                let (mfp, expr) = Self::extract_from_expression(input);
+                (mfp.project(outputs.iter().cloned()), expr)
+            }
+            x => (Self::new(x.arity()), x),
+        }
     }
 
     /// Optimize the internal expression evaluation order.
