@@ -537,7 +537,7 @@ fn plan_values(
             None
         };
 
-        let col = plan_homogeneous_exprs("VALUES", ecx, &col, type_hint)?;
+        let col = coerce_homogeneous_exprs("VALUES", ecx, plan_exprs(ecx, col)?, type_hint)?;
         col_types.push(ecx.column_type(&col[0]));
         col_iters.push(col.into_iter());
     }
@@ -1665,7 +1665,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
             let expr = ScalarExpr::CallVariadic {
                 func: VariadicFunc::Coalesce,
-                exprs: plan_homogeneous_exprs("coalesce", ecx, exprs, None)?,
+                exprs: coerce_homogeneous_exprs("coalesce", ecx, plan_exprs(ecx, exprs)?, None)?,
             };
             expr.into()
         }
@@ -1847,32 +1847,38 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
     })
 }
 
-/// Plans a list of expressions such that all input expressions will be cast to
-/// the same type. If successful, returns a new list of expressions in the same
-/// order as the input, where each expression has the appropriate casts to make
-/// them all of a uniform type.
+/// Plans a list of expressions.
+fn plan_exprs<E>(ecx: &ExprContext, exprs: &[E]) -> Result<Vec<CoercibleScalarExpr>, anyhow::Error>
+where
+    E: std::borrow::Borrow<Expr>,
+{
+    let mut out = vec![];
+    for expr in exprs {
+        out.push(plan_expr(ecx, expr.borrow())?);
+    }
+    Ok(out)
+}
+
+/// Coerces a list of expressions such that all input expressions will be cast
+/// to the same type. If successful, returns a new list of expressions in the
+/// same order as the input, where each expression has the appropriate casts to
+/// make them all of a uniform type.
 ///
 /// Note that this is our implementation of Postgres' type conversion for
-/// ["`UNION`, `CASE`, and Related Constructs"][union-type-conv], though it isn't
-/// yet used in all of those cases.
+/// ["`UNION`, `CASE`, and Related Constructs"][union-type-conv], though it
+/// isn't yet used in all of those cases.
 ///
 /// [union-type-conv]:
 /// https://www.postgresql.org/docs/12/typeconv-union-case.html
-pub fn plan_homogeneous_exprs(
+pub fn coerce_homogeneous_exprs(
     name: &str,
     ecx: &ExprContext,
-    exprs: &[impl std::borrow::Borrow<Expr>],
+    exprs: Vec<CoercibleScalarExpr>,
     type_hint: Option<ScalarType>,
 ) -> Result<Vec<ScalarExpr>, anyhow::Error> {
     assert!(!exprs.is_empty());
 
-    let mut cexprs = Vec::new();
-    for expr in exprs.iter() {
-        let cexpr = super::query::plan_expr(ecx, expr.borrow())?;
-        cexprs.push(cexpr);
-    }
-
-    let types: Vec<_> = cexprs.iter().map(|e| ecx.scalar_type(e)).collect();
+    let types: Vec<_> = exprs.iter().map(|e| ecx.scalar_type(e)).collect();
 
     let target = match typeconv::guess_best_common_type(&types, type_hint) {
         Some(t) => t,
@@ -1881,8 +1887,8 @@ pub fn plan_homogeneous_exprs(
 
     // Try to cast all expressions to `target`.
     let mut out = Vec::new();
-    for cexpr in cexprs {
-        let arg = typeconv::plan_coerce(ecx, cexpr, CoerceTo::Plain(target.clone()))?;
+    for expr in exprs {
+        let arg = typeconv::plan_coerce(ecx, expr, CoerceTo::Plain(target.clone()))?;
 
         match typeconv::plan_cast(name, ecx, arg.clone(), CastTo::Implicit(target.clone())) {
             Ok(expr) => out.push(expr),
@@ -2118,7 +2124,8 @@ fn plan_case<'a>(
         Some(else_result) => else_result,
         None => &Expr::Value(Value::Null),
     });
-    let mut result_exprs = plan_homogeneous_exprs("CASE", ecx, &result_exprs, None)?;
+    let mut result_exprs =
+        coerce_homogeneous_exprs("CASE", ecx, plan_exprs(ecx, &result_exprs)?, None)?;
     let mut expr = result_exprs.pop().unwrap();
     assert_eq!(cond_exprs.len(), result_exprs.len());
     for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
