@@ -149,41 +149,103 @@ impl AstDisplay for InsertStatement {
 }
 impl_display!(InsertStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CopyRelation {
+    Table {
+        name: ObjectName,
+        columns: Vec<Ident>,
+    },
+    Query(Query),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CopyDirection {
+    To,
+    From,
+}
+
+impl AstDisplay for CopyDirection {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str(match self {
+            CopyDirection::To => "TO",
+            CopyDirection::From => "FROM",
+        })
+    }
+}
+impl_display!(CopyDirection);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CopyTarget {
+    Stdin,
+    Stdout,
+}
+
+impl AstDisplay for CopyTarget {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str(match self {
+            CopyTarget::Stdin => "STDIN",
+            CopyTarget::Stdout => "STDOUT",
+        })
+    }
+}
+impl_display!(CopyTarget);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CopyOption {
+    Format(String),
+}
+
+impl AstDisplay for CopyOption {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            CopyOption::Format(s) => {
+                f.write_str("FORMAT ");
+                f.write_str(s);
+            }
+        }
+    }
+}
+
 /// `COPY`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CopyStatement {
-    /// TABLE
-    pub table_name: ObjectName,
-    /// COLUMNS
-    pub columns: Vec<Ident>,
-    /// VALUES a vector of values to be copied
-    pub values: Vec<Option<String>>,
+    /// RELATION
+    pub relation: CopyRelation,
+    /// DIRECTION
+    pub direction: CopyDirection,
+    // TARGET
+    pub target: CopyTarget,
+    // OPTIONS
+    pub options: Vec<CopyOption>,
 }
 
 impl AstDisplay for CopyStatement {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("COPY ");
-        f.write_node(&self.table_name);
-        if !self.columns.is_empty() {
-            f.write_str("(");
-            f.write_node(&display::comma_separated(&self.columns));
-            f.write_str(")");
-        }
-        f.write_str(" FROM stdin; ");
-        if !self.values.is_empty() {
-            f.write_str("\n");
-            let mut delim = "";
-            for v in &self.values {
-                f.write_str(delim);
-                delim = "\t";
-                if let Some(v) = v {
-                    f.write_str(v);
-                } else {
-                    f.write_str("\\N");
+        match &self.relation {
+            CopyRelation::Table { name, columns } => {
+                f.write_node(&name);
+                if !columns.is_empty() {
+                    f.write_str("(");
+                    f.write_node(&display::comma_separated(&columns));
+                    f.write_str(")");
                 }
             }
+            CopyRelation::Query(query) => {
+                f.write_str("(");
+                f.write_node(query);
+                f.write_str(")");
+            }
+        };
+        f.write_str(" ");
+        f.write_node(&self.direction);
+        f.write_str(" ");
+        f.write_node(&self.target);
+        if !self.options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
         }
-        f.write_str("\n\\.");
     }
 }
 impl_display!(CopyStatement);

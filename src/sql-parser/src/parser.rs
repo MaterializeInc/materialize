@@ -1082,12 +1082,6 @@ impl Parser {
         }
     }
 
-    /// Return the first unprocessed token, possibly whitespace.
-    fn next_token_no_skip(&mut self) -> Option<&Token> {
-        self.index += 1;
-        self.tokens.get(self.index - 1).map(|(token, _range)| token)
-    }
-
     /// Push back the last one non-whitespace token. Must be called after
     /// `next_token()`, otherwise might panic. OK to call after
     /// `next_token()` indicates an EOF.
@@ -2014,58 +2008,61 @@ impl Parser {
 
     /// Parse a copy statement
     fn parse_copy(&mut self) -> Result<Statement, ParserError> {
-        let table_name = self.parse_object_name()?;
-        let columns = self.parse_parenthesized_column_list(Optional)?;
-        self.expect_keywords(&["FROM", "STDIN"])?;
-        self.expect_token(&Token::SemiColon)?;
-        let values = self.parse_tsv()?;
+        let relation = if self.consume_token(&Token::LParen) {
+            let query = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            CopyRelation::Query(query)
+        } else {
+            let name = self.parse_object_name()?;
+            let columns = self.parse_parenthesized_column_list(Optional)?;
+            CopyRelation::Table { name, columns }
+        };
+        let (direction, target) = match self.expect_one_of_keywords(&["FROM", "TO"])? {
+            "FROM" => {
+                if let CopyRelation::Query(_) = relation {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_range(),
+                        "queries not allowed in COPY FROM"
+                    );
+                }
+                self.expect_keyword("STDIN")?;
+                (CopyDirection::From, CopyTarget::Stdin)
+            }
+            "TO" => {
+                self.expect_keyword("STDOUT")?;
+                (CopyDirection::To, CopyTarget::Stdout)
+            }
+            _ => unreachable!(),
+        };
+        let mut options = vec![];
+        // WITH must be followed by LParen.
+        let has_options = if self.parse_keyword("WITH") {
+            self.expect_token(&Token::LParen)?;
+            true
+        } else {
+            self.consume_token(&Token::LParen)
+        };
+        if has_options {
+            options = self.parse_comma_separated(Parser::parse_copy_option)?;
+            self.expect_token(&Token::RParen)?;
+        }
         Ok(Statement::Copy(CopyStatement {
-            table_name,
-            columns,
-            values,
+            relation,
+            direction,
+            target,
+            options,
         }))
     }
 
-    /// Parse a tab separated values in
-    /// COPY payload
-    fn parse_tsv(&mut self) -> Result<Vec<Option<String>>, ParserError> {
-        let values = self.parse_tab_value()?;
-        Ok(values)
-    }
-
-    fn parse_tab_value(&mut self) -> Result<Vec<Option<String>>, ParserError> {
-        let mut values = vec![];
-        let mut content = String::from("");
-        while let Some(t) = self.next_token_no_skip() {
-            match t {
-                Token::Whitespace(Whitespace::Tab) => {
-                    values.push(Some(content.to_string()));
-                    content.clear();
-                }
-                Token::Whitespace(Whitespace::Newline) => {
-                    values.push(Some(content.to_string()));
-                    content.clear();
-                }
-                Token::Backslash => {
-                    if self.consume_token(&Token::Period) {
-                        return Ok(values);
-                    }
-                    if let Some(token) = self.next_token() {
-                        if let Token::Word(Word { value: v, .. }) = token {
-                            if v == "N" {
-                                values.push(None);
-                            }
-                        }
-                    } else {
-                        continue;
-                    }
-                }
-                _ => {
-                    content.push_str(&t.to_string());
-                }
+    fn parse_copy_option(&mut self) -> Result<CopyOption, ParserError> {
+        Ok(match self.expect_one_of_keywords(&["FORMAT"])? {
+            "FORMAT" => {
+                let format = self.expect_one_of_keywords(&["CSV", "TEXT", "BINARY"])?;
+                CopyOption::Format(format.to_string())
             }
-        }
-        Ok(values)
+            _ => unreachable!(),
+        })
     }
 
     /// Parse a literal value (numbers, strings, date/time, booleans)
