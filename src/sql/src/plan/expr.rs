@@ -181,8 +181,6 @@ pub enum CoercibleScalarExpr {
     Parameter(usize),
     LiteralNull,
     LiteralString(String),
-    LiteralArray(Vec<CoercibleScalarExpr>),
-    LiteralList(Vec<CoercibleScalarExpr>),
     LiteralRecord(Vec<CoercibleScalarExpr>),
 }
 

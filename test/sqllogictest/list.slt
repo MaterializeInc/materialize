@@ -14,7 +14,7 @@ select LIST[1,2,3]
 ----
 {1,2,3}
 
-query error Cannot create list with mixed types
+query error LIST expression does not have uniform type: Int32 vs List\(Int32\)
 select LIST[1,LIST[2,3]]
 
 query T
@@ -22,7 +22,7 @@ select LIST[[1],[2,3]]
 ----
 {{1},{2,3}}
 
-query error unable to infer type for empty list
+query error cannot determine type of empty list
 select LIST[]
 
 query T
@@ -57,11 +57,13 @@ SELECT LIST[[[[1], [2]]], [[[3]]]]
 {{{{1},{2}}},{{{3}}}}
 
 # List(Int) cannot be cast to List(List(Int))
-query error Cannot create list with mixed types
+query error CAST does not support casting from i32 to i32 list
 select LIST[1, null] :: INT LIST LIST
 
-query error
+query T
 select LIST[1, null] :: TEXT LIST
+----
+{1,NULL}
 
 query T
 select LIST['foo', 'f}o', '"\', null, 'null', 'NULL']
@@ -1036,5 +1038,5 @@ SELECT length(LIST['1','2']::text)
 ----
 5
 
-query error Cannot call function length\(unknown\): length does not support implicitly casting from string list to string
+query error Cannot call function length\(string list\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT length(LIST['1','2'])

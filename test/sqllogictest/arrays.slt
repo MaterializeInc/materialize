@@ -9,6 +9,18 @@
 
 mode cockroach
 
+# Test coercion behavior of multidimensional arrays.
+
+query error ARRAY expression does not have uniform type: Array\(Int32\) vs Array\(String\)
+SELECT ARRAY[ARRAY[1, 2], ARRAY['3', '4']]
+
+query T
+SELECT ARRAY[ARRAY[1, 2], ARRAY['3', '4']]::int[]
+----
+{{1,2},{3,4}}
+
+# Test array_to_string.
+
 query TT
 SELECT array_to_string(ARRAY['a', 'b,', NULL, 'c'], ','), array_to_string(ARRAY['a', 'b,', NULL, 'c'], ',', NULL)
 ----
@@ -24,6 +36,8 @@ SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
 ----
 NULL  NULL
 
+# Test ANY.
+
 query B
 SELECT 1 = ANY(ARRAY[1, 2])
 ----
@@ -34,7 +48,7 @@ SELECT 1 = ANY(ARRAY[2])
 ----
 false
 
-query B
+query error ANY operand array must have type i32\[\], not type string\[\]
 SELECT 1 = ANY(ARRAY['1', '2'])
 ----
 true
@@ -42,15 +56,20 @@ true
 query error ANY operand array must have type i32\[\], not type string\[\]
 SELECT 1 = ANY(ARRAY['hi'::text])
 
-query error cannot evaluate ANY for element type string and array type i32
+query error invalid input syntax for int4: invalid digit found in string: "hi"
 select 'hi' = any(array[1]);
 
-query B
+query error cannot determine type of empty array
 SELECT 'hi'::text = ANY(ARRAY[])
 ----
 false
 
-query error Cannot create array with mixed types. Element 1 has type i32 but element 2 has type bool
+query B
+SELECT 'hi'::text = ANY(ARRAY[]::text[])
+----
+false
+
+query error ARRAY expression does not have uniform type: Int32 vs String
 SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
 
 query B
