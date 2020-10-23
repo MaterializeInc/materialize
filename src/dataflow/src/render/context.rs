@@ -175,6 +175,12 @@ where
     /// required by `self.collection(expr)` when converting data from an
     /// arrangement; if less data are required, the `logic` argument is able
     /// to use a reference and produce the minimal amount of data instead.
+    ///
+    /// The method also takes a `key_selector` argument which allows the
+    /// caller to indicate that certain scalar expressions may have literal
+    /// values (at least, for all yielded results). This can enable the
+    /// use of keys in arrangements, and in particular drive the choice of
+    /// which arrangement to use toward one whose keys must be literals.
     pub fn flat_map_ref<I, L, K>(
         &self,
         relation_expr: &P,
@@ -201,11 +207,15 @@ where
             Some((oks.flat_map(move |v| logic(&v)), err.clone()))
         } else if let Some(local) = self.local.get(relation_expr) {
             // Determine a key that is constrained to a literal value.
-            let constrained_key = local
+            let mut constrained_keys = local
                 .keys()
-                .find_map(|key| key_selector(key).map(|row| (key.clone(), row)));
+                .filter_map(|key| key_selector(key).map(|row| (key.clone(), row)))
+                .collect::<Vec<_>>();
+            // Sort keys by length as a proxy for selectivity.
+            // TODO(#4580): improve this heuristic when possible.
+            constrained_keys.sort_by_key(|(key, _row)| key.len());
             // If we found such a key, use a more advanced implementation.
-            if let Some((key, row)) = constrained_key {
+            if let Some((key, row)) = constrained_keys.pop() {
                 let (oks, errs) = &local[&key];
 
                 let result = oks
@@ -248,11 +258,15 @@ where
             }
         } else if let Some(trace) = self.trace.get(relation_expr) {
             // Determine a key that is constrained to a literal value.
-            let constrained_key = trace
+            let mut constrained_keys = trace
                 .keys()
-                .find_map(|key| key_selector(key).map(|row| (key.clone(), row)));
+                .filter_map(|key| key_selector(key).map(|row| (key.clone(), row)))
+                .collect::<Vec<_>>();
+            // Sort keys by length as a proxy for selectivity.
+            // TODO(#4580): improve this heuristic when possible.
+            constrained_keys.sort_by_key(|(key, _row)| key.len());
             // If we found such a key, use a more advanced implementation.
-            if let Some((key, row)) = constrained_key {
+            if let Some((key, row)) = constrained_keys.pop() {
                 let (_id, oks, errs) = &trace[&key];
 
                 let result = oks
