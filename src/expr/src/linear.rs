@@ -161,6 +161,30 @@ impl MapFilterProject {
         (map, filter, project)
     }
 
+    /// Determines if a scalar expression must be equal to a literal datum.
+    pub fn literal_constraint(&self, expr: &ScalarExpr) -> Option<Datum> {
+        for (_pos, predicate) in self.predicates.iter() {
+            if let ScalarExpr::CallBinary {
+                func: crate::BinaryFunc::Eq,
+                expr1,
+                expr2,
+            } = predicate
+            {
+                if let Some(Ok(datum1)) = expr1.as_literal() {
+                    if &**expr2 == expr {
+                        return Some(datum1);
+                    }
+                }
+                if let Some(Ok(datum2)) = expr2.as_literal() {
+                    if &**expr1 == expr {
+                        return Some(datum2);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Optimize the internal expression evaluation order.
     pub fn optimize(&mut self) {
         // This should probably resemble existing scalar cse.

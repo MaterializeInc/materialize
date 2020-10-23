@@ -766,17 +766,30 @@ where
         worker_index: usize,
     ) -> bool {
         if let Some((mfp, input)) = self.extract_map_filter_project(relation_expr) {
+            let mfp2 = mfp.clone();
             self.ensure_rendered(&input, scope, worker_index);
             let (ok_collection, mut err_collection) = self
-                .flat_map_ref(&input, {
-                    let mut row_packer = repr::RowPacker::new();
-                    move |row| {
-                        let temp_storage = RowArena::new();
-                        mfp.evaluate(&mut row.unpack(), &temp_storage, &mut row_packer)
-                            .map_err(|e| e.into())
-                            .transpose()
-                    }
-                })
+                .flat_map_ref(
+                    &input,
+                    move |exprs| {
+                        let constraints: Vec<_> =
+                            exprs.iter().map(|e| mfp2.literal_constraint(e)).collect();
+                        if constraints.iter().all(|c| c.is_some()) {
+                            Some(Row::pack(constraints.iter().map(|x| x.unwrap())))
+                        } else {
+                            None
+                        }
+                    },
+                    {
+                        let mut row_packer = repr::RowPacker::new();
+                        move |row| {
+                            let temp_storage = RowArena::new();
+                            mfp.evaluate(&mut row.unpack(), &temp_storage, &mut row_packer)
+                                .map_err(|e| e.into())
+                                .transpose()
+                        }
+                    },
+                )
                 .unwrap();
 
             use timely::dataflow::operators::ok_err::OkErr;
