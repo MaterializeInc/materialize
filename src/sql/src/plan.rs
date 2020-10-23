@@ -126,7 +126,6 @@ pub enum Plan {
         source: ::expr::RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
-        materialize: bool,
     },
     Tail {
         id: GlobalId,

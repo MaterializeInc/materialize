@@ -1556,7 +1556,6 @@ fn handle_select(
         source: relation_expr,
         when,
         finishing,
-        materialize: true,
     })
 }
 

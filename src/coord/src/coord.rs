@@ -468,11 +468,7 @@ where
                                 source,
                                 when,
                                 finishing,
-                                materialize,
-                            } => {
-                                self.sequence_peek(conn_id, source, when, finishing, materialize)
-                                    .await?
-                            }
+                            } => self.sequence_peek(conn_id, source, when, finishing).await?,
 
                             Plan::SendRows(rows) => send_immediate_rows(rows),
 
@@ -1288,9 +1284,8 @@ where
                 source,
                 when,
                 finishing,
-                materialize,
             } => tx.send(
-                self.sequence_peek(session.conn_id(), source, when, finishing, materialize)
+                self.sequence_peek(session.conn_id(), source, when, finishing)
                     .await,
                 session,
             ),
@@ -1772,7 +1767,6 @@ where
         mut source: RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
-        materialize: bool,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let timestamp = self.determine_timestamp(&source, when)?;
 
@@ -1826,13 +1820,8 @@ where
             {
                 if let Some(index_id) = self.catalog.default_index_for(*id) {
                     (true, index_id)
-                } else if materialize {
-                    (false, self.allocate_transient_id()?)
                 } else {
-                    bail!(
-                        "{} is not materialized",
-                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap()
-                    )
+                    (false, self.allocate_transient_id()?)
                 }
             } else {
                 (false, self.allocate_transient_id()?)
