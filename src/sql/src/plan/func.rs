@@ -1102,6 +1102,10 @@ lazy_static! {
                      WHERE o.oid = $1)"
                 )
             },
+            "regexp_match" => Scalar {
+                params!(String, String) => VariadicFunc::RegexpMatch,
+                params!(String, String, String) => VariadicFunc::RegexpMatch
+            },
             "replace" => Scalar {
                 params!(String, String, String) => VariadicFunc::Replace
             },
@@ -1693,36 +1697,36 @@ lazy_static! {
 
             // LIKE
             "~~" => Scalar {
-                params!(String, String) => MatchLikePattern
+                params!(String, String) => IsLikePatternMatch
             },
             "!~~" => Scalar {
                 params!(String, String) => binary_op(|_ecx, lhs, rhs| {
                     Ok(lhs
-                        .call_binary(rhs, MatchLikePattern)
+                        .call_binary(rhs, IsLikePatternMatch)
                         .call_unary(UnaryFunc::Not))
                 })
             },
 
             // REGEX
             "~" => Scalar {
-                params!(String, String) => MatchRegex { case_insensitive: false }
+                params!(String, String) => IsRegexpMatch { case_insensitive: false }
             },
             "~*" => Scalar {
                 params!(String, String) => binary_op(|_ecx, lhs, rhs| {
-                    Ok(lhs.call_binary(rhs, MatchRegex { case_insensitive: true }))
+                    Ok(lhs.call_binary(rhs, IsRegexpMatch { case_insensitive: true }))
                 })
             },
             "!~" => Scalar {
                 params!(String, String) => binary_op(|_ecx, lhs, rhs| {
                     Ok(lhs
-                        .call_binary(rhs, MatchRegex { case_insensitive: false })
+                        .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not))
                 })
             },
             "!~*" => Scalar {
                 params!(String, String) => binary_op(|_ecx, lhs, rhs| {
                     Ok(lhs
-                        .call_binary(rhs, MatchRegex { case_insensitive: true })
+                        .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
                         .call_unary(UnaryFunc::Not))
                 })
             },

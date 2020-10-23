@@ -10,12 +10,14 @@
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
+use std::iter;
 use std::str;
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
 use itertools::Itertools;
+use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
@@ -1235,34 +1237,6 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     }
 }
 
-fn match_like_pattern<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let haystack = a.unwrap_str();
-    let needle = like_pattern::build_regex(b.unwrap_str())?;
-    Ok(Datum::from(needle.is_match(haystack)))
-}
-
-fn match_cached_regex<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
-    let haystack = a.unwrap_str();
-    Datum::from(needle.is_match(haystack))
-}
-
-fn match_regex<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    case_insensitive: bool,
-) -> Result<Datum<'a>, EvalError> {
-    let haystack = a.unwrap_str();
-    let needle = build_regex(b, case_insensitive)?;
-    Ok(Datum::from(needle.is_match(haystack)))
-}
-
-pub fn build_regex(d: Datum, case_insensitive: bool) -> Result<regex::Regex, EvalError> {
-    regex::RegexBuilder::new(d.unwrap_str())
-        .case_insensitive(case_insensitive)
-        .build()
-        .map_err(|e| EvalError::InvalidRegex(e.to_string()))
-}
-
 fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
     match a.unwrap_str().chars().next() {
         None => Datum::Int32(0),
@@ -1780,8 +1754,8 @@ pub enum BinaryFunc {
     Lte,
     Gt,
     Gte,
-    MatchLikePattern,
-    MatchRegex { case_insensitive: bool },
+    IsLikePatternMatch,
+    IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
     DatePartInterval,
@@ -1883,8 +1857,10 @@ impl BinaryFunc {
             BinaryFunc::Lte => Ok(eager!(lte)),
             BinaryFunc::Gt => Ok(eager!(gt)),
             BinaryFunc::Gte => Ok(eager!(gte)),
-            BinaryFunc::MatchLikePattern => eager!(match_like_pattern),
-            BinaryFunc::MatchRegex { case_insensitive } => eager!(match_regex, *case_insensitive),
+            BinaryFunc::IsLikePatternMatch => eager!(is_like_pattern_match_dynamic),
+            BinaryFunc::IsRegexpMatch { case_insensitive } => {
+                eager!(is_regexp_match_dynamic, *case_insensitive)
+            }
             BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
             BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
             BinaryFunc::DatePartInterval => {
@@ -1955,7 +1931,7 @@ impl BinaryFunc {
                 ScalarType::Bool.nullable(in_nullable)
             }
 
-            MatchLikePattern | MatchRegex { .. } => {
+            IsLikePatternMatch | IsRegexpMatch { .. } => {
                 // The output can be null if the pattern is invalid.
                 ScalarType::Bool.nullable(true)
             }
@@ -2208,7 +2184,7 @@ impl BinaryFunc {
             | JsonbDeleteString
             | TextConcat
             | ListIndex
-            | MatchRegex { .. }
+            | IsRegexpMatch { .. }
             | ArrayContains
             | ArrayIndex
             | ArrayLower
@@ -2216,7 +2192,7 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat => true,
-            MatchLikePattern
+            IsLikePatternMatch
             | ToCharTimestamp
             | ToCharTimestampTz
             | DatePartInterval
@@ -2288,11 +2264,11 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Lte => f.write_str("<="),
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
-            BinaryFunc::MatchLikePattern => f.write_str("like"),
-            BinaryFunc::MatchRegex {
+            BinaryFunc::IsLikePatternMatch => f.write_str("like"),
+            BinaryFunc::IsRegexpMatch {
                 case_insensitive: false,
             } => f.write_str("~"),
-            BinaryFunc::MatchRegex {
+            BinaryFunc::IsRegexpMatch {
                 case_insensitive: true,
             } => f.write_str("~*"),
             BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
@@ -2441,7 +2417,8 @@ pub enum UnaryFunc {
     ByteLengthBytes,
     ByteLengthString,
     CharLength,
-    MatchRegex(Regex),
+    IsRegexpMatch(Regex),
+    RegexpMatch(Regex),
     DatePartInterval(DateTimeUnits),
     DatePartTimestamp(DateTimeUnits),
     DatePartTimestampTz(DateTimeUnits),
@@ -2574,7 +2551,8 @@ impl UnaryFunc {
             UnaryFunc::ByteLengthString => byte_length(a.unwrap_str()),
             UnaryFunc::ByteLengthBytes => byte_length(a.unwrap_bytes()),
             UnaryFunc::CharLength => char_length(a),
-            UnaryFunc::MatchRegex(regex) => Ok(match_cached_regex(a, &regex)),
+            UnaryFunc::IsRegexpMatch(regex) => Ok(is_regexp_match_static(a, &regex)),
+            UnaryFunc::RegexpMatch(regex) => regexp_match_static(a, temp_storage, &regex),
             UnaryFunc::DatePartInterval(units) => {
                 date_part_interval_inner(*units, a.unwrap_interval())
             }
@@ -2613,7 +2591,7 @@ impl UnaryFunc {
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(in_nullable),
 
-            MatchRegex(_) => ScalarType::Bool.nullable(in_nullable),
+            IsRegexpMatch(_) => ScalarType::Bool.nullable(in_nullable),
 
             CastStringToBool => ScalarType::Bool.nullable(true),
             CastStringToBytes => ScalarType::Bytes.nullable(true),
@@ -2739,6 +2717,8 @@ impl UnaryFunc {
             },
 
             ListLength => ScalarType::Int64.nullable(true),
+
+            RegexpMatch(_) => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
         }
     }
 
@@ -2873,7 +2853,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::BitLengthString => f.write_str("bit_length"),
             UnaryFunc::ByteLengthBytes => f.write_str("byte_length"),
             UnaryFunc::ByteLengthString => f.write_str("byte_length"),
-            UnaryFunc::MatchRegex(regex) => write!(f, "\"{}\" ~", regex.as_str()),
+            UnaryFunc::IsRegexpMatch(regex) => write!(f, "\"{}\" ~", regex.as_str()),
+            UnaryFunc::RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             UnaryFunc::DatePartInterval(units) => write!(f, "date_part_{}_iv", units),
             UnaryFunc::DatePartTimestamp(units) => write!(f, "date_part_{}_ts", units),
             UnaryFunc::DatePartTimestampTz(units) => write!(f, "date_part_{}_tstz", units),
@@ -3022,6 +3003,99 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::String(
         string.split(delimiter).nth(index).unwrap_or(""),
     ))
+}
+
+fn is_like_pattern_match_dynamic<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let haystack = a.unwrap_str();
+    let needle = like_pattern::build_regex(b.unwrap_str())?;
+    Ok(Datum::from(needle.is_match(haystack)))
+}
+
+fn is_regexp_match_static<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
+    let haystack = a.unwrap_str();
+    Datum::from(needle.is_match(haystack))
+}
+
+fn is_regexp_match_dynamic<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    case_insensitive: bool,
+) -> Result<Datum<'a>, EvalError> {
+    let haystack = a.unwrap_str();
+    let needle = build_regex(b.unwrap_str(), if case_insensitive { "i" } else { "" })?;
+    Ok(Datum::from(needle.is_match(haystack)))
+}
+
+fn regexp_match_dynamic<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let haystack = datums[0];
+    let needle = datums[1].unwrap_str();
+    let flags = match datums.get(2) {
+        Some(d) => d.unwrap_str(),
+        None => "",
+    };
+    let needle = build_regex(needle, flags)?;
+    regexp_match_static(haystack, temp_storage, &needle)
+}
+
+fn regexp_match_static<'a>(
+    haystack: Datum<'a>,
+    temp_storage: &'a RowArena,
+    needle: &regex::Regex,
+) -> Result<Datum<'a>, EvalError> {
+    let mut packer = RowPacker::new();
+    if needle.captures_len() > 1 {
+        // The regex contains capture groups, so return an array containing the
+        // matched text in each capture group, unless the entire match fails.
+        // Individual capture groups may also be null if that group did not
+        // participate in the match.
+        match needle.captures(haystack.unwrap_str()) {
+            None => packer.push(Datum::Null),
+            Some(captures) => packer.push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: captures.len() - 1,
+                }],
+                // Skip the 0th capture group, which is the whole match.
+                captures.iter().skip(1).map(|mtch| match mtch {
+                    None => Datum::Null,
+                    Some(mtch) => Datum::String(mtch.as_str()),
+                }),
+            )?,
+        }
+    } else {
+        // The regex contains no capture groups, so return a one-element array
+        // containing the match, or null if there is no match.
+        match needle.find(haystack.unwrap_str()) {
+            None => packer.push(Datum::Null),
+            Some(mtch) => packer.push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: 1,
+                }],
+                iter::once(Datum::String(mtch.as_str())),
+            )?,
+        };
+    };
+    Ok(temp_storage.push_unary_row(packer.finish()))
+}
+
+pub fn build_regex(needle: &str, flags: &str) -> Result<regex::Regex, EvalError> {
+    let mut regex = RegexBuilder::new(needle);
+    for f in flags.chars() {
+        match f {
+            'i' => {
+                regex.case_insensitive(true);
+            }
+            'c' => {
+                regex.case_insensitive(false);
+            }
+            _ => return Err(EvalError::InvalidRegexFlag(f)),
+        }
+    }
+    Ok(regex.build()?)
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
@@ -3499,6 +3573,7 @@ pub enum VariadicFunc {
     },
     ListSlice,
     SplitPart,
+    RegexpMatch,
 }
 
 impl VariadicFunc {
@@ -3524,7 +3599,7 @@ impl VariadicFunc {
             VariadicFunc::Coalesce => coalesce(datums, temp_storage, exprs),
             VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
             VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
-            VariadicFunc::PadLeading => Ok(eager!(pad_leading, temp_storage)?),
+            VariadicFunc::PadLeading => eager!(pad_leading, temp_storage),
             VariadicFunc::Substr => Ok(eager!(substr)),
             VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
@@ -3540,7 +3615,8 @@ impl VariadicFunc {
                 Ok(eager!(list_create, temp_storage))
             }
             VariadicFunc::ListSlice => Ok(eager!(list_slice, temp_storage)),
-            VariadicFunc::SplitPart => Ok(eager!(split_part)?),
+            VariadicFunc::SplitPart => eager!(split_part),
+            VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
         }
     }
 
@@ -3592,6 +3668,7 @@ impl VariadicFunc {
             }
             .nullable(true),
             SplitPart => ScalarType::String.nullable(true),
+            RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
         }
     }
 
@@ -3625,6 +3702,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
             VariadicFunc::ListSlice => f.write_str("list_slice"),
             VariadicFunc::SplitPart => f.write_str("split_string"),
+            VariadicFunc::RegexpMatch => f.write_str("regexp_match"),
         }
     }
 }
