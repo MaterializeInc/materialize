@@ -42,9 +42,11 @@ found.
 
 A `materialized` instance runs a specified number of timely dataflow worker
 threads. Worker threads can only be specified at startup by setting the
-required `--workers` flag, and cannot be changed without shutting down
-`materialized` and restarting. In the future, dynamically changing the number
-of worker threads will be possible over distributed clusters, see
+`--workers` flag, and cannot be changed without shutting down `materialized`
+and restarting. If `--workers` is not set, `materialized` will default to using
+half of the machine's physical cores as the thread count.  In the future,
+dynamically changing the number of worker threads will be possible over
+distributed clusters, see
 [#2449](https://github.com/MaterializeInc/materialize/issues/2449).
 
 {{< version-changed v0.4.0 >}}
