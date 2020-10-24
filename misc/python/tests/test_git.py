@@ -36,7 +36,7 @@ def test_tags_returns_ordered_newest_first() -> None:
             tag.patch,
         )
         if prev.prerelease and tag.prerelease:
-            assert prev.prerelease >= tag.prerelease
+            assert prev.patch > tag.patch or prev.prerelease >= tag.prerelease
         prev = tag
 
         if tag == current_latest:
