@@ -32,9 +32,12 @@ SELECT array_to_string(ARRAY['a', 'b,', 'c'], NULL), array_to_string(ARRAY['a', 
 NULL  afoob,foozerpfooc
 
 query TT
-SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
+SELECT array_to_string(NULL::text[], ','), array_to_string(NULL::text[], 'foo', 'zerp')
 ----
 NULL  NULL
+
+query error Cannot call function array_to_string\(unknown, unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
 
 # Test ANY.
 

@@ -757,9 +757,9 @@ impl<'a> ScalarType {
     /// equality.
     pub fn desaturate(&self) -> ScalarType {
         match self {
+            ScalarType::Array(..) => ScalarType::Array(Box::new(ScalarType::String)),
             ScalarType::Decimal(..) => ScalarType::Decimal(0, 0),
             ScalarType::List(..) => ScalarType::List(Box::new(ScalarType::String)),
-            ScalarType::Array(..) => ScalarType::Array(Box::new(ScalarType::String)),
             ScalarType::Record { .. } => ScalarType::Record { fields: vec![] },
             _ => self.clone(),
         }
@@ -772,6 +772,13 @@ impl<'a> ScalarType {
             nullable,
             scalar_type: self,
         }
+    }
+
+    /// Returns whether or not `self` is a vector-like type, i.e.
+    /// [`ScalarType::List`] or [`ScalarType::Array`], irrespective of its
+    /// element type.
+    pub fn is_vec(&self) -> bool {
+        matches!(self, ScalarType::List(_) | ScalarType::Array(_))
     }
 }
 
