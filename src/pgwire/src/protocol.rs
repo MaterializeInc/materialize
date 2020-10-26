@@ -9,11 +9,12 @@
 
 use std::cmp;
 use std::convert::TryFrom;
+use std::future::Future;
 use std::iter;
 use std::time::Instant;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::stream::StreamExt;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::debug;
@@ -22,10 +23,10 @@ use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
 
-use coord::{ExecuteResponse, StartupMessage};
+use coord::{session::RowBatchStream, ExecuteResponse, StartupMessage};
 use dataflow_types::{PeekResponse, Update};
 use ore::cast::CastFrom;
-use repr::{Datum, RelationDesc, Row, RowArena};
+use repr::{Datum, RelationDesc, RowArena};
 use sql::ast::Statement;
 
 use crate::codec::FramedConn;
@@ -84,25 +85,31 @@ pub struct StateMachine<A> {
 
 impl<A> StateMachine<A>
 where
-    A: AsyncRead + AsyncWrite + Unpin,
+    A: AsyncRead + AsyncWrite + Send + Unpin,
 {
-    pub async fn run(
+    // Manually desugar this (don't use `async fn run`) here because a much better
+    // error message is produced if there are problems with Send or other traits
+    // somewhere within the Future.
+    #[allow(clippy::manual_async_fn)]
+    pub fn run(
         mut self,
         version: i32,
         params: Vec<(String, String)>,
-    ) -> Result<(), comm::Error> {
-        let mut state = self.startup(version, params).await?;
+    ) -> impl Future<Output = Result<(), comm::Error>> + Send {
+        async move {
+            let mut state = self.startup(version, params).await?;
 
-        loop {
-            state = match state {
-                State::Ready => self.advance_ready().await?,
-                State::Drain => self.advance_drain().await?,
-                State::Done => break,
+            loop {
+                state = match state {
+                    State::Ready => self.advance_ready().await?,
+                    State::Drain => self.advance_drain().await?,
+                    State::Done => break,
+                }
             }
-        }
 
-        self.coord_client.terminate().await;
-        Ok(())
+            self.coord_client.terminate().await;
+            Ok(())
+        }
     }
 
     async fn advance_ready(&mut self) -> Result<State, comm::Error> {
@@ -388,11 +395,11 @@ where
         raw_params: Vec<Option<Vec<u8>>>,
         result_formats: Vec<pgrepr::Format>,
     ) -> Result<State, comm::Error> {
-        let stmt = match self
+        let stmt = self
             .coord_client
             .session()
-            .get_prepared_statement(&statement_name)
-        {
+            .get_prepared_statement(&statement_name);
+        let stmt = match stmt {
             Some(stmt) => stmt,
             None => {
                 return self
@@ -474,8 +481,7 @@ where
                     .await;
             }
         };
-        if portal.remaining_rows.is_some() {
-            let rows = portal.remaining_rows.take().unwrap();
+        if let Some(rows) = portal.remaining_rows.take() {
             return self
                 .send_rows(
                     row_desc.expect("portal missing row desc on resumption"),
@@ -499,7 +505,8 @@ where
     }
 
     async fn describe_statement(&mut self, name: String) -> Result<State, comm::Error> {
-        match self.coord_client.session().get_prepared_statement(&name) {
+        let stmt = self.coord_client.session().get_prepared_statement(&name);
+        match stmt {
             Some(stmt) => {
                 self.conn
                     .send(BackendMessage::ParameterDescription(
@@ -520,19 +527,21 @@ where
     }
 
     async fn describe_portal(&mut self, name: String) -> Result<State, comm::Error> {
-        let portal = match self.coord_client.session().get_portal(&name) {
-            Some(portal) => portal,
+        let stmt_name = self
+            .coord_client
+            .session()
+            .get_portal(&name)
+            .map(|portal| portal.statement_name.clone());
+        match stmt_name {
+            Some(stmt_name) => self.send_describe_rows(stmt_name).await,
             None => {
-                return self
-                    .error(
-                        SqlState::INVALID_SQL_STATEMENT_NAME,
-                        "portal does not exist",
-                    )
-                    .await
+                self.error(
+                    SqlState::INVALID_SQL_STATEMENT_NAME,
+                    "portal does not exist",
+                )
+                .await
             }
-        };
-        let stmt_name = portal.statement_name.clone();
-        self.send_describe_rows(stmt_name).await
+        }
     }
 
     async fn close_statement(&mut self, name: String) -> Result<State, comm::Error> {
@@ -553,10 +562,9 @@ where
     }
 
     async fn sync(&mut self) -> Result<State, comm::Error> {
+        let txn_state = self.coord_client.session().transaction().into();
         self.conn
-            .send(BackendMessage::ReadyForQuery(
-                self.coord_client.session().transaction().into(),
-            ))
+            .send(BackendMessage::ReadyForQuery(txn_state))
             .await?;
         self.flush().await
     }
@@ -672,7 +680,13 @@ where
                     }
                     PeekResponse::Error(text) => self.error(SqlState::INTERNAL_ERROR, text).await,
                     PeekResponse::Rows(rows) => {
-                        self.send_rows(row_desc, portal_name, rows, max_rows).await
+                        self.send_rows(
+                            row_desc,
+                            portal_name,
+                            Box::new(stream::iter(vec![Ok(rows)])),
+                            max_rows,
+                        )
+                        .await
                     }
                 }
             }
@@ -714,7 +728,7 @@ where
         &mut self,
         row_desc: RelationDesc,
         portal_name: String,
-        mut rows: Vec<Row>,
+        mut rows: RowBatchStream,
         max_rows: usize,
     ) -> Result<State, comm::Error> {
         let portal = self
@@ -723,7 +737,8 @@ where
             .get_portal_mut(&portal_name)
             .expect("valid portal name for send rows");
 
-        if let Some(row) = rows.first() {
+        let mut batch = rows.try_next().await?;
+        if let Some([row, ..]) = batch.as_deref() {
             let datums = row.unpack();
             let col_types = &row_desc.typ().column_types;
             if datums.len() != col_types.len() {
@@ -763,17 +778,38 @@ where
                 .collect(),
         );
 
-        let nrows = cmp::min(max_rows, rows.len());
-        self.conn
-            .send_all(rows.drain(..nrows).map(move |row| {
-                BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
-            }))
-            .await?;
-        ROWS_RETURNED.inc_by(u64::cast_from(nrows));
+        let mut total_sent_rows = 0;
+        // want_rows is the maximum number of rows the client wants.
+        let mut want_rows = if max_rows == 0 { usize::MAX } else { max_rows };
+
+        // Send rows while the client still wants them and there are still rows to send.
+        while let Some(batch_rows) = batch {
+            let mut batch_rows = batch_rows;
+            // Drain panics if it's > len, so cap it.
+            let drain_rows = cmp::min(want_rows, batch_rows.len());
+            self.conn
+                .send_all(batch_rows.drain(..drain_rows).map(|row| {
+                    BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
+                }))
+                .await?;
+            total_sent_rows += drain_rows;
+            want_rows -= drain_rows;
+            // If we have sent the number of requested rows, put the remainder of the batch
+            // back and stop sending.
+            if want_rows == 0 {
+                rows = Box::new(stream::iter(vec![Ok(batch_rows)]).chain(rows));
+                break;
+            }
+            self.conn.flush().await?;
+            batch = rows.try_next().await?;
+        }
+
+        ROWS_RETURNED.inc_by(u64::cast_from(total_sent_rows));
 
         // Always return rows back, even if it's empty. This prevents an unclosed
-        // portal from re-executing after it has been emptied.
-        portal.set_remaining_rows(rows);
+        // portal from re-executing after it has been emptied. into_inner unwraps the
+        // Take.
+        portal.set_remaining_rows(Box::new(rows));
 
         // If max_rows is not specified, we will always send back a CommandComplete. If
         // max_rows is specified, we only send CommandComplete if there were more rows
@@ -781,10 +817,10 @@ where
         // were remaining before sending (not that are remaining after sending), then
         // we still send a PortalSuspended. The number of remaining rows after the rows
         // have been sent doesn't matter. This matches postgres.
-        if max_rows == 0 || max_rows > nrows {
+        if max_rows == 0 || max_rows > total_sent_rows {
             self.conn
                 .send(BackendMessage::CommandComplete {
-                    tag: format!("SELECT {}", nrows),
+                    tag: format!("SELECT {}", total_sent_rows),
                 })
                 .await?;
         } else {

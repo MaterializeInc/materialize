@@ -38,5 +38,5 @@ mod transaction;
 mod var;
 
 pub use session::Session;
-pub use statement::{Portal, PreparedStatement};
+pub use statement::{Portal, PreparedStatement, RowBatchStream};
 pub use transaction::TransactionStatus;

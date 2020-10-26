@@ -39,6 +39,8 @@
 //! [eqf]: https://www.postgresql.org/docs/12/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
 //! [m]: https://www.postgresql.org/docs/12/protocol-message-formats.html#Parse
 
+use derivative::Derivative;
+
 use repr::{RelationDesc, Row};
 use sql::ast::Statement;
 use sql::plan::Params;
@@ -93,7 +95,8 @@ impl PreparedStatement {
 }
 
 /// A portal represents the execution state of a running or runnable query.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Portal {
     /// The name of the prepared statement that is bound to this portal.
     pub statement_name: String,
@@ -103,12 +106,17 @@ pub struct Portal {
     pub result_formats: Vec<pgrepr::Format>,
     /// The rows that have yet to be delivered to the client, if the portal is
     /// partially executed.
-    pub remaining_rows: Option<Vec<Row>>,
+    #[derivative(Debug = "ignore")]
+    pub remaining_rows: Option<Box<RowBatchStream>>,
 }
 
 impl Portal {
     /// Sets the remaining rows for this portal.
-    pub fn set_remaining_rows(&mut self, rows: Vec<Row>) {
+    pub fn set_remaining_rows(&mut self, rows: Box<RowBatchStream>) {
         self.remaining_rows = Some(rows);
     }
 }
+
+/// A stream of batched rows.
+pub type RowBatchStream =
+    Box<dyn futures::Stream<Item = Result<Vec<Row>, comm::Error>> + Send + Unpin>;
