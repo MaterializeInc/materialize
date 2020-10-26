@@ -32,7 +32,7 @@ prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", de
 prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prometheus.git" }
 rand = "0.7.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
-regex = "1.4.0"
+regex = "1.4.1"
 repr = { path = "../repr" }
 rusoto_core = "0.45.0"
 rusoto_credential = "0.45.0"

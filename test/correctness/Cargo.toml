@@ -22,7 +22,7 @@ pgrepr = { path = "../../src/pgrepr" }
 postgres = "0.17"
 postgres-types = "0.1.1"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
-regex = "1.4.0"
+regex = "1.4.1"
 serde = { version = "1.0.116", features = ["derive"] }
 tokio = { version = "0.2.22", features = ["rt-threaded"] }
 tokio-postgres = "0.5.5"

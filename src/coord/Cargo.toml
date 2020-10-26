@@ -30,7 +30,7 @@ pgrepr = { path = "../pgrepr" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rand = "0.7.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-regex = "1.4.0"
+regex = "1.4.1"
 repr = { path = "../repr" }
 rusoto_kinesis = "0.45.0"
 rusqlite = { version = "0.24", features = ["bundled", "unlock_notify"] }
