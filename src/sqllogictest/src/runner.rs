@@ -898,10 +898,10 @@ pub async fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyh
                     }
                 }
             }
-        }
-
-        if let Outcome::Bail { .. } = outcome {
-            break;
+        } else if let Outcome::Success = outcome {
+            // Ok.
+        } else {
+            bail!("unexpected: {}", outcome);
         }
     }
 
