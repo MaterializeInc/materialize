@@ -1811,7 +1811,7 @@ where
             // need to block on the arrival of further input data.
             let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
-            let (project, filter) = Self::plan_peek(source.as_mut());
+            let (mut project, mut filter) = Self::plan_peek(source.as_mut());
 
             let (fast_path, index_id) = if let RelationExpr::Get {
                 id: Id::Global(id),
@@ -1831,6 +1831,16 @@ where
                 // Slow path. We need to perform some computation, so build
                 // a new transient dataflow that will be dropped after the
                 // peek completes.
+                // Re-install the filter and projection for dataflow rendering.
+                if !filter.is_empty() {
+                    let source_mut = source.as_mut();
+                    *source_mut = source_mut.take_dangerous().filter(filter.drain(..));
+                }
+                if let Some(columns) = project {
+                    let source_mut = source.as_mut();
+                    *source_mut = source_mut.take_dangerous().project(columns);
+                    project = None;
+                }
                 let typ = source.as_ref().typ();
                 let key: Vec<_> = (0..typ.arity()).map(ScalarExpr::Column).collect();
                 let view_id = self.allocate_transient_id()?;
