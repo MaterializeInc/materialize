@@ -232,6 +232,8 @@ pub enum DataType {
     Jsonb,
     /// Object ID
     Oid,
+    /// User-defined type
+    Custom(String),
 }
 
 impl AstDisplay for DataType {
@@ -299,6 +301,7 @@ impl AstDisplay for DataType {
             }
             DataType::Jsonb => f.write_str("jsonb"),
             DataType::Oid => f.write_str("oid"),
+            DataType::Custom(c) => f.write_str(c),
         }
     }
 }

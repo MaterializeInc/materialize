@@ -35,12 +35,12 @@ use ore::iter::IteratorExt;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
-    DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
-    Format, Ident, IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query,
-    SelectStatement, SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption,
-    Statement, TailStatement, Value,
+    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement,
+    CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateViewStatement, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
+    ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement,
+    ObjectName, ObjectType, Query, SelectStatement, SetVariableStatement, SetVariableValue,
+    ShowVariableStatement, SqlOption, Statement, TailStatement, Value,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -81,6 +81,7 @@ pub fn describe_statement(
         | Statement::CreateTable(_)
         | Statement::CreateSink(_)
         | Statement::CreateView(_)
+        | Statement::CreateMapType(_)
         | Statement::DropDatabase(_)
         | Statement::DropObjects(_)
         | Statement::SetVariable(_)
@@ -247,6 +248,7 @@ pub fn handle_statement(
         Statement::CreateSource(stmt) => handle_create_source(scx, stmt),
         Statement::CreateTable(stmt) => handle_create_table(scx, stmt),
         Statement::CreateView(stmt) => handle_create_view(scx, stmt, params),
+        Statement::CreateMapType(stmt) => handle_create_type(scx, stmt),
         Statement::DropDatabase(stmt) => handle_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => handle_drop_objects(scx, stmt),
         Statement::AlterObjectRename(stmt) => handle_alter_object_rename(scx, stmt),
@@ -800,6 +802,14 @@ fn handle_create_view(
         materialize,
         if_not_exists,
     })
+}
+
+fn handle_create_type(
+    _scx: &StatementContext,
+    _stmt: CreateMapTypeStatement,
+) -> Result<Plan, anyhow::Error> {
+    // todo@jldlaughlin: Return an error for any non-String, integral key types.
+    unsupported!("CREATE TYPE");
 }
 
 fn extract_timestamp_frequency_option(

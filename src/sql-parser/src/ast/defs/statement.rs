@@ -20,7 +20,8 @@
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    ColumnDef, Connector, Envelope, Expr, Format, Ident, ObjectName, Query, TableConstraint, Value,
+    ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, ObjectName, Query,
+    TableConstraint, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -39,6 +40,7 @@ pub enum Statement {
     CreateView(CreateViewStatement),
     CreateTable(CreateTableStatement),
     CreateIndex(CreateIndexStatement),
+    CreateMapType(CreateMapTypeStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndexOptions(AlterIndexOptionsStatement),
     DropDatabase(DropDatabaseStatement),
@@ -77,6 +79,7 @@ impl AstDisplay for Statement {
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
+            Statement::CreateMapType(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndexOptions(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
@@ -492,6 +495,32 @@ impl AstDisplay for CreateIndexStatement {
     }
 }
 impl_display!(CreateIndexStatement);
+
+/// `CREATE TYPE .. AS MAP`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateMapTypeStatement {
+    /// Name of the created type.
+    pub name: Ident,
+    /// Key type of the map.
+    pub key_typ: DataType,
+    /// Value type of the map.
+    pub value_typ: DataType,
+}
+
+impl AstDisplay for CreateMapTypeStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE TYPE ");
+        f.write_node(&self.name);
+        f.write_str(" ");
+        f.write_str("AS MAP ( KEY_TYPE = ");
+        f.write_node(&self.key_typ);
+        f.write_str(", ");
+        f.write_str("VALUE_TYPE = ");
+        f.write_node(&self.value_typ);
+        f.write_str(" )");
+    }
+}
+impl_display!(CreateMapTypeStatement);
 
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

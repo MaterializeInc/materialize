@@ -1347,6 +1347,8 @@ impl Parser {
         } else if self.parse_keyword("INDEX") {
             self.prev_token();
             self.parse_create_index()
+        } else if self.parse_keyword("TYPE") {
+            self.parse_create_type()
         } else {
             self.expected(
                 self.peek_range(),
@@ -1689,6 +1691,32 @@ impl Parser {
             on_name,
             key_parts,
             if_not_exists,
+        }))
+    }
+
+    fn parse_create_type(&mut self) -> Result<Statement, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_keyword("AS")?;
+        self.expect_keyword("MAP")?;
+
+        self.expect_token(&Token::LParen)?;
+
+        self.expect_keyword("KEY_TYPE")?;
+        self.expect_token(&Token::Eq)?;
+        let key_typ = self.parse_data_type_or_custom()?;
+
+        self.expect_token(&Token::Comma)?;
+
+        self.expect_keyword("VALUE_TYPE")?;
+        self.expect_token(&Token::Eq)?;
+        let value_typ = self.parse_data_type_or_custom()?;
+
+        self.expect_token(&Token::RParen)?;
+
+        Ok(Statement::CreateMapType(CreateMapTypeStatement {
+            name,
+            key_typ,
+            value_typ,
         }))
     }
 
@@ -2227,6 +2255,17 @@ impl Parser {
             }
         }
         Ok(data_type)
+    }
+
+    /// Parse a SQL data type using `parse_data_type`. If unable to parse an existing
+    /// SQL data type, parse as a custom, user-defined SQL data type.
+    fn parse_data_type_or_custom(&mut self) -> Result<DataType, ParserError> {
+        Ok(if let Ok(typ) = self.parse_data_type() {
+            typ
+        } else {
+            self.prev_token();
+            DataType::Custom(self.parse_identifier()?.to_string())
+        })
     }
 
     /// Parse `AS identifier` (or simply `identifier` if it's not a reserved keyword)
