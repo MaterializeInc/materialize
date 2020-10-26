@@ -1342,6 +1342,12 @@ lazy_static! {
                     })
                 })
             },
+            "list_append" => Scalar {
+                vec![ListAny, ListElementAny] => BinaryFunc::ListElementConcat
+            },
+            "list_cat" => Scalar {
+                vec![ListAny, ListAny] =>  BinaryFunc::ListListConcat
+            },
             "list_ndims" => Scalar {
                 vec![ListAny] => unary_op(|ecx, e| {
                     ecx.require_experimental_mode("list_ndims")?;
@@ -1358,6 +1364,9 @@ lazy_static! {
                     let max_dim = ecx.scalar_type(&lhs).unwrap_list_n_dims();
                     Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax{ max_dim }))
                 })
+            },
+            "list_prepend" => Scalar {
+                vec![ListElementAny, ListAny] => BinaryFunc::ElementListConcat
             },
             "mz_logical_timestamp" => Scalar {
                 params!() => nullary_op(|ecx| {
@@ -1720,7 +1729,10 @@ lazy_static! {
                     Ok(lhs.call_binary(rhs, TextConcat))
                 }),
                 params!(String, String) => TextConcat,
-                params!(Jsonb, Jsonb) => JsonbConcat
+                params!(Jsonb, Jsonb) => JsonbConcat,
+                params!(ListAny, ListAny) => ListListConcat,
+                params!(ListAny, ListElementAny) => ListElementConcat,
+                params!(ListElementAny, ListAny) => ElementListConcat
             },
 
             //JSON
