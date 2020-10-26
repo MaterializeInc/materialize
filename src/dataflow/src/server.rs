@@ -993,11 +993,19 @@ impl PendingPeek {
                 // The `results` should be sorted by `Row`, which means we only
                 // need to re-order `results` when there is a non-empty order_by.
                 if !self.finishing.order_by.is_empty() {
+                    // Re-usable storage for unpacking rows.
+                    let mut unpack_left = Vec::new();
+                    let mut unpack_right = Vec::new();
                     pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
+                        // Unpack rows into re-used allocations.
+                        unpack_left.clear();
+                        unpack_left.extend(left.iter());
+                        unpack_right.clear();
+                        unpack_right.extend(right.iter());
                         expr::compare_columns(
                             &self.finishing.order_by,
-                            &left.unpack(),
-                            &right.unpack(),
+                            &unpack_left[..],
+                            &unpack_right[..],
                             || left.cmp(right),
                         )
                     });
