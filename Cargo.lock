@@ -210,7 +210,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_sts",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -261,7 +261,7 @@ dependencies = [
  "rand_distr",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
  "uuid",
 ]
@@ -366,7 +366,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
  "url",
 ]
 
@@ -395,7 +395,7 @@ dependencies = [
  "rand",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -461,9 +461,9 @@ dependencies = [
  "predicates",
  "rand",
  "serde",
- "tokio",
+ "tokio 0.2.22",
  "tokio-serde",
- "tokio-util",
+ "tokio-util 0.4.0",
  "uuid",
 ]
 
@@ -521,7 +521,7 @@ dependencies = [
  "sql",
  "symbiosis",
  "timely",
- "tokio",
+ "tokio 0.2.22",
  "transform",
  "unicase",
  "url",
@@ -750,8 +750,8 @@ dependencies = [
  "serde",
  "serde_json",
  "timely",
- "tokio",
- "tokio-util",
+ "tokio 0.2.22",
+ "tokio-util 0.4.0",
  "url",
  "uuid",
 ]
@@ -1289,7 +1289,7 @@ dependencies = [
  "rand",
  "sqllogictest",
  "testdrive",
- "tokio",
+ "tokio 0.2.22",
  "walkdir",
 ]
 
@@ -1350,8 +1350,8 @@ dependencies = [
  "indexmap",
  "log",
  "slab",
- "tokio",
- "tokio-util",
+ "tokio 0.2.22",
+ "tokio-util 0.3.1",
 ]
 
 [[package]]
@@ -1475,7 +1475,7 @@ dependencies = [
  "itoa",
  "pin-project",
  "socket2",
- "tokio",
+ "tokio 0.2.22",
  "tower-service",
  "tracing",
  "want",
@@ -1489,7 +1489,7 @@ checksum = "ab58a31960b2f78c5c24cf255216789863754438a1e48849a956846f899e762e"
 dependencies = [
  "hyper",
  "native-tls",
- "tokio",
+ "tokio 0.2.22",
  "tokio-tls",
 ]
 
@@ -1697,7 +1697,7 @@ dependencies = [
  "rdkafka",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
  "url",
 ]
 
@@ -1887,7 +1887,7 @@ dependencies = [
  "sql-parser",
  "sysctl",
  "tempfile",
- "tokio",
+ "tokio 0.2.22",
  "tokio-openssl",
  "tokio-postgres",
  "tracing",
@@ -1917,7 +1917,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -1979,7 +1979,7 @@ dependencies = [
  "log",
  "metabase",
  "ore",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
 ]
 
@@ -2396,7 +2396,7 @@ dependencies = [
  "libc",
  "log",
  "smallvec",
- "tokio",
+ "tokio 0.2.22",
  "tracing-subscriber",
 ]
 
@@ -2487,7 +2487,7 @@ dependencies = [
  "prometheus",
  "regex",
  "serde",
- "tokio",
+ "tokio 0.2.22",
  "toml",
 ]
 
@@ -2516,7 +2516,7 @@ dependencies = [
  "rusoto_kinesis",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
 ]
 
@@ -2537,7 +2537,7 @@ dependencies = [
  "rand_distr",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
 ]
 
@@ -2595,9 +2595,9 @@ dependencies = [
  "rand",
  "repr",
  "sql",
- "tokio",
+ "tokio 0.2.22",
  "tokio-openssl",
- "tokio-util",
+ "tokio-util 0.4.0",
 ]
 
 [[package]]
@@ -2678,7 +2678,7 @@ dependencies = [
  "fallible-iterator",
  "futures",
  "log",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
 ]
 
@@ -2691,7 +2691,7 @@ dependencies = [
  "bytes",
  "futures",
  "openssl",
- "tokio",
+ "tokio 0.2.22",
  "tokio-openssl",
  "tokio-postgres",
 ]
@@ -2878,7 +2878,7 @@ dependencies = [
  "lazy_static",
  "pprof",
  "tempfile",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -3061,7 +3061,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -3183,7 +3183,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "tokio",
+ "tokio 0.2.22",
  "tokio-tls",
  "url",
  "wasm-bindgen",
@@ -3231,7 +3231,7 @@ dependencies = [
  "rustc_version",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
  "xml-rs",
 ]
 
@@ -3251,7 +3251,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
- "tokio",
+ "tokio 0.2.22",
  "zeroize",
 ]
 
@@ -3291,7 +3291,7 @@ dependencies = [
  "serde",
  "sha2",
  "time 0.2.16",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -3608,7 +3608,7 @@ dependencies = [
  "serde_json",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
  "url",
 ]
@@ -3658,7 +3658,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sql-parser",
- "tokio",
+ "tokio 0.2.22",
  "unicase",
  "url",
  "uuid",
@@ -3702,7 +3702,7 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
- "tokio",
+ "tokio 0.2.22",
  "walkdir",
 ]
 
@@ -3852,7 +3852,7 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
  "uuid",
  "whoami",
@@ -3972,7 +3972,7 @@ dependencies = [
  "prometheus",
  "regex",
  "serde",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
  "toml",
 ]
@@ -3988,7 +3988,7 @@ dependencies = [
  "ore",
  "rand",
  "rdkafka",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
 ]
 
@@ -4036,7 +4036,7 @@ dependencies = [
  "sql-parser",
  "tempfile",
  "termcolor",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
  "url",
  "uuid",
@@ -4209,6 +4209,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1911a203c5c240fd237e23a42e48846475f3d3b1e1dad3f17e6cc17a775b707c"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "tokio-macros"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4226,7 +4236,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c4b08c5f4208e699ede3df2520aca2e82401b2de33f45e96696a074480be594"
 dependencies = [
  "openssl",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -4247,8 +4257,8 @@ dependencies = [
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",
- "tokio",
- "tokio-util",
+ "tokio 0.2.22",
+ "tokio-util 0.3.1",
 ]
 
 [[package]]
@@ -4272,7 +4282,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bde02a3a5291395f59b06ec6945a3077602fac2b07eeeaf0dee2122f3619828"
 dependencies = [
  "native-tls",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -4286,7 +4296,21 @@ dependencies = [
  "futures-sink",
  "log",
  "pin-project-lite",
- "tokio",
+ "tokio 0.2.22",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24793699f4665ba0416ed287dc794fe6b11a4aa5e4e95b58624f45f6c46b97d4"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "log",
+ "pin-project-lite",
+ "tokio 0.3.1",
 ]
 
 [[package]]
