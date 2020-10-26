@@ -13,7 +13,7 @@ comm = { path = "../comm" }
 expr = { path = "../expr" }
 kafka-util = { path = "../kafka-util" }
 log = "0.4"
-regex = "1.4.0"
+regex = "1.4.1"
 repr = { path = "../repr" }
 rusoto_core = "0.45.0"
 serde = { version = "1.0", features = ["derive"] }
