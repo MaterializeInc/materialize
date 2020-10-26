@@ -1,0 +1,56 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+parse-statement
+CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
+----
+CREATE TYPE custom AS MAP ( key_type = text, value_type = bool )
+=>
+CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }, Ident { name: Ident("value_type"), ident: Ident("bool") }] })
+
+parse-statement
+CREATE TYPE custom AS MAP (KEY_TYPE='text', VaLuE_tYpE=custom_type)
+----
+CREATE TYPE custom AS MAP ( key_type = 'text', value_type = custom_type )
+=>
+CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Value { name: Ident("key_type"), value: String("text") }, Ident { name: Ident("value_type"), ident: Ident("custom_type") }] })
+
+parse-statement
+CREATE TYPE custom AS MAP (key_type=text)
+----
+CREATE TYPE custom AS MAP ( key_type = text )
+=>
+CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }] })
+
+parse-statement
+CREATE TYPE custom AS MAP (value_type=bool)
+----
+CREATE TYPE custom AS MAP ( value_type = bool )
+=>
+CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Ident { name: Ident("value_type"), ident: Ident("bool") }] })
+
+parse-statement
+CREATE TYPE custom AS MAP (key_type=text, value_type=bool, random_type=int)
+----
+CREATE TYPE custom AS MAP ( key_type = text, value_type = bool, random_type = int )
+=>
+CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }, Ident { name: Ident("value_type"), ident: Ident("bool") }, Ident { name: Ident("random_type"), ident: Ident("int") }] })
+
+parse-statement
+CREATE TYPE custom AS MAP (key_type=text, random_type=int)
+----
+CREATE TYPE custom AS MAP ( key_type = text, random_type = int )
+=>
+CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }, Ident { name: Ident("random_type"), ident: Ident("int") }] })

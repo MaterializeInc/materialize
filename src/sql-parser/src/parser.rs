@@ -1347,6 +1347,8 @@ impl Parser {
         } else if self.parse_keyword("INDEX") {
             self.prev_token();
             self.parse_create_index()
+        } else if self.parse_keyword("TYPE") {
+            self.parse_create_type()
         } else {
             self.expected(
                 self.peek_range(),
@@ -1692,6 +1694,17 @@ impl Parser {
         }))
     }
 
+    fn parse_create_type(&mut self) -> Result<Statement, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_keyword("AS")?;
+        self.expect_keyword("MAP")?;
+
+        Ok(Statement::CreateMapType(CreateMapTypeStatement {
+            name,
+            with_options: self.parse_options()?,
+        }))
+    }
+
     fn parse_if_exists(&mut self) -> Result<bool, ParserError> {
         if self.parse_keyword("IF") {
             self.expect_keyword("EXISTS")?;
@@ -1918,20 +1931,34 @@ impl Parser {
 
     fn parse_with_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
         if self.parse_keyword("WITH") {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_sql_option)?;
-            self.expect_token(&Token::RParen)?;
-            Ok(options)
+            self.parse_options()
         } else {
             Ok(vec![])
         }
     }
 
+    fn parse_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let options = self.parse_comma_separated(Parser::parse_sql_option)?;
+        self.expect_token(&Token::RParen)?;
+        Ok(options)
+    }
+
     fn parse_sql_option(&mut self) -> Result<SqlOption, ParserError> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
-        let value = self.parse_value()?;
-        Ok(SqlOption { name, value })
+        let token = self.peek_token();
+        let option = if let Ok(value) = self.parse_value() {
+            SqlOption::Value { name, value }
+        } else if let Some(Token::Word(ident)) = token {
+            SqlOption::Ident {
+                name,
+                ident: ident.to_ident(),
+            }
+        } else {
+            self.expected(self.peek_range(), "option value", token)?
+        };
+        Ok(option)
     }
 
     fn parse_alter(&mut self) -> Result<Statement, ParserError> {
@@ -2193,12 +2220,13 @@ impl Parser {
                 "INTERVAL" => DataType::Interval,
                 "REGCLASS" => DataType::Regclass,
                 "TEXT" | "STRING" => DataType::Text,
-                "BYTEA" => DataType::Bytea,
+                "BYTEA" | "BYTES" => DataType::Bytea,
                 "NUMERIC" | "DECIMAL" | "DEC" => {
                     let (precision, scale) = self.parse_optional_precision_scale()?;
                     DataType::Decimal(precision, scale)
                 }
                 "JSON" | "JSONB" => DataType::Jsonb,
+                custom if !custom.is_empty() => DataType::Custom(custom.to_string()),
                 _ => self.expected(
                     self.peek_prev_range(),
                     "a known data type",

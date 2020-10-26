@@ -39,6 +39,7 @@ pub enum Statement {
     CreateView(CreateViewStatement),
     CreateTable(CreateTableStatement),
     CreateIndex(CreateIndexStatement),
+    CreateMapType(CreateMapTypeStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndexOptions(AlterIndexOptionsStatement),
     DropDatabase(DropDatabaseStatement),
@@ -77,6 +78,7 @@ impl AstDisplay for Statement {
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
+            Statement::CreateMapType(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndexOptions(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
@@ -492,6 +494,30 @@ impl AstDisplay for CreateIndexStatement {
     }
 }
 impl_display!(CreateIndexStatement);
+
+/// `CREATE TYPE .. AS MAP`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateMapTypeStatement {
+    /// Name of the created type.
+    pub name: Ident,
+    /// Provides the name and type for the key
+    /// and value.
+    pub with_options: Vec<SqlOption>,
+}
+
+impl AstDisplay for CreateMapTypeStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE TYPE ");
+        f.write_node(&self.name);
+        f.write_str(" ");
+        f.write_str("AS MAP ( ");
+        if !self.with_options.is_empty() {
+            f.write_node(&display::comma_separated(&self.with_options));
+        }
+        f.write_str(" )");
+    }
+}
+impl_display!(CreateMapTypeStatement);
 
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1013,16 +1039,34 @@ impl AstDisplay for ShowStatementFilter {
 impl_display!(ShowStatementFilter);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SqlOption {
-    pub name: Ident,
-    pub value: Value,
+pub enum SqlOption {
+    Value { name: Ident, value: Value },
+    Ident { name: Ident, ident: Ident },
+}
+
+impl SqlOption {
+    pub fn name(&self) -> &Ident {
+        match self {
+            SqlOption::Value { name, .. } => name,
+            SqlOption::Ident { name, .. } => name,
+        }
+    }
 }
 
 impl AstDisplay for SqlOption {
     fn fmt(&self, f: &mut AstFormatter) {
-        f.write_node(&self.name);
-        f.write_str(" = ");
-        f.write_node(&self.value);
+        match self {
+            SqlOption::Value { name, value } => {
+                f.write_node(name);
+                f.write_str(" = ");
+                f.write_node(value);
+            }
+            SqlOption::Ident { name, ident } => {
+                f.write_node(name);
+                f.write_str(" = ");
+                f.write_node(ident);
+            }
+        }
     }
 }
 impl_display!(SqlOption);
