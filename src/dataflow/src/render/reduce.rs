@@ -465,6 +465,10 @@ where
                     while index != &index_datum.0 {
                         index_datum = row_iter.next().unwrap();
                     }
+                    // TODO: this is also extremely bad.
+                    while diffs.len() < 3 * index {
+                        diffs.push(0i128);
+                    }
                     let datum = index_datum.1;
                     if accumulable_hierarchical(&aggr.func).0 {
                         if aggr.distinct {
@@ -500,7 +504,8 @@ where
                 .as_collection()
                 .explode({
                     move |(key, row)| {
-                        let datum = row.iter().nth(index).unwrap();
+                        // TODO: iirc this row only ever has a single datum
+                        let datum = row.iter().nth(0).unwrap();
                         let mut diffs = Vec::new();
                         while diffs.len() < 3 * index {
                             diffs.push(0i128);
