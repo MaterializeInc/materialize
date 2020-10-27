@@ -301,7 +301,6 @@ where
             // `row` contains a single value that can be minimized or
             // maximized over.
 
-            use differential_dataflow::operators::consolidate::Consolidate;
             use differential_dataflow::operators::reduce::Count;
             use timely::dataflow::operators::map::Map;
 
