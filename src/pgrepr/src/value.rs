@@ -161,10 +161,7 @@ impl Value {
             ),
             Value::Bytea(b) => (Datum::Bytes(buf.push_bytes(b)), ScalarType::Bytes),
             Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
-            Value::Jsonb(js) => (
-                buf.push_row(js.0.into_row()).unpack_first(),
-                ScalarType::Jsonb,
-            ),
+            Value::Jsonb(js) => (buf.push_unary_row(js.0.into_row()), ScalarType::Jsonb),
             Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
             Value::Array { .. } => {
                 // This situation is handled gracefully by Value::decode; if we
@@ -183,7 +180,7 @@ impl Value {
                     None => Datum::Null,
                 }));
                 (
-                    buf.push_row(packer.finish()).unpack_first(),
+                    buf.push_unary_row(packer.finish()),
                     ScalarType::List(Box::new(elem_type)),
                 )
             }

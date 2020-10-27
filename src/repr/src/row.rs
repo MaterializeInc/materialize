@@ -1023,14 +1023,25 @@ impl RowArena {
         }
     }
 
-    /// Take ownership of `row` for the lifetime of the arena
-    pub fn push_row<'a>(&'a self, row: Row) -> &'a Row {
+    /// Take ownership of `row` for the lifetime of the arena, returning a
+    /// reference to the first datum in the row.
+    ///
+    /// If we had an owned datum type, this method would be much clearer, and
+    /// would be called `push_owned_datum`.
+    pub fn push_unary_row<'a>(&'a self, row: Row) -> Datum<'a> {
         let mut inner = self.inner.borrow_mut();
         inner.owned_rows.push(row);
-        let owned_row = &inner.owned_rows[inner.owned_rows.len() - 1];
+        let datum = inner.owned_rows[inner.owned_rows.len() - 1].unpack_first();
         unsafe {
-            // this is safe because we only ever append to self.owned_rows
-            transmute::<&Row, &'a Row>(owned_row)
+            // This is safe because:
+            //   * We only ever append to self.owned_rows, so the row will live
+            //     as long as the arena.
+            //   * We return a reference to the heap allocation inside the row,
+            //     so it's okay if self.owned_rows reallocates and moves the
+            //     row.
+            //   * We don't allow access to the row itself, so row.data will
+            //     never reallocate.
+            transmute::<Datum<'_>, Datum<'a>>(datum)
         }
     }
 
@@ -1051,7 +1062,7 @@ impl RowArena {
     {
         let mut packer = RowPacker::new();
         f(&mut packer);
-        self.push_row(packer.finish()).unpack_first()
+        self.push_unary_row(packer.finish())
     }
 
     /// Like [`Row::make_datum`], but the provided closure can return an error.
@@ -1061,7 +1072,7 @@ impl RowArena {
     {
         let mut packer = RowPacker::new();
         f(&mut packer)?;
-        Ok(self.push_row(packer.finish()).unpack_first())
+        Ok(self.push_unary_row(packer.finish()))
     }
 }
 
@@ -1102,15 +1113,19 @@ mod tests {
         assert_eq!(arena.push_bytes(vec![]), empty);
         assert_eq!(arena.push_bytes(vec![0, 2, 1, 255]), &[0, 2, 1, 255]);
 
-        let row = Row::pack(&[
-            Datum::Null,
-            Datum::Int32(-42),
-            Datum::Interval(Interval {
-                months: 312,
-                ..Default::default()
-            }),
-        ]);
-        assert_eq!(arena.push_row(row.clone()).unpack(), row.unpack());
+        let mut packer = RowPacker::new();
+        packer.push_dict_with(|packer| {
+            packer.push(Datum::String("a"));
+            packer.push_list_with(|packer| {
+                packer.push(Datum::String("one"));
+                packer.push(Datum::String("two"));
+                packer.push(Datum::String("three"));
+            });
+            packer.push(Datum::String("b"));
+            packer.push(Datum::String("c"));
+        });
+        let row = packer.finish();
+        assert_eq!(arena.push_unary_row(row.clone()), row.unpack_first());
     }
 
     #[test]
