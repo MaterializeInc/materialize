@@ -80,7 +80,7 @@ impl MapFilterProject {
     /// miss some errors that would occur later in evaluation.
     pub fn evaluate<'a>(
         &'a self,
-        datums: &'a mut Vec<Datum<'a>>,
+        datums: &mut Vec<Datum<'a>>,
         arena: &'a RowArena,
         row_packer: &mut RowPacker,
     ) -> Result<Option<Row>, EvalError> {
@@ -98,11 +98,11 @@ impl MapFilterProject {
     /// This version is used internally by `evaluate` and can be useful
     /// when one wants to capture the resulting datums without packing
     /// and then unpacking a row.
-    pub fn evaluate_iter<'a>(
+    pub fn evaluate_iter<'b, 'a: 'b>(
         &'a self,
-        datums: &'a mut Vec<Datum<'a>>,
+        datums: &'b mut Vec<Datum<'a>>,
         arena: &'a RowArena,
-    ) -> Result<Option<impl Iterator<Item = Datum> + 'a>, EvalError> {
+    ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
         let mut expression = 0;
         for (support, predicate) in self.predicates.iter() {
             while self.input_arity + expression < *support {
