@@ -1867,6 +1867,7 @@ dependencies = [
  "openssl",
  "openssl-sys",
  "ore",
+ "os_info",
  "parse_duration",
  "pgrepr",
  "pgtest",
@@ -1886,6 +1887,7 @@ dependencies = [
  "sql",
  "sql-parser",
  "sysctl",
+ "sysinfo",
  "tempfile",
  "tokio",
  "tokio-openssl",
@@ -2198,6 +2200,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ntapi"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a31937dea023539c72ddae0e3571deadc1414b300483fa7aaec176168cfa9d2"
+dependencies = [
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "num"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2398,6 +2409,17 @@ dependencies = [
  "smallvec",
  "tokio",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "os_info"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2127a5da3c69035537febc04cd07008bb643653303b213a49b036d944531207"
+dependencies = [
+ "log",
+ "serde",
+ "winapi 0.3.8",
 ]
 
 [[package]]
@@ -3929,6 +3951,21 @@ dependencies = [
  "failure",
  "libc",
  "walkdir",
+]
+
+[[package]]
+name = "sysinfo"
+version = "0.15.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67330cbee3b2a819e3365a773f05e884a136603687f812bf24db5b6c3d76b696"
+dependencies = [
+ "cfg-if 0.1.10",
+ "doc-comment",
+ "libc",
+ "ntapi",
+ "once_cell",
+ "rayon",
+ "winapi 0.3.8",
 ]
 
 [[package]]
