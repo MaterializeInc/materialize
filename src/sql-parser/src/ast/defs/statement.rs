@@ -20,8 +20,7 @@
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, ObjectName, Query,
-    TableConstraint, Value,
+    ColumnDef, Connector, Envelope, Expr, Format, Ident, ObjectName, Query, TableConstraint, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -501,10 +500,10 @@ impl_display!(CreateIndexStatement);
 pub struct CreateMapTypeStatement {
     /// Name of the created type.
     pub name: Ident,
-    /// Key type of the map.
-    pub key_typ: DataType,
-    /// Value type of the map.
-    pub value_typ: DataType,
+    /// Provides key type for the map.
+    pub key: SqlOption,
+    /// Provides value type for the map.
+    pub value: SqlOption,
 }
 
 impl AstDisplay for CreateMapTypeStatement {
@@ -512,11 +511,10 @@ impl AstDisplay for CreateMapTypeStatement {
         f.write_str("CREATE TYPE ");
         f.write_node(&self.name);
         f.write_str(" ");
-        f.write_str("AS MAP ( KEY_TYPE = ");
-        f.write_node(&self.key_typ);
+        f.write_str("AS MAP ( ");
+        f.write_node(&self.key);
         f.write_str(", ");
-        f.write_str("VALUE_TYPE = ");
-        f.write_node(&self.value_typ);
+        f.write_node(&self.value);
         f.write_str(" )");
     }
 }
@@ -1042,16 +1040,34 @@ impl AstDisplay for ShowStatementFilter {
 impl_display!(ShowStatementFilter);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SqlOption {
-    pub name: Ident,
-    pub value: Value,
+pub enum SqlOption {
+    Value { name: Ident, value: Value },
+    Ident { name: Ident, ident: Ident },
+}
+
+impl SqlOption {
+    pub fn name(&self) -> &Ident {
+        match self {
+            SqlOption::Value { name, .. } => name,
+            SqlOption::Ident { name, .. } => name,
+        }
+    }
 }
 
 impl AstDisplay for SqlOption {
     fn fmt(&self, f: &mut AstFormatter) {
-        f.write_node(&self.name);
-        f.write_str(" = ");
-        f.write_node(&self.value);
+        match self {
+            SqlOption::Value { name, value } => {
+                f.write_node(name);
+                f.write_str(" = ");
+                f.write_node(value);
+            }
+            SqlOption::Ident { name, ident } => {
+                f.write_node(name);
+                f.write_str(" = ");
+                f.write_node(ident);
+            }
+        }
     }
 }
 impl_display!(SqlOption);

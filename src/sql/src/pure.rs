@@ -58,7 +58,7 @@ pub async fn purify(mut stmt: Statement) -> Result<Statement, anyhow::Error> {
                 let r = mz_avro::Reader::new(f)?;
                 if !with_options_map.contains_key("reader_schema") {
                     let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                    with_options.push(sql_parser::ast::SqlOption {
+                    with_options.push(sql_parser::ast::SqlOption::Value {
                         name: sql_parser::ast::Ident::new("reader_schema"),
                         value: sql_parser::ast::Value::String(schema),
                     });

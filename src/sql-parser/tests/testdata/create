@@ -16,9 +16,16 @@
 parse-statement
 CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
 ----
-CREATE TYPE custom AS MAP ( KEY_TYPE = text, VALUE_TYPE = boolean )
+CREATE TYPE custom AS MAP ( key_type = text, value_type = bool )
 =>
-CreateMapType(CreateMapTypeStatement { name: Ident("custom"), key_typ: Text, value_typ: Boolean })
+CreateMapType(CreateMapTypeStatement { name: Ident("custom"), key: Ident { name: Ident("key_type"), ident: Ident("text") }, value: Ident { name: Ident("value_type"), ident: Ident("bool") } })
+
+parse-statement
+CREATE TYPE custom AS MAP (KEY_TYPE='text', VaLuE_tYpE=custom_type)
+----
+CREATE TYPE custom AS MAP ( key_type = 'text', value_type = custom_type )
+=>
+CreateMapType(CreateMapTypeStatement { name: Ident("custom"), key: Value { name: Ident("key_type"), value: String("text") }, value: Ident { name: Ident("value_type"), ident: Ident("custom_type") } })
 
 parse-statement
 CREATE TYPE custom AS MAP (key_type=text)
@@ -29,15 +36,14 @@ CREATE TYPE custom AS MAP (key_type=text)
                                         ^
 Expected ,, found: )
 
-
 parse-statement
 CREATE TYPE custom AS MAP (value_type=bool)
 ----
 error:
 Parse error:
 CREATE TYPE custom AS MAP (value_type=bool)
-                           ^^^^^^^^^^
-Expected KEY_TYPE, found: value_type
+                                          ^
+Expected ,, found: )
 
 parse-statement
 CREATE TYPE custom AS MAP (key_type=text, value_type=bool, random_type=int)
@@ -47,3 +53,12 @@ Parse error:
 CREATE TYPE custom AS MAP (key_type=text, value_type=bool, random_type=int)
                                                          ^
 Expected ), found: ,
+
+parse-statement
+CREATE TYPE custom AS MAP (key_type=text, random_type=int)
+----
+error:
+Parse error:
+CREATE TYPE custom AS MAP (key_type=text, random_type=int)
+                                                         ^
+Expected key_type and value_type parameters, found key_type and random_type
