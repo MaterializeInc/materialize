@@ -1410,6 +1410,16 @@ lazy_static! {
                         column_names: vec![]
                     })
                 })
+            },
+            "unnest" => Table {
+                vec![ListAny] => unary_op(move |ecx, e| {
+                    let el_typ =  ecx.scalar_type(&e).unwrap_list_element_type().clone();
+                    Ok(TableFuncPlan {
+                        func: TableFunc::UnnestList{ el_typ },
+                        exprs: vec![e],
+                        column_names: vec![Some("unnest".into())],
+                    })
+                })
             }
         }
     };

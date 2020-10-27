@@ -587,6 +587,15 @@ fn generate_series_int64(start: Datum, stop: Datum) -> Vec<(Row, Diff)> {
         .collect()
 }
 
+fn unnest_list(a: Datum) -> Vec<(Row, Diff)> {
+    let mut row_packer = RowPacker::new();
+
+    a.unwrap_list()
+        .iter()
+        .map(move |e| (row_packer.pack(&[e]), 1))
+        .collect()
+}
+
 impl fmt::Display for AggregateFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -720,6 +729,9 @@ pub enum TableFunc {
         source: GlobalId,
         persistence_directory: PathBuf,
     },
+    UnnestList {
+        el_typ: ScalarType,
+    },
 }
 
 impl TableFunc {
@@ -767,6 +779,7 @@ impl TableFunc {
                     })
                     .collect::<Vec<(Row, Diff)>>()
             }
+            TableFunc::UnnestList { .. } => unnest_list(datums[0]),
         }
     }
 
@@ -803,6 +816,7 @@ impl TableFunc {
                 ScalarType::Bytes.nullable(false),
                 ScalarType::Bytes.nullable(false),
             ],
+            TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
         })
     }
 
@@ -817,6 +831,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt64 => 1,
             TableFunc::Repeat => 0,
             TableFunc::ReadPersistedData { .. } => 4,
+            TableFunc::UnnestList { .. } => 1,
         }
     }
 
@@ -830,7 +845,8 @@ impl TableFunc {
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
-            | TableFunc::ReadPersistedData { .. } => true,
+            | TableFunc::ReadPersistedData { .. }
+            | TableFunc::UnnestList { .. } => true,
         }
     }
 }
@@ -849,6 +865,7 @@ impl fmt::Display for TableFunc {
             TableFunc::ReadPersistedData { source, .. } => {
                 write!(f, "internal_read_persisted_data({})", source)
             }
+            TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
         }
     }
 }
