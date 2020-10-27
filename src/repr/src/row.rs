@@ -1008,7 +1008,7 @@ impl RowArena {
         }
     }
 
-    /// Take ownership of `bytes` for the lifetime of the arena
+    /// Take ownership of `bytes` for the lifetime of the arena.
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn push_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
         let mut inner = self.inner.borrow_mut();
@@ -1027,11 +1027,11 @@ impl RowArena {
         }
     }
 
-    /// Take ownership of `string` for the lifetime of the arena
-    pub fn push_string(&self, string: String) -> &str {
+    /// Take ownership of `string` for the lifetime of the arena.
+    pub fn push_string<'a>(&'a self, string: String) -> &'a str {
         let owned_bytes = self.push_bytes(string.into_bytes());
         unsafe {
-            // this is safe because we know it was a String just before
+            // This is safe because we know it was a `String` just before.
             std::str::from_utf8_unchecked(owned_bytes)
         }
     }
