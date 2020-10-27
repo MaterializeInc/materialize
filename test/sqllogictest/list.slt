@@ -1086,6 +1086,39 @@ SELECT list_length_max((LIST[1]::INT LIST), -1)
 query error invalid dimension: -1; must use value within \[1, 1\]
 SELECT list_length_max((LIST[1]::INT LIST), LIST[-1][1])
 
+# 🔬🔬 unnest
+
+query I rowsort
+SELECT unnest FROM unnest(LIST[1,2,3])
+----
+1
+2
+3
+
+query T rowsort
+SELECT unnest FROM unnest(LIST[[1,2],[3]])
+----
+{1,2}
+{3}
+
+query T
+SELECT unnest FROM unnest(LIST[NULL])
+----
+NULL
+
+query I rowsort
+SELECT unnest FROM unnest(LIST[NULL,1])
+----
+NULL
+1
+
+query T
+SELECT unnest FROM unnest(NULL::int list)
+----
+
+query error Cannot call function unnest\(unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT * FROM unnest(NULL)
+
 # 🔬 List casts
 
 # 🔬🔬 Between lists
