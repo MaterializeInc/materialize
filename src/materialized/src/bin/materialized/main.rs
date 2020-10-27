@@ -37,6 +37,7 @@ use lazy_static::lazy_static;
 use log::{info, warn};
 
 mod sys;
+mod tracing;
 
 fn main() {
     if let Err(err) = run() {
@@ -323,6 +324,8 @@ fn run() -> Result<(), anyhow::Error> {
         use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::util::SubscriberInitExt;
 
+        use crate::tracing::FilterLayer;
+
         let env_filter = EnvFilter::try_from_env("MZ_LOG")
             .or_else(|_| EnvFilter::try_new("info")) // default log level
             .unwrap()
@@ -354,8 +357,10 @@ fn run() -> Result<(), anyhow::Error> {
                         .with_ansi(false)
                         .with_writer(move || file.try_clone().expect("failed to clone log file"))
                 })
-                .with(LevelFilter::WARN)
-                .with(fmt::layer().with_writer(io::stderr))
+                .with(FilterLayer::new(
+                    fmt::layer().with_writer(io::stderr),
+                    LevelFilter::WARN,
+                ))
                 .init();
         }
     }
