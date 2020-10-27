@@ -479,7 +479,7 @@ fn cast_bytes_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
 fn cast_string_to_jsonb<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     match strconv::parse_jsonb(a.unwrap_str()) {
         Err(_) => Datum::Null,
-        Ok(jsonb) => temp_storage.push_row(jsonb.into_row()).unpack_first(),
+        Ok(jsonb) => temp_storage.push_unary_row(jsonb.into_row()),
     }
 }
 
