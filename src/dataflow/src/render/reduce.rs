@@ -503,7 +503,7 @@ where
                     move |(key, row)| {
                         let datum = row.iter().nth(index).unwrap();
                         let mut diffs = Vec::new();
-                        while diffs.len() <= 3 * index {
+                        while diffs.len() < 3 * index {
                             diffs.push(0i128);
                         }
                         let (agg1, agg2) = datum_aggr_values(datum, &aggr.func);
