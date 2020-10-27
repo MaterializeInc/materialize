@@ -527,36 +527,27 @@ where
         if let Some(feedback_tx) = &mut self.feedback_tx {
             let mut upper = Antichain::new();
             let mut progress = Vec::new();
-            let ids = self
-                .render_state
-                .traces
-                .traces
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
-            for id in ids {
-                if let Some(traces) = self.render_state.traces.get_mut(&id) {
-                    // Read the upper frontier and compare to what we've reported.
-                    traces.oks_mut().read_upper(&mut upper);
-                    let lower = self
-                        .reported_frontiers
-                        .get_mut(&id)
-                        .expect("Frontier missing!");
-                    if lower != &upper {
-                        let mut changes = ChangeBatch::new();
-                        for time in lower.elements().iter() {
-                            changes.update(time.clone(), -1);
-                        }
-                        for time in upper.elements().iter() {
-                            changes.update(time.clone(), 1);
-                        }
-                        let lower = self.reported_frontiers.get_mut(&id).unwrap();
-                        changes.compact();
-                        if !changes.is_empty() {
-                            progress.push((id, changes));
-                        }
-                        lower.clone_from(&upper);
+            for (id, traces) in self.render_state.traces.traces.iter_mut() {
+                // Read the upper frontier and compare to what we've reported.
+                traces.oks_mut().read_upper(&mut upper);
+                let lower = self
+                    .reported_frontiers
+                    .get_mut(&id)
+                    .expect("Frontier missing!");
+                if lower != &upper {
+                    let mut changes = ChangeBatch::new();
+                    for time in lower.elements().iter() {
+                        changes.update(time.clone(), -1);
                     }
+                    for time in upper.elements().iter() {
+                        changes.update(time.clone(), 1);
+                    }
+                    let lower = self.reported_frontiers.get_mut(&id).unwrap();
+                    changes.compact();
+                    if !changes.is_empty() {
+                        progress.push((*id, changes));
+                    }
+                    lower.clone_from(&upper);
                 }
             }
             if let Some(logger) = self.materialized_logger.as_mut() {
