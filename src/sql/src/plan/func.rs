@@ -414,10 +414,7 @@ impl ParamList {
     /// Matches a `&[ScalarType]` derived from the user's function argument
     /// against this `ParamList`'s permitted arguments.
     fn exact_match(&self, types: &[&ScalarType]) -> bool {
-        types
-            .iter()
-            .enumerate()
-            .all(|(i, t)| self[i].accepts_type_directly(t))
+        types.iter().enumerate().all(|(i, t)| self[i] == **t)
     }
 }
 
@@ -473,35 +470,26 @@ pub enum ParamType {
 impl ParamType {
     /// Does `self` accept arguments of type `t`?
     fn accepts_type(&self, t: &ScalarType) -> bool {
-        if self.accepts_type_directly(t) {
+        use ParamType::*;
+        use ScalarType::*;
+        // This `match` expresses the values permitted by polymorphic types,
+        // which do not have valid `CastTo` values.
+        if match self {
+            // To support list (and, soon, array) concatenation, we must tell
+            // ourselves this white lie until
+            // https://github.com/MaterializeInc/materialize/issues/4627
+            ArrayAny => matches!(t, Array(..) | String),
+            ListAny => matches!(t, List(..) | String),
+            ListElementAny => true,
+            NonVecAny => !t.is_vec(),
+            _ => false,
+        } {
             return true;
         }
+
         match self.get_cast_to_for_type(t) {
             Ok(cast_to) => typeconv::get_cast(t, &cast_to).is_some(),
             Err(..) => false,
-        }
-    }
-
-    /// Does `self` accept arguments of type `t` without casting?
-    fn accepts_type_directly(&self, t: &ScalarType) -> bool {
-        use ParamType::*;
-        match self {
-            Any | ListElementAny => true,
-            ArrayAny => matches!(t, ScalarType::Array(..)),
-            JsonbAny => matches!(t, ScalarType::Jsonb),
-            ListAny => matches!(t, ScalarType::List(..)),
-            NonVecAny => !t.is_vec(),
-            Plain(s) => *s == t.desaturate(),
-            StringAny => matches!(t, ScalarType::String),
-        }
-    }
-
-    /// Does `self` accept arguments of category `c`?
-    fn accepts_cat(&self, c: &TypeCategory) -> bool {
-        use ParamType::*;
-        match self {
-            Any | JsonbAny | ListElementAny | NonVecAny | StringAny => true,
-            ArrayAny | ListAny | Plain(_) => TypeCategory::from_param(&self) == *c,
         }
     }
 
@@ -673,7 +661,7 @@ impl<'a> ArgImplementationMatcher<'a> {
     /// conversion matching algorithm][pgparser].
     ///
     /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
-    fn find_match<'b, R>(
+    fn find_match<'b, R: std::fmt::Debug>(
         &self,
         types: &[Option<ScalarType>],
         impls: Vec<&'b FuncImpl<R>>,
@@ -790,22 +778,21 @@ impl<'a> ArgImplementationMatcher<'a> {
                 // remaining candidates.
                 None => {
                     for c in candidates.iter() {
-                        // 4.e. cont: At each  position, select the string
-                        // category if any candidate accepts that category.
-                        // (This bias towards string is appropriate since an
-                        // unknown-type literal looks like a string.)
-                        if c.fimpl.params[i].accepts_type_directly(&ScalarType::String) {
-                            found_string_candidate = true;
-                            selected_category = Some(TypeCategory::String);
-                            break;
-                        }
-                        // 4.e. cont: Otherwise, if all the remaining candidates
-                        // accept the same type category, select that category.
                         let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
                         match selected_category {
-                            Some(ref selected_category) => {
+                            Some(ref mut selected_category) => {
+                                // 4.e. cont: ...if all the remaining candidates
+                                // accept the same type category, select that category.
                                 categories_match =
-                                    selected_category == &this_category && categories_match
+                                    selected_category == &this_category && categories_match;
+                                // 4.e. cont: [except for...] select the string
+                                // category if any candidate accepts that category.
+                                // (This bias towards string is appropriate since an
+                                // unknown-type literal looks like a string.)
+                                if this_category == TypeCategory::String {
+                                    *selected_category = TypeCategory::String;
+                                    found_string_candidate = true;
+                                }
                             }
                             None => selected_category = Some(this_category.clone()),
                         }
@@ -829,17 +816,15 @@ impl<'a> ArgImplementationMatcher<'a> {
                     let mut found_preferred_type_candidate = false;
                     candidates.retain(|c| {
                         if let Some(typ) = &preferred_type {
-                            found_preferred_type_candidate = c.fimpl.params[i]
-                                .accepts_type_directly(typ)
+                            found_preferred_type_candidate = c.fimpl.params[i].accepts_type(typ)
                                 || found_preferred_type_candidate;
                         }
-                        c.fimpl.params[i].accepts_cat(&selected_category)
+                        selected_category == TypeCategory::from_param(&c.fimpl.params[i])
                     });
 
                     if found_preferred_type_candidate {
                         let preferred_type = preferred_type.unwrap();
-                        candidates
-                            .retain(|c| c.fimpl.params[i].accepts_type_directly(&preferred_type));
+                        candidates.retain(|c| c.fimpl.params[i].accepts_type(&preferred_type));
                     }
                 }
                 Some(typ) => {
@@ -1357,6 +1342,12 @@ lazy_static! {
                     })
                 })
             },
+            "list_append" => Scalar {
+                vec![ListAny, ListElementAny] => BinaryFunc::ListElementConcat
+            },
+            "list_cat" => Scalar {
+                vec![ListAny, ListAny] =>  BinaryFunc::ListListConcat
+            },
             "list_ndims" => Scalar {
                 vec![ListAny] => unary_op(|ecx, e| {
                     ecx.require_experimental_mode("list_ndims")?;
@@ -1373,6 +1364,9 @@ lazy_static! {
                     let max_dim = ecx.scalar_type(&lhs).unwrap_list_n_dims();
                     Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax{ max_dim }))
                 })
+            },
+            "list_prepend" => Scalar {
+                vec![ListElementAny, ListAny] => BinaryFunc::ElementListConcat
             },
             "mz_logical_timestamp" => Scalar {
                 params!() => nullary_op(|ecx| {
@@ -1723,7 +1717,6 @@ lazy_static! {
                         rhs,
                         typeconv::CastTo::Explicit(ScalarType::String)
                     )?;
-
                     Ok(lhs.call_binary(rhs, TextConcat))
                 }),
                 vec![NonVecAny, Plain(String)] =>  binary_op(|ecx, lhs, rhs| {
@@ -1736,7 +1729,10 @@ lazy_static! {
                     Ok(lhs.call_binary(rhs, TextConcat))
                 }),
                 params!(String, String) => TextConcat,
-                params!(Jsonb, Jsonb) => JsonbConcat
+                params!(Jsonb, Jsonb) => JsonbConcat,
+                params!(ListAny, ListAny) => ListListConcat,
+                params!(ListAny, ListElementAny) => ListElementConcat,
+                params!(ListElementAny, ListAny) => ElementListConcat
             },
 
             //JSON
