@@ -34,7 +34,9 @@ use std::{cmp, env};
 use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
 use lazy_static::lazy_static;
-use log::{info, trace, warn};
+use log::{info, warn};
+
+mod sys;
 
 fn main() {
     if let Err(err) = run() {
@@ -379,7 +381,7 @@ environment:{}",
         env_message
     );
 
-    adjust_rlimits();
+    sys::adjust_rlimits();
 
     // Inform the user about what they are using, and how to contact us.
     beta_splash();
@@ -523,82 +525,4 @@ fn print_build_info() {
     let rdkafka_version = unsafe { CStr::from_ptr(rdkafka_sys::bindings::rd_kafka_version_str()) };
     println!("{}", openssl_version.to_string_lossy());
     println!("librdkafka v{}", rdkafka_version.to_string_lossy());
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
-fn adjust_rlimits() {
-    trace!("rlimit crate does not support this OS; not adjusting nofile limit");
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
-/// Attempts to increase the soft nofile rlimit to the maximum possible value.
-fn adjust_rlimits() {
-    use rlimit::{Resource, Rlim};
-
-    // getrlimit/setrlimit can have surprisingly different behavior across
-    // platforms, even with the rlimit wrapper crate that we use. This function
-    // is chattier than normal at the trace log level in an attempt to ease
-    // debugging of such differences.
-
-    let (soft, hard) = match Resource::NOFILE.get() {
-        Ok(limits) => limits,
-        Err(e) => {
-            trace!("unable to read initial nofile rlimit: {}", e);
-            return;
-        }
-    };
-    trace!("initial nofile rlimit: ({}, {})", soft, hard);
-
-    #[cfg(target_os = "macos")]
-    let hard = {
-        use ore::cast::CastFrom;
-        use sysctl::Sysctl;
-
-        // On macOS, getrlimit by default reports that the hard limit is
-        // unlimited, but there is usually a stricter hard limit discoverable
-        // via sysctl. Failing to discover this secret stricter hard limit will
-        // cause the call to setrlimit below to fail.
-        let res = sysctl::Ctl::new("kern.maxfilesperproc")
-            .and_then(|ctl| ctl.value())
-            .map_err(|e| e.to_string())
-            .and_then(|v| match v {
-                sysctl::CtlValue::Int(v) => Ok(Rlim::from_usize(usize::cast_from(v))),
-                o => Err(format!("unexpected sysctl value type: {:?}", o)),
-            });
-        match res {
-            Ok(v) => {
-                trace!("sysctl kern.maxfilesperproc hard limit: {}", v);
-                cmp::min(v, hard)
-            }
-            Err(e) => {
-                trace!("error while reading sysctl: {}", e);
-                hard
-            }
-        }
-    };
-
-    trace!("attempting to adjust nofile rlimit to ({0}, {0})", hard);
-    if let Err(e) = Resource::NOFILE.set(hard, hard) {
-        trace!("error adjusting nofile rlimit: {}", e);
-        return;
-    }
-
-    // Check whether getrlimit reflects the limit we installed with setrlimit.
-    // Some platforms will silently ignore invalid values in setrlimit.
-    let (soft, hard) = match Resource::NOFILE.get() {
-        Ok(limits) => limits,
-        Err(e) => {
-            trace!("unable to read adjusted nofile rlimit: {}", e);
-            return;
-        }
-    };
-    trace!("adjusted nofile rlimit: ({}, {})", soft, hard);
-
-    let recommended_soft = Rlim::from_usize(1024);
-    if soft < recommended_soft {
-        warn!(
-            "soft nofile rlimit ({}) is dangerously low; at least {} is recommended",
-            soft, recommended_soft
-        )
-    }
 }
