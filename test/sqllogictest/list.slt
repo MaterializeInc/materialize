@@ -1086,6 +1086,82 @@ SELECT list_length_max((LIST[1]::INT LIST), -1)
 query error invalid dimension: -1; must use value within \[1, 1\]
 SELECT list_length_max((LIST[1]::INT LIST), LIST[-1][1])
 
+# 🔬🔬 list_prepend
+
+# 🔬🔬🔬 element + list
+
+query T
+SELECT list_prepend(1, LIST[2, 3])
+----
+{1,2,3}
+
+# 🔬🔬🔬 list + list list (element + list)
+
+query T
+SELECT list_prepend(LIST[1], LIST[[2], [3]])
+----
+{{1},{2},{3}}
+
+# 🔬🔬🔬 NULL elements
+
+# 🔬🔬🔬🔬 element + list
+
+query T
+SELECT list_prepend(NULL, LIST[1])
+----
+{NULL,1}
+
+query T
+SELECT list_prepend(NULL::INT, LIST[1])
+----
+{NULL,1}
+
+query T
+SELECT list_prepend(1, NULL::INT LIST)
+----
+{1}
+
+query T
+SELECT list_prepend(NULL::INT, NULL::INT LIST)
+----
+{NULL}
+
+# 🔬🔬🔬🔬 list + list list (element + list)
+
+query T
+SELECT list_prepend(NULL, LIST[[1]])
+----
+{NULL,{1}}
+
+query T
+SELECT list_prepend(LIST[1], NULL)
+----
+{{1}}
+
+query T
+SELECT list_prepend(NULL::INT LIST, NULL)
+----
+{NULL}
+
+query T
+SELECT list_prepend(NULL, NULL::INT LIST LIST)
+----
+{NULL}
+
+# 🔬🔬🔬 errors
+
+query error
+SELECT list_prepend(NULL, NULL)
+
+query error
+SELECT list_prepend('a', LIST[1])
+
+query error
+SELECT list_prepend(LIST[1], LIST[2])
+
+query error
+SELECT list_prepend(LIST[1], 1)
+
 # 🔬🔬 unnest
 
 query I rowsort
@@ -1242,82 +1318,6 @@ SELECT length(LIST['1','2']::text)
 
 query error Cannot call function length\(string list\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT length(LIST['1','2'])
-
-# 🔬🔬 list_prepend
-
-# 🔬🔬🔬 element + list
-
-query T
-SELECT list_prepend(1, LIST[2, 3])
-----
-{1,2,3}
-
-# 🔬🔬🔬 list + list list (element + list)
-
-query T
-SELECT list_prepend(LIST[1], LIST[[2], [3]])
-----
-{{1},{2},{3}}
-
-# 🔬🔬🔬 NULL elements
-
-# 🔬🔬🔬🔬 element + list
-
-query T
-SELECT list_prepend(NULL, LIST[1])
-----
-{NULL,1}
-
-query T
-SELECT list_prepend(NULL::INT, LIST[1])
-----
-{NULL,1}
-
-query T
-SELECT list_prepend(1, NULL::INT LIST)
-----
-{1}
-
-query T
-SELECT list_prepend(NULL::INT, NULL::INT LIST)
-----
-{NULL}
-
-# 🔬🔬🔬🔬 list + list list (element + list)
-
-query T
-SELECT list_prepend(NULL, LIST[[1]])
-----
-{NULL,{1}}
-
-query T
-SELECT list_prepend(LIST[1], NULL)
-----
-{{1}}
-
-query T
-SELECT list_prepend(NULL::INT LIST, NULL)
-----
-{NULL}
-
-query T
-SELECT list_prepend(NULL, NULL::INT LIST LIST)
-----
-{NULL}
-
-# 🔬🔬🔬 errors
-
-query error
-SELECT list_prepend(NULL, NULL)
-
-query error
-SELECT list_prepend('a', LIST[1])
-
-query error
-SELECT list_prepend(LIST[1], LIST[2])
-
-query error
-SELECT list_prepend(LIST[1], 1)
 
 # 🔬 Built-in operations
 
