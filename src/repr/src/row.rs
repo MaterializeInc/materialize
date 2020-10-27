@@ -134,7 +134,13 @@ pub struct RowArena {
 
 #[derive(Debug)]
 struct RowArenaInner {
-    owned_bytes: Vec<Box<[u8]>>,
+    // Semantically, `owned_bytes` is better represented by a `Vec<Box<[u8]>>`,
+    // as once the arena takes ownership of a byte vector the vector is never
+    // modified. But `RowArena::push_bytes` takes ownership of a `Vec<u8>`, so
+    // storing that `Vec<u8>` directly avoids an allocation. The cost is
+    // additional memory use, as the vector may have spare capacity, but row
+    // arenas are short lived so this is the better tradeoff.
+    owned_bytes: Vec<Vec<u8>>,
     owned_rows: Vec<Row>,
 }
 
@@ -1006,10 +1012,17 @@ impl RowArena {
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn push_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
         let mut inner = self.inner.borrow_mut();
-        inner.owned_bytes.push(bytes.into_boxed_slice());
+        inner.owned_bytes.push(bytes);
         let owned_bytes = &inner.owned_bytes[inner.owned_bytes.len() - 1];
         unsafe {
-            // this is safe because we only ever append to self.owned_bytes
+            // This is safe because:
+            //   * We only ever append to self.owned_bytes, so the byte vector
+            //     will live as long as the arena.
+            //   * We return a reference to the byte vector's contents, so it's
+            //     okay if self.owned_bytes reallocates and moves the byte
+            //     vector.
+            //   * We don't allow access to the byte vector itself, so it will
+            //     never reallocate.
             transmute::<&[u8], &'a [u8]>(owned_bytes)
         }
     }
