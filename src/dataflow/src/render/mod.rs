@@ -130,7 +130,6 @@ use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
 use repr::{Datum, RelationType, Row, RowArena, Timestamp};
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::decode::{decode_avro_values, decode_values};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
@@ -140,6 +139,10 @@ use crate::server::{
 use crate::sink;
 use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
 use crate::source::{SourceConfig, SourceToken};
+use crate::{
+    arrangement::manager::{TraceBundle, TraceManager},
+    logging::materialized::Logger,
+};
 
 mod arrange_by;
 mod context;
@@ -177,6 +180,7 @@ pub fn build_dataflow<A: Allocate>(
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
+    let materialized_logging = timely_worker.log_register().get("materialized");
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
@@ -197,7 +201,13 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (src_id, src) in dataflow.source_imports.clone() {
-                context.import_source(render_state, region, src_id, src);
+                context.import_source(
+                    render_state,
+                    region,
+                    materialized_logging.clone(),
+                    src_id,
+                    src,
+                );
             }
 
             // Import declared indexes into the rendering context.
@@ -233,6 +243,7 @@ where
         &mut self,
         render_state: &mut RenderState,
         scope: &mut Child<'g, G, G::Timestamp>,
+        materialized_logging: Option<Logger>,
         src_id: GlobalId,
         mut src: SourceDesc,
     ) {
@@ -317,6 +328,7 @@ where
                     timestamp_frequency: ts_frequency,
                     worker_id: scope.index(),
                     worker_count: scope.peers(),
+                    logger: materialized_logging,
                     encoding: encoding.clone(),
                     persistence_tx,
                 };

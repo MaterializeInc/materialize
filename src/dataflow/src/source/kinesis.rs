@@ -27,11 +27,15 @@ use dataflow_types::{
 };
 use expr::{PartitionId, SourceInstanceId};
 
-use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+};
+use crate::{
+    logging::materialized::Logger,
+    server::{
+        TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
+        TimestampMetadataUpdates,
+    },
 };
 
 lazy_static! {
@@ -60,6 +64,8 @@ pub struct KinesisSourceInfo {
     is_activated_reader: bool,
     /// Kinesis client used to obtain records
     kinesis_client: KinesisClient,
+    /// Timely worker logger for source events
+    logger: Option<Logger>,
     /// The name of the stream
     stream_name: String,
     /// The set of active shards
@@ -83,6 +89,7 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
         active: bool,
         _worker_id: usize,
         _worker_count: usize,
+        logger: Option<Logger>,
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -93,13 +100,20 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
             _ => unreachable!(),
         };
 
-        let state = block_on(create_state(kc, &source_name, source_id, consistency_info));
+        let state = block_on(create_state(
+            kc,
+            &source_name,
+            source_id,
+            consistency_info,
+            logger.clone(),
+        ));
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceInfo {
                 name: source_name,
                 id: source_id,
                 is_activated_reader: active,
                 kinesis_client,
+                logger,
                 shard_queue,
                 last_checked_shards: Instant::now(),
                 buffered_messages: VecDeque::new(),
@@ -132,7 +146,12 @@ impl KinesisSourceInfo {
             consistency_info.update_partition_metadata(kinesis_id.clone());
             consistency_info.partition_metrics.insert(
                 kinesis_id.clone(),
-                PartitionMetrics::new(&self.name, &self.id.to_string(), &kinesis_id.to_string()),
+                PartitionMetrics::new(
+                    &self.name,
+                    &self.id.to_string(),
+                    &kinesis_id.to_string(),
+                    self.logger.clone(),
+                ),
             );
         }
         Ok(())
@@ -329,6 +348,7 @@ async fn create_state(
     name: &str,
     id: SourceInstanceId,
     consistency_info: &mut ConsistencyInfo,
+    logger: Option<Logger>,
 ) -> Result<
     (
         KinesisClient,
@@ -357,7 +377,12 @@ async fn create_state(
         consistency_info.update_partition_metadata(kinesis_id.clone());
         consistency_info.partition_metrics.insert(
             kinesis_id.clone(),
-            PartitionMetrics::new(name, &id.to_string(), &kinesis_id.to_string()),
+            PartitionMetrics::new(
+                name,
+                &id.to_string(),
+                &kinesis_id.to_string(),
+                logger.clone(),
+            ),
         );
     }
 
