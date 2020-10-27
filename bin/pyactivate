@@ -15,8 +15,10 @@ from typing import List, Optional
 from pathlib import Path
 import logging
 import os
+import platform
 import subprocess
 import sys
+import sysconfig
 import venv  # type: ignore
 
 logger = logging.getLogger("bootstrap")
@@ -102,6 +104,19 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
         # See: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=959997
         for path in venv_dir.glob("share/python-wheels/wheel*"):
             path.unlink()
+
+    # The Python that ships with Xcode 12 is broken and attempts to compile
+    # Python extensions for ARM when it shouldn't. Detect this known-broken
+    # Python and manually override the architecture to x86_64.
+    # For context, see https://github.com/gorakhargosh/watchdog/issues/689.
+    # (The failing package for us is regex, not watchdog, but the underlying
+    # issue is the same.)
+    if (
+        sys.executable == "/Applications/Xcode.app/Contents/Developer/usr/bin/python3"
+        and platform.machine() == "x86_64"
+        and platform.python_version() == "3.8.2"
+    ):
+        os.environ["ARCHFLAGS"] = "-arch x86_64"
 
     acquire_deps(venv_dir)
     if dev:
