@@ -100,7 +100,7 @@ impl PredicatePushdown {
                         .or_insert_with(|| predicates.iter().cloned().collect())
                         .retain(|p| predicates.contains(p));
                 } else {
-                    input.visit1_mut(|e| self.dataflow_transform(e, get_predicates));
+                    self.dataflow_transform(input, get_predicates);
                 }
             }
             RelationExpr::Get { id, .. } => {
