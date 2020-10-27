@@ -151,9 +151,10 @@ def acquire_deps(venv_dir: Path, variant: Optional[str] = None) -> None:
     # Update dependencies, if necessary.
     if stamp_mtime <= requirements_mtime:
         print("==> Updating {}dependencies with pip".format(variant + " " if variant else ""))
-        subprocess.check_call(
-            [venv_dir / "bin" / "pip", "install", "-r", requirements_path]
-        )
+        subprocess.check_call([
+            venv_dir / "bin" / "pip", "install", "-r", requirements_path,
+            "--disable-pip-version-check",
+        ])
         stamp_path.touch()
 
 
