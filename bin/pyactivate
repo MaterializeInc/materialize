@@ -89,7 +89,13 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
             )
             logger.info(f"python exec error: {e}")
         print("==> Initializing virtualenv in {}".format(venv_dir))
-        venv.create(venv_dir, with_pip=True, clear=True)
+        # Install Python into the virtualenv via a symlink rather than copying,
+        # except on Windows. This matches the behavior of the `python -m venv`
+        # command line tool. This is important on macOS, where the default
+        # `symlinks=False` is broken with the system Python.
+        # See: https://bugs.python.org/issue38705
+        symlinks = os.name != "nt"
+        venv.create(venv_dir, with_pip=True, clear=True, symlinks=symlinks)
         # Work around a Debian bug which incorrectly makes pip think that we've
         # installed wheel in the virtual environment when we haven't. This is
         # a no-op on systems without the bug.
