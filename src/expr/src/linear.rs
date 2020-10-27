@@ -80,10 +80,29 @@ impl MapFilterProject {
     /// miss some errors that would occur later in evaluation.
     pub fn evaluate<'a>(
         &'a self,
-        datums: &mut Vec<Datum<'a>>,
+        datums: &'a mut Vec<Datum<'a>>,
         arena: &'a RowArena,
         row_packer: &mut RowPacker,
     ) -> Result<Option<Row>, EvalError> {
+        self.evaluate_iter(datums, arena).map(|result| {
+            result.map(|result| {
+                row_packer.extend(result);
+                row_packer.finish_and_reuse()
+            })
+        })
+    }
+
+    /// A version of `evaluate` which produces an iterator over `Datum`
+    /// as output.
+    ///
+    /// This version is used internally by `evaluate` and can be useful
+    /// when one wants to capture the resulting datums without packing
+    /// and then unpacking a row.
+    pub fn evaluate_iter<'a>(
+        &'a self,
+        datums: &'a mut Vec<Datum<'a>>,
+        arena: &'a RowArena,
+    ) -> Result<Option<impl Iterator<Item = Datum> + 'a>, EvalError> {
         let mut expression = 0;
         for (support, predicate) in self.predicates.iter() {
             while self.input_arity + expression < *support {
@@ -98,8 +117,7 @@ impl MapFilterProject {
             datums.push(self.expressions[expression].eval(&datums[..], &arena)?);
             expression += 1;
         }
-        row_packer.extend(self.projection.iter().map(|i| datums[*i]));
-        Ok(Some(row_packer.finish_and_reuse()))
+        Ok(Some(self.projection.iter().map(move |i| datums[*i])))
     }
 
     /// Retain only the indicated columns in the presented order.
