@@ -2237,13 +2237,18 @@ impl Parser {
                 "INTERVAL" => DataType::Interval,
                 "REGCLASS" => DataType::Regclass,
                 "TEXT" | "STRING" => DataType::Text,
-                "BYTEA" => DataType::Bytea,
+                "BYTEA" | "BYTES" => DataType::Bytea,
                 "NUMERIC" | "DECIMAL" | "DEC" => {
                     let (precision, scale) = self.parse_optional_precision_scale()?;
                     DataType::Decimal(precision, scale)
                 }
                 "JSON" | "JSONB" => DataType::Jsonb,
-                custom => DataType::Custom(custom.to_string()),
+                custom if !custom.is_empty() => DataType::Custom(custom.to_string()),
+                _ => self.expected(
+                    self.peek_prev_range(),
+                    "a known data type",
+                    Some(Token::Word(k)),
+                )?,
             },
             other => self.expected(self.peek_prev_range(), "a data type name", other)?,
         };
