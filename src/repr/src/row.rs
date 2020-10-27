@@ -193,8 +193,14 @@ enum Tag {
     Timestamp,
     TimestampTz,
     Interval,
-    Bytes,
-    String,
+    BytesTiny,
+    BytesShort,
+    BytesLong,
+    BytesHuge,
+    StringTiny,
+    StringShort,
+    StringLong,
+    StringHuge,
     Uuid,
     Array,
     List,
@@ -240,17 +246,31 @@ unsafe fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8
     bytes
 }
 
-/// Read a string starting at byte `offset`.
+/// Read a data whose length is encoded in the row before its contents.
 ///
 /// Updates `offset` to point to the first byte after the end of the read region.
 ///
 /// # Safety
 ///
-/// This function is safe if a `str` was previously written at this offset by `push_untagged_string`.
-/// Otherwise it could return invalid values, which is Undefined Behavior.
-unsafe fn read_untagged_string<'a>(data: &'a [u8], offset: &mut usize) -> &'a str {
-    let bytes = read_untagged_bytes(data, offset);
-    std::str::from_utf8_unchecked(bytes)
+/// This function is safe if the datum's length and contents were previously written by `push_lengthed_bytes`,
+/// and it was only written with a `String` tag if it was indeed UTF-8.
+unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) -> Datum<'a> {
+    let len = match tag {
+        Tag::BytesTiny | Tag::StringTiny => read_copy::<u8>(data, offset) as usize,
+        Tag::BytesShort | Tag::StringShort => read_copy::<u16>(data, offset) as usize,
+        Tag::BytesLong | Tag::StringLong => read_copy::<u32>(data, offset) as usize,
+        Tag::BytesHuge | Tag::StringHuge => read_copy::<usize>(data, offset),
+        _ => unreachable!(),
+    };
+    let bytes = &data[*offset..(*offset + len)];
+    *offset += len;
+    match tag {
+        Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => Datum::Bytes(bytes),
+        Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
+            Datum::String(std::str::from_utf8_unchecked(bytes))
+        }
+        _ => unreachable!(),
+    }
 }
 
 /// Read a datum starting at byte `offset`.
@@ -308,13 +328,16 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let s = read_copy::<Significand>(data, offset);
             Datum::Decimal(s)
         }
-        Tag::Bytes => {
-            let bytes = read_untagged_bytes(data, offset);
-            Datum::Bytes(bytes)
-        }
-        Tag::String => {
-            let string = read_untagged_string(data, offset);
-            Datum::String(string)
+        Tag::BytesTiny
+        | Tag::BytesShort
+        | Tag::BytesLong
+        | Tag::BytesHuge
+        | Tag::StringTiny
+        | Tag::StringShort
+        | Tag::StringLong
+        | Tag::StringHuge => {
+            let datum = read_lengthed_datum(data, offset, tag);
+            datum
         }
         Tag::Uuid => {
             let mut b: uuid::Bytes = [0; 16];
@@ -365,8 +388,23 @@ fn push_untagged_bytes(data: &mut Vec<u8>, bytes: &[u8]) {
     data.extend_from_slice(bytes);
 }
 
-fn push_untagged_string(data: &mut Vec<u8>, string: &str) {
-    push_untagged_bytes(data, string.as_bytes())
+fn push_lengthed_bytes(data: &mut Vec<u8>, bytes: &[u8], tag: Tag) {
+    match tag {
+        Tag::BytesTiny | Tag::StringTiny => {
+            push_copy!(data, bytes.len() as u8, u8);
+        }
+        Tag::BytesShort | Tag::StringShort => {
+            push_copy!(data, bytes.len() as u16, u16);
+        }
+        Tag::BytesLong | Tag::StringLong => {
+            push_copy!(data, bytes.len() as u32, u32);
+        }
+        Tag::BytesHuge | Tag::StringHuge => {
+            push_copy!(data, bytes.len() as usize, usize);
+        }
+        _ => unreachable!(),
+    }
+    data.extend_from_slice(bytes);
 }
 
 fn push_datum(data: &mut Vec<u8>, datum: Datum) {
@@ -416,12 +454,24 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
             push_copy!(data, s, Significand);
         }
         Datum::Bytes(bytes) => {
-            data.push(Tag::Bytes as u8);
-            push_untagged_bytes(data, bytes);
+            let tag = match bytes.len() {
+                0..=255 => Tag::BytesTiny,
+                256..=65535 => Tag::BytesShort,
+                65536..=4294967295 => Tag::BytesLong,
+                _ => Tag::BytesHuge,
+            };
+            data.push(tag as u8);
+            push_lengthed_bytes(data, bytes, tag);
         }
         Datum::String(string) => {
-            data.push(Tag::String as u8);
-            push_untagged_string(data, string);
+            let tag = match string.len() {
+                0..=255 => Tag::StringTiny,
+                256..=65535 => Tag::StringShort,
+                65536..=4294967295 => Tag::StringLong,
+                _ => Tag::StringHuge,
+            };
+            data.push(tag as u8);
+            push_lengthed_bytes(data, string.as_bytes(), tag);
         }
         Datum::Uuid(u) => {
             data.push(Tag::Uuid as u8);
@@ -665,11 +715,14 @@ impl<'a> Iterator for DatumDictIter<'a> {
             Some(unsafe {
                 let key_tag = read_copy::<Tag>(self.data, &mut self.offset);
                 assert!(
-                    key_tag == Tag::String,
+                    key_tag == Tag::StringTiny
+                        || key_tag == Tag::StringShort
+                        || key_tag == Tag::StringLong
+                        || key_tag == Tag::StringHuge,
                     "Dict keys must be strings, got {:?}",
                     key_tag
                 );
-                let key = read_untagged_string(self.data, &mut self.offset);
+                let key = read_lengthed_datum(self.data, &mut self.offset, key_tag).unwrap_str();
                 let val = read_datum(self.data, &mut self.offset);
 
                 // if in debug mode, sanity check keys
