@@ -225,7 +225,6 @@ where
                                     new_row.iter()
                                 };
 
-                                println!("{:?}", input);
                                 row_packer.extend(key.iter());
                                 for is_accum in is_accumulable.iter() {
                                     if *is_accum {
@@ -449,6 +448,12 @@ where
         }
     };
 
+    let max_index = if let Some((index, _)) = aggrs.iter().cloned().last() {
+        index + 1
+    } else {
+        0
+    };
+
     let mut to_aggregate = Vec::new();
     // First, collect all non-distinct aggregations in one pass.
     let easy_cases = collection
@@ -516,6 +521,10 @@ where
                         diffs.push(1i128);
                         diffs.push(agg1);
                         diffs.push(agg2);
+
+                        while diffs.len() < 3 * max_index {
+                            diffs.push(0i128);
+                        }
                         Some(((key, ()), DiffVector::new(diffs)))
                     }
                 });
