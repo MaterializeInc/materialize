@@ -218,12 +218,14 @@ where
                                 // There can be at most one `None` index, and it indicates the accumulable aggregates.
                                 let new_row = Row::new(Vec::new());
                                 let mut accumulable = if (input[0].0).0 == None {
-                                    (input[0].0).1.iter()
+                                    let iter = (input[0].0).1.iter();
+                                    input = &input[1..];
+                                    iter
                                 } else {
                                     new_row.iter()
                                 };
 
-                                input = &input[1..];
+                                println!("{:?}", input);
                                 row_packer.extend(key.iter());
                                 for is_accum in is_accumulable.iter() {
                                     if *is_accum {
