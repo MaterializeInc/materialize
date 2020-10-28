@@ -230,7 +230,10 @@ where
                                     if *is_accum {
                                         row_packer.push(accumulable.next().unwrap());
                                     } else {
-                                        row_packer.push((input[0].0).1.unpack_first());
+                                        let elem = input[0].0;
+                                        let inner = &elem.1;
+                                        let datum = inner.unpack_first();
+                                        row_packer.push(datum);
                                         input = &input[1..];
                                     }
                                 }
@@ -512,7 +515,7 @@ where
                 .explode({
                     move |(key, row)| {
                         // TODO: iirc this row only ever has a single datum
-                        let datum = row.iter().nth(0).unwrap();
+                        let datum = row.iter().next().unwrap();
                         let mut diffs = Vec::new();
                         while diffs.len() < 3 * index {
                             diffs.push(0i128);
