@@ -15,7 +15,6 @@ use anyhow::{anyhow, Error};
 /// various optimizations on them. It uses datadriven, so the output of each test can be rewritten
 /// by setting the REWRITE environment variable.
 /// TODO(justin):
-/// * It's currently missing a mechanism to run just a single test file
 /// * There is some duplication between this and the SQL planner
 /// * Not all operators supported (Reduce)
 
@@ -132,8 +131,8 @@ mod tests {
     use super::{Sexp, SexpParser};
     use anyhow::{anyhow, bail, Error};
     use expr::{
-        BinaryFunc, GlobalId, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
-        ScalarExpr, TableFunc,
+        AggregateExpr, AggregateFunc, BinaryFunc, GlobalId, Id, IdHumanizer, JoinImplementation,
+        LocalId, RelationExpr, ScalarExpr, TableFunc,
     };
     use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
     use std::collections::HashMap;
@@ -398,6 +397,16 @@ mod tests {
                     .map(build_scalar_list)
                     .collect::<Result<Vec<Vec<ScalarExpr>>, Error>>()?,
             }),
+            // (reduce <input> [<grouping-exprs>] [<aggregations>])
+            "reduce" => Ok(RelationExpr::Reduce {
+                input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
+                group_key: build_scalar_list(nth(&s, 2)?)?,
+                aggregates: try_list(nth(&s, 3)?)?
+                    .into_iter()
+                    .map(build_aggregate)
+                    .collect::<Result<Vec<AggregateExpr>, Error>>()?,
+                monotonic: false,
+            }),
             // TODO(justin): add the rest of the operators.
             name => Err(anyhow!("expected {} to be a relational operator", name)),
         }
@@ -408,6 +417,18 @@ mod tests {
             .into_iter()
             .map(build_scalar)
             .collect::<Result<Vec<ScalarExpr>, Error>>()
+    }
+
+    fn build_aggregate(s: Sexp) -> Result<AggregateExpr, Error> {
+        // TODO(justin): support distinct.
+        let list = try_list(s)?;
+        let func = get_aggregate(&list[0])?;
+        let expr = build_scalar(list[1].clone())?;
+        Ok(AggregateExpr {
+            func,
+            expr,
+            distinct: false,
+        })
     }
 
     // TODO(justin): is there some way to re-use the sql parser/builder for this?
@@ -478,6 +499,14 @@ mod tests {
         // TODO(justin): can this delegate to the planner?
         match try_atom(s)?.as_str() {
             "generate_series_int32" => Ok(TableFunc::GenerateSeriesInt32),
+            _ => Err(anyhow!("unknown table func {}", s)),
+        }
+    }
+
+    fn get_aggregate(s: &Sexp) -> Result<AggregateFunc, Error> {
+        // TODO(justin): can this delegate to the planner?
+        match try_atom(s)?.as_str() {
+            "sum_int32" => Ok(AggregateFunc::SumInt32),
             _ => Err(anyhow!("unknown table func {}", s)),
         }
     }

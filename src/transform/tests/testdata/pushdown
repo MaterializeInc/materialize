@@ -211,3 +211,47 @@ build apply=ProjectionPushdown
 | Project (#1, #0, #2)
 ----
 ----
+
+# Reduce
+
+build apply=ProjectionPushdown
+(project
+  (reduce
+    (get x)
+    [#1]
+    [(sum_int32 #0)])
+  [#0 #1])
+----
+%0 =
+| Get x (u0)
+| Reduce group=(#1)
+| | agg sum(#0)
+
+build apply=ProjectionPushdown
+(project
+  (reduce
+    (get x)
+    [#0]
+    [(sum_int32 #0)])
+  [#0 #1])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| Reduce group=(#0)
+| | agg sum(#0)
+
+build apply=ProjectionPushdown
+(project
+  (reduce
+    (get x)
+    [#0]
+    [(sum_int32 #0)])
+  [#0])
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+| Reduce group=(#0)
+| | agg sum(#0)
+| Project (#0)

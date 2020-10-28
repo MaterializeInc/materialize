@@ -651,6 +651,24 @@ impl RelationExpr {
         }
     }
 
+    /// Perform a key-wise reduction / aggregation.
+    ///
+    /// The `group_key` argument indicates columns in the input collection that should
+    /// be grouped, and `aggregates` lists aggregation functions each of which produces
+    /// one output column in addition to the keys.
+    pub fn reduce_scalars(
+        self,
+        group_key: Vec<ScalarExpr>,
+        aggregates: Vec<AggregateExpr>,
+    ) -> Self {
+        RelationExpr::Reduce {
+            input: Box::new(self),
+            group_key,
+            aggregates,
+            monotonic: false,
+        }
+    }
+
     /// Perform a key-wise reduction order by and limit.
     ///
     /// The `group_key` argument indicates columns in the input collection that should
