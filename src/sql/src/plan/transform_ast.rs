@@ -18,8 +18,8 @@ use uuid::Uuid;
 
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    BinaryOperator, Expr, Function, FunctionArgs, Ident, ObjectName, Query, Select, SelectItem,
-    TableAlias, TableWithJoins, Value, Values,
+    Expr, Function, FunctionArgs, Ident, ObjectName, Query, Select, SelectItem, TableAlias,
+    TableWithJoins, Value, Values,
 };
 
 use crate::normalize;
@@ -318,13 +318,13 @@ impl Desugarer {
             if *negated {
                 *expr = Expr::All {
                     left: Box::new(e.take()),
-                    op: BinaryOperator::NotEq,
+                    op: "<>".into(),
                     right: Box::new(subquery.take()),
                 };
             } else {
                 *expr = Expr::AnySubquery {
                     left: Box::new(e.take()),
-                    op: BinaryOperator::Eq,
+                    op: "=".into(),
                     right: Box::new(subquery.take()),
                 };
             }
@@ -364,7 +364,7 @@ impl Desugarer {
                 .project(SelectItem::Expr {
                     expr: left
                         .binop(
-                            op.clone(),
+                            &op,
                             Expr::Row {
                                 exprs: bindings
                                     .into_iter()
@@ -398,12 +398,16 @@ impl Desugarer {
         // $l1 < $r1 OR ($l1 = $r1 AND ($l2 < $r2 OR ($l2 = $r2 AND ... ($ln <= $rn))))
         //
         // and analogously for the inverse operations !=, >, and >=.
-        if let Expr::BinaryOp { left, right, op } = expr {
+        if let Expr::Op {
+            op,
+            expr1: left,
+            expr2: Some(right),
+        } = expr
+        {
             if let (Expr::Row { exprs: left }, Expr::Row { exprs: right }) =
                 (&mut **left, &mut **right)
             {
-                use BinaryOperator::*;
-                if matches!(op, Eq | NotEq | Lt | LtEq | Gt | GtEq) {
+                if matches!(op.as_str(), "=" | "<>" | "<" | "<=" | ">" | ">=") {
                     if left.len() != right.len() {
                         bail!("unequal number of entries in row expressions");
                     }
@@ -412,29 +416,29 @@ impl Desugarer {
                         bail!("cannot compare rows of zero length");
                     }
                 }
-                match op {
-                    Eq | NotEq => {
+                match op.as_str() {
+                    "=" | "<>" => {
                         let mut new = Expr::Value(Value::Boolean(true));
                         for (l, r) in left.iter_mut().zip(right) {
                             new = l.take().equals(r.take()).and(new);
                         }
-                        if let NotEq = op {
+                        if op == "<>" {
                             new = new.negate();
                         }
                         *expr = new;
                     }
-                    Lt | LtEq | Gt | GtEq => {
-                        let strict_op = match op {
-                            Lt | LtEq => Lt,
-                            Gt | GtEq => Gt,
+                    "<" | "<=" | ">" | ">=" => {
+                        let strict_op = match op.as_str() {
+                            "<" | "<=" => "<",
+                            ">" | ">=" => ">",
                             _ => unreachable!(),
                         };
                         let (l, r) = (left.last_mut().unwrap(), right.last_mut().unwrap());
-                        let mut new = l.take().binop(op.clone(), r.take());
+                        let mut new = l.take().binop(&op, r.take());
                         for (l, r) in left.iter_mut().zip(right).rev().skip(1) {
                             new = l
                                 .clone()
-                                .binop(strict_op.clone(), r.clone())
+                                .binop(strict_op, r.clone())
                                 .or(l.take().equals(r.take()).and(new));
                         }
                         *expr = new;

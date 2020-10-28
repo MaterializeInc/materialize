@@ -314,8 +314,7 @@ impl Parser {
                 "EXISTS" => self.parse_exists_expr(),
                 "EXTRACT" => self.parse_extract_expr(),
                 "INTERVAL" => self.parse_literal_interval(),
-                "NOT" => Ok(Expr::UnaryOp {
-                    op: UnaryOperator::Not,
+                "NOT" => Ok(Expr::Not {
                     expr: Box::new(self.parse_subexpr(Precedence::UnaryNot)?),
                 }),
                 "ROW" => self.parse_row_expr(),
@@ -361,14 +360,11 @@ impl Parser {
                 },
             }, // End of Token::Word
             tok @ Token::Minus | tok @ Token::Plus => {
-                let op = if tok == Token::Plus {
-                    UnaryOperator::Plus
-                } else {
-                    UnaryOperator::Minus
-                };
-                Ok(Expr::UnaryOp {
-                    op,
-                    expr: Box::new(self.parse_subexpr(Precedence::UnaryOp)?),
+                let op = if tok == Token::Plus { "+" } else { "-" };
+                Ok(Expr::Op {
+                    op: op.into(),
+                    expr1: Box::new(self.parse_subexpr(Precedence::UnaryOp)?),
+                    expr2: None,
                 })
             }
             Token::Number(_) | Token::String(_) | Token::HexString(_) => {
@@ -762,41 +758,39 @@ impl Parser {
         let tok = self.next_token().unwrap(); // safe as EOF's precedence is the lowest
 
         let regular_binary_operator = match tok {
-            Token::Eq => Some(BinaryOperator::Eq),
-            Token::Neq => Some(BinaryOperator::NotEq),
-            Token::Gt => Some(BinaryOperator::Gt),
-            Token::GtEq => Some(BinaryOperator::GtEq),
-            Token::Lt => Some(BinaryOperator::Lt),
-            Token::LtEq => Some(BinaryOperator::LtEq),
-            Token::Plus => Some(BinaryOperator::Plus),
-            Token::Minus => Some(BinaryOperator::Minus),
-            Token::Mult => Some(BinaryOperator::Multiply),
-            Token::Mod => Some(BinaryOperator::Modulus),
-            Token::Div => Some(BinaryOperator::Divide),
-            Token::Concat => Some(BinaryOperator::Concat),
-            Token::RegexMatch => Some(BinaryOperator::RegexMatch),
-            Token::RegexIMatch => Some(BinaryOperator::RegexIMatch),
-            Token::RegexNotMatch => Some(BinaryOperator::RegexNotMatch),
-            Token::RegexNotIMatch => Some(BinaryOperator::RegexNotIMatch),
-            Token::JsonGet => Some(BinaryOperator::JsonGet),
-            Token::JsonGetAsText => Some(BinaryOperator::JsonGetAsText),
-            Token::JsonGetPath => Some(BinaryOperator::JsonGetPath),
-            Token::JsonGetPathAsText => Some(BinaryOperator::JsonGetPathAsText),
-            Token::JsonContainsJson => Some(BinaryOperator::JsonContainsJson),
-            Token::JsonContainedInJson => Some(BinaryOperator::JsonContainedInJson),
-            Token::JsonContainsField => Some(BinaryOperator::JsonContainsField),
-            Token::JsonContainsAnyFields => Some(BinaryOperator::JsonContainsAnyFields),
-            Token::JsonContainsAllFields => Some(BinaryOperator::JsonContainsAllFields),
-            Token::JsonDeletePath => Some(BinaryOperator::JsonDeletePath),
-            Token::JsonContainsPath => Some(BinaryOperator::JsonContainsPath),
-            Token::JsonApplyPathPredicate => Some(BinaryOperator::JsonApplyPathPredicate),
+            Token::Eq => Some("="),
+            Token::Neq => Some("<>"),
+            Token::Gt => Some(">"),
+            Token::GtEq => Some(">="),
+            Token::Lt => Some("<"),
+            Token::LtEq => Some("<="),
+            Token::Plus => Some("+"),
+            Token::Minus => Some("-"),
+            Token::Mult => Some("*"),
+            Token::Mod => Some("%"),
+            Token::Div => Some("/"),
+            Token::Concat => Some("||"),
+            Token::RegexMatch => Some("~"),
+            Token::RegexIMatch => Some("~*"),
+            Token::RegexNotMatch => Some("!~"),
+            Token::RegexNotIMatch => Some("!~*"),
+            Token::JsonGet => Some("->"),
+            Token::JsonGetAsText => Some("->>"),
+            Token::JsonGetPath => Some("#>"),
+            Token::JsonGetPathAsText => Some("#>>"),
+            Token::JsonContainsJson => Some("@>"),
+            Token::JsonContainedInJson => Some("<@"),
+            Token::JsonContainsField => Some("?"),
+            Token::JsonContainsAnyFields => Some("?|"),
+            Token::JsonContainsAllFields => Some("?&"),
+            Token::JsonDeletePath => Some("#-"),
+            Token::JsonContainsPath => Some("@?"),
+            Token::JsonApplyPathPredicate => Some("@@"),
             Token::Word(ref k) => match k.keyword.as_ref() {
-                "AND" => Some(BinaryOperator::And),
-                "OR" => Some(BinaryOperator::Or),
-                "LIKE" => Some(BinaryOperator::Like),
+                "LIKE" => Some("~~"),
                 "NOT" => {
                     if self.parse_keyword("LIKE") {
-                        Some(BinaryOperator::NotLike)
+                        Some("!~~")
                     } else {
                         None
                     }
@@ -805,28 +799,22 @@ impl Parser {
             },
             _ => None,
         };
-        let op_range = self.peek_prev_range();
 
         if let Some(op) = regular_binary_operator {
             if let Some(kw) = self.parse_one_of_keywords(&["ANY", "SOME", "ALL"]) {
-                use BinaryOperator::*;
-                match op {
-                    Eq | NotEq | Gt | GtEq | Lt | LtEq => (),
-                    _ => self.expected(op_range, "comparison operator", Some(tok))?,
-                }
                 self.expect_token(&Token::LParen)?;
                 if kw == "ANY" || kw == "SOME" {
                     let expr = if self.parse_one_of_keywords(&["SELECT", "VALUES"]).is_some() {
                         self.prev_token();
                         Expr::AnySubquery {
                             left: Box::new(expr),
-                            op,
+                            op: op.into(),
                             right: Box::new(self.parse_query()?),
                         }
                     } else {
                         Expr::AnyExpr {
                             left: Box::new(expr),
-                            op,
+                            op: op.into(),
                             right: Box::new(self.parse_expr()?),
                         }
                     };
@@ -837,15 +825,15 @@ impl Parser {
                     self.expect_token(&Token::RParen)?;
                     Ok(Expr::All {
                         left: Box::new(expr),
-                        op,
+                        op: op.into(),
                         right: Box::new(query),
                     })
                 }
             } else {
-                Ok(Expr::BinaryOp {
-                    left: Box::new(expr),
-                    op,
-                    right: Box::new(self.parse_subexpr(precedence)?),
+                Ok(Expr::Op {
+                    op: op.into(),
+                    expr1: Box::new(expr),
+                    expr2: Some(Box::new(self.parse_subexpr(precedence)?)),
                 })
             }
         } else if let Token::Word(ref k) = tok {
@@ -884,6 +872,14 @@ impl Parser {
                         )
                     }
                 }
+                "AND" => Ok(Expr::And {
+                    left: Box::new(expr),
+                    right: Box::new(self.parse_subexpr(precedence)?),
+                }),
+                "OR" => Ok(Expr::Or {
+                    left: Box::new(expr),
+                    right: Box::new(self.parse_subexpr(precedence)?),
+                }),
                 // Can only happen if `get_next_precedence` got out of sync with this function
                 _ => panic!("No infix parser for token {:?}", tok),
             }

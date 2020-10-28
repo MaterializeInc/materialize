@@ -129,11 +129,9 @@ Expected ), found: EOF
 parse-statement
 SELECT 1 WHERE 1 + ANY (SELECT 2)
 ----
-error:
-Parse error:
-SELECT 1 WHERE 1 + ANY (SELECT 2)
-                 ^
-Expected comparison operator, found: +
+SELECT 1 WHERE 1 +ANY (SELECT 2)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: Some(AnySubquery { left: Value(Number("1")), op: "+", right: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None })
 
 parse-statement
 SELECT EXISTS (NULL)
