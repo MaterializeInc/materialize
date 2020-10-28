@@ -1,0 +1,22 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+query error value_type parameter required
+CREATE TYPE custom AS MAP (key_type=text)
+
+query error key_type parameter required
+CREATE TYPE custom AS MAP (value_type='bool')
+
+query error unexpected parameters for CREATE TYPE: extra_type
+CREATE TYPE custom AS MAP (key_type=text, value_type='bool', extra_type=customthing)
+
+query error CREATE TYPE not yet supported
+CREATE TYPE custom AS MAP (key_type=text, value_type=bool)

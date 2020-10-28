@@ -50,7 +50,12 @@ pub fn object_name(mut name: ObjectName) -> Result<PartialName, PlanError> {
 pub fn options(options: &[SqlOption]) -> HashMap<String, Value> {
     options
         .iter()
-        .map(|o| (ident(o.name.clone()), o.value.clone()))
+        .map(|o| match o {
+            SqlOption::Value { name, value } => (ident(name.clone()), value.clone()),
+            SqlOption::Ident { name, ident: id } => {
+                (ident(name.clone()), Value::String(ident(id.clone())))
+            }
+        })
         .collect()
 }
 
