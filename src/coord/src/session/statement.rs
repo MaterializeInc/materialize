@@ -41,15 +41,15 @@
 
 use derivative::Derivative;
 
-use repr::{RelationDesc, Row};
+use repr::Row;
 use sql::ast::Statement;
-use sql::plan::Params;
+use sql::plan::{Params, StatementDesc};
 
 /// A prepared statement.
 #[derive(Debug)]
 pub struct PreparedStatement {
     sql: Option<Statement>,
-    desc: Option<RelationDesc>,
+    desc: StatementDesc,
     param_types: Vec<pgrepr::Type>,
 }
 
@@ -57,7 +57,7 @@ impl PreparedStatement {
     /// Constructs a new `PreparedStatement`.
     pub fn new(
         sql: Option<Statement>,
-        desc: Option<RelationDesc>,
+        desc: StatementDesc,
         param_types: Vec<pgrepr::Type>,
     ) -> PreparedStatement {
         PreparedStatement {
@@ -75,8 +75,8 @@ impl PreparedStatement {
 
     /// Returns the type of the rows that will be returned by this prepared
     /// statement, if this prepared statement will return rows at all.
-    pub fn desc(&self) -> Option<&RelationDesc> {
-        self.desc.as_ref()
+    pub fn desc(&self) -> &StatementDesc {
+        &self.desc
     }
 
     /// Returns the types of any parameters in this prepared statement.
@@ -88,6 +88,7 @@ impl PreparedStatement {
     /// the statement does not return rows.
     pub fn result_width(&self) -> usize {
         self.desc
+            .relation_desc
             .as_ref()
             .map(|desc| desc.typ().column_types.len())
             .unwrap_or(0)
