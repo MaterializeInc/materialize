@@ -94,6 +94,8 @@ pub enum SequencedCommand {
     Peek {
         /// The identifier of the arrangement.
         id: GlobalId,
+        /// An optional key that should be used for the arrangement.
+        key: Option<Row>,
         /// The identifier of this peek request.
         ///
         /// Used in responses and cancelation requests.
@@ -625,6 +627,7 @@ where
 
             SequencedCommand::Peek {
                 id,
+                key,
                 timestamp,
                 conn_id,
                 tx,
@@ -650,6 +653,7 @@ where
                 // Prepare a description of the peek work to do.
                 let mut peek = PendingPeek {
                     id,
+                    key,
                     conn_id,
                     tx,
                     timestamp,
@@ -834,6 +838,8 @@ pub struct LocalInput {
 struct PendingPeek {
     /// The identifier of the dataflow to peek.
     id: GlobalId,
+    /// An optional key to use for the arrangement.
+    key: Option<Row>,
     /// The ID of the connection that submitted the peek. For logging only.
     conn_id: u32,
     /// A transmitter connected to the intended recipient of the peek.
@@ -940,6 +946,10 @@ impl PendingPeek {
         // just at least the results.
         let max_results = self.finishing.limit.map(|l| l + self.finishing.offset);
 
+        if let Some(literal) = &self.key {
+            cursor.seek_key(&storage, literal);
+        }
+
         while cursor.key_valid(&storage) {
             while cursor.val_valid(&storage) {
                 let row = cursor.val(&storage);
@@ -1005,7 +1015,12 @@ impl PendingPeek {
                 }
                 cursor.step_val(&storage);
             }
-            cursor.step_key(&storage);
+            // If we had a key, we are now done and can return.
+            if self.key.is_some() {
+                return Ok(results);
+            } else {
+                cursor.step_key(&storage);
+            }
         }
 
         Ok(results)

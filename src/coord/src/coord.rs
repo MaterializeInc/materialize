@@ -1820,18 +1820,43 @@ where
             // an existing materialization. This is the case if the expression is now a
             // `RelationExpr::Get` and its target is something we have materialized.
             // Otherwise, we will need to build a new dataflow.
-            let (fast_path, index_id) = if let RelationExpr::Get {
+            let mut fast_path: Option<(_, Option<Row>)> = None;
+            if let RelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
             } = inner
             {
-                if let Some(index_id) = self.catalog.default_index_for(*id) {
-                    (true, index_id)
-                } else {
-                    (false, self.allocate_transient_id()?)
+                // Here we should check for an index whose keys are constrained to literal
+                // values by predicate constraints in `map_filter_project`. If we find such
+                // an index, we can use it with the literal to perform look-ups at workers,
+                // and in principle avoid even contacting all but one worker (future work).
+                if let Some(indexes) = self.catalog.indexes().get(id) {
+                    // Determine for each index identifier, an optional row literal as key.
+                    // We want to extract the "best" option, where we prefer indexes with
+                    // literals and long keys, then indexes at all, then exit correctly.
+                    fast_path = indexes
+                        .iter()
+                        .map(|(id, exprs)| {
+                            let literal_row = map_filter_project.literal_constraints(exprs);
+                            // Prefer non-trivial literal rows foremost, then long expressions,
+                            // then we don't really care at that point.
+                            (
+                                literal_row.is_some() && exprs.len() > 0,
+                                exprs.len(),
+                                literal_row,
+                                *id,
+                            )
+                        })
+                        .max()
+                        .map(|(_some, _len, literal, id)| (id, literal));
                 }
+            }
+
+            // Unpack what we have learned with default values if we found nothing.
+            let (fast_path, index_id, literal_row) = if let Some((id, row)) = fast_path {
+                (true, id, row)
             } else {
-                (false, self.allocate_transient_id()?)
+                (false, self.allocate_transient_id()?, None)
             };
 
             if !fast_path {
@@ -1854,6 +1879,7 @@ where
                 &mut self.broadcast_tx,
                 SequencedCommand::Peek {
                     id: index_id,
+                    key: literal_row,
                     conn_id,
                     tx: rows_tx,
                     timestamp,

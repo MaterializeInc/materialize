@@ -211,6 +211,19 @@ impl MapFilterProject {
         None
     }
 
+    /// Determines if a sequence of scalar expressions must be equal to a literal row.
+    pub fn literal_constraints(&self, exprs: &[ScalarExpr]) -> Option<Row> {
+        let mut row_packer = RowPacker::new();
+        for expr in exprs {
+            if let Some(literal) = self.literal_constraint(expr) {
+                row_packer.push(literal);
+            } else {
+                return None;
+            }
+        }
+        Some(row_packer.finish_and_reuse())
+    }
+
     /// Extracts any MapFilterProject at the root of the expression.
     ///
     /// The expression will be modified to extract any maps, filters, and
