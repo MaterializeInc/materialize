@@ -91,6 +91,11 @@ pub enum ExecuteResponse {
     AlteredIndexLogicalCompaction,
     /// The active transaction was committed.
     CommittedTransaction,
+    CopyTo {
+        format: sql::plan::CopyFormat,
+        #[derivative(Debug = "ignore")]
+        rx: RowsFuture,
+    },
     /// The requested database was created.
     CreatedDatabase {
         existed: bool,

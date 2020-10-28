@@ -205,6 +205,7 @@ impl From<&ColumnName> for ColumnName {
 pub struct RelationDesc {
     typ: RelationType,
     names: Vec<Option<ColumnName>>,
+    send: bool,
 }
 
 impl RelationDesc {
@@ -214,6 +215,7 @@ impl RelationDesc {
         RelationDesc {
             typ: RelationType::empty(),
             names: vec![],
+            send: true,
         }
     }
 
@@ -231,7 +233,23 @@ impl RelationDesc {
     {
         let names: Vec<_> = names.into_iter().map(|n| n.map(Into::into)).collect();
         assert_eq!(typ.column_types.len(), names.len());
-        RelationDesc { typ, names }
+        RelationDesc {
+            typ,
+            names,
+            send: true,
+        }
+    }
+
+    /// Marks send as false. Used for statements that have a description but it
+    /// should not be sent.
+    pub fn no_send(mut self) -> Self {
+        self.send = false;
+        self
+    }
+
+    /// Returns whether a RowDescription should be returned for this statement.
+    pub fn send(&self) -> bool {
+        self.send
     }
 
     /// Concatenates a `RelationDesc` onto the end of this `RelationDesc`.
