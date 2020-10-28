@@ -192,12 +192,6 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     let local_addr = listener.local_addr()?;
     config.addresses[config.process].set_port(local_addr.port());
 
-    println!(
-        "materialized {} listening on {}...",
-        version(),
-        SocketAddr::new(listen_addr.ip(), local_addr.port()),
-    );
-
     let switchboard = Switchboard::new(config.addresses, config.process);
 
     // Launch task to serve connections.

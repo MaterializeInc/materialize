@@ -54,7 +54,7 @@ from materialize import git
 from materialize import spawn
 from materialize import ui
 
-announce = ui.speaker("==>")
+announce = ui.speaker("==> ")
 
 # BUILD_MODE enables building Rust binaries without the --release flag.
 # TODO(mjibson): Make this not an environment variable, instead pass it around
