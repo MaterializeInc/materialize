@@ -12,7 +12,7 @@
 use anyhow::bail;
 
 use ore::collections::CollectionExt;
-use repr::{Datum, RelationDesc, Row, ScalarType};
+use repr::{Datum, Row};
 use sql_parser::ast::{
     ObjectName, ObjectType, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
@@ -22,7 +22,7 @@ use sql_parser::ast::{
 
 use crate::catalog::CatalogItemType;
 use crate::parse;
-use crate::plan::statement::StatementContext;
+use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{Params, Plan};
 
 pub fn handle_show_create_view(
@@ -441,7 +441,7 @@ impl<'a> ShowSelect<'a> {
     }
 
     /// Computes the shape of this `ShowSelect`.
-    pub fn describe(self) -> Result<(Option<RelationDesc>, Vec<ScalarType>), anyhow::Error> {
+    pub fn describe(self) -> Result<StatementDesc, anyhow::Error> {
         super::describe_statement(self.scx.catalog, Statement::Select(self.stmt), &[])
     }
 

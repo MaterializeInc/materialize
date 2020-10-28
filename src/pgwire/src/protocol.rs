@@ -274,7 +274,7 @@ where
                 .await;
         }
 
-        let row_desc = stmt.desc().cloned();
+        let row_desc = stmt.desc().relation_desc();
 
         // Bind.
         let portal_name = String::from("");
@@ -291,10 +291,10 @@ where
             .expect("unnamed statement to be present during simple query flow");
 
         // Maybe send row description.
-        if let Some(desc) = &row_desc {
+        if let Some(ref desc) = row_desc {
             self.conn
                 .send(BackendMessage::RowDescription(
-                    message::row_description_from_desc(&desc),
+                    message::row_description_from_desc(desc),
                 ))
                 .await?;
         }
@@ -444,6 +444,8 @@ where
         let result_formats = match pad_formats(
             result_formats,
             stmt.desc()
+                .relation_desc
+                .clone()
                 .map(|desc| desc.typ().column_types.len())
                 .unwrap_or(0),
         ) {
@@ -469,7 +471,7 @@ where
             .coord_client
             .session()
             .get_prepared_statement_for_portal(&portal_name)
-            .and_then(|stmt| stmt.desc().cloned());
+            .and_then(|stmt| stmt.desc().relation_desc.clone());
         let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
             Some(portal) => portal,
             None => {
@@ -575,7 +577,7 @@ where
             .session()
             .get_prepared_statement(&stmt_name)
             .expect("send_describe_statement called incorrectly");
-        match stmt.desc() {
+        match stmt.desc().relation_desc() {
             Some(desc) => {
                 self.conn
                     .send(BackendMessage::RowDescription(

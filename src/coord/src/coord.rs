@@ -55,6 +55,7 @@ use sql::ast::{
 };
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
+use sql::plan::StatementDesc;
 use sql::plan::{
     AlterIndexLogicalCompactionWindow, LogicalCompactionWindow, MutationKind, Params, PeekWhen,
     Plan, PlanContext,
@@ -474,7 +475,10 @@ where
 
                             _ => bail!("unsupported plan"),
                         };
-                        Ok(NoSessionExecuteResponse { desc, response })
+                        Ok(NoSessionExecuteResponse {
+                            desc: desc.relation_desc,
+                            response,
+                        })
                     }
                     .await;
                     let _ = tx.send(res);
@@ -768,12 +772,14 @@ where
                 // only handles commands that do not return rows, so the
                 // `RelationDesc` is always `None`.
                 Err(err) => match self.symbiosis {
-                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
+                    Some(ref postgres) if postgres.can_handle(&stmt) => {
+                        (StatementDesc::new(None), vec![])
+                    }
                     _ => return Err(err),
                 },
             }
         } else {
-            (None, vec![])
+            (StatementDesc::new(None), vec![])
         };
         session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
         Ok(())
