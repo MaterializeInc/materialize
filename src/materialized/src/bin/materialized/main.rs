@@ -275,13 +275,13 @@ fn run() -> Result<(), anyhow::Error> {
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
     let symbiosis_url = popts.opt_str("symbiosis");
     fs::create_dir_all(&data_directory)
-        .with_context(|| anyhow!("creating data directory {}", data_directory.display()))?;
+        .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
 
     // Configure source persistence.
     let persistence = if experimental_mode {
         let persistence_directory = data_directory.join("persistence/");
         fs::create_dir_all(&persistence_directory).with_context(|| {
-            anyhow!(
+            format!(
                 "creating persistence directory: {}",
                 persistence_directory.display()
             )
@@ -352,10 +352,16 @@ fn run() -> Result<(), anyhow::Error> {
                         Some(path) => PathBuf::from(path),
                         None => data_directory.join("materialized.log"),
                     };
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent).with_context(|| {
+                            format!("creating log file directory: {}", parent.display())
+                        })?;
+                    }
                     let file = fs::OpenOptions::new()
                         .append(true)
                         .create(true)
-                        .open(path)?;
+                        .open(&path)
+                        .with_context(|| format!("creating log file: {}", path.display()))?;
                     fmt::layer()
                         .with_ansi(false)
                         .with_writer(move || file.try_clone().expect("failed to clone log file"))
