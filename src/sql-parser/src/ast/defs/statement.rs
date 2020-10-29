@@ -499,7 +499,7 @@ impl_display!(CreateIndexStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateMapTypeStatement {
     /// Name of the created type.
-    pub name: Ident,
+    pub name: ObjectName,
     /// Provides the name and type for the key
     /// and value.
     pub with_options: Vec<SqlOption>,

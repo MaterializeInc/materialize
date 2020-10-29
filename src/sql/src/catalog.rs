@@ -143,6 +143,9 @@ pub trait Catalog: fmt::Debug {
     /// Panics if `id` does not specify an object on which indexes can be built.
     fn is_materialized(&self, id: GlobalId) -> bool;
 
+    /// Reports whether the specified user-defined type exists in the catalog.
+    fn type_exists(&self, name: &FullName) -> bool;
+
     /// Expresses whether or not the catalog allows experimental mode features.
     fn experimental_mode(&self) -> bool;
 
@@ -190,6 +193,9 @@ pub trait CatalogItem {
     /// catalog item is an index.
     fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)>;
 }
+
+/// A user-defined type in a [`Catalog`].
+pub trait Type {}
 
 /// The type of a [`CatalogItem`].
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -320,6 +326,10 @@ impl Catalog for DummyCatalog {
     }
 
     fn is_materialized(&self, _: GlobalId) -> bool {
+        false
+    }
+
+    fn type_exists(&self, _: &FullName) -> bool {
         false
     }
 

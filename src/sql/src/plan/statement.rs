@@ -805,8 +805,8 @@ fn handle_create_view(
 }
 
 fn handle_create_type(
-    _scx: &StatementContext,
-    CreateMapTypeStatement { with_options, .. }: CreateMapTypeStatement,
+    scx: &StatementContext,
+    CreateMapTypeStatement { name, with_options }: CreateMapTypeStatement,
 ) -> Result<Plan, anyhow::Error> {
     let mut with_options = normalize::options(&with_options);
     let _key_type = match with_options.remove("key_type") {
@@ -824,6 +824,11 @@ fn handle_create_type(
             "unexpected parameters for CREATE TYPE: {}",
             with_options.keys().join(",")
         )
+    }
+
+    let name = scx.allocate_name(normalize::object_name(name)?);
+    if scx.catalog.type_exists(&name) {
+        bail!("type \"{}\" already exists", name.to_string());
     }
 
     // todo@jldlaughlin: Return an error for any non-String, integral key types.

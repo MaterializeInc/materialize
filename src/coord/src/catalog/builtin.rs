@@ -371,6 +371,17 @@ lazy_static! {
         id: GlobalId::System(2025),
         index_id: GlobalId::System(2026),
     };
+    pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
+        name: "mz_map_types",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("key_oid", ScalarType::Oid.nullable(false))
+            .with_column("value_oid", ScalarType::Oid.nullable(false)),
+        id: GlobalId::System(2027),
+        index_id: GlobalId::System(2028),
+    };
 }
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
@@ -793,6 +804,7 @@ lazy_static! {
             Builtin::Table(&MZ_SOURCES),
             Builtin::Table(&MZ_SINKS),
             Builtin::Table(&MZ_VIEWS),
+            Builtin::Table(&MZ_MAP_TYPES),
             Builtin::View(&MZ_RELATIONS),
             Builtin::View(&MZ_OBJECTS),
             Builtin::View(&MZ_CATALOG_NAMES),
