@@ -276,6 +276,7 @@ mz_tables
 mz_sources
 mz_sinks
 mz_views
+mz_map_types
 
 > SHOW FULL TABLES FROM mz_catalog
 name                  type
@@ -293,17 +294,18 @@ mz_tables             system
 mz_sinks              system
 mz_sources            system
 mz_views              system
+mz_map_types          system
 
 ! SHOW EXTENDED TABLES
 SHOW EXTENDED TABLES not yet supported
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-13
+14
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-27
+28
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

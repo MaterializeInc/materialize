@@ -1691,7 +1691,7 @@ impl Parser {
     }
 
     fn parse_create_type(&mut self) -> Result<Statement, ParserError> {
-        let name = self.parse_identifier()?;
+        let name = self.parse_object_name()?;
         self.expect_keyword("AS")?;
         self.expect_keyword("MAP")?;
 
