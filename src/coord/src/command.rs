@@ -12,7 +12,8 @@ use std::pin::Pin;
 
 use derivative::Derivative;
 
-use dataflow_types::{PeekResponse, Update};
+use dataflow_types::PeekResponse;
+use repr::Row;
 use sql::ast::{ObjectType, Statement};
 
 use crate::session::Session;
@@ -94,7 +95,7 @@ pub enum ExecuteResponse {
     CopyTo {
         format: sql::plan::CopyFormat,
         #[derivative(Debug = "ignore")]
-        rx: RowsFuture,
+        resp: Box<ExecuteResponse>,
     },
     /// The requested database was created.
     CreatedDatabase {
@@ -155,7 +156,7 @@ pub enum ExecuteResponse {
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
     Tailing {
-        rx: comm::mpsc::Receiver<Vec<Update>>,
+        rx: comm::mpsc::Receiver<Vec<Row>>,
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),

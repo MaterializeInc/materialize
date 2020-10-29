@@ -155,7 +155,8 @@ pub enum CopyRelation {
         name: ObjectName,
         columns: Vec<Ident>,
     },
-    Query(Query),
+    Select(SelectStatement),
+    Tail(TailStatement),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -231,7 +232,12 @@ impl AstDisplay for CopyStatement {
                     f.write_str(")");
                 }
             }
-            CopyRelation::Query(query) => {
+            CopyRelation::Select(query) => {
+                f.write_str("(");
+                f.write_node(query);
+                f.write_str(")");
+            }
+            CopyRelation::Tail(query) => {
                 f.write_str("(");
                 f.write_node(query);
                 f.write_str(")");

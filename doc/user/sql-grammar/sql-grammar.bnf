@@ -9,6 +9,9 @@ avro_schema_spec ::=
 connector_spec ::=
   'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
   'KAFKA BROKER' host 'TOPIC' topic?
+copy_to ::=
+  'COPY' '(' query ')' 'TO' 'STDOUT'
+  ( 'WITH'? '(' option ( ',' option )* ')' )?
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
