@@ -923,11 +923,7 @@ impl PendingPeek {
         let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
         // Accumulated `Vec<Datum>` results that we are likely to return.
         let mut results = Vec::new();
-        // Temporary storage for datums we are considering.
-        let mut datums = Vec::new();
-
         let mut row_packer = repr::RowPacker::new();
-        let arena = RowArena::new();
 
         // There are roughly two paths we can take here, where we split
         // based on whether there is an ordering or not. If there is not
@@ -952,9 +948,17 @@ impl PendingPeek {
 
         while cursor.key_valid(&storage) {
             while cursor.val_valid(&storage) {
+                // TODO: This arena could be maintained and reuse for longer
+                // but it wasn't clear at what granularity we should flush
+                // it to ensure we don't accidentally spike our memory use.
+                // This choice is conservative, and not the end of the world
+                // from a performance perspective.
+                let arena = RowArena::new();
                 let row = cursor.val(&storage);
-                datums.clear();
-                datums.extend(row.iter());
+                // TODO: We could unpack into a re-used allocation, except
+                // for the arena above (the allocation would not be allowed
+                // to outlive the arena above, from which it might borrow).
+                let mut datums = row.unpack();
                 if let Some(result) = self
                     .map_filter_project
                     .evaluate(&mut datums, &arena, &mut row_packer)
