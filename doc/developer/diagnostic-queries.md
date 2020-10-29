@@ -1,7 +1,7 @@
 ## Diagnostic queries that can help understand apparent performance defects.
 
-This is a work in progress, and sections are meant to be thematically
-related based on what problems are experienced.
+Sections are meant to be thematically related based on what problems are
+experienced.
 
 The queries may be useful for spot debugging, but it may also be smart
 to create them as views and TAIL them, or as materialized views to read
