@@ -127,6 +127,7 @@ pub enum Plan {
         source: ::expr::RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
+        copy_to: Option<CopyFormat>,
     },
     Tail {
         id: GlobalId,
@@ -209,6 +210,25 @@ pub enum MutationKind {
     Insert,
     Update,
     Delete,
+}
+
+#[derive(Debug)]
+pub enum CopyRelationKind {
+    Table {
+        id: GlobalId,
+        column_names: Vec<ColumnName>,
+    },
+    Query {
+        expr: ::expr::RelationExpr,
+        finishing: RowSetFinishing,
+    },
+}
+
+#[derive(Debug)]
+pub enum CopyFormat {
+    Text,
+    Csv,
+    Binary,
 }
 
 #[derive(Debug, PartialEq)]

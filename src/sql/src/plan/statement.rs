@@ -35,12 +35,13 @@ use ore::iter::IteratorExt;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement,
-    CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
-    ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement,
-    ObjectName, ObjectType, Query, SelectStatement, SetVariableStatement, SetVariableValue,
-    ShowVariableStatement, SqlOption, Statement, TailStatement, Value,
+    ColumnOption, Connector, CopyDirection, CopyOption, CopyRelation, CopyStatement, CopyTarget,
+    CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement, CreateSchemaStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
+    DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
+    Format, Ident, IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query,
+    SelectStatement, SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption,
+    Statement, TailStatement, Value,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -50,8 +51,8 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
-    query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, Index, LogicalCompactionWindow,
-    Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, View,
+    query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, CopyFormat, Index,
+    LogicalCompactionWindow, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, View,
 };
 use crate::pure::Schema;
 
@@ -74,6 +75,10 @@ impl StatementDesc {
     }
     fn with_params(mut self, param_types: Vec<ScalarType>) -> Self {
         self.param_types = param_types;
+        self
+    }
+    fn no_send(mut self) -> Self {
+        self.send = false;
         self
     }
     /// If send is false, returns None. Otherwise returns relation_desc.
@@ -198,6 +203,15 @@ pub fn describe_statement(
             StatementDesc::new(Some(sql_object.desc()?.clone()))
         }
 
+        Statement::Copy(CopyStatement { relation, .. }) => match relation {
+            CopyRelation::Table { .. } => bail!("unsupported COPY relation {:?}", relation),
+            CopyRelation::Query(query) => {
+                let (_relation_expr, desc, _finishing) =
+                    query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
+                StatementDesc::new(Some(desc)).no_send()
+            }
+        },
+
         // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
         // plans the whole query to determine its shape and parameter types,
         // and then throws away that plan. If we were smarter, we'd stash that
@@ -220,7 +234,6 @@ pub fn describe_statement(
 
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
-        Statement::Copy(_) => bail!("COPY statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
     })
 }
@@ -270,8 +283,9 @@ pub fn handle_statement(
         Statement::ShowVariable(stmt) => handle_show_variable(scx, stmt),
 
         Statement::Explain(stmt) => handle_explain(scx, stmt, params),
-        Statement::Select(stmt) => handle_select(scx, stmt, params),
+        Statement::Select(stmt) => handle_select(scx, stmt, params, None),
         Statement::Tail(stmt) => handle_tail(scx, stmt),
+        Statement::Copy(stmt) => handle_copy(scx, stmt),
 
         Statement::Insert(stmt) => handle_insert(scx, stmt, params),
 
@@ -281,7 +295,6 @@ pub fn handle_statement(
 
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
-        Statement::Copy(_) => bail!("COPY statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
     }
 }
@@ -343,6 +356,46 @@ fn handle_tail(
             from,
             entry.item_type(),
         ),
+    }
+}
+
+fn handle_copy(
+    scx: &StatementContext,
+    CopyStatement {
+        relation,
+        direction,
+        target,
+        options,
+    }: CopyStatement,
+) -> Result<Plan, anyhow::Error> {
+    let mut format = CopyFormat::Text;
+    for opt in options {
+        match opt {
+            CopyOption::Format(fmt) => {
+                format = match fmt.to_lowercase().as_str() {
+                    "text" => CopyFormat::Text,
+                    "csv" => CopyFormat::Csv,
+                    "binary" => CopyFormat::Binary,
+                    _ => bail!("unknown FORMAT: {}", fmt),
+                };
+            }
+        }
+    }
+    match (&direction, &target) {
+        (CopyDirection::To, CopyTarget::Stdout) => {
+            match relation {
+                CopyRelation::Table { .. } => bail!("table with COPY TO unsupported"),
+                // TODO(mjibson): use SelectStatement instead of Query so users can use AS OF
+                // in COPY.
+                CopyRelation::Query(query) => Ok(handle_select(
+                    scx,
+                    SelectStatement { query, as_of: None },
+                    &Params::empty(),
+                    Some(format),
+                )?),
+            }
+        }
+        _ => bail!("COPY {} {} not supported", direction, target),
     }
 }
 
@@ -1580,6 +1633,7 @@ fn handle_select(
     scx: &StatementContext,
     SelectStatement { query, as_of }: SelectStatement,
     params: &Params,
+    copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
     let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
@@ -1591,6 +1645,7 @@ fn handle_select(
         source: relation_expr,
         when,
         finishing,
+        copy_to,
     })
 }
 

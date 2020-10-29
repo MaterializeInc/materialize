@@ -57,8 +57,8 @@ use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::StatementDesc;
 use sql::plan::{
-    AlterIndexLogicalCompactionWindow, LogicalCompactionWindow, MutationKind, Params, PeekWhen,
-    Plan, PlanContext,
+    AlterIndexLogicalCompactionWindow, CopyFormat, LogicalCompactionWindow, MutationKind, Params,
+    PeekWhen, Plan, PlanContext,
 };
 use transform::Optimizer;
 
@@ -469,7 +469,11 @@ where
                                 source,
                                 when,
                                 finishing,
-                            } => self.sequence_peek(conn_id, source, when, finishing).await?,
+                                copy_to,
+                            } => {
+                                self.sequence_peek(conn_id, source, when, finishing, copy_to)
+                                    .await?
+                            }
 
                             Plan::SendRows(rows) => send_immediate_rows(rows),
 
@@ -1290,8 +1294,9 @@ where
                 source,
                 when,
                 finishing,
+                copy_to,
             } => tx.send(
-                self.sequence_peek(session.conn_id(), source, when, finishing)
+                self.sequence_peek(session.conn_id(), source, when, finishing, copy_to)
                     .await,
                 session,
             ),
@@ -1773,6 +1778,7 @@ where
         mut source: RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
+        copy_to: Option<CopyFormat>,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let timestamp = self.determine_timestamp(&source, when)?;
 
@@ -1791,7 +1797,7 @@ where
         let source = self.optimizer.optimize(source, self.catalog.indexes())?;
 
         // If this optimizes to a constant expression, we can immediately return the result.
-        if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
+        let resp = if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
             let mut results = Vec::new();
             for &(ref row, count) in rows {
                 assert!(
@@ -1804,7 +1810,7 @@ where
                 }
             }
             finishing.finish(&mut results);
-            Ok(send_immediate_rows(results))
+            send_immediate_rows(results)
         } else {
             // Peeks describe a source of data and a timestamp at which to view its contents.
             //
@@ -1917,7 +1923,15 @@ where
                 })
                 .err_into();
 
-            Ok(ExecuteResponse::SendingRows(Box::pin(rows_rx)))
+            ExecuteResponse::SendingRows(Box::pin(rows_rx))
+        };
+
+        match (copy_to, resp) {
+            (None, resp) => Ok(resp),
+            (Some(format), ExecuteResponse::SendingRows(rx)) => {
+                Ok(ExecuteResponse::CopyTo { format, rx })
+            }
+            _ => bail!("unsupported rows type with COPY"),
         }
     }
 
