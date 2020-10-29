@@ -925,21 +925,11 @@ impl PendingPeek {
         let mut results = Vec::new();
         let mut row_packer = repr::RowPacker::new();
 
-        // There are roughly two paths we can take here, where we split
-        // based on whether there is an ordering or not. If there is not
-        // an ordering, we power through all the elements perhaps bailing
-        // early if a limit is reached. We hit each row with any operators
-        // for post-processing (map, filter, project).
-        // If there is an ordering, we want to more carefully pilot things
-        // to leave the data as `[Datum]` and use this representation to
-        // maintain the top so-many results. We would love to use a heap
-        // to maintain this efficiently, but Rust makes this tricky.
-
         // When set, a bound on the number of records we need to return.
         // The requirements on the records are driven by the finishing's
         // `order_by` field. Further limiting will happen when the results
         // are collected, so we don't need to have exactly this many results,
-        // just at least the results.
+        // just at least those results that would have been returned.
         let max_results = self.finishing.limit.map(|l| l + self.finishing.offset);
 
         if let Some(literal) = &self.key {
@@ -978,7 +968,7 @@ impl PendingPeek {
                         ));
                     }
 
-                    // TODO: In and ORDER BY .. LIMIT .. setting, once we have a full output
+                    // TODO: In an ORDER BY .. LIMIT .. setting, once we have a full output
                     // we could compare each of these to the "least" current output, and
                     // avoid stashing the result and growing results.
                     for _ in 0..copies {
