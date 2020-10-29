@@ -30,9 +30,9 @@ use anyhow::{anyhow, bail, ensure, Context};
 use ore::iter::IteratorExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
-    BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
-    JoinOperator, ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator,
-    TableAlias, TableFactor, TableWithJoins, Value, Values,
+    DataType, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint, JoinOperator,
+    ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, TableAlias,
+    TableFactor, TableWithJoins, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -49,7 +49,7 @@ use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder,
     ColumnRef, JoinKind, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
 };
-use crate::plan::func::{self, Func};
+use crate::plan::func::{self, Func, FuncSpec};
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
@@ -1094,15 +1094,15 @@ fn plan_table_function(
         bail!("VALUES expression in FROM clause must be surrounded by parentheses");
     }
 
-    let impls = match func::resolve(&ecx.qcx.scx, &name)? {
+    let impls = match func::resolve_func(&ecx.qcx.scx, &name)? {
         Func::Table(impls) => impls,
         _ => bail!("{} is not a table function", name),
     };
     let args = match args {
         FunctionArgs::Star => bail!("{} does not accept * as an argument", name),
-        FunctionArgs::Args(args) => args,
+        FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
-    let tf = func::select_impl(ecx, &name, impls, args)?;
+    let tf = func::select_impl(ecx, FuncSpec::Func(&name), impls, args)?;
     let call = RelationExpr::CallTable {
         func: tf.func,
         exprs: tf.exprs,
@@ -1630,8 +1630,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
         }
 
         // Generalized functions, operators, and casts.
-        Expr::UnaryOp { op, expr } => func::plan_unary_op(ecx, op, expr)?.into(),
-        Expr::BinaryOp { op, left, right } => func::plan_binary_op(ecx, op, left, right)?.into(),
+        Expr::Op { op, expr1, expr2 } => plan_op(ecx, op, expr1, expr2.as_deref())?.into(),
         Expr::Cast { expr, data_type } => {
             let to_scalar_type = scalar_type_from_sql(data_type)?;
             let expr = match &**expr {
@@ -1653,6 +1652,32 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
         Expr::Function(func) => plan_function(ecx, func)?.into(),
 
         // Special functions and operators.
+        Expr::Not { expr } => {
+            let ecx = ecx.with_name("NOT argument");
+            ScalarExpr::CallUnary {
+                func: UnaryFunc::Not,
+                expr: Box::new(plan_expr(&ecx, expr)?.type_as(&ecx, ScalarType::Bool)?),
+            }
+            .into()
+        }
+        Expr::And { left, right } => {
+            let ecx = ecx.with_name("AND argument");
+            ScalarExpr::CallBinary {
+                func: BinaryFunc::And,
+                expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, ScalarType::Bool)?),
+                expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, ScalarType::Bool)?),
+            }
+            .into()
+        }
+        Expr::Or { left, right } => {
+            let ecx = ecx.with_name("OR argument");
+            ScalarExpr::CallBinary {
+                func: BinaryFunc::Or,
+                expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, ScalarType::Bool)?),
+                expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, ScalarType::Bool)?),
+            }
+            .into()
+        }
         Expr::IsNull { expr, negated } => plan_is_null_expr(ecx, expr, *negated)?.into(),
         Expr::Case {
             operand,
@@ -1800,9 +1825,9 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 expr1: Box::new(lhs),
                 expr2: Box::new(rhs),
             };
-            let scalar_expr = match op {
-                BinaryOperator::Eq => array_contains,
-                BinaryOperator::NotEq => ScalarExpr::CallUnary {
+            let scalar_expr = match op.as_str() {
+                "=" => array_contains,
+                "<>" => ScalarExpr::CallUnary {
                     func: UnaryFunc::Not,
                     expr: Box::new(array_contains),
                 },
@@ -1980,7 +2005,7 @@ pub fn coerce_homogeneous_exprs(
 
 fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExpr, anyhow::Error> {
     let name = normalize::object_name(sql_func.name.clone())?;
-    let impls = match func::resolve(&ecx.qcx.scx, &name)? {
+    let impls = match func::resolve_func(&ecx.qcx.scx, &name)? {
         Func::Aggregate(impls) => impls,
         _ => unreachable!("plan_aggregate called on non-aggregate function,"),
     };
@@ -1998,16 +2023,16 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
     // user-defined aggregates, including user-defined aggregates that take no
     // parameters.
     let args = match &sql_func.args {
-        FunctionArgs::Star => &[][..],
+        FunctionArgs::Star => vec![],
         FunctionArgs::Args(args) if args.is_empty() => {
             bail!(
                 "{}(*) must be used to call a parameterless aggregate function",
                 name
             );
         }
-        FunctionArgs::Args(args) => args,
+        FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
-    let (mut expr, func) = func::select_impl(ecx, &name, impls, args)?;
+    let (mut expr, func) = func::select_impl(ecx, FuncSpec::Func(&name), impls, args)?;
     if let Some(filter) = &sql_func.filter {
         // If a filter is present, as in
         //
@@ -2108,12 +2133,26 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, Pla
     Err(PlanError::UnknownColumn(col_name.to_string()))
 }
 
+fn plan_op(
+    ecx: &ExprContext,
+    op: &str,
+    expr1: &Expr,
+    expr2: Option<&Expr>,
+) -> Result<ScalarExpr, anyhow::Error> {
+    let impls = func::resolve_op(op)?;
+    let args = match expr2 {
+        None => plan_exprs(ecx, &[expr1])?,
+        Some(expr2) => plan_exprs(ecx, &[expr1, expr2])?,
+    };
+    func::select_impl(ecx, FuncSpec::Op(op), impls, args)
+}
+
 fn plan_function<'a>(
     ecx: &ExprContext,
     sql_func: &'a Function,
 ) -> Result<ScalarExpr, anyhow::Error> {
     let name = normalize::object_name(sql_func.name.clone())?;
-    let impls = match func::resolve(&ecx.qcx.scx, &name)? {
+    let impls = match func::resolve_func(&ecx.qcx.scx, &name)? {
         Func::Aggregate(_) if ecx.allow_aggregates => {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
             bail!(
@@ -2144,10 +2183,10 @@ fn plan_function<'a>(
     }
     let args = match &sql_func.args {
         FunctionArgs::Star => bail!("* argument is invalid with non-aggregate function {}", name),
-        FunctionArgs::Args(args) => args,
+        FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
 
-    func::select_impl(ecx, &name, impls, args)
+    func::select_impl(ecx, FuncSpec::Func(&name), impls, args)
 }
 
 fn plan_is_null_expr<'a>(
@@ -2184,11 +2223,7 @@ fn plan_case<'a>(
     let mut result_exprs = Vec::new();
     for (c, r) in conditions.iter().zip(results) {
         let c = match operand {
-            Some(operand) => Expr::BinaryOp {
-                left: operand.clone(),
-                op: BinaryOperator::Eq,
-                right: Box::new(c.clone()),
-            },
+            Some(operand) => operand.clone().equals(c.clone()),
             None => c.clone(),
         };
         let cexpr = plan_expr(ecx, &c)?.type_as(ecx, ScalarType::Bool)?;
@@ -2399,7 +2434,7 @@ impl<'a, 'ast> AggregateFuncVisitor<'a, 'ast> {
 impl<'a, 'ast> Visit<'ast> for AggregateFuncVisitor<'a, 'ast> {
     fn visit_function(&mut self, func: &'ast Function) {
         if let Ok(name) = normalize::object_name(func.name.clone()) {
-            if let Ok(Func::Aggregate(_)) = func::resolve(self.scx, &name) {
+            if let Ok(Func::Aggregate(_)) = func::resolve_func(self.scx, &name) {
                 if self.within_aggregate {
                     self.err = Some(anyhow!("nested aggregate functions are not allowed"));
                     return;

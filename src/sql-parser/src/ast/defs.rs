@@ -48,7 +48,6 @@
 mod ddl;
 mod expr;
 mod name;
-mod operator;
 mod query;
 mod statement;
 mod value;
@@ -56,7 +55,6 @@ mod value;
 pub use ddl::*;
 pub use expr::*;
 pub use name::*;
-pub use operator::*;
 pub use query::*;
 pub use statement::*;
 pub use value::*;

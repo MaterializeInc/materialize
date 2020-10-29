@@ -577,13 +577,16 @@ pub fn plan_coerce<'a>(
 }
 
 /// Plans a cast between from a [`ScalarType::List`]s to another.
-pub fn plan_cast_between_lists<'a>(
-    caller_name: &str,
+pub fn plan_cast_between_lists<'a, D>(
+    caller_name: D,
     ecx: &ExprContext<'a>,
     expr: ScalarExpr,
     from: &ScalarType,
     cast_to: CastTo,
-) -> Result<ScalarExpr, anyhow::Error> {
+) -> Result<ScalarExpr, anyhow::Error>
+where
+    D: fmt::Display,
+{
     let from_element_typ = from.unwrap_list_element_type();
 
     let cast_to_element_typ = match cast_to {
@@ -645,12 +648,15 @@ pub fn plan_cast_between_lists<'a>(
 /// - Not possible, e.g. `Bytes` to `Decimal`
 /// - Not permitted, e.g. implicitly casting from `Float64` to `Float32`.
 /// - Not implemented yet
-pub fn plan_cast<'a>(
-    caller_name: &str,
+pub fn plan_cast<'a, D>(
+    caller_name: D,
     ecx: &ExprContext<'a>,
     expr: ScalarExpr,
     cast_to: CastTo,
-) -> Result<ScalarExpr, anyhow::Error> {
+) -> Result<ScalarExpr, anyhow::Error>
+where
+    D: fmt::Display,
+{
     match (ecx.scalar_type(&expr), cast_to.scalar_type()) {
         (ScalarType::List(t), ScalarType::List(_)) => {
             plan_cast_between_lists(caller_name, ecx, expr, &ScalarType::List(t), cast_to)

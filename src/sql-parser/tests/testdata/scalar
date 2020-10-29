@@ -28,57 +28,57 @@ Parameter(1)
 parse-scalar
 $91 + $42
 ----
-BinaryOp { left: Parameter(91), op: Plus, right: Parameter(42) }
+Op { op: "+", expr1: Parameter(91), expr2: Some(Parameter(42)) }
 
 parse-scalar
 NOT salary = ''
 ----
-UnaryOp { op: Not, expr: BinaryOp { left: Identifier([Ident("salary")]), op: Eq, right: Value(String("")) } }
+Not { expr: Op { op: "=", expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }
 
 parse-scalar
 salary <> 'Not Provided' AND salary <> ''
 ----
-BinaryOp { left: BinaryOp { left: Identifier([Ident("salary")]), op: NotEq, right: Value(String("Not Provided")) }, op: And, right: BinaryOp { left: Identifier([Ident("salary")]), op: NotEq, right: Value(String("")) } }
+And { left: Op { op: "<>", expr1: Identifier([Ident("salary")]), expr2: Some(Value(String("Not Provided"))) }, right: Op { op: "<>", expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }
 
 parse-scalar
 name LIKE '%a'
 ----
-BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(String("%a")) }
+Op { op: "~~", expr1: Identifier([Ident("name")]), expr2: Some(Value(String("%a"))) }
 
 parse-scalar
 name NOT LIKE '%a'
 ----
-BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("%a")) }
+Op { op: "!~~", expr1: Identifier([Ident("name")]), expr2: Some(Value(String("%a"))) }
 
 parse-scalar
 name LIKE '%a' IS NULL
 ----
-IsNull { expr: BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(String("%a")) }, negated: false }
+IsNull { expr: Op { op: "~~", expr1: Identifier([Ident("name")]), expr2: Some(Value(String("%a"))) }, negated: false }
 
 parse-scalar
 name NOT LIKE '%a' IS NULL
 ----
-IsNull { expr: BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("%a")) }, negated: false }
+IsNull { expr: Op { op: "!~~", expr1: Identifier([Ident("name")]), expr2: Some(Value(String("%a"))) }, negated: false }
 
 parse-scalar
 a ~ 'foo'
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: RegexMatch, right: Value(String("foo")) }
+Op { op: "~", expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a ~* 'foo'
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: RegexIMatch, right: Value(String("foo")) }
+Op { op: "~*", expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a !~ 'foo'
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: RegexNotMatch, right: Value(String("foo")) }
+Op { op: "!~", expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a !~* 'foo'
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: RegexNotIMatch, right: Value(String("foo")) }
+Op { op: "!~*", expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a !x 'foo'
@@ -281,17 +281,17 @@ Case { operand: Some(Identifier([Ident("foo")])), conditions: [Value(Number("1")
 parse-scalar
 (SELECT 1) + (SELECT 2)
 ----
-BinaryOp { left: Subquery(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), op: Plus, right: Subquery(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }) }
+Op { op: "+", expr1: Subquery(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), expr2: Some(Subquery(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })) }
 
 parse-scalar
 1 < ANY (SELECT 2)
 ----
-AnySubquery { left: Value(Number("1")), op: Lt, right: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }
+AnySubquery { left: Value(Number("1")), op: "<", right: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }
 
 parse-scalar
 1 < ANY (fn())
 ----
-AnyExpr { left: Value(Number("1")), op: Lt, right: Function(Function { name: ObjectName([Ident("fn")]), args: Args([]), filter: None, over: None, distinct: false }) }
+AnyExpr { left: Value(Number("1")), op: "<", right: Function(Function { name: ObjectName([Ident("fn")]), args: Args([]), filter: None, over: None, distinct: false }) }
 
 parse-scalar
 LIST[]
@@ -306,7 +306,7 @@ List([Value(Number("1")), Value(String("foo"))])
 parse-scalar
 LIST[LIST[1 + 1, 2], a || b]
 ----
-List([List([BinaryOp { left: Value(Number("1")), op: Plus, right: Value(Number("1")) }, Value(Number("2"))]), BinaryOp { left: Identifier([Ident("a")]), op: Concat, right: Identifier([Ident("b")]) }])
+List([List([Op { op: "+", expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, Value(Number("2"))]), Op { op: "||", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }])
 
 parse-scalar
 LIST[1,2,3][1]
@@ -361,64 +361,64 @@ Cast { expr: Array([]), data_type: Array(Int) }
 parse-scalar
 a -> b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonGet, right: Identifier([Ident("b")]) }
+Op { op: "->", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ->> b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonGetAsText, right: Identifier([Ident("b")]) }
+Op { op: "->>", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a #> b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonGetPath, right: Identifier([Ident("b")]) }
+Op { op: "#>", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a #>> b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonGetPathAsText, right: Identifier([Ident("b")]) }
+Op { op: "#>>", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a @> b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsJson, right: Identifier([Ident("b")]) }
+Op { op: "@>", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a <@ b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonContainedInJson, right: Identifier([Ident("b")]) }
+Op { op: "<@", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ? b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsField, right: Identifier([Ident("b")]) }
+Op { op: "?", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ?| b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsAnyFields, right: Identifier([Ident("b")]) }
+Op { op: "?|", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ?& b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsAllFields, right: Identifier([Ident("b")]) }
+Op { op: "?&", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a || b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: Concat, right: Identifier([Ident("b")]) }
+Op { op: "||", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a #- b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonDeletePath, right: Identifier([Ident("b")]) }
+Op { op: "#-", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a @? b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsPath, right: Identifier([Ident("b")]) }
+Op { op: "@?", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a @@ b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonApplyPathPredicate, right: Identifier([Ident("b")]) }
+Op { op: "@@", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }

@@ -127,9 +127,11 @@ impl fmt::Display for Outcome<'_> {
         use Outcome::*;
         const INDENT: &str = "\n        ";
         match self {
-            Unsupported { error, location } => write!(f, "Unsupported:{}:\n{}", location, error),
-            ParseFailure { error, location } => write!(f, "ParseFailure:{}:\n{}", location, error),
-            PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{}", location, error),
+            Unsupported { error, location } => write!(f, "Unsupported:{}:\n{:#}", location, error),
+            ParseFailure { error, location } => {
+                write!(f, "ParseFailure:{}:\n{:#}", location, error)
+            }
+            PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{:#}", location, error),
             UnexpectedPlanSuccess {
                 expected_error,
                 location,
@@ -495,7 +497,7 @@ impl State {
             }
             Err(error) => {
                 if let Some(expected_error) = expected_error {
-                    if Regex::new(expected_error)?.is_match(&error.to_string()) {
+                    if Regex::new(expected_error)?.is_match(&format!("{:#}", error)) {
                         return Ok(Outcome::Success);
                     }
                 }
@@ -577,7 +579,7 @@ impl State {
                         }
                     }
                     Err(expected_error) => {
-                        if Regex::new(expected_error)?.is_match(&error.to_string()) {
+                        if Regex::new(expected_error)?.is_match(&format!("{:#}", error)) {
                             Ok(Outcome::Success)
                         } else {
                             Ok(Outcome::PlanFailure { error, location })
