@@ -29,6 +29,17 @@ goofus,gallant
 > CREATE MATERIALIZED VIEW v3 AS
   SELECT a || b AS c FROM src
 
+# We should refuse to create a sink with an invalid schema registry URL
+
+! CREATE SINK bad_schema_registry FROM src
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://twitter.com:8080'
+unable to publish schema to registry in kafka sink
+
+> SHOW SINKS
+name
+----
+
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
 
