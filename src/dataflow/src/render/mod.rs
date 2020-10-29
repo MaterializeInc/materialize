@@ -742,31 +742,6 @@ impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn extract_map_filter_project(
-        &mut self,
-        relation_expr: &RelationExpr,
-    ) -> Option<(MapFilterProject, RelationExpr)> {
-        match relation_expr {
-            RelationExpr::Map { input, scalars } => {
-                let (mfp, input) = self.extract_map_filter_project(input)?;
-                Some((mfp.map(scalars.iter().cloned()), input))
-            }
-            RelationExpr::Filter { input, predicates } => {
-                let (mfp, input) = self.extract_map_filter_project(input)?;
-                Some((mfp.filter(predicates.iter().cloned()), input))
-            }
-            RelationExpr::Project { input, outputs } => {
-                let (mfp, input) = self.extract_map_filter_project(input)?;
-                Some((mfp.project(outputs.iter().cloned()), input))
-            }
-            RelationExpr::Get { .. } => Some((
-                MapFilterProject::new(relation_expr.arity()),
-                relation_expr.clone(),
-            )),
-            _ => None,
-        }
-    }
-
     /// Attempt to extract a chain of map/filter/project operators on top of a Get. Returns true if
     /// it was successful and false otherwise. We still fall back to individual implementations for
     /// the various operators so that ones like Filter, that special-case being on top of a join,
@@ -777,31 +752,21 @@ where
         scope: &mut G,
         worker_index: usize,
     ) -> bool {
-        if let Some((mfp, input)) = self.extract_map_filter_project(relation_expr) {
+        // Extract a MapFilterProject and residual from `relation_expr`.
+        let (mfp, input) = MapFilterProject::extract_from_expression(relation_expr);
+        if let RelationExpr::Get { .. } = input {
             let mfp2 = mfp.clone();
             self.ensure_rendered(&input, scope, worker_index);
             let (ok_collection, mut err_collection) = self
-                .flat_map_ref(
-                    &input,
-                    move |exprs| {
-                        let constraints: Vec<_> =
-                            exprs.iter().map(|e| mfp2.literal_constraint(e)).collect();
-                        if constraints.iter().all(|c| c.is_some()) {
-                            Some(Row::pack(constraints.iter().map(|x| x.unwrap())))
-                        } else {
-                            None
-                        }
-                    },
-                    {
-                        let mut row_packer = repr::RowPacker::new();
-                        move |row| {
-                            let temp_storage = RowArena::new();
-                            mfp.evaluate(&mut row.unpack(), &temp_storage, &mut row_packer)
-                                .map_err(|e| e.into())
-                                .transpose()
-                        }
-                    },
-                )
+                .flat_map_ref(&input, move |exprs| mfp2.literal_constraints(exprs), {
+                    let mut row_packer = repr::RowPacker::new();
+                    move |row| {
+                        let temp_storage = RowArena::new();
+                        mfp.evaluate(&mut row.unpack(), &temp_storage, &mut row_packer)
+                            .map_err(|e| e.into())
+                            .transpose()
+                    }
+                })
                 .unwrap();
 
             use timely::dataflow::operators::ok_err::OkErr;

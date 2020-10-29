@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{scalar::EvalError, ScalarExpr};
+use crate::{scalar::EvalError, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 /// A compound operator that can be applied row-by-row.
@@ -58,6 +58,14 @@ impl MapFilterProject {
         }
     }
 
+    /// True if the operator describes the identity transformation.
+    pub fn is_identity(&self) -> bool {
+        self.expressions.is_empty()
+            && self.predicates.is_empty()
+            && self.projection.len() == self.input_arity
+            && self.projection.iter().enumerate().all(|(i, p)| i == *p)
+    }
+
     /// Evaluates the linear operator on a supplied list of datums.
     ///
     /// The arguments are the initial datums associated with the row,
@@ -76,6 +84,25 @@ impl MapFilterProject {
         arena: &'a RowArena,
         row_packer: &mut RowPacker,
     ) -> Result<Option<Row>, EvalError> {
+        self.evaluate_iter(datums, arena).map(|result| {
+            result.map(|result| {
+                row_packer.extend(result);
+                row_packer.finish_and_reuse()
+            })
+        })
+    }
+
+    /// A version of `evaluate` which produces an iterator over `Datum`
+    /// as output.
+    ///
+    /// This version is used internally by `evaluate` and can be useful
+    /// when one wants to capture the resulting datums without packing
+    /// and then unpacking a row.
+    pub fn evaluate_iter<'b, 'a: 'b>(
+        &'a self,
+        datums: &'b mut Vec<Datum<'a>>,
+        arena: &'a RowArena,
+    ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
         let mut expression = 0;
         for (support, predicate) in self.predicates.iter() {
             while self.input_arity + expression < *support {
@@ -90,8 +117,7 @@ impl MapFilterProject {
             datums.push(self.expressions[expression].eval(&datums[..], &arena)?);
             expression += 1;
         }
-        row_packer.extend(self.projection.iter().map(|i| datums[*i]));
-        Ok(Some(row_packer.finish_and_reuse()))
+        Ok(Some(self.projection.iter().map(move |i| datums[*i])))
     }
 
     /// Retain only the indicated columns in the presented order.
@@ -183,6 +209,53 @@ impl MapFilterProject {
             }
         }
         None
+    }
+
+    /// Determines if a sequence of scalar expressions must be equal to a literal row.
+    ///
+    /// This method returns `None` on an empty `exprs`, which might be surprising, but
+    /// seems to line up with its callers' expectations of that being a non-constraint.
+    /// The caller knows if `exprs` is empty, and can modify their behavior appopriately.
+    /// if they would rather have a literal empty row.
+    pub fn literal_constraints(&self, exprs: &[ScalarExpr]) -> Option<Row> {
+        if exprs.is_empty() {
+            return None;
+        }
+        let mut row_packer = RowPacker::new();
+        for expr in exprs {
+            if let Some(literal) = self.literal_constraint(expr) {
+                row_packer.push(literal);
+            } else {
+                return None;
+            }
+        }
+        Some(row_packer.finish_and_reuse())
+    }
+
+    /// Extracts any MapFilterProject at the root of the expression.
+    ///
+    /// The expression will be modified to extract any maps, filters, and
+    /// projections, which will be return as `Self`. If there are no maps,
+    /// filters, or projections the method will return an identity operator.
+    pub fn extract_from_expression(expr: &RelationExpr) -> (Self, &RelationExpr) {
+        // TODO: This could become iterative rather than recursive if
+        // we were able to fuse MFP operators from below, rather than
+        // from above.
+        match expr {
+            RelationExpr::Map { input, scalars } => {
+                let (mfp, expr) = Self::extract_from_expression(input);
+                (mfp.map(scalars.iter().cloned()), expr)
+            }
+            RelationExpr::Filter { input, predicates } => {
+                let (mfp, expr) = Self::extract_from_expression(input);
+                (mfp.filter(predicates.iter().cloned()), expr)
+            }
+            RelationExpr::Project { input, outputs } => {
+                let (mfp, expr) = Self::extract_from_expression(input);
+                (mfp.project(outputs.iter().cloned()), expr)
+            }
+            x => (Self::new(x.arity()), x),
+        }
     }
 
     /// Optimize the internal expression evaluation order.

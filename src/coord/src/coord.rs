@@ -1782,7 +1782,7 @@ where
         // constant expression that originally contains a global get? Is
         // there anything not containing a global get that cannot be
         // optimized to a constant expression?
-        let mut source = self.optimizer.optimize(source, self.catalog.indexes())?;
+        let source = self.optimizer.optimize(source, self.catalog.indexes())?;
 
         // If this optimizes to a constant expression, we can immediately return the result.
         if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
@@ -1811,37 +1811,55 @@ where
             // need to block on the arrival of further input data.
             let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
-            let (mut project, mut filter) = Self::plan_peek(source.as_mut());
+            // Extract any surrounding linear operators to determine if we can simply read
+            // out the contents from an existing arrangement.
+            let (mut map_filter_project, inner) =
+                expr::MapFilterProject::extract_from_expression(source.as_ref());
 
-            let (fast_path, index_id) = if let RelationExpr::Get {
+            // We can use a fast path approach if our query corresponds to a read out of
+            // an existing materialization. This is the case if the expression is now a
+            // `RelationExpr::Get` and its target is something we have materialized.
+            // Otherwise, we will need to build a new dataflow.
+            let mut fast_path: Option<(_, Option<Row>)> = None;
+            if let RelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
-            } = source.as_ref()
+            } = inner
             {
-                if let Some(index_id) = self.catalog.default_index_for(*id) {
-                    (true, index_id)
-                } else {
-                    (false, self.allocate_transient_id()?)
+                // Here we should check for an index whose keys are constrained to literal
+                // values by predicate constraints in `map_filter_project`. If we find such
+                // an index, we can use it with the literal to perform look-ups at workers,
+                // and in principle avoid even contacting all but one worker (future work).
+                if let Some(indexes) = self.catalog.indexes().get(id) {
+                    // Determine for each index identifier, an optional row literal as key.
+                    // We want to extract the "best" option, where we prefer indexes with
+                    // literals and long keys, then indexes at all, then exit correctly.
+                    fast_path = indexes
+                        .iter()
+                        .map(|(id, exprs)| {
+                            let literal_row = map_filter_project.literal_constraints(exprs);
+                            // Prefer non-trivial literal rows foremost, then long expressions,
+                            // then we don't really care at that point.
+                            (literal_row.is_some(), exprs.len(), literal_row, *id)
+                        })
+                        .max()
+                        .map(|(_some, _len, literal, id)| (id, literal));
                 }
+            }
+
+            // Unpack what we have learned with default values if we found nothing.
+            let (fast_path, index_id, literal_row) = if let Some((id, row)) = fast_path {
+                (true, id, row)
             } else {
-                (false, self.allocate_transient_id()?)
+                (false, self.allocate_transient_id()?, None)
             };
 
             if !fast_path {
                 // Slow path. We need to perform some computation, so build
                 // a new transient dataflow that will be dropped after the
                 // peek completes.
-                // Re-install the filter and projection for dataflow rendering.
-                if !filter.is_empty() {
-                    let source_mut = source.as_mut();
-                    *source_mut = source_mut.take_dangerous().filter(filter.drain(..));
-                }
-                if let Some(columns) = project {
-                    let source_mut = source.as_mut();
-                    *source_mut = source_mut.take_dangerous().project(columns);
-                    project = None;
-                }
                 let typ = source.as_ref().typ();
+                map_filter_project = expr::MapFilterProject::new(typ.arity());
                 let key: Vec<_> = (0..typ.arity()).map(ScalarExpr::Column).collect();
                 let view_id = self.allocate_transient_id()?;
                 let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
@@ -1856,12 +1874,12 @@ where
                 &mut self.broadcast_tx,
                 SequencedCommand::Peek {
                     id: index_id,
+                    key: literal_row,
                     conn_id,
                     tx: rows_tx,
                     timestamp,
                     finishing: finishing.clone(),
-                    project,
-                    filter,
+                    map_filter_project,
                 },
             )
             .await;
@@ -1929,39 +1947,6 @@ where
         ))
         .await;
         Ok(ExecuteResponse::Tailing { rx })
-    }
-
-    /// Extracts an optional projection around an optional filter.
-    ///
-    /// This extraction is done to allow workers to process a larger class of queries
-    /// without building explicit dataflows, avoiding latency, allocation and general
-    /// load on the system. The worker performs the filter and projection in place.
-    fn plan_peek(expr: &mut RelationExpr) -> (Option<Vec<usize>>, Vec<expr::ScalarExpr>) {
-        let mut outputs_plan = None;
-        if let RelationExpr::Project { input, outputs } = expr {
-            outputs_plan = Some(outputs.clone());
-            *expr = input.take_dangerous();
-        }
-        let mut predicates_plan = Vec::new();
-        if let RelationExpr::Filter { input, predicates } = expr {
-            predicates_plan.extend(predicates.iter().cloned());
-            *expr = input.take_dangerous();
-        }
-
-        // We only apply this transformation if the result is a `Get`.
-        // It is harmful to apply it otherwise, as we materialize more data than
-        // we would have if we applied the filter and projection beforehand.
-        if let RelationExpr::Get { .. } = expr {
-            (outputs_plan, predicates_plan)
-        } else {
-            if !predicates_plan.is_empty() {
-                *expr = expr.take_dangerous().filter(predicates_plan);
-            }
-            if let Some(outputs) = outputs_plan {
-                *expr = expr.take_dangerous().project(outputs);
-            }
-            (None, Vec::new())
-        }
     }
 
     /// A policy for determining the timestamp for a peek.

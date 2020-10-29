@@ -44,9 +44,9 @@ use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     DataflowDesc, DataflowError, MzOffset, PeekResponse, TimestampSourceUpdate, Update,
 };
-use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
+use expr::{GlobalId, MapFilterProject, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
-use repr::{Datum, Diff, Row, RowArena, Timestamp};
+use repr::{Diff, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
@@ -94,6 +94,8 @@ pub enum SequencedCommand {
     Peek {
         /// The identifier of the arrangement.
         id: GlobalId,
+        /// An optional key that should be used for the arrangement.
+        key: Option<Row>,
         /// The identifier of this peek request.
         ///
         /// Used in responses and cancelation requests.
@@ -104,10 +106,8 @@ pub enum SequencedCommand {
         timestamp: Timestamp,
         /// Actions to apply to the result set before returning them.
         finishing: RowSetFinishing,
-        /// A projection that should be applied to results.
-        project: Option<Vec<usize>>,
-        /// A list of predicates that should restrict the set of results.
-        filter: Vec<expr::ScalarExpr>,
+        /// Linear operation to apply in-line on each result.
+        map_filter_project: MapFilterProject,
     },
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek {
@@ -618,12 +618,12 @@ where
 
             SequencedCommand::Peek {
                 id,
+                key,
                 timestamp,
                 conn_id,
                 tx,
                 finishing,
-                project,
-                filter,
+                map_filter_project,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace_bundle = self.render_state.traces.get(&id).unwrap().clone();
@@ -644,13 +644,13 @@ where
                 // Prepare a description of the peek work to do.
                 let mut peek = PendingPeek {
                     id,
+                    key,
                     conn_id,
                     tx,
                     timestamp,
                     finishing,
                     trace_bundle,
-                    project,
-                    filter,
+                    map_filter_project,
                 };
                 // Log the receipt of the peek.
                 if let Some(logger) = self.materialized_logger.as_mut() {
@@ -829,6 +829,8 @@ pub struct LocalInput {
 struct PendingPeek {
     /// The identifier of the dataflow to peek.
     id: GlobalId,
+    /// An optional key to use for the arrangement.
+    key: Option<Row>,
     /// The ID of the connection that submitted the peek. For logging only.
     conn_id: u32,
     /// A transmitter connected to the intended recipient of the peek.
@@ -838,8 +840,8 @@ struct PendingPeek {
     /// Finishing operations to perform on the peek, like an ordering and a
     /// limit.
     finishing: RowSetFinishing,
-    project: Option<Vec<usize>>,
-    filter: Vec<expr::ScalarExpr>,
+    /// Linear operators to apply in-line to all results.
+    map_filter_project: MapFilterProject,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
 }
@@ -908,44 +910,41 @@ impl PendingPeek {
             cursor.step_key(&storage);
         }
 
+        // Cursor and bound lifetime for `Row` data in the backing trace.
         let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
+        // Accumulated `Vec<Datum>` results that we are likely to return.
         let mut results = Vec::new();
+        let mut row_packer = repr::RowPacker::new();
 
-        // We can limit the record enumeration if i. there is a limit set,
-        // and ii. if the specified ordering is empty (specifies no order).
-        let limit = if self.finishing.order_by.is_empty() {
-            self.finishing.limit.map(|l| l + self.finishing.offset)
-        } else {
-            None
-        };
+        // When set, a bound on the number of records we need to return.
+        // The requirements on the records are driven by the finishing's
+        // `order_by` field. Further limiting will happen when the results
+        // are collected, so we don't need to have exactly this many results,
+        // just at least those results that would have been returned.
+        let max_results = self.finishing.limit.map(|l| l + self.finishing.offset);
 
-        let mut datums = Vec::new();
-        while cursor.key_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
-            while cursor.val_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
+        if let Some(literal) = &self.key {
+            cursor.seek_key(&storage, literal);
+        }
+
+        while cursor.key_valid(&storage) {
+            while cursor.val_valid(&storage) {
+                // TODO: This arena could be maintained and reuse for longer
+                // but it wasn't clear at what granularity we should flush
+                // it to ensure we don't accidentally spike our memory use.
+                // This choice is conservative, and not the end of the world
+                // from a performance perspective.
+                let arena = RowArena::new();
                 let row = cursor.val(&storage);
-
-                let mut retain = true;
-                if !self.filter.is_empty() {
-                    datums.clear();
-                    datums.extend(row.iter());
-                    // Before (expensively) determining how many copies of a row
-                    // we have, let's eliminate rows that we don't care about.
-                    let temp_storage = RowArena::new();
-                    for predicate in &self.filter {
-                        let d = predicate
-                            .eval(&datums, &temp_storage)
-                            .map_err(|e| e.to_string())?;
-                        if d != Datum::True {
-                            retain = false;
-                            break;
-                        }
-                    }
-                }
-                if retain {
-                    // Differential dataflow represents collections with binary counts,
-                    // but our output representation is unary (as many rows as reported
-                    // by the count). We should determine this count, and especially if
-                    // it is non-zero, before producing any output data.
+                // TODO: We could unpack into a re-used allocation, except
+                // for the arena above (the allocation would not be allowed
+                // to outlive the arena above, from which it might borrow).
+                let mut datums = row.unpack();
+                if let Some(result) = self
+                    .map_filter_project
+                    .evaluate(&mut datums, &arena, &mut row_packer)
+                    .map_err(|e| e.to_string())?
+                {
                     let mut copies = 0;
                     cursor.map_times(&storage, |time, diff| {
                         if time.less_equal(&self.timestamp) {
@@ -960,65 +959,56 @@ impl PendingPeek {
                         ));
                     }
 
-                    // TODO: We could push a count here, as we create owned output later.
+                    // TODO: In an ORDER BY .. LIMIT .. setting, once we have a full output
+                    // we could compare each of these to the "least" current output, and
+                    // avoid stashing the result and growing results.
                     for _ in 0..copies {
-                        results.push(row);
+                        results.push(result.clone());
+                    }
+
+                    // If we hold many more than `max_results` records, we can thin down
+                    // `results` using `self.finishing.ordering`.
+                    if let Some(max_results) = max_results {
+                        // We use a threshold twice what we intend, to amortize the work
+                        // across all of the insertions. We could tighten this, but it
+                        // works for the moment.
+                        if results.len() >= 2 * max_results {
+                            if self.finishing.order_by.is_empty() {
+                                results.truncate(max_results);
+                                return Ok(results);
+                            } else {
+                                // We can sort `results` and then truncate to `max_results`.
+                                // This has an effect similar to a priority queue, without
+                                // its interactive dequeueing properties.
+                                // TODO: Had we left these as `Vec<Datum>` we would avoid
+                                // the unpacking; we should consider doing that, although
+                                // it will require a re-pivot of the code to branch on this
+                                // inner test (as we prefer not to maintain `Vec<Datum>`
+                                // in the other case).
+                                results.sort_by(|left, right| {
+                                    expr::compare_columns(
+                                        &self.finishing.order_by,
+                                        &left.unpack(),
+                                        &right.unpack(),
+                                        || left.cmp(right),
+                                    )
+                                });
+                                results.truncate(max_results);
+                            }
+                        }
                     }
                 }
                 cursor.step_val(&storage);
             }
-            cursor.step_key(&storage)
-        }
-
-        // If we have extracted a projection, we should re-write the order_by columns.
-        if let Some(columns) = &self.project {
-            for key in self.finishing.order_by.iter_mut() {
-                key.column = columns[key.column];
+            // If we had a key, we are now done and can return.
+            if self.key.is_some() {
+                return Ok(results);
+            } else {
+                cursor.step_key(&storage);
             }
         }
 
-        // TODO: We could sort here in any case, as it allows a merge sort at the coordinator.
-        if let Some(limit) = self.finishing.limit {
-            let offset_plus_limit = limit + self.finishing.offset;
-            if results.len() > offset_plus_limit {
-                // The `results` should be sorted by `Row`, which means we only
-                // need to re-order `results` when there is a non-empty order_by.
-                if !self.finishing.order_by.is_empty() {
-                    // Re-usable storage for unpacking rows.
-                    let mut unpack_left = Vec::new();
-                    let mut unpack_right = Vec::new();
-                    pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
-                        // Unpack rows into re-used allocations.
-                        unpack_left.clear();
-                        unpack_left.extend(left.iter());
-                        unpack_right.clear();
-                        unpack_right.extend(right.iter());
-                        expr::compare_columns(
-                            &self.finishing.order_by,
-                            &unpack_left[..],
-                            &unpack_right[..],
-                            || left.cmp(right),
-                        )
-                    });
-                }
-                results.truncate(offset_plus_limit);
-            }
-        }
-
-        Ok(if let Some(columns) = &self.project {
-            let mut row_packer = repr::RowPacker::new();
-            results
-                .iter()
-                .map({
-                    move |row| {
-                        let datums = row.unpack();
-                        row_packer.pack(columns.iter().map(|i| datums[*i]))
-                    }
-                })
-                .collect()
-        } else {
-            results.iter().map(|row| (*row).clone()).collect()
-        })
+        Ok(results)
     }
 }
 
