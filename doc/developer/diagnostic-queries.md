@@ -127,3 +127,49 @@ where
 group by mdo.id, mdo.name
 order by sum(mas.records) desc;
 ```
+
+### How can I check whether work is distributed equally across workers?
+
+Work is distributed across workers by the hash of their keys. Thus, work can
+become skewed if situations arise where Materialize needs to use arrangements
+with very few or no keys. Example situations include:
+* views that maintain order by/limit/offset
+* cross joins
+* joins where the join columns have very few unique values.
+
+Additionally, the operators that implement data sources may demonstrate skew, as
+they (currently) have a granularity determined by the source itself. For
+example, Kafka topic ingestion work can become skewed if most of the data is in
+only one out of multiple partitions.
+
+```sql
+-- Average the total time spent by each operator across all workers.
+create view avg_elapsed_by_id as
+select
+    id,
+    avg(elapsed_ns) as avg_ns
+from
+    mz_scheduling_elapsed
+group by
+    id;
+
+-- Get operators where one worker has spent more than 2 times the average
+-- amount of time spent. The number 2 can be changed according to the threshold
+-- for the amount of skew deemed problematic.
+select
+    mse.id,
+    dod.name,
+    mse.worker,
+    elapsed_ns,
+    avg_ns,
+    elapsed_ns/avg_ns as ratio
+from
+    mz_scheduling_elapsed mse,
+    avg_elapsed_by_id aebi,
+    mz_dataflow_operator_dataflows dod
+where
+    mse.id = aebi.id and
+    mse.elapsed_ns > 2 * aebi.avg_ns and
+    mse.id = dod.id
+order by ratio desc;
+```
