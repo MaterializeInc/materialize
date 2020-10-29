@@ -64,10 +64,10 @@ use transform::Optimizer;
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
     BUILTINS, MZ_AVRO_OCF_SINKS, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES, MZ_INDEX_COLUMNS,
-    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS,
-    MZ_VIEW_KEYS,
+    MZ_KAFKA_SINKS, MZ_MAP_TYPES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS,
+    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState};
+use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type};
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
@@ -1128,6 +1128,29 @@ where
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
                     Datum::String(name),
+                ]),
+                diff,
+            )),
+        )
+        .await
+    }
+
+    async fn report_map_type_update(
+        &mut self,
+        name: &str,
+        oid: u32,
+        key_oid: u32,
+        value_oid: u32,
+        diff: isize,
+    ) {
+        self.update_catalog_view(
+            MZ_MAP_TYPES.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String(name),
+                    Datum::Int32(oid as i32),
+                    Datum::Int32(key_oid as i32),
+                    Datum::Int32(value_oid as i32),
                 ]),
                 diff,
             )),
@@ -2323,6 +2346,18 @@ where
                             self.report_sink_update(*id, *oid, *schema_id, &name.item, 1)
                                 .await;
                         }
+                        CatalogItem::Type(Type::Map {
+                            key_ids, value_ids, ..
+                        }) => {
+                            self.report_map_type_update(
+                                &name.item,
+                                *oid,
+                                key_ids.oid,
+                                value_ids.oid,
+                                1,
+                            )
+                            .await;
+                        }
                     }
                 }
                 catalog::Event::UpdatedItem {
@@ -2364,6 +2399,26 @@ where
                                 .await;
                             self.report_index_update(*id, *oid, &index, &to_name.item, 1)
                                 .await;
+                        }
+                        CatalogItem::Type(Type::Map {
+                            key_ids, value_ids, ..
+                        }) => {
+                            self.report_map_type_update(
+                                &from_name.item,
+                                *oid,
+                                key_ids.oid,
+                                value_ids.oid,
+                                -1,
+                            )
+                            .await;
+                            self.report_map_type_update(
+                                &to_name.item,
+                                *oid,
+                                key_ids.oid,
+                                value_ids.oid,
+                                1,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -2479,6 +2534,18 @@ where
                         }) => {
                             // If the sink connector state is pending, the sink
                             // dataflow was never created, so nothing to drop.
+                        }
+                        CatalogItem::Type(Type::Map {
+                            key_ids, value_ids, ..
+                        }) => {
+                            self.report_map_type_update(
+                                &entry.name().item,
+                                entry.oid(),
+                                key_ids.oid,
+                                value_ids.oid,
+                                -1,
+                            )
+                            .await;
                         }
                         CatalogItem::Index(_) => {
                             unreachable!("dropped indexes should be handled by DroppedIndex");

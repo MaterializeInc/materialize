@@ -210,6 +210,8 @@ pub enum CatalogItemType {
     View,
     /// An index.
     Index,
+    /// A user-defined type.
+    Type,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -220,6 +222,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Sink => f.write_str("sink"),
             CatalogItemType::View => f.write_str("view"),
             CatalogItemType::Index => f.write_str("index"),
+            CatalogItemType::Type => f.write_str("user-defined type"),
         }
     }
 }
@@ -237,6 +240,8 @@ pub enum CatalogError {
     InvalidSinkDependency(String),
     /// Invalid attempt to depend on an index.
     InvalidIndexDependency(String),
+    /// Invalid attempt to depend on a user-defined type.
+    InvalidTypeDependency(String),
 }
 
 impl fmt::Display for CatalogError {
@@ -253,6 +258,11 @@ impl fmt::Display for CatalogError {
             Self::InvalidIndexDependency(name) => write!(
                 f,
                 "catalog item '{}' is an index and so cannot be depended upon",
+                name
+            ),
+            Self::InvalidTypeDependency(name) => write!(
+                f,
+                "catalog item '{}' is a user-defined type and so cannot be depended upon",
                 name
             ),
         }
