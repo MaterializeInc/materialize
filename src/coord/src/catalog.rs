@@ -121,6 +121,7 @@ pub struct Schema {
     #[serde(skip)]
     pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
+    pub types: BTreeMap<String, Type>,
 }
 
 #[derive(Clone, Debug)]
@@ -187,6 +188,15 @@ pub struct Index {
     pub plan_cx: PlanContext,
     pub on: GlobalId,
     pub keys: Vec<ScalarExpr>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Type {
+    Map {
+        oid: u32,
+        key_oid: u32,
+        value_oid: u32,
+    },
 }
 
 impl CatalogItem {
@@ -401,6 +411,7 @@ impl Catalog {
                     id,
                     oid,
                     items: BTreeMap::new(),
+                    types: BTreeMap::new(),
                 },
             );
             events.push(Event::CreatedSchema {
@@ -692,6 +703,13 @@ impl Catalog {
             .ok_or_else(|| SqlCatalogError::UnknownItem(name.to_string()))
     }
 
+    /// Returns the named user-defined type, if it exists.
+    pub fn try_get_type(&self, name: &FullName, conn_id: u32) -> Option<&Type> {
+        self.get_schema(&name.database, &name.schema, conn_id)
+            .ok()
+            .and_then(|schema| schema.types.get(&name.item))
+    }
+
     pub fn try_get_by_id(&self, id: GlobalId) -> Option<&CatalogEntry> {
         self.by_id.get(&id)
     }
@@ -710,6 +728,7 @@ impl Catalog {
                 id: -1,
                 oid,
                 items: BTreeMap::new(),
+                types: BTreeMap::new(),
             },
         );
         Ok(())
@@ -1194,6 +1213,7 @@ impl Catalog {
                             id,
                             oid,
                             items: BTreeMap::new(),
+                            types: BTreeMap::new(),
                         },
                     );
                     Event::CreatedSchema {
@@ -1749,12 +1769,17 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         let (_, complete) = self.catalog.nearest_indexes(&[id]);
         complete
     }
-    fn experimental_mode(&self) -> bool {
-        self.catalog.experimental_mode
-    }
 
     fn is_materialized(&self, id: GlobalId) -> bool {
         !self.catalog.indexes[&id].is_empty()
+    }
+
+    fn type_exists(&self, name: &FullName) -> bool {
+        self.catalog.try_get_type(name, self.conn_id).is_some()
+    }
+
+    fn experimental_mode(&self) -> bool {
+        self.catalog.experimental_mode
     }
 
     fn persistence_directory(&self) -> Option<&Path> {
@@ -1821,3 +1846,5 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         self.used_by()
     }
 }
+
+impl sql::catalog::Type for Type {}

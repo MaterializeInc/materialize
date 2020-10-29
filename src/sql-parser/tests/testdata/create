@@ -18,39 +18,39 @@ CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
 ----
 CREATE TYPE custom AS MAP ( key_type = text, value_type = bool )
 =>
-CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }, Ident { name: Ident("value_type"), ident: Ident("bool") }] })
+CreateMapType(CreateMapTypeStatement { name: ObjectName([Ident("custom")]), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }, Ident { name: Ident("value_type"), ident: Ident("bool") }] })
 
 parse-statement
 CREATE TYPE custom AS MAP (KEY_TYPE='text', VaLuE_tYpE=custom_type)
 ----
 CREATE TYPE custom AS MAP ( key_type = 'text', value_type = custom_type )
 =>
-CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Value { name: Ident("key_type"), value: String("text") }, Ident { name: Ident("value_type"), ident: Ident("custom_type") }] })
+CreateMapType(CreateMapTypeStatement { name: ObjectName([Ident("custom")]), with_options: [Value { name: Ident("key_type"), value: String("text") }, Ident { name: Ident("value_type"), ident: Ident("custom_type") }] })
 
 parse-statement
 CREATE TYPE custom AS MAP (key_type=text)
 ----
 CREATE TYPE custom AS MAP ( key_type = text )
 =>
-CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }] })
+CreateMapType(CreateMapTypeStatement { name: ObjectName([Ident("custom")]), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }] })
 
 parse-statement
 CREATE TYPE custom AS MAP (value_type=bool)
 ----
 CREATE TYPE custom AS MAP ( value_type = bool )
 =>
-CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Ident { name: Ident("value_type"), ident: Ident("bool") }] })
+CreateMapType(CreateMapTypeStatement { name: ObjectName([Ident("custom")]), with_options: [Ident { name: Ident("value_type"), ident: Ident("bool") }] })
 
 parse-statement
 CREATE TYPE custom AS MAP (key_type=text, value_type=bool, random_type=int)
 ----
 CREATE TYPE custom AS MAP ( key_type = text, value_type = bool, random_type = int )
 =>
-CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }, Ident { name: Ident("value_type"), ident: Ident("bool") }, Ident { name: Ident("random_type"), ident: Ident("int") }] })
+CreateMapType(CreateMapTypeStatement { name: ObjectName([Ident("custom")]), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }, Ident { name: Ident("value_type"), ident: Ident("bool") }, Ident { name: Ident("random_type"), ident: Ident("int") }] })
 
 parse-statement
 CREATE TYPE custom AS MAP (key_type=text, random_type=int)
 ----
 CREATE TYPE custom AS MAP ( key_type = text, random_type = int )
 =>
-CreateMapType(CreateMapTypeStatement { name: Ident("custom"), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }, Ident { name: Ident("random_type"), ident: Ident("int") }] })
+CreateMapType(CreateMapTypeStatement { name: ObjectName([Ident("custom")]), with_options: [Ident { name: Ident("key_type"), ident: Ident("text") }, Ident { name: Ident("random_type"), ident: Ident("int") }] })
