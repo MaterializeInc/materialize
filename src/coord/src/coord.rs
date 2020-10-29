@@ -1840,12 +1840,7 @@ where
                             let literal_row = map_filter_project.literal_constraints(exprs);
                             // Prefer non-trivial literal rows foremost, then long expressions,
                             // then we don't really care at that point.
-                            (
-                                literal_row.is_some() && exprs.len() > 0,
-                                exprs.len(),
-                                literal_row,
-                                *id,
-                            )
+                            (literal_row.is_some(), exprs.len(), literal_row, *id)
                         })
                         .max()
                         .map(|(_some, _len, literal, id)| (id, literal));

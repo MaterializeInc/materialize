@@ -212,7 +212,15 @@ impl MapFilterProject {
     }
 
     /// Determines if a sequence of scalar expressions must be equal to a literal row.
+    ///
+    /// This method returns `None` on an empty `exprs`, which might be surprising, but
+    /// seems to line up with its callers' expectations of that being a non-constraint.
+    /// The caller knows if `exprs` is empty, and can modify their behavior appopriately.
+    /// if they would rather have a literal empty row.
     pub fn literal_constraints(&self, exprs: &[ScalarExpr]) -> Option<Row> {
+        if exprs.is_empty() {
+            return None;
+        }
         let mut row_packer = RowPacker::new();
         for expr in exprs {
             if let Some(literal) = self.literal_constraint(expr) {
