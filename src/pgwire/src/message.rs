@@ -12,7 +12,7 @@ use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
 use dataflow_types::Update;
-use repr::{ColumnName, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnName, RelationDesc, RelationType, Row, ScalarType};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -340,6 +340,36 @@ pub fn encode_update(update: Update, typ: &RelationType) -> Vec<u8> {
         out.push(b'\t');
     }
     out.extend(format!("Diff: {} at {}\n", update.diff, update.timestamp).bytes());
+    out
+}
+
+pub fn encode_copy_row_text(row: Row, typ: &RelationType) -> Vec<u8> {
+    let delim = b'\t';
+    let null = b"\\N";
+    let mut out = Vec::new();
+    let mut buf = BytesMut::new();
+    for (idx, field) in pgrepr::values_from_row(row, typ).into_iter().enumerate() {
+        if idx > 0 {
+            out.push(delim);
+        }
+        match field {
+            None => out.extend(null),
+            Some(field) => {
+                buf.clear();
+                field.encode_text(&mut buf);
+                for b in &buf {
+                    match b {
+                        b'\\' => out.extend(b"\\\\"),
+                        b'\n' => out.extend(b"\\n"),
+                        b'\r' => out.extend(b"\\r"),
+                        b'\t' => out.extend(b"\\t"),
+                        _ => out.push(*b),
+                    }
+                }
+            }
+        }
+    }
+    out.push(b'\n');
     out
 }
 

@@ -447,6 +447,6 @@ impl<'a> ShowSelect<'a> {
 
     /// Converts this `ShowSelect` into a [`Plan`].
     pub fn handle(self) -> Result<Plan, anyhow::Error> {
-        super::handle_select(self.scx, self.stmt, &Params::empty())
+        super::handle_select(self.scx, self.stmt, &Params::empty(), None)
     }
 }
