@@ -143,7 +143,7 @@ pub trait Catalog: fmt::Debug {
     /// Panics if `id` does not specify an object on which indexes can be built.
     fn is_materialized(&self, id: GlobalId) -> bool;
 
-    /// Reports whether the specified user-defined type exists in the catalog.
+    /// Reports whether the specified type exists in the catalog.
     fn type_exists(&self, name: &FullName) -> bool;
 
     /// Expresses whether or not the catalog allows experimental mode features.
@@ -194,7 +194,7 @@ pub trait CatalogItem {
     fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)>;
 }
 
-/// A user-defined type in a [`Catalog`].
+/// A type in a [`Catalog`].
 pub trait Type {}
 
 /// The type of a [`CatalogItem`].
@@ -210,6 +210,8 @@ pub enum CatalogItemType {
     View,
     /// An index.
     Index,
+    /// A type.
+    Type,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -220,6 +222,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Sink => f.write_str("sink"),
             CatalogItemType::View => f.write_str("view"),
             CatalogItemType::Index => f.write_str("index"),
+            CatalogItemType::Type => f.write_str("type"),
         }
     }
 }
@@ -237,6 +240,8 @@ pub enum CatalogError {
     InvalidSinkDependency(String),
     /// Invalid attempt to depend on an index.
     InvalidIndexDependency(String),
+    /// Invalid attempt to depend on a type.
+    InvalidTypeDependency(String),
 }
 
 impl fmt::Display for CatalogError {
@@ -253,6 +258,11 @@ impl fmt::Display for CatalogError {
             Self::InvalidIndexDependency(name) => write!(
                 f,
                 "catalog item '{}' is an index and so cannot be depended upon",
+                name
+            ),
+            Self::InvalidTypeDependency(name) => write!(
+                f,
+                "catalog item '{}' is a type and so cannot be depended upon",
                 name
             ),
         }

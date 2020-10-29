@@ -38,6 +38,7 @@ pub enum Builtin {
     Log(&'static BuiltinLog),
     Table(&'static BuiltinTable),
     View(&'static BuiltinView),
+    Type(&'static BuiltinType),
 }
 
 impl Builtin {
@@ -46,6 +47,7 @@ impl Builtin {
             Builtin::Log(log) => log.name,
             Builtin::Table(table) => table.name,
             Builtin::View(view) => view.name,
+            Builtin::Type(typ) => typ.name,
         }
     }
 
@@ -54,6 +56,7 @@ impl Builtin {
             Builtin::Log(log) => log.schema,
             Builtin::Table(table) => table.schema,
             Builtin::View(view) => view.schema,
+            Builtin::Type(typ) => typ.schema,
         }
     }
 
@@ -62,6 +65,7 @@ impl Builtin {
             Builtin::Log(log) => log.id,
             Builtin::Table(table) => table.id,
             Builtin::View(view) => view.id,
+            Builtin::Type(typ) => typ.id,
         }
     }
 }
@@ -91,6 +95,13 @@ pub struct BuiltinView {
     pub needs_logs: bool,
 }
 
+pub struct BuiltinType {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub id: GlobalId,
+    pub oid: u32,
+}
+
 // Builtin definitions below. Keep these sorted by global ID, and ensure you
 // add new builtins to the `BUILTINS` map.
 //
@@ -109,6 +120,7 @@ pub struct BuiltinView {
 // | Logs      | 1000-1999 |
 // | Tables    | 2000-2999 |
 // | Views     | 3000-3999 |
+// | Types     | 4000-4999 |
 //
 // WARNING: if you change the definition of an existing builtin item, you must
 // be careful to maintain backwards compatibility! Adding new columns is safe.
@@ -371,16 +383,27 @@ lazy_static! {
         id: GlobalId::System(2025),
         index_id: GlobalId::System(2026),
     };
+    pub static ref MZ_BUILTIN_TYPES: BuiltinTable = BuiltinTable {
+        name: "mz_builtin_types",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false)),
+        id: GlobalId::System(2027),
+        index_id: GlobalId::System(2028),
+    };
     pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_map_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
+            .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("key_oid", ScalarType::Oid.nullable(false))
-            .with_column("value_oid", ScalarType::Oid.nullable(false)),
-        id: GlobalId::System(2027),
-        index_id: GlobalId::System(2028),
+            .with_column("key_id", ScalarType::String.nullable(false))
+            .with_column("value_id", ScalarType::String.nullable(false)),
+        id: GlobalId::System(2029),
+        index_id: GlobalId::System(2030),
     };
 }
 
@@ -774,6 +797,250 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
     needs_logs: false,
 };
 
+// The following types are the list of builtin data types available
+// in Materialize. This list is derived from the Type variants supported
+// in pgrepr.
+//
+// Builtin types cannot be created, updated, or deleted. Their OIDs
+// are static, unlike other objects, to match the type OIDs defined by Postgres.
+pub const TYPE_BOOL: BuiltinType = BuiltinType {
+    name: "bool",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4000),
+    oid: 16,
+};
+
+pub const TYPE_BYTEA: BuiltinType = BuiltinType {
+    name: "bytea",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4001),
+    oid: 17,
+};
+
+pub const TYPE_INT8: BuiltinType = BuiltinType {
+    name: "int8",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4002),
+    oid: 20,
+};
+
+pub const TYPE_INT4: BuiltinType = BuiltinType {
+    name: "int4",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4003),
+    oid: 23,
+};
+
+pub const TYPE_TEXT: BuiltinType = BuiltinType {
+    name: "text",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4004),
+    oid: 25,
+};
+
+pub const TYPE_OID: BuiltinType = BuiltinType {
+    name: "oid",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4005),
+    oid: 26,
+};
+
+pub const TYPE_FLOAT4: BuiltinType = BuiltinType {
+    name: "float4",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4006),
+    oid: 700,
+};
+
+pub const TYPE_FLOAT8: BuiltinType = BuiltinType {
+    name: "float8",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4007),
+    oid: 701,
+};
+
+pub const TYPE_BOOL_ARRAY: BuiltinType = BuiltinType {
+    name: "_bool",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4008),
+    oid: 1000,
+};
+
+pub const TYPE_BYTEA_ARRAY: BuiltinType = BuiltinType {
+    name: "_bytea",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4009),
+    oid: 1001,
+};
+
+pub const TYPE_INT4_ARRAY: BuiltinType = BuiltinType {
+    name: "_int4",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4010),
+    oid: 1007,
+};
+
+pub const TYPE_TEXT_ARRAY: BuiltinType = BuiltinType {
+    name: "_text",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4011),
+    oid: 1009,
+};
+
+pub const TYPE_INT8_ARRAY: BuiltinType = BuiltinType {
+    name: "_int8",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4012),
+    oid: 1016,
+};
+
+pub const TYPE_FLOAT4_ARRAY: BuiltinType = BuiltinType {
+    name: "_float4",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4013),
+    oid: 1021,
+};
+
+pub const TYPE_FLOAT8_ARRAY: BuiltinType = BuiltinType {
+    name: "_float8",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4014),
+    oid: 1022,
+};
+
+pub const TYPE_OID_ARRAY: BuiltinType = BuiltinType {
+    name: "_oid",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4015),
+    oid: 1028,
+};
+
+pub const TYPE_DATE: BuiltinType = BuiltinType {
+    name: "date",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4016),
+    oid: 1082,
+};
+
+pub const TYPE_TIME: BuiltinType = BuiltinType {
+    name: "time",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4017),
+    oid: 1083,
+};
+
+pub const TYPE_TIMESTAMP: BuiltinType = BuiltinType {
+    name: "timestamp",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4018),
+    oid: 1114,
+};
+
+pub const TYPE_TIMESTAMP_ARRAY: BuiltinType = BuiltinType {
+    name: "_timestamp",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4019),
+    oid: 1115,
+};
+
+pub const TYPE_DATE_ARRAY: BuiltinType = BuiltinType {
+    name: "_date",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4020),
+    oid: 1182,
+};
+
+pub const TYPE_TIME_ARRAY: BuiltinType = BuiltinType {
+    name: "_time",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4021),
+    oid: 1183,
+};
+
+pub const TYPE_TIMESTAMPTZ: BuiltinType = BuiltinType {
+    name: "timestamptz",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4022),
+    oid: 1184,
+};
+
+pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType = BuiltinType {
+    name: "_timestamptz",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4023),
+    oid: 1185,
+};
+
+pub const TYPE_INTERVAL: BuiltinType = BuiltinType {
+    name: "interval",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4024),
+    oid: 1186,
+};
+
+pub const TYPE_INTERVAL_ARRAY: BuiltinType = BuiltinType {
+    name: "_interval",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4025),
+    oid: 1187,
+};
+
+pub const TYPE_NUMERIC_ARRAY: BuiltinType = BuiltinType {
+    name: "_numeric",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4026),
+    oid: 1231,
+};
+
+pub const TYPE_NUMERIC: BuiltinType = BuiltinType {
+    name: "numeric",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4027),
+    oid: 1700,
+};
+
+pub const TYPE_RECORD: BuiltinType = BuiltinType {
+    name: "record",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4028),
+    oid: 2249,
+};
+
+pub const TYPE_RECORD_ARRAY: BuiltinType = BuiltinType {
+    name: "_record",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4029),
+    oid: 2287,
+};
+
+pub const TYPE_UUID: BuiltinType = BuiltinType {
+    name: "uuid",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4030),
+    oid: 2950,
+};
+
+pub const TYPE_UUID_ARRAY: BuiltinType = BuiltinType {
+    name: "_uuid",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4031),
+    oid: 2951,
+};
+
+pub const TYPE_JSONB: BuiltinType = BuiltinType {
+    name: "jsonb",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4032),
+    oid: 3802,
+};
+
+pub const TYPE_JSONB_ARRAY: BuiltinType = BuiltinType {
+    name: "_jsonb",
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(4033),
+    oid: 3807,
+};
+
 lazy_static! {
     pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
         let builtins = vec![
@@ -804,6 +1071,7 @@ lazy_static! {
             Builtin::Table(&MZ_SOURCES),
             Builtin::Table(&MZ_SINKS),
             Builtin::Table(&MZ_VIEWS),
+            Builtin::Table(&MZ_BUILTIN_TYPES),
             Builtin::Table(&MZ_MAP_TYPES),
             Builtin::View(&MZ_RELATIONS),
             Builtin::View(&MZ_OBJECTS),
@@ -830,6 +1098,40 @@ lazy_static! {
             Builtin::View(&PG_PROC),
             Builtin::View(&PG_RANGE),
             Builtin::View(&PG_ENUM),
+            Builtin::Type(&TYPE_BOOL),
+            Builtin::Type(&TYPE_BOOL_ARRAY),
+            Builtin::Type(&TYPE_BYTEA),
+            Builtin::Type(&TYPE_BYTEA_ARRAY),
+            Builtin::Type(&TYPE_DATE),
+            Builtin::Type(&TYPE_DATE_ARRAY),
+            Builtin::Type(&TYPE_FLOAT4),
+            Builtin::Type(&TYPE_FLOAT4_ARRAY),
+            Builtin::Type(&TYPE_FLOAT8),
+            Builtin::Type(&TYPE_FLOAT8_ARRAY),
+            Builtin::Type(&TYPE_INT4),
+            Builtin::Type(&TYPE_INT4_ARRAY),
+            Builtin::Type(&TYPE_INT8),
+            Builtin::Type(&TYPE_INT8_ARRAY),
+            Builtin::Type(&TYPE_INTERVAL),
+            Builtin::Type(&TYPE_INTERVAL_ARRAY),
+            Builtin::Type(&TYPE_JSONB),
+            Builtin::Type(&TYPE_JSONB_ARRAY),
+            Builtin::Type(&TYPE_NUMERIC),
+            Builtin::Type(&TYPE_NUMERIC_ARRAY),
+            Builtin::Type(&TYPE_RECORD),
+            Builtin::Type(&TYPE_RECORD_ARRAY),
+            Builtin::Type(&TYPE_TEXT),
+            Builtin::Type(&TYPE_TEXT_ARRAY),
+            Builtin::Type(&TYPE_TIME),
+            Builtin::Type(&TYPE_TIME_ARRAY),
+            Builtin::Type(&TYPE_TIMESTAMP),
+            Builtin::Type(&TYPE_TIMESTAMP_ARRAY),
+            Builtin::Type(&TYPE_TIMESTAMPTZ),
+            Builtin::Type(&TYPE_TIMESTAMPTZ_ARRAY),
+            Builtin::Type(&TYPE_UUID),
+            Builtin::Type(&TYPE_UUID_ARRAY),
+            Builtin::Type(&TYPE_OID),
+            Builtin::Type(&TYPE_OID_ARRAY),
         ];
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };

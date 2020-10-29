@@ -45,6 +45,7 @@ pub(crate) enum ErrorKind {
         dependee: String,
         message: String,
     },
+    TypeRename(String),
     ExperimentalModeRequired,
     ExperimentalModeUnavailable,
 }
@@ -87,6 +88,7 @@ impl std::error::Error for Error {
             | ErrorKind::MandatoryTableIndex(_)
             | ErrorKind::UnsatisfiableLoggingDependency { .. }
             | ErrorKind::AmbiguousRename { .. }
+            | ErrorKind::TypeRename(_)
             | ErrorKind::ExperimentalModeRequired
             | ErrorKind::ExperimentalModeUnavailable => None,
             ErrorKind::Sql(e) => Some(e),
@@ -150,6 +152,7 @@ impl fmt::Display for Error {
                     )
                 }
             }
+            ErrorKind::TypeRename(typ) => write!(f, "cannot rename type: {}", typ),
             ErrorKind::ExperimentalModeRequired => write!(
                 f,
                 r#"Materialize previously started with --experimental to
