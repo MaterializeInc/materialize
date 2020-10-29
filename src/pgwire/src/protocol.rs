@@ -24,7 +24,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
 
 use coord::{session::RowBatchStream, ExecuteResponse, StartupMessage};
-use dataflow_types::{PeekResponse, Update};
+use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use repr::{Datum, RelationDesc, RowArena};
 use sql::ast::Statement;
@@ -719,26 +719,39 @@ where
             ExecuteResponse::Tailing { rx } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::Tailing");
-                self.stream_rows(row_desc, rx).await
+                self.send_rows(row_desc, portal_name, Box::new(rx), max_rows)
+                    .await
             }
-            ExecuteResponse::CopyTo { format, rx } => {
+            ExecuteResponse::CopyTo { format, resp } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
-                // TODO(mjibson): This logic is duplicated from SendingRows. Dedup somehow.
-                match rx.await? {
-                    PeekResponse::Canceled => {
-                        self.error(
-                            SqlState::QUERY_CANCELED,
-                            "canceling statement due to user request",
-                        )
-                        .await
+                let rows: RowBatchStream = match *resp {
+                    ExecuteResponse::Tailing { rx } => Box::new(rx),
+                    ExecuteResponse::SendingRows(rx) => match rx.await? {
+                        // TODO(mjibson): This logic is duplicated from SendingRows. Dedup?
+                        PeekResponse::Canceled => {
+                            return self
+                                .error(
+                                    SqlState::QUERY_CANCELED,
+                                    "canceling statement due to user request",
+                                )
+                                .await;
+                        }
+                        PeekResponse::Error(text) => {
+                            return self.error(SqlState::INTERNAL_ERROR, text).await;
+                        }
+                        PeekResponse::Rows(rows) => Box::new(stream::iter(vec![Ok(rows)])),
+                    },
+                    _ => {
+                        return self
+                            .error(
+                                SqlState::INTERNAL_ERROR,
+                                "unsupported COPY response type".to_string(),
+                            )
+                            .await;
                     }
-                    PeekResponse::Error(text) => self.error(SqlState::INTERNAL_ERROR, text).await,
-                    PeekResponse::Rows(rows) => {
-                        self.copy_rows(format, row_desc, Box::new(stream::iter(vec![Ok(rows)])))
-                            .await
-                    }
-                }
+                };
+                self.copy_rows(format, row_desc, rows).await
             }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
@@ -892,70 +905,6 @@ where
                         self.conn
                             .send(BackendMessage::CopyData(message::encode_copy_row_text(
                                 row, typ,
-                            )))
-                            .await?;
-                    }
-                }
-                Err(time::Elapsed { .. }) => {
-                    // It's been a while since we've had any data to send, and
-                    // the client may have disconnected. Send a data message
-                    // with zero bytes of data, which will error if the client
-                    // has, in fact, disconnected. Otherwise we might block
-                    // forever waiting for rows, leaking memory and a socket.
-                    //
-                    // Writing these empty data packets is rather distasteful,
-                    // but no better solution for detecting a half-closed socket
-                    // presents itself. Tokio/Mio don't provide a cross-platform
-                    // means of receiving socket closed notifications, and it's
-                    // not clear how to plumb such notifications through a
-                    // `Codec` and a `Framed`, anyway.
-                    //
-                    // If someone does wind up investigating a better solution,
-                    // on Linux, the underlying epoll system call supports the
-                    // desired notifications via POLLRDHUP [0].
-                    //
-                    // [0]: https://lkml.org/lkml/2003/7/12/116
-                    self.conn.send(BackendMessage::CopyData(vec![])).await?;
-                }
-            }
-            self.conn.flush().await?;
-        }
-
-        let tag = format!("COPY {}", count);
-        self.conn.send(BackendMessage::CopyDone).await?;
-        self.conn
-            .send(BackendMessage::CommandComplete { tag })
-            .await?;
-        Ok(State::Ready)
-    }
-
-    async fn stream_rows(
-        &mut self,
-        row_desc: RelationDesc,
-        mut rx: comm::mpsc::Receiver<Vec<Update>>,
-    ) -> Result<State, comm::Error> {
-        let typ = row_desc.typ();
-        let column_formats = iter::repeat(pgrepr::Format::Text)
-            .take(typ.column_types.len())
-            .collect();
-        self.conn
-            .send(BackendMessage::CopyOutResponse {
-                overall_format: pgrepr::Format::Text,
-                column_formats,
-            })
-            .await?;
-
-        let mut count = 0;
-        loop {
-            match time::timeout(Duration::from_secs(1), rx.next()).await {
-                Ok(None) => break,
-                Ok(Some(updates)) => {
-                    let updates = updates?;
-                    count += updates.len();
-                    for update in updates {
-                        self.conn
-                            .send(BackendMessage::CopyData(message::encode_update(
-                                update, typ,
                             )))
                             .await?;
                     }

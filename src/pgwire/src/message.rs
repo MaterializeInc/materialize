@@ -11,7 +11,6 @@ use bytes::BytesMut;
 use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
-use dataflow_types::Update;
 use repr::{ColumnName, RelationDesc, RelationType, Row, ScalarType};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -315,32 +314,6 @@ pub struct FieldDescription {
     // https://github.com/cockroachdb/cockroach/blob/3e8553e249a842e206aa9f4f8be416b896201f10/pkg/sql/pgwire/conn.go#L1115-L1123
     pub type_mod: i32,
     pub format: pgrepr::Format,
-}
-
-pub fn encode_update(update: Update, typ: &RelationType) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut buf = BytesMut::new();
-    for field in pgrepr::values_from_row(update.row, typ) {
-        match field {
-            None => out.extend(b"\\N"),
-            Some(field) => {
-                buf.clear();
-                field.encode_text(&mut buf);
-                for b in &buf {
-                    match b {
-                        b'\\' => out.extend(b"\\\\"),
-                        b'\n' => out.extend(b"\\n"),
-                        b'\r' => out.extend(b"\\r"),
-                        b'\t' => out.extend(b"\\t"),
-                        b => out.push(*b),
-                    }
-                }
-            }
-        }
-        out.push(b'\t');
-    }
-    out.extend(format!("Diff: {} at {}\n", update.diff, update.timestamp).bytes());
-    out
 }
 
 pub fn encode_copy_row_text(row: Row, typ: &RelationType) -> Vec<u8> {

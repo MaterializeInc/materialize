@@ -200,17 +200,27 @@ pub fn describe_statement(
         Statement::Tail(TailStatement { name, .. }) => {
             let name = scx.resolve_item(name)?;
             let sql_object = scx.catalog.get_item(&name);
-            StatementDesc::new(Some(sql_object.desc()?.clone()))
+            const MAX_U64_DIGITS: u8 = 20;
+            let desc = RelationDesc::empty()
+                .with_column(
+                    "timestamp",
+                    ScalarType::Decimal(MAX_U64_DIGITS, 0).nullable(false),
+                )
+                .with_column("diff", ScalarType::Int64.nullable(true))
+                .concat(sql_object.desc()?.clone());
+            StatementDesc::new(Some(desc))
         }
 
         Statement::Copy(CopyStatement { relation, .. }) => match relation {
             CopyRelation::Table { .. } => bail!("unsupported COPY relation {:?}", relation),
-            CopyRelation::Query(query) => {
-                let (_relation_expr, desc, _finishing) =
-                    query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
-                StatementDesc::new(Some(desc)).no_send()
+            CopyRelation::Select(stmt) => {
+                describe_statement(catalog, Statement::Select(stmt), param_types_in)?
             }
-        },
+            CopyRelation::Tail(stmt) => {
+                describe_statement(catalog, Statement::Tail(stmt), param_types_in)?
+            }
+        }
+        .no_send(),
 
         // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
         // plans the whole query to determine its shape and parameter types,
@@ -284,7 +294,7 @@ pub fn handle_statement(
 
         Statement::Explain(stmt) => handle_explain(scx, stmt, params),
         Statement::Select(stmt) => handle_select(scx, stmt, params, None),
-        Statement::Tail(stmt) => handle_tail(scx, stmt),
+        Statement::Tail(stmt) => handle_tail(scx, stmt, None),
         Statement::Copy(stmt) => handle_copy(scx, stmt),
 
         Statement::Insert(stmt) => handle_insert(scx, stmt, params),
@@ -338,6 +348,7 @@ fn handle_tail(
         as_of,
         with_snapshot,
     }: TailStatement,
+    copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
     let from = scx.resolve_item(name)?;
     let entry = scx.catalog.get_item(&from);
@@ -349,6 +360,7 @@ fn handle_tail(
                 id: entry.id(),
                 ts,
                 with_snapshot,
+                copy_to,
             })
         }
         CatalogItemType::Index | CatalogItemType::Sink => bail!(
@@ -382,19 +394,13 @@ fn handle_copy(
         }
     }
     match (&direction, &target) {
-        (CopyDirection::To, CopyTarget::Stdout) => {
-            match relation {
-                CopyRelation::Table { .. } => bail!("table with COPY TO unsupported"),
-                // TODO(mjibson): use SelectStatement instead of Query so users can use AS OF
-                // in COPY.
-                CopyRelation::Query(query) => Ok(handle_select(
-                    scx,
-                    SelectStatement { query, as_of: None },
-                    &Params::empty(),
-                    Some(format),
-                )?),
+        (CopyDirection::To, CopyTarget::Stdout) => match relation {
+            CopyRelation::Table { .. } => bail!("table with COPY TO unsupported"),
+            CopyRelation::Select(stmt) => {
+                Ok(handle_select(scx, stmt, &Params::empty(), Some(format))?)
             }
-        }
+            CopyRelation::Tail(stmt) => Ok(handle_tail(scx, stmt, Some(format))?),
+        },
         _ => bail!("COPY {} {} not supported", direction, target),
     }
 }

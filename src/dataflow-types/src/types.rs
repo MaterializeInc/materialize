@@ -662,7 +662,7 @@ impl SinkConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
-    pub tx: comm::mpsc::Sender<Vec<Update>>,
+    pub tx: comm::mpsc::Sender<Vec<Row>>,
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
 }

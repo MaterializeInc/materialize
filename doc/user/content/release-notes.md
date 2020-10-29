@@ -50,6 +50,12 @@ Wrap your release notes at the 80 character mark.
 
 - Default to using a worker thread count equal to half of the machine's
   physical cores if [`--workers`](/cli/#worker-threads) is not specified.
+- [`TAIL`](/sql/tail) now sends rows instead of being implemented as a
+  `COPY TO` operation. It has gained `timestamp` and `diff` columns.
+- [`COPY TO`](/sql/copy-to) has been added to
+  allow any query to send data via the [Postgres
+  COPY](https://www.postgresql.org/docs/current/sql-copy.html)
+  protocol. This can be used to replace the old `TAIL` behavior.
 
 {{% version-header v0.5.0 %}}
 

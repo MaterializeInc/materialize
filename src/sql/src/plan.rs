@@ -133,6 +133,7 @@ pub enum Plan {
         id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
+        copy_to: Option<CopyFormat>,
     },
     SendRows(Vec<Row>),
     ExplainPlan {
@@ -210,18 +211,6 @@ pub enum MutationKind {
     Insert,
     Update,
     Delete,
-}
-
-#[derive(Debug)]
-pub enum CopyRelationKind {
-    Table {
-        id: GlobalId,
-        column_names: Vec<ColumnName>,
-    },
-    Query {
-        expr: ::expr::RelationExpr,
-        finishing: RowSetFinishing,
-    },
 }
 
 #[derive(Debug)]
