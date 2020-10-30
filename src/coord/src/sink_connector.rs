@@ -135,6 +135,7 @@ async fn build_kafka(
         frontier,
         strict: !with_snapshot,
         config_options: builder.config_options,
+        key_indices: builder.key_indices,
     }))
 }
 
