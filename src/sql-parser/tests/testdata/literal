@@ -25,6 +25,23 @@ NULL
 ----
 Value(Null)
 
+# Identifiers
+
+parse-scalar
+"foo"
+----
+Identifier([Ident("foo")])
+
+parse-scalar
+"f""oo"
+----
+Identifier([Ident("f\"oo")])
+
+parse-scalar roundtrip
+"f""oo"
+----
+"f""oo"
+
 # Strings
 
 parse-scalar
