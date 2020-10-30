@@ -2071,18 +2071,20 @@ impl Encoder {
 
     pub fn encode_unchecked(
         &self,
-        schema_id: i32,
+        key_schema_id: Option<i32>,
+        value_schema_id: i32,
         diff_pair: DiffPair<&Row>,
         transaction_id: Option<String>,
     ) -> (Option<Vec<u8>>, Vec<u8>) {
         self.validate_transaction_id(&transaction_id);
         let mut key_buf = vec![];
         let mut buf = vec![];
-        encode_avro_header(&mut buf, schema_id);
+        encode_avro_header(&mut buf, value_schema_id);
         let (avro_key, avro_value) = self.diff_pair_to_avro(diff_pair, transaction_id);
         debug_assert!(avro_value.validate(self.writer_schema.top_node()));
         mz_avro::encode_unchecked(&avro_value, &self.writer_schema, &mut buf);
         let key_buf = avro_key.map(|avro_key| {
+            encode_avro_header(&mut key_buf, key_schema_id.unwrap());
             let key_schema = &self.key_schema_and_filter.as_ref().unwrap().0;
             debug_assert!(avro_key.validate(key_schema.top_node()));
             mz_avro::encode_unchecked(&avro_key, key_schema, &mut key_buf);
