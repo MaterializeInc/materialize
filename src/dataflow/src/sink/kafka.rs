@@ -400,46 +400,50 @@ where
                 // loop has explicitly been designed so that each iteration sends
                 // at most one record to Kafka
                 for _ in 0..connector.fuel {
-                    let ((encoded_key, encoded_val), count) = if let Some((encoded, count)) =
-                        encoded_buffer.take()
-                    {
-                        // We still need to send more copies of this record.
-                        (encoded, count)
-                    } else if let Some((row, time, diff)) = queue.pop_front() {
-                        // Convert a previously queued (Row, Diff) to a Avro diff
-                        // envelope record
-                        if diff == 0 {
-                            // Explicitly refuse to send no-op records
-                            continue;
-                        };
+                    let ((encoded_key, encoded_val), count) =
+                        if let Some((encoded, count)) = encoded_buffer.take() {
+                            // We still need to send more copies of this record.
+                            (encoded, count)
+                        } else if let Some((row, time, diff)) = queue.pop_front() {
+                            // Convert a previously queued (Row, Diff) to a Avro diff
+                            // envelope record
+                            if diff == 0 {
+                                // Explicitly refuse to send no-op records
+                                continue;
+                            };
 
-                        let time = match consistency {
-                            Some(_) => Some(time.to_string()),
-                            None => None,
-                        };
+                            let time = match consistency {
+                                Some(_) => Some(time.to_string()),
+                                None => None,
+                            };
 
-                        let diff_pair = if diff < 0 {
-                            DiffPair {
-                                before: Some(&row),
-                                after: None,
-                            }
+                            let diff_pair = if diff < 0 {
+                                DiffPair {
+                                    before: Some(&row),
+                                    after: None,
+                                }
+                            } else {
+                                DiffPair {
+                                    before: None,
+                                    after: Some(&row),
+                                }
+                            };
+
+                            let bufs = encoder.encode_unchecked(
+                                connector.key_schema_id,
+                                connector.value_schema_id,
+                                diff_pair,
+                                time,
+                            );
+                            // For diffs other than +/- 1, we send repeated copies of the
+                            // Avro record [diff] times. Since the format and envelope
+                            // capture the "polarity" of the update, we need to remember
+                            // how many times to send the data.
+                            (bufs, diff.abs())
                         } else {
-                            DiffPair {
-                                before: None,
-                                after: Some(&row),
-                            }
+                            // Nothing left for us to do
+                            break;
                         };
-
-                        let bufs = encoder.encode_unchecked(connector.schema_id, diff_pair, time);
-                        // For diffs other than +/- 1, we send repeated copies of the
-                        // Avro record [diff] times. Since the format and envelope
-                        // capture the "polarity" of the update, we need to remember
-                        // how many times to send the data.
-                        (bufs, diff.abs())
-                    } else {
-                        // Nothing left for us to do
-                        break;
-                    };
 
                     let record =
                         BaseRecord::<Vec<u8>, _>::to(&connector.topic).payload(&encoded_val);
