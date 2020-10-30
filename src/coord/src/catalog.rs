@@ -192,6 +192,9 @@ pub struct Index {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Type {
+    Builtin {
+        oid: u32,
+    },
     Map {
         create_sql: String,
         plan_cx: PlanContext,
@@ -201,11 +204,9 @@ pub enum Type {
     },
 }
 
-/// All data types available for use in Materialize will
-/// have an OID. Only user-defined types will have a GlobalId.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypeIds {
-    pub id: Option<GlobalId>,
+    pub id: GlobalId,
     pub oid: u32,
 }
 
@@ -218,9 +219,7 @@ impl CatalogItem {
             CatalogItem::Sink(_) => "sink",
             CatalogItem::View(_) => "view",
             CatalogItem::Index(_) => "index",
-            CatalogItem::Type(t) => match t {
-                Type::Map { .. } => "map type",
-            },
+            CatalogItem::Type(_) => "type",
         }
     }
 
@@ -245,18 +244,10 @@ impl CatalogItem {
             CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
             CatalogItem::Index(idx) => vec![idx.on],
             CatalogItem::Type(typ) => match typ {
+                Type::Builtin { .. } => vec![],
                 Type::Map {
                     key_ids, value_ids, ..
-                } => {
-                    let mut uses = Vec::with_capacity(2);
-                    if key_ids.id.is_some() {
-                        uses.push(key_ids.id.unwrap());
-                    }
-                    if value_ids.id.is_some() {
-                        uses.push(value_ids.id.unwrap());
-                    }
-                    uses
-                }
+                } => vec![key_ids.id, value_ids.id],
             },
         }
     }
@@ -336,21 +327,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Index(i))
             }
-            CatalogItem::Type(i) => match i {
-                Type::Map {
-                    create_sql,
-                    plan_cx,
-                    oid,
-                    key_ids,
-                    value_ids,
-                } => Ok(CatalogItem::Type(Type::Map {
-                    create_sql: do_rewrite(create_sql.clone())?,
-                    plan_cx: plan_cx.clone(),
-                    oid: *oid,
-                    key_ids: key_ids.clone(),
-                    value_ids: value_ids.clone(),
-                })),
-            },
+            CatalogItem::Type(_) => unreachable!("types cannot be renamed"),
         }
     }
 }
@@ -573,6 +550,19 @@ impl Catalog {
                         });
                     let oid = catalog.allocate_oid()?;
                     events.push(catalog.insert_item(view.id, oid, name, item));
+                }
+
+                Builtin::Type(typ) => {
+                    events.push(catalog.insert_item(
+                        typ.id,
+                        typ.oid,
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: PG_CATALOG_SCHEMA.into(),
+                            item: typ.name.to_owned(),
+                        },
+                        CatalogItem::Type(Type::Builtin { oid: typ.oid }),
+                    ));
                 }
 
                 _ => (),
@@ -1109,9 +1099,14 @@ impl Catalog {
                                 )));
                             }
                         };
-                        let schema_id = tx.load_schema_id(database_id, &name.schema)?;
-                        let serialized_item = self.serialize_item(&item);
-                        tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
+                        match item {
+                            CatalogItem::Type(Type::Builtin { .. }) => (),
+                            _ => {
+                                let schema_id = tx.load_schema_id(database_id, &name.schema)?;
+                                let serialized_item = self.serialize_item(&item);
+                                tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
+                            }
+                        }
                     }
 
                     vec![Action::CreateItem {
@@ -1164,6 +1159,9 @@ impl Catalog {
                     let mut actions = Vec::new();
 
                     let entry = self.by_id.get(&id).unwrap();
+                    if let CatalogItem::Type(_) = entry.item() {
+                        return Err(Error::new(ErrorKind::TypeRename(entry.name().to_string())));
+                    }
 
                     let mut to_full_name = entry.name.clone();
                     to_full_name.item = to_name;
@@ -1411,6 +1409,7 @@ impl Catalog {
                 eval_env: Some(sink.plan_cx.clone().into()),
             },
             CatalogItem::Type(typ) => match typ {
+                Type::Builtin { .. } => unreachable!("builtin types are not stored"),
                 Type::Map {
                     create_sql,
                     plan_cx,
@@ -1852,6 +1851,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::View(View { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type::Map { create_sql, .. }) => create_sql,
+            CatalogItem::Type(Type::Builtin { .. }) => unimplemented!(),
         }
     }
 
@@ -1863,6 +1863,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::View(View { plan_cx, .. }) => plan_cx,
             CatalogItem::Index(Index { plan_cx, .. }) => plan_cx,
             CatalogItem::Type(Type::Map { plan_cx, .. }) => plan_cx,
+            CatalogItem::Type(Type::Builtin { .. }) => unimplemented!(),
         }
     }
 

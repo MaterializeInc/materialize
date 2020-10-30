@@ -2358,6 +2358,7 @@ where
                             )
                             .await;
                         }
+                        CatalogItem::Type(Type::Builtin { .. }) => (),
                     }
                 }
                 catalog::Event::UpdatedItem {
@@ -2419,6 +2420,9 @@ where
                                 1,
                             )
                             .await;
+                        }
+                        CatalogItem::Type(Type::Builtin { .. }) => {
+                            unreachable!("builtin types cannot be updated")
                         }
                     }
                 }
@@ -2546,6 +2550,9 @@ where
                                 -1,
                             )
                             .await;
+                        }
+                        CatalogItem::Type(Type::Builtin { .. }) => {
+                            unreachable!("builtin types cannot be dropped")
                         }
                         CatalogItem::Index(_) => {
                             unreachable!("dropped indexes should be handled by DroppedIndex");

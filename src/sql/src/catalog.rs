@@ -210,7 +210,7 @@ pub enum CatalogItemType {
     View,
     /// An index.
     Index,
-    /// A user-defined type.
+    /// A type.
     Type,
 }
 
@@ -222,7 +222,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Sink => f.write_str("sink"),
             CatalogItemType::View => f.write_str("view"),
             CatalogItemType::Index => f.write_str("index"),
-            CatalogItemType::Type => f.write_str("user-defined type"),
+            CatalogItemType::Type => f.write_str("type"),
         }
     }
 }
