@@ -202,7 +202,12 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
     }
 }
 
-pub fn validate_sink<I>(schema: &Schema, expected: I, actual: &[Value]) -> Result<(), String>
+pub fn validate_sink<I>(
+    key_schema: Option<&Schema>,
+    value_schema: &Schema,
+    expected: I,
+    actual: &[(Option<Value>, Value)],
+) -> Result<(), String>
 where
     I: IntoIterator,
     I::Item: AsRef<str>,
@@ -210,9 +215,24 @@ where
     let expected = expected
         .into_iter()
         .map(|v| {
-            let json = &serde_json::from_str(v.as_ref())
-                .map_err(|e| format!("parsing expected avro datum as json: {}", e.to_string()))?;
-            Ok(from_json(json, schema.top_node())?)
+            let mut bytes = v.as_ref().as_bytes();
+            let deserializer = serde_json::Deserializer::from_reader(&mut bytes);
+            let mut iter = deserializer.into_iter();
+            let key = key_schema
+                .map(|key_schema| -> Result<_, String> {
+                    let key: serde_json::Value = match iter.next() {
+                        None => Err(format!("Couldn't parse Json: no key found")),
+                        Some(r) => r.map_err(|e| format!("parsing json: {}", e)),
+                    }?;
+                    Ok(from_json(&key, key_schema.top_node())?)
+                })
+                .transpose()?;
+            let value: serde_json::Value = match iter.next() {
+                None => Err(format!("Couldn't parse Json: no value found")),
+                Some(r) => r.map_err(|e| format!("parsing json: {}", e)),
+            }?;
+            let value = from_json(&value, value_schema.top_node())?;
+            Ok((key, value))
         })
         .collect::<Result<Vec<_>, String>>()?;
     let mut expected = expected.iter();
