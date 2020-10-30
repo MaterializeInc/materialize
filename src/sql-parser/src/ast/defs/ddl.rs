@@ -222,6 +222,7 @@ pub enum Connector {
     Kafka {
         broker: String,
         topic: String,
+        keys: Option<Vec<Ident>>,
     },
     Kinesis {
         arn: String,
@@ -240,13 +241,22 @@ impl AstDisplay for Connector {
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
             }
-            Connector::Kafka { broker, topic } => {
+            Connector::Kafka {
+                broker,
+                topic,
+                keys,
+            } => {
                 f.write_str("KAFKA BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
                 f.write_str("'");
                 f.write_str(" TOPIC '");
                 f.write_node(&display::escape_single_quote_string(topic));
                 f.write_str("'");
+                if let Some(keys) = keys.as_ref() {
+                    f.write_str(" KEYS (");
+                    f.write_node(&display::comma_separated(&keys));
+                    f.write_str(")");
+                }
             }
             Connector::Kinesis { arn } => {
                 f.write_str("KINESIS ARN '");

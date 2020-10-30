@@ -458,6 +458,7 @@ fn kafka_sink_builder(
     topic_prefix: String,
     desc: RelationDesc,
     topic_suffix: String,
+    key_indices: Option<Vec<usize>>,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let (schema_registry_url, ccsr_with_options) = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
@@ -482,7 +483,7 @@ fn kafka_sink_builder(
         Some(_) => bail!("consistency must be a boolean"),
     };
 
-    let encoder = Encoder::new(desc, include_consistency);
+    let encoder = Encoder::new(desc, include_consistency, key_indices.clone());
     let value_schema = encoder.writer_schema().canonical_form();
 
     // Use the user supplied value for replication factor, or default to 1
@@ -520,6 +521,7 @@ fn kafka_sink_builder(
         consistency_value_schema,
         config_options,
         ccsr_config,
+        key_indices,
     }))
 }
 
@@ -578,14 +580,37 @@ fn handle_create_sink(
     let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
-        Connector::Kafka { broker, topic } => kafka_sink_builder(
-            format,
-            with_options,
+        Connector::Kafka {
             broker,
             topic,
-            from.desc()?.clone(),
-            suffix,
-        )?,
+            keys,
+        } => {
+            let desc = from.desc()?;
+            let key_indices = if let Some(keys) = keys {
+                let idces = keys
+                    .iter()
+                    .map(|k| {
+                        desc.iter_names()
+                            .position(|name| {
+                                name.map(|cn| cn.as_str() == k.as_str()).unwrap_or(false)
+                            })
+                            .ok_or_else(|| anyhow!("No such column: {}", k))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Some(idces)
+            } else {
+                None
+            };
+            kafka_sink_builder(
+                format,
+                with_options,
+                broker,
+                topic,
+                desc.clone(),
+                suffix,
+                key_indices,
+            )?
+        }
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
         Connector::AvroOcf { path } => avro_ocf_sink_builder(format, with_options, path, suffix)?,
     };

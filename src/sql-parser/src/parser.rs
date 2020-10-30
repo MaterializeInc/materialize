@@ -1598,7 +1598,16 @@ impl Parser {
                 let broker = self.parse_literal_string()?;
                 self.expect_keyword("TOPIC")?;
                 let topic = self.parse_literal_string()?;
-                Ok(Connector::Kafka { broker, topic })
+                let keys = if self.parse_keyword("KEYS") {
+                    Some(self.parse_parenthesized_column_list(Mandatory)?)
+                } else {
+                    None
+                };
+                Ok(Connector::Kafka {
+                    broker,
+                    topic,
+                    keys,
+                })
             }
             "KINESIS" => {
                 self.expect_keyword("ARN")?;
