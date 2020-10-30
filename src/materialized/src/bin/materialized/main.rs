@@ -33,6 +33,7 @@ use std::{cmp, env};
 
 use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, warn};
 use sysinfo::{ProcessorExt, SystemExt};
@@ -383,8 +384,7 @@ fn run() -> Result<(), anyhow::Error> {
         "booting server
 materialized {mz_version}
 {dep_versions}
-invoked as: {invocation:?}
-influential env vars: {env:?}
+invoked as: {invocation}
 os: {os}
 cpus: {ncpus_logical} logical, {ncpus_physical} physical
 cpu0: {cpu0}
@@ -392,8 +392,8 @@ memory: {memory_total}KB total, {memory_used}KB used
 swap: {swap_total}KB total, {swap_used}KB used",
         mz_version = materialized::version(),
         dep_versions = build_info().join("\n"),
-        invocation = args,
-        env = {
+        invocation = {
+            use shell_words::quote as escape;
             // TODO - make this only check for "MZ_" if #1223 is fixed.
             env::vars()
                 .filter(|(name, _value)| {
@@ -401,8 +401,9 @@ swap: {swap_total}KB total, {swap_used}KB used",
                         || name.starts_with("DIFFERENTIAL_")
                         || name == "DEFAULT_PROGRESS_MODE"
                 })
-                .map(|(name, value)| format!("{}={}", name, value))
-                .collect::<Vec<_>>()
+                .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
+                .chain(args.into_iter().map(|arg| escape(&arg).into_owned()))
+                .join(" ")
         },
         os = os_info::get(),
         ncpus_logical = num_cpus::get(),

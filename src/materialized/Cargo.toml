@@ -25,6 +25,7 @@ getopts = "0.2"
 hex = "0.4"
 hyper = "0.13.8"
 include_dir = "0.6.0"
+itertools = "0.9"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
 log = "0.4.11"
@@ -45,6 +46,7 @@ reqwest = { version = "0.10.8", features = ["json"] }
 rlimit = "0.5.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
+shell-words = "1.0"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
 sysctl = "0.4.0"
