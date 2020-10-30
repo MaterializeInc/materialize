@@ -199,15 +199,9 @@ pub enum Type {
         create_sql: String,
         plan_cx: PlanContext,
         oid: u32,
-        key_ids: TypeIds,
-        value_ids: TypeIds,
+        key_id: GlobalId,
+        value_id: GlobalId,
     },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TypeIds {
-    pub id: GlobalId,
-    pub oid: u32,
 }
 
 impl CatalogItem {
@@ -246,8 +240,8 @@ impl CatalogItem {
             CatalogItem::Type(typ) => match typ {
                 Type::Builtin { .. } => vec![],
                 Type::Map {
-                    key_ids, value_ids, ..
-                } => vec![key_ids.id, value_ids.id],
+                    key_id, value_id, ..
+                } => vec![*key_id, *value_id],
             },
         }
     }

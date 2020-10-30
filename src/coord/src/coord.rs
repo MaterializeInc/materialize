@@ -63,9 +63,9 @@ use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES, MZ_INDEX_COLUMNS,
-    MZ_KAFKA_SINKS, MZ_MAP_TYPES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS,
-    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_BUILTIN_TYPES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
+    MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_MAP_TYPES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES,
+    MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type};
 use crate::command::{
@@ -1135,22 +1135,45 @@ where
         .await
     }
 
+    async fn report_builtin_type_update(
+        &mut self,
+        id: GlobalId,
+        oid: u32,
+        name: &str,
+        diff: isize,
+    ) {
+        self.update_catalog_view(
+            MZ_BUILTIN_TYPES.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String(&id.to_string()),
+                    Datum::Int32(oid as i32),
+                    Datum::String(name),
+                ]),
+                diff,
+            )),
+        )
+        .await
+    }
+
     async fn report_map_type_update(
         &mut self,
+        id: GlobalId,
         name: &str,
         oid: u32,
-        key_oid: u32,
-        value_oid: u32,
+        key_id: GlobalId,
+        value_id: GlobalId,
         diff: isize,
     ) {
         self.update_catalog_view(
             MZ_MAP_TYPES.id,
             iter::once((
                 Row::pack(&[
+                    Datum::String(&id.to_string()),
                     Datum::String(name),
                     Datum::Int32(oid as i32),
-                    Datum::Int32(key_oid as i32),
-                    Datum::Int32(value_oid as i32),
+                    Datum::String(&key_id.to_string()),
+                    Datum::String(&value_id.to_string()),
                 ]),
                 diff,
             )),
@@ -2347,18 +2370,17 @@ where
                                 .await;
                         }
                         CatalogItem::Type(Type::Map {
-                            key_ids, value_ids, ..
+                            key_id, value_id, ..
                         }) => {
                             self.report_map_type_update(
-                                &name.item,
-                                *oid,
-                                key_ids.oid,
-                                value_ids.oid,
-                                1,
+                                *id, &name.item, *oid, *key_id, *value_id, 1,
                             )
                             .await;
                         }
-                        CatalogItem::Type(Type::Builtin { .. }) => (),
+                        CatalogItem::Type(Type::Builtin { .. }) => {
+                            self.report_builtin_type_update(*id, *oid, &name.item, 1)
+                                .await;
+                        }
                     }
                 }
                 catalog::Event::UpdatedItem {
@@ -2402,21 +2424,23 @@ where
                                 .await;
                         }
                         CatalogItem::Type(Type::Map {
-                            key_ids, value_ids, ..
+                            key_id, value_id, ..
                         }) => {
                             self.report_map_type_update(
+                                *id,
                                 &from_name.item,
                                 *oid,
-                                key_ids.oid,
-                                value_ids.oid,
+                                *key_id,
+                                *value_id,
                                 -1,
                             )
                             .await;
                             self.report_map_type_update(
+                                *id,
                                 &to_name.item,
                                 *oid,
-                                key_ids.oid,
-                                value_ids.oid,
+                                *key_id,
+                                *value_id,
                                 1,
                             )
                             .await;
@@ -2540,13 +2564,14 @@ where
                             // dataflow was never created, so nothing to drop.
                         }
                         CatalogItem::Type(Type::Map {
-                            key_ids, value_ids, ..
+                            key_id, value_id, ..
                         }) => {
                             self.report_map_type_update(
+                                entry.id(),
                                 &entry.name().item,
                                 entry.oid(),
-                                key_ids.oid,
-                                value_ids.oid,
+                                *key_id,
+                                *value_id,
                                 -1,
                             )
                             .await;

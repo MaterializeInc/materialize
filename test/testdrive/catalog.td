@@ -276,6 +276,7 @@ mz_tables
 mz_sources
 mz_sinks
 mz_views
+mz_builtin_types
 mz_map_types
 
 > SHOW FULL TABLES FROM mz_catalog
@@ -294,6 +295,7 @@ mz_tables             system
 mz_sinks              system
 mz_sources            system
 mz_views              system
+mz_builtin_types      system
 mz_map_types          system
 
 ! SHOW EXTENDED TABLES
