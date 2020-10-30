@@ -520,9 +520,9 @@ where
                         tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
                     }
                     Err(e) => {
-                        self.catalog
-                            .transact(vec![catalog::Op::DropItem(id)])
-                            .expect("corrupt catalog");
+                        self.catalog_transact(vec![catalog::Op::DropItem(id)])
+                            .await
+                            .expect("deleting placeholder sink cannot fail");
                         tx.send(Err(e), session);
                     }
                 },
@@ -843,8 +843,8 @@ where
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        self.catalog
-            .transact(ops)
+        self.catalog_transact(ops)
+            .await
             .expect("replacing a sink cannot fail");
 
         self.ship_dataflow(self.build_sink_dataflow(name.to_string(), id, sink.from, connector))
@@ -2319,9 +2319,15 @@ where
                             self.report_view_update(*id, *oid, *schema_id, &name.item, 1)
                                 .await;
                         }
-                        CatalogItem::Sink(_) => {
-                            self.report_sink_update(*id, *oid, *schema_id, &name.item, 1)
-                                .await;
+                        CatalogItem::Sink(sink) => {
+                            if let catalog::Sink {
+                                connector: SinkConnectorState::Ready(_),
+                                ..
+                            } = sink
+                            {
+                                self.report_sink_update(*id, *oid, *schema_id, &name.item, 1)
+                                    .await;
+                            }
                         }
                     }
                 }
@@ -2347,11 +2353,17 @@ where
                             self.report_view_update(*id, *oid, *schema_id, &to_name.item, 1)
                                 .await;
                         }
-                        CatalogItem::Sink(_) => {
-                            self.report_sink_update(*id, *oid, *schema_id, &from_name.item, -1)
-                                .await;
-                            self.report_sink_update(*id, *oid, *schema_id, &to_name.item, 1)
-                                .await;
+                        CatalogItem::Sink(sink) => {
+                            if let catalog::Sink {
+                                connector: SinkConnectorState::Ready(_),
+                                ..
+                            } = sink
+                            {
+                                self.report_sink_update(*id, *oid, *schema_id, &from_name.item, -1)
+                                    .await;
+                                self.report_sink_update(*id, *oid, *schema_id, &to_name.item, 1)
+                                    .await;
+                            }
                         }
                         CatalogItem::Table(_) => {
                             self.report_table_update(*id, *oid, *schema_id, &from_name.item, -1)
