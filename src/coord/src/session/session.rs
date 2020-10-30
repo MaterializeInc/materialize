@@ -87,6 +87,12 @@ const SQL_SAFE_UPDATES: ServerVar<&bool> = ServerVar {
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
 };
 
+const STANDARD_CONFORMING_STRINGS: ServerVar<&bool> = ServerVar {
+    name: unicase::Ascii::new("standard_conforming_strings"),
+    value: &true,
+    description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
+};
+
 const TIMEZONE: ServerVar<&str> = ServerVar {
     // TimeZone has nonstandard capitalization for historical reasons.
     name: unicase::Ascii::new("TimeZone"),
@@ -114,6 +120,7 @@ pub struct Session {
     search_path: ServerVar<&'static [&'static str]>,
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
+    standard_conforming_strings: ServerVar<&'static bool>,
     timezone: ServerVar<&'static str>,
     transaction_isolation: ServerVar<&'static str>,
     conn_id: u32,
@@ -142,6 +149,7 @@ impl Session {
             search_path: SEARCH_PATH,
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
+            standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
             timezone: TIMEZONE,
             transaction_isolation: TRANSACTION_ISOLATION,
             conn_id,
@@ -164,6 +172,7 @@ impl Session {
             search_path: SEARCH_PATH,
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
+            standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
             timezone: TIMEZONE,
             transaction_isolation: TRANSACTION_ISOLATION,
             conn_id: DUMMY_CONNECTION_ID,
@@ -191,6 +200,7 @@ impl Session {
             &self.search_path,
             &self.server_version,
             &self.sql_safe_updates,
+            &self.standard_conforming_strings,
             &self.timezone,
             &self.transaction_isolation,
         ]
@@ -204,8 +214,9 @@ impl Session {
             &self.application_name,
             &self.client_encoding,
             &self.date_style,
-            &self.server_version,
             &self.integer_datetimes,
+            &self.server_version,
+            &self.standard_conforming_strings,
         ]
     }
 
@@ -238,6 +249,8 @@ impl Session {
             Ok(&self.server_version)
         } else if name == SQL_SAFE_UPDATES.name {
             Ok(&self.sql_safe_updates)
+        } else if name == STANDARD_CONFORMING_STRINGS.name {
+            Ok(&self.standard_conforming_strings)
         } else if name == TIMEZONE.name {
             Ok(&self.timezone)
         } else if name == TRANSACTION_ISOLATION.name {
@@ -273,6 +286,11 @@ impl Session {
             bail!("parameter {} is read only", SERVER_VERSION.name);
         } else if name == SQL_SAFE_UPDATES.name {
             self.sql_safe_updates.set(value)
+        } else if name == STANDARD_CONFORMING_STRINGS.name {
+            bail!(
+                "parameter {} is read only",
+                STANDARD_CONFORMING_STRINGS.name
+            );
         } else if name == TIMEZONE.name {
             if unicase::Ascii::new(value) != TIMEZONE.value {
                 bail!(
@@ -333,6 +351,12 @@ impl Session {
     /// Returns the value of the `sql_safe_updates` configuration parameter.
     pub fn sql_safe_updates(&self) -> bool {
         *self.sql_safe_updates.value()
+    }
+
+    /// Returns the value of the `standard_conforming_strings` configuration
+    /// parameter.
+    pub fn standard_conforming_strings(&self) -> bool {
+        *self.standard_conforming_strings.value
     }
 
     /// Returns the value of the `timezone` configuration parameter.
