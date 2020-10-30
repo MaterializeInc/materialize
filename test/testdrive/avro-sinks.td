@@ -157,16 +157,16 @@ a  b
 4  2
 
 > CREATE SINK input_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEYS (a)
   WITH (consistency = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   AS OF 1;
 
 $ kafka-verify format=avro sink=materialize.public.input_sink
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+{"a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
 
 $ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezium
 {"id": "1", "status": "BEGIN", "event_count": null}
