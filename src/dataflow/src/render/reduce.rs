@@ -189,9 +189,12 @@ where
                 } else {
                     // Otherwise we need to stitch things together.
                     let mut to_collect = Vec::new();
-                    let accumulable = build_accumulables(ok_input.clone(), accumulable, false)
-                        .as_collection(|key, val| (key.clone(), (None, val.clone())));
-                    to_collect.push(accumulable);
+                    if !accumulable.is_empty() {
+                        let accumulables_collection =
+                            build_accumulables(ok_input.clone(), accumulable, false)
+                                .as_collection(|key, val| (key.clone(), (None, val.clone())));
+                        to_collect.push(accumulables_collection);
+                    }
                     for (index, aggr) in remaining {
                         let collection = build_aggregate_stage(
                             ok_input.clone(),
@@ -217,7 +220,9 @@ where
                                 // There can be at most one `None` index, and it indicates the accumulable aggregates.
                                 let new_row = Row::new(Vec::new());
                                 let mut accumulable = if (input[0].0).0 == None {
+                                    // This input corresponds to our densely packed accumulable aggregates.
                                     let iter = (input[0].0).1.iter();
+                                    // Make sure we never try to read from this input again.
                                     input = &input[1..];
                                     iter
                                 } else {
@@ -229,9 +234,12 @@ where
                                     if *is_accum {
                                         row_packer.push(accumulable.next().unwrap());
                                     } else {
+                                        // Since this is not an accumulable aggregate, we need to grab
+                                        // the next result from other reduction dataflows and put them
+                                        // in our output.
                                         let elem = input[0].0;
-                                        let inner = &elem.1;
-                                        let datum = inner.unpack_first();
+                                        let row = &elem.1;
+                                        let datum = row.unpack_first();
                                         row_packer.push(datum);
                                         input = &input[1..];
                                     }
@@ -378,7 +386,7 @@ where
     })
 }
 
-/// Builds the dataflow for a reductions that can be performed in-place.
+/// Builds the dataflow for reductions that can be performed in-place.
 ///
 /// The incoming values are moved to the update's "difference" field, at which point
 /// they can be accumulated in place. The `count` operator promotes the accumulated
