@@ -175,6 +175,26 @@ impl PgTest {
                                 .unwrap(),
                         })?,
                     ),
+                    Message::CopyOutResponse(body) => (
+                        "CopyOut",
+                        serde_json::to_string(&CopyOut {
+                            format: format_name(body.format()),
+                            column_formats: body
+                                .column_formats()
+                                .map(|format| Ok(format_name(format as u8)))
+                                .collect()
+                                .unwrap(),
+                        })?,
+                    ),
+                    Message::CopyData(body) => (
+                        "CopyData",
+                        serde_json::to_string(
+                            &std::str::from_utf8(body.data())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|_| format!("{:?}", body.data())),
+                        )?,
+                    ),
+                    Message::CopyDone => ("CopyDone", "".to_string()),
                     _ => ("UNKNOWN", format!("'{}'", ch)),
                 };
                 let mut s = typ.to_string();
@@ -237,6 +257,12 @@ pub struct DataRow {
 }
 
 #[derive(Serialize)]
+pub struct CopyOut {
+    pub format: String,
+    pub column_formats: Vec<String>,
+}
+
+#[derive(Serialize)]
 pub struct CommandComplete {
     pub tag: String,
 }
@@ -255,6 +281,14 @@ pub struct ErrorField {
 impl Drop for PgTest {
     fn drop(&mut self) {
         let _ = self.send(|buf| frontend::terminate(buf));
+    }
+}
+
+fn format_name(format: u8) -> String {
+    match format {
+        0 => "text".to_string(),
+        1 => "binary".to_string(),
+        _ => format!("unknown: {}", format),
     }
 }
 

@@ -35,12 +35,13 @@ use ore::iter::IteratorExt;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement,
-    CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
-    ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement,
-    ObjectName, ObjectType, Query, SelectStatement, SetVariableStatement, SetVariableValue,
-    ShowVariableStatement, SqlOption, Statement, TailStatement, Value,
+    ColumnOption, Connector, CopyDirection, CopyOption, CopyRelation, CopyStatement, CopyTarget,
+    CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement, CreateSchemaStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
+    DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
+    Format, Ident, IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query,
+    SelectStatement, SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption,
+    Statement, TailStatement, Value,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -50,18 +51,51 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
-    query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, Index, LogicalCompactionWindow,
-    Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, View,
+    query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, CopyFormat, Index,
+    LogicalCompactionWindow, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, View,
 };
 use crate::pure::Schema;
 
 mod show;
 
+#[derive(Debug)]
+pub struct StatementDesc {
+    pub relation_desc: Option<RelationDesc>,
+    pub param_types: Vec<ScalarType>,
+    pub send: bool,
+}
+
+impl StatementDesc {
+    pub fn new(relation_desc: Option<RelationDesc>) -> Self {
+        StatementDesc {
+            relation_desc,
+            param_types: vec![],
+            send: true,
+        }
+    }
+    fn with_params(mut self, param_types: Vec<ScalarType>) -> Self {
+        self.param_types = param_types;
+        self
+    }
+    fn no_send(mut self) -> Self {
+        self.send = false;
+        self
+    }
+    /// If send is false, returns None. Otherwise returns relation_desc.
+    pub fn relation_desc(&self) -> Option<RelationDesc> {
+        if !self.send {
+            None
+        } else {
+            self.relation_desc.clone()
+        }
+    }
+}
+
 pub fn describe_statement(
     catalog: &dyn Catalog,
     stmt: Statement,
     param_types_in: &[Option<pgrepr::Type>],
-) -> Result<(Option<RelationDesc>, Vec<ScalarType>), anyhow::Error> {
+) -> Result<StatementDesc, anyhow::Error> {
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
         if let Some(ty) = ty {
@@ -89,79 +123,62 @@ pub fn describe_statement(
         | Statement::Rollback(_)
         | Statement::Commit(_)
         | Statement::AlterObjectRename(_)
-        | Statement::AlterIndexOptions(_) => (None, vec![]),
+        | Statement::AlterIndexOptions(_) => StatementDesc::new(None),
 
         Statement::Explain(ExplainStatement {
             stage, explainee, ..
-        }) => (
-            Some(RelationDesc::empty().with_column(
-                match stage {
-                    ExplainStage::RawPlan => "Raw Plan",
-                    ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
-                    ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
-                },
-                ScalarType::String.nullable(false),
-            )),
-            match explainee {
-                Explainee::Query(q) => {
-                    describe_statement(
-                        catalog,
-                        Statement::Select(SelectStatement {
-                            query: q,
-                            as_of: None,
-                        }),
-                        param_types_in,
-                    )?
-                    .1
-                }
-                _ => vec![],
+        }) => StatementDesc::new(Some(RelationDesc::empty().with_column(
+            match stage {
+                ExplainStage::RawPlan => "Raw Plan",
+                ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
+                ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
             },
-        ),
+            ScalarType::String.nullable(false),
+        )))
+        .with_params(match explainee {
+            Explainee::Query(q) => {
+                describe_statement(
+                    catalog,
+                    Statement::Select(SelectStatement {
+                        query: q,
+                        as_of: None,
+                    }),
+                    param_types_in,
+                )?
+                .param_types
+            }
+            _ => vec![],
+        }),
 
-        Statement::ShowCreateView(_) => (
-            Some(
-                RelationDesc::empty()
-                    .with_column("View", ScalarType::String.nullable(false))
-                    .with_column("Create View", ScalarType::String.nullable(false)),
-            ),
-            vec![],
-        ),
+        Statement::ShowCreateView(_) => StatementDesc::new(Some(
+            RelationDesc::empty()
+                .with_column("View", ScalarType::String.nullable(false))
+                .with_column("Create View", ScalarType::String.nullable(false)),
+        )),
 
-        Statement::ShowCreateSource(_) => (
-            Some(
-                RelationDesc::empty()
-                    .with_column("Source", ScalarType::String.nullable(false))
-                    .with_column("Create Source", ScalarType::String.nullable(false)),
-            ),
-            vec![],
-        ),
+        Statement::ShowCreateSource(_) => StatementDesc::new(Some(
+            RelationDesc::empty()
+                .with_column("Source", ScalarType::String.nullable(false))
+                .with_column("Create Source", ScalarType::String.nullable(false)),
+        )),
 
-        Statement::ShowCreateTable(_) => (
-            Some(
-                RelationDesc::empty()
-                    .with_column("Table", ScalarType::String.nullable(false))
-                    .with_column("Create Table", ScalarType::String.nullable(false)),
-            ),
-            vec![],
-        ),
+        Statement::ShowCreateTable(_) => StatementDesc::new(Some(
+            RelationDesc::empty()
+                .with_column("Table", ScalarType::String.nullable(false))
+                .with_column("Create Table", ScalarType::String.nullable(false)),
+        )),
 
-        Statement::ShowCreateSink(_) => (
-            Some(
-                RelationDesc::empty()
-                    .with_column("Sink", ScalarType::String.nullable(false))
-                    .with_column("Create Sink", ScalarType::String.nullable(false)),
-            ),
-            vec![],
-        ),
+        Statement::ShowCreateSink(_) => StatementDesc::new(Some(
+            RelationDesc::empty()
+                .with_column("Sink", ScalarType::String.nullable(false))
+                .with_column("Create Sink", ScalarType::String.nullable(false)),
+        )),
 
-        Statement::ShowCreateIndex(_) => (
-            Some(
-                RelationDesc::empty()
-                    .with_column("Index", ScalarType::String.nullable(false))
-                    .with_column("Create Index", ScalarType::String.nullable(false)),
-            ),
-            vec![],
-        ),
+        Statement::ShowCreateIndex(_) => StatementDesc::new(Some(
+            RelationDesc::empty()
+                .with_column("Index", ScalarType::String.nullable(false))
+                .with_column("Create Index", ScalarType::String.nullable(false)),
+        )),
 
         Statement::ShowColumns(stmt) => show::show_columns(&scx, stmt)?.describe()?,
         Statement::ShowIndexes(stmt) => show::show_indexes(&scx, stmt)?.describe()?,
@@ -169,32 +186,31 @@ pub fn describe_statement(
         Statement::ShowObjects(stmt) => show::show_objects(&scx, stmt)?.describe()?,
 
         Statement::ShowVariable(ShowVariableStatement { variable, .. }) => {
-            if variable.as_str() == unicase::Ascii::new("ALL") {
-                (
-                    Some(
-                        RelationDesc::empty()
-                            .with_column("name", ScalarType::String.nullable(false))
-                            .with_column("setting", ScalarType::String.nullable(false))
-                            .with_column("description", ScalarType::String.nullable(false)),
-                    ),
-                    vec![],
-                )
+            StatementDesc::new(Some(if variable.as_str() == unicase::Ascii::new("ALL") {
+                RelationDesc::empty()
+                    .with_column("name", ScalarType::String.nullable(false))
+                    .with_column("setting", ScalarType::String.nullable(false))
+                    .with_column("description", ScalarType::String.nullable(false))
             } else {
-                (
-                    Some(
-                        RelationDesc::empty()
-                            .with_column(variable.as_str(), ScalarType::String.nullable(false)),
-                    ),
-                    vec![],
-                )
-            }
+                RelationDesc::empty()
+                    .with_column(variable.as_str(), ScalarType::String.nullable(false))
+            }))
         }
 
         Statement::Tail(TailStatement { name, .. }) => {
             let name = scx.resolve_item(name)?;
             let sql_object = scx.catalog.get_item(&name);
-            (Some(sql_object.desc()?.clone()), vec![])
+            StatementDesc::new(Some(sql_object.desc()?.clone()))
         }
+
+        Statement::Copy(CopyStatement { relation, .. }) => match relation {
+            CopyRelation::Table { .. } => bail!("unsupported COPY relation {:?}", relation),
+            CopyRelation::Query(query) => {
+                let (_relation_expr, desc, _finishing) =
+                    query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
+                StatementDesc::new(Some(desc)).no_send()
+            }
+        },
 
         // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
         // plans the whole query to determine its shape and parameter types,
@@ -204,7 +220,7 @@ pub fn describe_statement(
         Statement::Select(SelectStatement { query, .. }) => {
             let (_relation_expr, desc, _finishing) =
                 query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
-            (Some(desc), scx.finalize_param_types()?)
+            StatementDesc::new(Some(desc)).with_params(scx.finalize_param_types()?)
         }
         Statement::Insert(InsertStatement {
             table_name,
@@ -213,12 +229,11 @@ pub fn describe_statement(
             ..
         }) => {
             query::plan_insert_query(&scx, table_name, columns, source)?;
-            (None, scx.finalize_param_types()?)
+            StatementDesc::new(None).with_params(scx.finalize_param_types()?)
         }
 
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
-        Statement::Copy(_) => bail!("COPY statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
     })
 }
@@ -268,8 +283,9 @@ pub fn handle_statement(
         Statement::ShowVariable(stmt) => handle_show_variable(scx, stmt),
 
         Statement::Explain(stmt) => handle_explain(scx, stmt, params),
-        Statement::Select(stmt) => handle_select(scx, stmt, params),
+        Statement::Select(stmt) => handle_select(scx, stmt, params, None),
         Statement::Tail(stmt) => handle_tail(scx, stmt),
+        Statement::Copy(stmt) => handle_copy(scx, stmt),
 
         Statement::Insert(stmt) => handle_insert(scx, stmt, params),
 
@@ -279,7 +295,6 @@ pub fn handle_statement(
 
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
-        Statement::Copy(_) => bail!("COPY statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
     }
 }
@@ -341,6 +356,46 @@ fn handle_tail(
             from,
             entry.item_type(),
         ),
+    }
+}
+
+fn handle_copy(
+    scx: &StatementContext,
+    CopyStatement {
+        relation,
+        direction,
+        target,
+        options,
+    }: CopyStatement,
+) -> Result<Plan, anyhow::Error> {
+    let mut format = CopyFormat::Text;
+    for opt in options {
+        match opt {
+            CopyOption::Format(fmt) => {
+                format = match fmt.to_lowercase().as_str() {
+                    "text" => CopyFormat::Text,
+                    "csv" => CopyFormat::Csv,
+                    "binary" => CopyFormat::Binary,
+                    _ => bail!("unknown FORMAT: {}", fmt),
+                };
+            }
+        }
+    }
+    match (&direction, &target) {
+        (CopyDirection::To, CopyTarget::Stdout) => {
+            match relation {
+                CopyRelation::Table { .. } => bail!("table with COPY TO unsupported"),
+                // TODO(mjibson): use SelectStatement instead of Query so users can use AS OF
+                // in COPY.
+                CopyRelation::Query(query) => Ok(handle_select(
+                    scx,
+                    SelectStatement { query, as_of: None },
+                    &Params::empty(),
+                    Some(format),
+                )?),
+            }
+        }
+        _ => bail!("COPY {} {} not supported", direction, target),
     }
 }
 
@@ -1578,6 +1633,7 @@ fn handle_select(
     scx: &StatementContext,
     SelectStatement { query, as_of }: SelectStatement,
     params: &Params,
+    copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
     let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
@@ -1589,6 +1645,7 @@ fn handle_select(
         source: relation_expr,
         when,
         finishing,
+        copy_to,
     })
 }
 

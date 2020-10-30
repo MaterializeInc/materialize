@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SourceConnector};
 use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
+use statement::describe_statement;
 
 use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use crate::catalog::Catalog;
@@ -55,7 +56,7 @@ pub use self::expr::RelationExpr;
 pub use error::PlanError;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
 pub use query::scalar_type_from_sql;
-pub use statement::StatementContext;
+pub use statement::{StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
@@ -126,6 +127,7 @@ pub enum Plan {
         source: ::expr::RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
+        copy_to: Option<CopyFormat>,
     },
     Tail {
         id: GlobalId,
@@ -210,6 +212,25 @@ pub enum MutationKind {
     Delete,
 }
 
+#[derive(Debug)]
+pub enum CopyRelationKind {
+    Table {
+        id: GlobalId,
+        column_names: Vec<ColumnName>,
+    },
+    Query {
+        expr: ::expr::RelationExpr,
+        finishing: RowSetFinishing,
+    },
+}
+
+#[derive(Debug)]
+pub enum CopyFormat {
+    Text,
+    Csv,
+    Binary,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct AlterIndexLogicalCompactionWindow {
     pub index: GlobalId,
@@ -280,8 +301,8 @@ pub fn describe(
     catalog: &dyn Catalog,
     stmt: Statement,
     param_types: &[Option<pgrepr::Type>],
-) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), anyhow::Error> {
-    let (desc, types) = statement::describe_statement(catalog, stmt, param_types)?;
-    let types = types.into_iter().map(|t| pgrepr::Type::from(&t)).collect();
+) -> Result<(StatementDesc, Vec<pgrepr::Type>), anyhow::Error> {
+    let desc = describe_statement(catalog, stmt, param_types)?;
+    let types = desc.param_types.iter().map(pgrepr::Type::from).collect();
     Ok((desc, types))
 }

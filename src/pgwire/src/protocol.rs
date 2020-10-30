@@ -28,6 +28,7 @@ use dataflow_types::{PeekResponse, Update};
 use ore::cast::CastFrom;
 use repr::{Datum, RelationDesc, RowArena};
 use sql::ast::Statement;
+use sql::plan::CopyFormat;
 
 use crate::codec::FramedConn;
 use crate::message::{
@@ -274,7 +275,7 @@ where
                 .await;
         }
 
-        let row_desc = stmt.desc().cloned();
+        let row_desc = stmt.desc().relation_desc();
 
         // Bind.
         let portal_name = String::from("");
@@ -291,10 +292,10 @@ where
             .expect("unnamed statement to be present during simple query flow");
 
         // Maybe send row description.
-        if let Some(desc) = &row_desc {
+        if let Some(ref desc) = row_desc {
             self.conn
                 .send(BackendMessage::RowDescription(
-                    message::row_description_from_desc(&desc),
+                    message::row_description_from_desc(desc),
                 ))
                 .await?;
         }
@@ -444,6 +445,8 @@ where
         let result_formats = match pad_formats(
             result_formats,
             stmt.desc()
+                .relation_desc
+                .clone()
                 .map(|desc| desc.typ().column_types.len())
                 .unwrap_or(0),
         ) {
@@ -469,7 +472,7 @@ where
             .coord_client
             .session()
             .get_prepared_statement_for_portal(&portal_name)
-            .and_then(|stmt| stmt.desc().cloned());
+            .and_then(|stmt| stmt.desc().relation_desc.clone());
         let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
             Some(portal) => portal,
             None => {
@@ -575,7 +578,7 @@ where
             .session()
             .get_prepared_statement(&stmt_name)
             .expect("send_describe_statement called incorrectly");
-        match stmt.desc() {
+        match stmt.desc().relation_desc() {
             Some(desc) => {
                 self.conn
                     .send(BackendMessage::RowDescription(
@@ -718,6 +721,25 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::Tailing");
                 self.stream_rows(row_desc, rx).await
             }
+            ExecuteResponse::CopyTo { format, rx } => {
+                let row_desc =
+                    row_desc.expect("missing row description for ExecuteResponse::CopyTo");
+                // TODO(mjibson): This logic is duplicated from SendingRows. Dedup somehow.
+                match rx.await? {
+                    PeekResponse::Canceled => {
+                        self.error(
+                            SqlState::QUERY_CANCELED,
+                            "canceling statement due to user request",
+                        )
+                        .await
+                    }
+                    PeekResponse::Error(text) => self.error(SqlState::INTERNAL_ERROR, text).await,
+                    PeekResponse::Rows(rows) => {
+                        self.copy_rows(format, row_desc, Box::new(stream::iter(vec![Ok(rows)])))
+                            .await
+                    }
+                }
+            }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
             ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
@@ -827,6 +849,83 @@ where
             self.conn.send(BackendMessage::PortalSuspended).await?;
         }
 
+        Ok(State::Ready)
+    }
+
+    async fn copy_rows(
+        &mut self,
+        format: CopyFormat,
+        row_desc: RelationDesc,
+        mut stream: RowBatchStream,
+    ) -> Result<State, comm::Error> {
+        match format {
+            CopyFormat::Text => {}
+            _ => {
+                return self
+                    .error(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        format!("COPY TO format {:?} not supported", format),
+                    )
+                    .await
+            }
+        };
+
+        let typ = row_desc.typ();
+        let column_formats = iter::repeat(pgrepr::Format::Text)
+            .take(typ.column_types.len())
+            .collect();
+        self.conn
+            .send(BackendMessage::CopyOutResponse {
+                overall_format: pgrepr::Format::Text,
+                column_formats,
+            })
+            .await?;
+
+        let mut count = 0;
+        loop {
+            match time::timeout(Duration::from_secs(1), stream.next()).await {
+                Ok(None) => break,
+                Ok(Some(rows)) => {
+                    let rows = rows?;
+                    count += rows.len();
+                    for row in rows {
+                        self.conn
+                            .send(BackendMessage::CopyData(message::encode_copy_row_text(
+                                row, typ,
+                            )))
+                            .await?;
+                    }
+                }
+                Err(time::Elapsed { .. }) => {
+                    // It's been a while since we've had any data to send, and
+                    // the client may have disconnected. Send a data message
+                    // with zero bytes of data, which will error if the client
+                    // has, in fact, disconnected. Otherwise we might block
+                    // forever waiting for rows, leaking memory and a socket.
+                    //
+                    // Writing these empty data packets is rather distasteful,
+                    // but no better solution for detecting a half-closed socket
+                    // presents itself. Tokio/Mio don't provide a cross-platform
+                    // means of receiving socket closed notifications, and it's
+                    // not clear how to plumb such notifications through a
+                    // `Codec` and a `Framed`, anyway.
+                    //
+                    // If someone does wind up investigating a better solution,
+                    // on Linux, the underlying epoll system call supports the
+                    // desired notifications via POLLRDHUP [0].
+                    //
+                    // [0]: https://lkml.org/lkml/2003/7/12/116
+                    self.conn.send(BackendMessage::CopyData(vec![])).await?;
+                }
+            }
+            self.conn.flush().await?;
+        }
+
+        let tag = format!("COPY {}", count);
+        self.conn.send(BackendMessage::CopyDone).await?;
+        self.conn
+            .send(BackendMessage::CommandComplete { tag })
+            .await?;
         Ok(State::Ready)
     }
 
