@@ -485,6 +485,9 @@ fn kafka_sink_builder(
 
     let encoder = Encoder::new(desc, include_consistency, key_indices.clone());
     let value_schema = encoder.writer_schema().canonical_form();
+    let key_schema = encoder
+        .key_writer_schema()
+        .map(|key_schema| key_schema.canonical_form());
 
     // Use the user supplied value for replication factor, or default to 1
     let replication_factor = match with_options.remove("replication_factor") {
@@ -522,6 +525,7 @@ fn kafka_sink_builder(
         config_options,
         ccsr_config,
         key_indices,
+        key_schema,
     }))
 }
 
