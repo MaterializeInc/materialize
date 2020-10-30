@@ -31,6 +31,15 @@ land, and then browsed as reference material as you skill up on the codebase.
 * [demos.md](demos.md) explains the two tiers of demos in this codebase and
   how to add a new one.
 
+* Our diagnostics guide is a work in progress. The sections we have so far are
+  themselves works in progress. Feel free to add to them if you think up of
+  something useful.
+  * [diagnostic-queries.md](diagnostic-queries.md) has queries to find the
+    specific, problematic Timely/Differential operators.
+  * [diagnostic-questions.md](diagnostic-questions.md) is a checklist of
+    higher-level things to look for and think about if something is not working
+    as expected.
+
 * [guide.md](guide.md) walks you through hacking on this codebase and our
   development philosophy.
 
