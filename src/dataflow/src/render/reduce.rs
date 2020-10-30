@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use differential_dataflow::collection::AsCollection;
-// use differential_dataflow::difference::{DiffPair, DiffVector};
 use differential_dataflow::difference::DiffVector;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -451,13 +450,8 @@ where
         }
     };
 
-    let max_index = if let Some((index, _)) = aggrs.iter().cloned().last() {
-        index + 1
-    } else {
-        0
-    };
-
     let mut to_aggregate = Vec::new();
+    let diffs_len = aggrs.len() * 3;
     // First, collect all non-distinct aggregations in one pass.
     let easy_cases = collection
         .inner
@@ -466,30 +460,25 @@ where
         .explode({
             let aggrs = aggrs.clone();
             move |(key, row)| {
-                // TODO: Could determine capacity.
-                let mut diffs = Vec::new();
-                // TODO: It sucks that we have to do this.
+                let mut diffs = vec![0i128; diffs_len];
+                // Try to unpack only the datums we need. Unfortunately, since we
+                // can't random access into a Row, we have to iterate through one by one.
+                // TODO: Even though we don't have random access, we could still avoid unpacking
+                // everything that we don't care about, and it might be worth it to extend the
+                // Row API to do that.
                 let mut row_iter = row.iter().enumerate();
-                for (index, aggr) in aggrs.iter() {
-                    let mut index_datum = row_iter.next().unwrap();
-                    while index != &index_datum.0 {
-                        index_datum = row_iter.next().unwrap();
+                for (index, (datum_index, aggr)) in aggrs.iter().enumerate() {
+                    let mut datum = row_iter.next().unwrap();
+                    while datum_index != &datum.0 {
+                        datum = row_iter.next().unwrap();
                     }
-                    // TODO: this is also extremely bad.
-                    while diffs.len() < 3 * index {
-                        diffs.push(0i128);
-                    }
-                    let datum = index_datum.1;
+                    let datum = datum.1;
                     if accumulable_hierarchical(&aggr.func).0 {
-                        if aggr.distinct {
-                            diffs.push(0i128);
-                            diffs.push(0i128);
-                            diffs.push(0i128);
-                        } else {
+                        if !aggr.distinct {
                             let (agg1, agg2) = datum_aggr_values(datum, &aggr.func);
-                            diffs.push(1i128);
-                            diffs.push(agg1);
-                            diffs.push(agg2);
+                            diffs[3 * index] = 1i128;
+                            diffs[3 * index + 1] = agg1;
+                            diffs[3 * index + 2] = agg2;
                         }
                     }
                 }
@@ -499,12 +488,12 @@ where
     to_aggregate.push(easy_cases);
 
     // Next, collect all aggregations that require distinctness.
-    for (index, aggr) in aggrs.iter().cloned() {
+    for (idx, (datum_index, aggr)) in aggrs.iter().cloned().enumerate() {
         if accumulable_hierarchical(&aggr.func).0 && aggr.distinct {
             let mut packer = RowPacker::new();
             let collection = collection
                 .map(move |(key, row)| {
-                    let value = row.iter().nth(index).unwrap();
+                    let value = row.iter().nth(datum_index).unwrap();
                     packer.push(value);
                     (key, packer.finish_and_reuse())
                 })
@@ -514,20 +503,12 @@ where
                 .as_collection()
                 .explode({
                     move |(key, row)| {
-                        // TODO: iirc this row only ever has a single datum
                         let datum = row.iter().next().unwrap();
-                        let mut diffs = Vec::new();
-                        while diffs.len() < 3 * index {
-                            diffs.push(0i128);
-                        }
+                        let mut diffs = vec![0i128; diffs_len];
                         let (agg1, agg2) = datum_aggr_values(datum, &aggr.func);
-                        diffs.push(1i128);
-                        diffs.push(agg1);
-                        diffs.push(agg2);
-
-                        while diffs.len() < 3 * max_index {
-                            diffs.push(0i128);
-                        }
+                        diffs[3 * idx] = 1i128;
+                        diffs[3 * idx + 1] = agg1;
+                        diffs[3 * idx + 2] = agg2;
                         Some(((key, ()), DiffVector::new(diffs)))
                     }
                 });
@@ -549,7 +530,7 @@ where
                     row_packer.extend(key.iter());
                 }
 
-                for (index, aggr) in aggrs.iter() {
+                for (index, (_, aggr)) in aggrs.iter().enumerate() {
                     // For most aggregations, the first aggregate is the "data" and the second is the number
                     // of non-null elements (so that we can determine if we should produce 0 or a Null).
                     // For Any and All, the two aggregates are the numbers of true and false records, resp.
