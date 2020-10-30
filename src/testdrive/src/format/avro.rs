@@ -202,7 +202,12 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
     }
 }
 
-pub fn validate_sink<I>(schema: &Schema, expected: I, actual: &[Value]) -> Result<(), String>
+pub fn validate_sink<I>(
+    key_schema: Option<&Schema>,
+    value_schema: &Schema,
+    expected: I,
+    actual: &[(Option<Value>, Value)],
+) -> Result<(), String>
 where
     I: IntoIterator,
     I::Item: AsRef<str>,
@@ -210,9 +215,22 @@ where
     let expected = expected
         .into_iter()
         .map(|v| {
-            let json = &serde_json::from_str(v.as_ref())
-                .map_err(|e| format!("parsing expected avro datum as json: {}", e.to_string()))?;
-            Ok(from_json(json, schema.top_node())?)
+            let mut deserializer = serde_json::Deserializer::from_str(v.as_ref()).into_iter();
+            let key = if let Some(key_schema) = key_schema {
+                let key: serde_json::Value = match deserializer.next() {
+                    None => Err("key missing in input line".to_string()),
+                    Some(r) => r.map_err(|e| format!("parsing json: {}", e)),
+                }?;
+                Some(from_json(&key, key_schema.top_node())?)
+            } else {
+                None
+            };
+            let value: serde_json::Value = match deserializer.next() {
+                None => Err("value missing in input line".to_string()),
+                Some(r) => r.map_err(|e| format!("parsing json: {}", e)),
+            }?;
+            let value = from_json(&value, value_schema.top_node())?;
+            Ok((key, value))
         })
         .collect::<Result<Vec<_>, String>>()?;
     let mut expected = expected.iter();
