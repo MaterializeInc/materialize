@@ -261,11 +261,13 @@ FORMAT AVRO USING
 #### Get actual Kafka topic names
 
 ```sql
-SELECT * FROM mz_catalog_names NATURAL JOIN mz_kafka_sinks;
+SELECT sink_id, name, topic
+FROM mz_sinks
+JOIN mz_kafka_sinks ON mz_sinks.id = mz_kafka_sinks.sink_id
 ```
 
 ```nofmt
- global_id |              name                    |                        topic
+  sink_id  |              name                    |                        topic
 -----------+--------------------------------------+------------------------------------------------------
  u5        | materialize.public.quotes_sink       | quotes-sink-u6-1586024632-15401700525642547992
  u6        | materialize.public.frank_quotes_sink | frank-quotes-sink-u5-1586024632-15401700525642547992
