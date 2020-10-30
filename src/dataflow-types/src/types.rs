@@ -641,6 +641,7 @@ pub struct KafkaSinkConnector {
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
     pub config_options: HashMap<String, String>,
+    pub key_indices: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -691,6 +692,7 @@ pub struct KafkaSinkConnectorBuilder {
     pub consistency_value_schema: Option<String>,
     pub config_options: HashMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
+    pub key_indices: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
