@@ -31,21 +31,7 @@ use repr::adt::datetime::DateTimeField;
 
 use crate::ast::*;
 use crate::keywords;
-use crate::tokenizer::*;
-
-/// Parses a SQL string containing zero or more SQL statements.
-pub fn parse_statements(sql: String) -> Result<Vec<Statement>, ParserError> {
-    let mut tokenizer = Tokenizer::new(&sql);
-    let tokens = tokenizer.tokenize()?;
-    Parser::new(sql, tokens).parse_statements()
-}
-
-/// Parses a SQL string containing one SQL expression.
-pub fn parse_expr(sql: String) -> Result<Expr, ParserError> {
-    let mut tokenizer = Tokenizer::new(&sql);
-    let tokens = tokenizer.tokenize()?;
-    Parser::new(sql, tokens).parse_expr()
-}
+use crate::lexer::{self, Token, Word};
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -55,6 +41,28 @@ macro_rules! parser_err {
     ($parser:expr, $range:expr, $($arg:tt)*) => {
         Err($parser.error($range, format!($($arg)*)))
     };
+}
+
+/// Parses a SQL string containing zero or more SQL statements.
+pub fn parse_statements(sql: String) -> Result<Vec<Statement>, ParserError> {
+    let tokens = lexer::lex(&sql)?;
+    Parser::new(sql, tokens).parse_statements()
+}
+
+/// Parses a SQL string containing one SQL expression.
+pub fn parse_expr(sql: String) -> Result<Expr, ParserError> {
+    let tokens = lexer::lex(&sql)?;
+    let mut parser = Parser::new(sql, tokens);
+    let expr = parser.parse_expr()?;
+    if parser.next_token().is_some() {
+        parser_err!(
+            parser,
+            parser.peek_prev_range(),
+            "extra token after expression"
+        )
+    } else {
+        Ok(expr)
+    }
 }
 
 macro_rules! maybe {
@@ -169,7 +177,7 @@ impl Parser {
         let mut expecting_statement_delimiter = false;
         loop {
             // ignore empty statements (between successive statement delimiters)
-            while self.consume_token(&Token::SemiColon) {
+            while self.consume_token(&Token::Semicolon) {
                 expecting_statement_delimiter = false;
             }
 
@@ -221,8 +229,8 @@ impl Parser {
                         self,
                         self.peek_prev_range(),
                         format!(
-                            "Unexpected keyword {:?} at the beginning of a statement",
-                            w.to_string()
+                            "Unexpected keyword {} at the beginning of a statement",
+                            w.value
                         )
                     ),
                 },
@@ -328,13 +336,13 @@ impl Parser {
                     ));
                 }
                 _ => match self.peek_token() {
-                    Some(Token::LParen) | Some(Token::Period) => {
+                    Some(Token::LParen) | Some(Token::Dot) => {
                         let mut id_parts: Vec<Ident> = vec![w.to_ident()];
                         let mut ends_with_wildcard = false;
-                        while self.consume_token(&Token::Period) {
+                        while self.consume_token(&Token::Dot) {
                             match self.next_token() {
                                 Some(Token::Word(w)) => id_parts.push(w.to_ident()),
-                                Some(Token::Mult) => {
+                                Some(Token::Star) => {
                                     ends_with_wildcard = true;
                                     break;
                                 }
@@ -359,29 +367,16 @@ impl Parser {
                     _ => Ok(Expr::Identifier(vec![w.to_ident()])),
                 },
             }, // End of Token::Word
-            tok @ Token::Minus | tok @ Token::Plus => {
-                let op = if tok == Token::Plus { "+" } else { "-" };
-                Ok(Expr::Op {
-                    op: op.into(),
-                    expr1: Box::new(self.parse_subexpr(Precedence::UnaryOp)?),
-                    expr2: None,
-                })
-            }
+            Token::Op(op) if op == "+" || op == "-" => Ok(Expr::Op {
+                op,
+                expr1: Box::new(self.parse_subexpr(Precedence::UnaryOp)?),
+                expr2: None,
+            }),
             Token::Number(_) | Token::String(_) | Token::HexString(_) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))
             }
-            Token::Parameter(s) => Ok(Expr::Parameter(match s.parse() {
-                Ok(n) => n,
-                Err(err) => {
-                    return parser_err!(
-                        self,
-                        self.peek_prev_range(),
-                        "unable to parse parameter: {}",
-                        err
-                    )
-                }
-            })),
+            Token::Parameter(n) => Ok(Expr::Parameter(n)),
             Token::LParen => {
                 let mut expr = if self.parse_keyword("SELECT") || self.parse_keyword("WITH") {
                     self.prev_token();
@@ -395,7 +390,7 @@ impl Parser {
                     }
                 };
                 self.expect_token(&Token::RParen)?;
-                while self.consume_token(&Token::Period) {
+                while self.consume_token(&Token::Dot) {
                     match self.next_token() {
                         Some(Token::Word(w)) => {
                             expr = Expr::FieldAccess {
@@ -403,7 +398,7 @@ impl Parser {
                                 field: w.to_ident(),
                             };
                         }
-                        Some(Token::Mult) => {
+                        Some(Token::Star) => {
                             expr = Expr::WildcardAccess(Box::new(expr));
                             break;
                         }
@@ -757,35 +752,10 @@ impl Parser {
         debug!("parsing infix");
         let tok = self.next_token().unwrap(); // safe as EOF's precedence is the lowest
 
-        let regular_binary_operator = match tok {
+        let regular_binary_operator = match &tok {
+            Token::Op(s) => Some(s.as_str()),
             Token::Eq => Some("="),
-            Token::Neq => Some("<>"),
-            Token::Gt => Some(">"),
-            Token::GtEq => Some(">="),
-            Token::Lt => Some("<"),
-            Token::LtEq => Some("<="),
-            Token::Plus => Some("+"),
-            Token::Minus => Some("-"),
-            Token::Mult => Some("*"),
-            Token::Mod => Some("%"),
-            Token::Div => Some("/"),
-            Token::Concat => Some("||"),
-            Token::RegexMatch => Some("~"),
-            Token::RegexIMatch => Some("~*"),
-            Token::RegexNotMatch => Some("!~"),
-            Token::RegexNotIMatch => Some("!~*"),
-            Token::JsonGet => Some("->"),
-            Token::JsonGetAsText => Some("->>"),
-            Token::JsonGetPath => Some("#>"),
-            Token::JsonGetPathAsText => Some("#>>"),
-            Token::JsonContainsJson => Some("@>"),
-            Token::JsonContainedInJson => Some("<@"),
-            Token::JsonContainsField => Some("?"),
-            Token::JsonContainsAnyFields => Some("?|"),
-            Token::JsonContainsAllFields => Some("?&"),
-            Token::JsonDeletePath => Some("#-"),
-            Token::JsonContainsPath => Some("@?"),
-            Token::JsonApplyPathPredicate => Some("@@"),
+            Token::Star => Some("*"),
             Token::Word(ref k) => match k.keyword.as_ref() {
                 "LIKE" => Some("~~"),
                 "NOT" => {
@@ -1015,28 +985,14 @@ impl Parser {
                 Token::Word(k) if k.keyword == "IN" => Precedence::Like,
                 Token::Word(k) if k.keyword == "BETWEEN" => Precedence::Like,
                 Token::Word(k) if k.keyword == "LIKE" => Precedence::Like,
-                Token::Eq | Token::Lt | Token::LtEq | Token::Neq | Token::Gt | Token::GtEq => {
-                    Precedence::Cmp
-                }
-                Token::JsonContainsJson
-                | Token::JsonContainedInJson
-                | Token::JsonContainsField
-                | Token::JsonContainsAnyFields
-                | Token::JsonContainsAllFields
-                | Token::JsonContainsPath
-                | Token::JsonApplyPathPredicate
-                | Token::JsonGet
-                | Token::JsonGetAsText
-                | Token::JsonGetPath
-                | Token::JsonGetPathAsText
-                | Token::JsonDeletePath
-                | Token::Concat
-                | Token::RegexMatch
-                | Token::RegexIMatch
-                | Token::RegexNotMatch
-                | Token::RegexNotIMatch => Precedence::Other,
-                Token::Plus | Token::Minus => Precedence::Plus,
-                Token::Mult | Token::Div | Token::Mod => Precedence::Times,
+                Token::Op(s) => match s.as_str() {
+                    "<" | "<=" | "<>" | "!=" | ">" | ">=" => Precedence::Cmp,
+                    "+" | "-" => Precedence::Plus,
+                    "/" | "%" => Precedence::Times,
+                    _ => Precedence::Other,
+                },
+                Token::Eq => Precedence::Cmp,
+                Token::Star => Precedence::Times,
                 Token::DoubleColon => Precedence::DoubleColon,
                 Token::LBracket => Precedence::Subscript,
                 _ => Precedence::Zero,
@@ -1052,61 +1008,36 @@ impl Parser {
         self.peek_nth_token(0)
     }
 
-    /// Return nth non-whitespace token that has not yet been processed
-    fn peek_nth_token(&self, mut n: usize) -> Option<Token> {
-        let mut index = self.index;
-        loop {
-            index += 1;
-            match self.tokens.get(index - 1) {
-                Some((Token::Whitespace(_), _)) => continue,
-                non_whitespace => {
-                    if n == 0 {
-                        return non_whitespace.map(|(token, _range)| token.clone());
-                    }
-                    n -= 1;
-                }
-            }
-        }
+    /// Return the nth token that has not yet been processed.
+    fn peek_nth_token(&self, n: usize) -> Option<Token> {
+        self.tokens.get(self.index + n).map(|(t, _)| t.clone())
     }
 
-    /// Return the first non-whitespace token that has not yet been processed
-    /// (or None if reached end-of-file) and mark it as processed. OK to call
-    /// repeatedly after reaching EOF.
+    /// Return the next token that has not yet been processed, or None if
+    /// reached end-of-file, and mark it as processed. OK to call repeatedly
+    /// after reaching EOF.
     fn next_token(&mut self) -> Option<Token> {
-        loop {
-            self.index += 1;
-            match self.tokens.get(self.index - 1) {
-                Some((Token::Whitespace(_), _)) => continue,
-                token => return token.map(|(token, _range)| token.clone()),
-            }
-        }
+        let token = self
+            .tokens
+            .get(self.index)
+            .map(|(token, _range)| token.clone());
+        self.index += 1;
+        token
     }
 
     /// Push back the last one non-whitespace token. Must be called after
     /// `next_token()`, otherwise might panic. OK to call after
     /// `next_token()` indicates an EOF.
     fn prev_token(&mut self) {
-        loop {
-            assert!(self.index > 0);
-            self.index -= 1;
-            if let Some((Token::Whitespace(_), _)) = self.tokens.get(self.index) {
-                continue;
-            }
-            return;
-        }
+        assert!(self.index > 0);
+        self.index -= 1;
     }
 
-    /// Return the range within the query string at which the next non-whitespace token occurs
+    /// Return the range within the query string at which the next token occurs.
     fn peek_range(&self) -> Range<usize> {
-        let mut index = self.index;
-        loop {
-            index += 1;
-            match self.tokens.get(index - 1) {
-                Some((Token::Whitespace(_), _)) => continue,
-                Some((_token, range)) => return range.clone(),
-                #[allow(clippy::range_plus_one)]
-                None => return self.sql.len()..self.sql.len() + 1,
-            }
+        match self.tokens.get(self.index) {
+            Some((_token, range)) => range.clone(),
+            None => self.sql.len()..self.sql.len() + 1,
         }
     }
 
@@ -1115,16 +1046,10 @@ impl Parser {
     /// Must be called after `next_token()`, otherwise might panic.
     /// OK to call after `next_token()` indicates an EOF.
     fn peek_prev_range(&self) -> Range<usize> {
-        let mut index = self.index;
-        loop {
-            assert!(index > 0);
-            index -= 1;
-            match self.tokens.get(index) {
-                Some((Token::Whitespace(_), _)) => continue,
-                Some((_token, range)) => return range.clone(),
-                #[allow(clippy::range_plus_one)]
-                None => return self.sql.len()..self.sql.len() + 1,
-            }
+        assert!(self.index > 0);
+        match self.tokens.get(self.index - 1) {
+            Some((_token, range)) => range.clone(),
+            None => self.sql.len()..self.sql.len() + 1,
         }
     }
 
@@ -1138,9 +1063,9 @@ impl Parser {
         parser_err!(
             self,
             range,
-            "Expected {}, found: {}",
+            "Expected {}, found {}",
             expected,
-            found.map_or_else(|| "EOF".to_string(), |t| format!("{}", t))
+            found.as_ref().map(|t| t.name()).unwrap_or("EOF")
         )
     }
 
@@ -1252,7 +1177,7 @@ impl Parser {
         if self.consume_token(expected) {
             Ok(())
         } else {
-            self.expected(self.peek_range(), &expected.to_string(), self.peek_token())
+            self.expected(self.peek_range(), expected.name(), self.peek_token())
         }
     }
 
@@ -2323,7 +2248,7 @@ impl Parser {
         let mut idents = vec![];
         loop {
             idents.push(self.parse_identifier()?);
-            if !self.consume_token(&Token::Period) {
+            if !self.consume_token(&Token::Dot) {
                 break;
             }
         }
@@ -3010,7 +2935,7 @@ impl Parser {
     }
 
     fn parse_optional_args(&mut self) -> Result<FunctionArgs, ParserError> {
-        if self.consume_token(&Token::Mult) {
+        if self.consume_token(&Token::Star) {
             self.expect_token(&Token::RParen)?;
             Ok(FunctionArgs::Star)
         } else if self.consume_token(&Token::RParen) {
@@ -3041,7 +2966,7 @@ impl Parser {
 
     /// Parse a comma-delimited list of projections after SELECT
     fn parse_select_item(&mut self) -> Result<SelectItem, ParserError> {
-        if self.consume_token(&Token::Mult) {
+        if self.consume_token(&Token::Star) {
             return Ok(SelectItem::Wildcard);
         }
         Ok(SelectItem::Expr {
@@ -3313,36 +3238,9 @@ impl Parser {
 
 impl Word {
     fn to_ident(&self) -> Ident {
-        match self.quote_style {
-            Some(_) => Ident::new(&self.value),
-            None => Ident::new_normalized(&self.value),
+        match self.quoted {
+            true => Ident::new(&self.value),
+            false => Ident::new_normalized(&self.value),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_prev_index() {
-        let sql = "SELECT version";
-        let mut tokenizer = Tokenizer::new(sql);
-        let tokens = tokenizer.tokenize().unwrap();
-        let mut parser = Parser::new(sql.to_string(), tokens);
-        assert_eq!(parser.peek_token(), Some(Token::make_keyword("SELECT")));
-        assert_eq!(parser.next_token(), Some(Token::make_keyword("SELECT")));
-        parser.prev_token();
-        assert_eq!(parser.next_token(), Some(Token::make_keyword("SELECT")));
-        assert_eq!(parser.next_token(), Some(Token::make_word("version", None)));
-        parser.prev_token();
-        assert_eq!(parser.peek_token(), Some(Token::make_word("version", None)));
-        assert_eq!(parser.next_token(), Some(Token::make_word("version", None)));
-        assert_eq!(parser.peek_token(), None);
-        parser.prev_token();
-        assert_eq!(parser.next_token(), Some(Token::make_word("version", None)));
-        assert_eq!(parser.next_token(), None);
-        assert_eq!(parser.next_token(), None);
-        parser.prev_token();
     }
 }

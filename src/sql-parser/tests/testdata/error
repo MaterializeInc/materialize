@@ -34,7 +34,7 @@ error:
 Parse error:
 UPDATE t WHERE 1
          ^^^^^
-Expected SET, found: WHERE
+Expected SET, found WHERE
 
 parse-statement
 UPDATE t SET a = 1 extrabadstuff
@@ -43,7 +43,7 @@ error:
 Parse error:
 UPDATE t SET a = 1 extrabadstuff
                    ^^^^^^^^^^^^^
-Expected end of statement, found: extrabadstuff
+Expected end of statement, found identifier
 
 parse-statement
 SELECT ALL DISTINCT name FROM customer
@@ -61,7 +61,7 @@ error:
 Parse error:
 INSERT public.customer (id, name, active) VALUES (1, 2, 3)
        ^^^^^^
-Expected INTO, found: public
+Expected INTO, found identifier
 
 parse-statement
 SELECT foo AS
@@ -70,7 +70,7 @@ error:
 Parse error:
 SELECT foo AS
              ^
-Expected an identifier after AS, found: EOF
+Expected an identifier after AS, found EOF
 
 parse-statement
 SELECT 1 FROM foo AS
@@ -79,7 +79,7 @@ error:
 Parse error:
 SELECT 1 FROM foo AS
                     ^
-Expected an identifier after AS, found: EOF
+Expected an identifier after AS, found EOF
 
 parse-statement
 SELECT count(ALL DISTINCT + x) FROM customer
@@ -97,7 +97,7 @@ error:
 Parse error:
 SELECT INTERVAL '01:01.01' MINUTE (5) TO SECOND (5)
                                   ^
-Expected end of statement, found: (
+Expected end of statement, found left parenthesis
 
 parse-statement
 SELECT 1 WHERE 1 < ANY SELECT 2
@@ -106,7 +106,7 @@ error:
 Parse error:
 SELECT 1 WHERE 1 < ANY SELECT 2
                        ^^^^^^
-Expected (, found: SELECT
+Expected left parenthesis, found SELECT
 
 parse-statement
 SELECT 1 WHERE 1 < NONE (SELECT 2)
@@ -115,7 +115,7 @@ error:
 Parse error:
 SELECT 1 WHERE 1 < NONE (SELECT 2)
                                 ^
-Expected ), found: 2
+Expected right parenthesis, found number
 
 parse-statement
 SELECT 1 WHERE 1 < ANY (SELECT 2
@@ -124,7 +124,7 @@ error:
 Parse error:
 SELECT 1 WHERE 1 < ANY (SELECT 2
                                 ^
-Expected ), found: EOF
+Expected right parenthesis, found EOF
 
 parse-statement
 SELECT 1 WHERE 1 + ANY (SELECT 2)
@@ -140,7 +140,7 @@ error:
 Parse error:
 SELECT EXISTS (NULL)
                ^^^^
-Expected SELECT, VALUES, or a subquery in the query body, found: NULL
+Expected SELECT, VALUES, or a subquery in the query body, found NULL
 
 parse-statement
 SELECT SELECT 1 FROM bar WHERE 1=1 FROM baz
@@ -149,7 +149,7 @@ error:
 Parse error:
 SELECT SELECT 1 FROM bar WHERE 1=1 FROM baz
               ^
-Expected end of statement, found: 1
+Expected end of statement, found number
 
 parse-statement
 SELECT foo FROM
@@ -160,7 +160,7 @@ error:
 Parse error:
 
 ^
-Expected identifier, found: EOF
+Expected identifier, found EOF
 ----
 ----
 
@@ -175,7 +175,7 @@ error:
 Parse error:
 SEL
 ^^^
-Expected a keyword at the beginning of a statement, found: SEL
+Expected a keyword at the beginning of a statement, found identifier
 
 parse-statement
 SELECT foo
@@ -186,7 +186,7 @@ error:
 Parse error:
 FROM bar+1 ORDER
         ^
-Expected end of statement, found: +
+Expected end of statement, found operator
 
 parse-statement
 SELECT * FROM db.public..customer
@@ -195,7 +195,7 @@ error:
 Parse error:
 SELECT * FROM db.public..customer
                         ^
-Expected identifier, found: .
+Expected identifier, found dot
 
 parse-statement
 SELECT * FROM
@@ -204,7 +204,7 @@ error:
 Parse error:
 SELECT * FROM
              ^
-Expected identifier, found: EOF
+Expected identifier, found EOF
 
 parse-statement
 SELECT '
@@ -213,7 +213,7 @@ error:
 Parse error:
 SELECT '
        ^
-unexpected EOF while parsing string literal
+unterminated quoted string
 
 parse-statement
 SELECT E'
@@ -221,8 +221,8 @@ SELECT E'
 error:
 Parse error:
 SELECT E'
-       ^^
-unexpected EOF while parsing extended string literal
+        ^
+unterminated quoted string
 
 parse-statement
 SELECT E'\u&'
@@ -230,8 +230,8 @@ SELECT E'\u&'
 error:
 Parse error:
 SELECT E'\u&'
-       ^^^^
-too few digits in unicode escape sequence
+         ^^^^
+invalid unicode escape
 
 parse-statement
 SELECT E'\u&&&&'
@@ -239,8 +239,8 @@ SELECT E'\u&&&&'
 error:
 Parse error:
 SELECT E'\u&&&&'
-       ^^^^^^^^
-invalid unicode escape sequence
+         ^^^^^^
+invalid unicode escape
 
 # List literal expressions must begin with `LIST` before interior lists can
 # omit it.
@@ -251,7 +251,7 @@ error:
 Parse error:
 SELECT [1, 2]
        ^
-Expected an expression, found: [
+Expected an expression, found left square bracket
 
 # Subscripts must have values
 parse-statement
@@ -261,7 +261,7 @@ error:
 Parse error:
 SELECT LIST[1][]
                ^
-Expected an expression, found: ]
+Expected an expression, found right square bracket
 
 # Multi-dimensional subscripts must all be slices
 parse-statement
@@ -271,7 +271,7 @@ error:
 Parse error:
 SELECT LIST[1][1:2, 1]
                      ^
-Expected :, found: ]
+Expected colon, found right square bracket
 
 parse-statement
 SELECT LIST[1][1, 1]
@@ -280,7 +280,7 @@ error:
 Parse error:
 SELECT LIST[1][1, 1]
                 ^
-Expected ], found: ,
+Expected right square bracket, found comma
 
 parse-statement
 SELECT LIST[1][1, 1:1]
@@ -289,7 +289,7 @@ error:
 Parse error:
 SELECT LIST[1][1, 1:1]
                 ^
-Expected ], found: ,
+Expected right square bracket, found comma
 
 parse-statement
 SELECT LIST[1][1:1, ]
@@ -298,7 +298,7 @@ error:
 Parse error:
 SELECT LIST[1][1:1, ]
                     ^
-Expected an expression, found: ]
+Expected an expression, found right square bracket
 
 parse-scalar
 ARRAY[]::int[1 + 1]
@@ -307,4 +307,4 @@ error:
 Parse error:
 ARRAY[]::int[1 + 1]
                ^
-Expected ], found: +
+Expected right square bracket, found operator

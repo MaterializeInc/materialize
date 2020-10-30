@@ -62,7 +62,7 @@ error:
 Parse error:
 COPY t TO STDOUT ()
                   ^
-Expected one of FORMAT, found: )
+Expected one of FORMAT, found right parenthesis
 
 parse-statement
 COPY t TO STDIN
@@ -71,7 +71,7 @@ error:
 Parse error:
 COPY t TO STDIN
           ^^^^^
-Expected STDOUT, found: STDIN
+Expected STDOUT, found STDIN
 
 parse-statement
 COPY (select 1) FROM STDIN
@@ -90,4 +90,4 @@ error:
 Parse error:
 COPY t TO STDOUT WITH
                      ^
-Expected (, found: EOF
+Expected left parenthesis, found EOF

@@ -349,7 +349,7 @@ error:
 Parse error:
 SET
    ^
-Expected identifier, found: EOF
+Expected identifier, found EOF
 
 parse-statement
 SET a b
@@ -358,7 +358,7 @@ error:
 Parse error:
 SET a b
       ^
-Expected equals sign or TO, found: b
+Expected equals sign or TO, found identifier
 
 parse-statement
 SET a =
@@ -367,4 +367,4 @@ error:
 Parse error:
 SET a =
        ^
-Expected variable value, found: EOF
+Expected variable value, found EOF

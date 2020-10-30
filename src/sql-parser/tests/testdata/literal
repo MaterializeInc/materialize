@@ -25,6 +25,23 @@ NULL
 ----
 Value(Null)
 
+# Identifiers
+
+parse-scalar
+"foo"
+----
+Identifier([Ident("foo")])
+
+parse-scalar
+"f""oo"
+----
+Identifier([Ident("f\"oo")])
+
+parse-scalar roundtrip
+"f""oo"
+----
+"f""oo"
+
 # Strings
 
 parse-scalar
@@ -35,14 +52,14 @@ Value(String("Jim\'s salary"))
 parse-scalar
 E'lots\tof\nescapes\bin\nhere\r.\f\U0001f64a\u2048'
 ----
-Value(String("lots\tof\nescapes\u{8}in\nhere\r.\u{12}🙊⁈"))
+Value(String("lots\tof\nescapes\u{8}in\nhere\r.\u{c}🙊⁈"))
 
 parse-scalar roundtrip
 E'lots\tof\nescapes\bin\nhere\r.\f\U0001f64a\u2048'
 ----
 'lots	of
 escapesin
-here.🙊⁈'
+here.🙊⁈'
 
 # Numbers
 
@@ -260,7 +277,11 @@ Array([Array([Value(Number("1")), Value(Number("2"))]), Array([Value(Number("3")
 parse-scalar
 ARRAY[3]]
 ----
-Array([Value(Number("3"))])
+error:
+Parse error:
+ARRAY[3]]
+        ^
+extra token after expression
 
 parse-scalar
 ARRAY[[[[1], [2]]], [[[3]]]]
