@@ -27,51 +27,51 @@ use crate::session::statement::{Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
 use crate::session::var::{ServerVar, SessionVar, Var};
 
-const APPLICATION_NAME: ServerVar<&str> = ServerVar {
+const APPLICATION_NAME: ServerVar<str> = ServerVar {
     name: unicase::Ascii::new("application_name"),
     value: "",
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
 };
 
-const CLIENT_ENCODING: ServerVar<&str> = ServerVar {
+const CLIENT_ENCODING: ServerVar<str> = ServerVar {
     name: unicase::Ascii::new("client_encoding"),
     value: "UTF8",
     description: "Sets the client's character set encoding (PostgreSQL).",
 };
 
-const DATABASE: ServerVar<&str> = ServerVar {
+const DATABASE: ServerVar<str> = ServerVar {
     name: unicase::Ascii::new("database"),
     value: "materialize",
     description: "Sets the current database (CockroachDB).",
 };
 
-const DATE_STYLE: ServerVar<&str> = ServerVar {
+const DATE_STYLE: ServerVar<str> = ServerVar {
     // DateStyle has nonstandard capitalization for historical reasons.
     name: unicase::Ascii::new("DateStyle"),
     value: "ISO, MDY",
     description: "Sets the display format for date and time values (PostgreSQL).",
 };
 
-const EXTRA_FLOAT_DIGITS: ServerVar<&i32> = ServerVar {
+const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     name: unicase::Ascii::new("extra_float_digits"),
     value: &3,
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
 };
 
-const INTEGER_DATETIMES: ServerVar<&bool> = ServerVar {
+const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     name: unicase::Ascii::new("integer_datetimes"),
     value: &true,
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
 };
 
-const SEARCH_PATH: ServerVar<&[&str]> = ServerVar {
+const SEARCH_PATH: ServerVar<[&str]> = ServerVar {
     name: unicase::Ascii::new("search_path"),
     value: &["mz_catalog", "pg_catalog", "public", "mz_temp"],
     description:
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
 };
 
-const SERVER_VERSION: ServerVar<&str> = ServerVar {
+const SERVER_VERSION: ServerVar<str> = ServerVar {
     name: unicase::Ascii::new("server_version"),
     // Pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
     // be. Too new and some clients will emit a "server too new" warning. Too
@@ -81,26 +81,26 @@ const SERVER_VERSION: ServerVar<&str> = ServerVar {
     description: "Shows the server version (PostgreSQL).",
 };
 
-const SQL_SAFE_UPDATES: ServerVar<&bool> = ServerVar {
+const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
     name: unicase::Ascii::new("sql_safe_updates"),
     value: &false,
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
 };
 
-const STANDARD_CONFORMING_STRINGS: ServerVar<&bool> = ServerVar {
+const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
     name: unicase::Ascii::new("standard_conforming_strings"),
     value: &true,
     description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
 };
 
-const TIMEZONE: ServerVar<&str> = ServerVar {
+const TIMEZONE: ServerVar<str> = ServerVar {
     // TimeZone has nonstandard capitalization for historical reasons.
     name: unicase::Ascii::new("TimeZone"),
     value: "UTC",
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
 };
 
-const TRANSACTION_ISOLATION: ServerVar<&str> = ServerVar {
+const TRANSACTION_ISOLATION: ServerVar<str> = ServerVar {
     name: unicase::Ascii::new("transaction_isolation"),
     value: "serializable",
     description: "Sets the current transaction's isolation level (PostgreSQL).",
@@ -112,17 +112,17 @@ const DUMMY_CONNECTION_ID: u32 = 0;
 #[derive(Debug)]
 pub struct Session {
     application_name: SessionVar<str>,
-    client_encoding: ServerVar<&'static str>,
+    client_encoding: ServerVar<str>,
     database: SessionVar<str>,
-    date_style: ServerVar<&'static str>,
+    date_style: ServerVar<str>,
     extra_float_digits: SessionVar<i32>,
-    integer_datetimes: ServerVar<&'static bool>,
-    search_path: ServerVar<&'static [&'static str]>,
-    server_version: ServerVar<&'static str>,
+    integer_datetimes: ServerVar<bool>,
+    search_path: ServerVar<[&'static str]>,
+    server_version: ServerVar<str>,
     sql_safe_updates: SessionVar<bool>,
-    standard_conforming_strings: ServerVar<&'static bool>,
-    timezone: ServerVar<&'static str>,
-    transaction_isolation: ServerVar<&'static str>,
+    standard_conforming_strings: ServerVar<bool>,
+    timezone: ServerVar<str>,
+    transaction_isolation: ServerVar<str>,
     conn_id: u32,
     /// The current state of the the session's transaction
     transaction: TransactionStatus,

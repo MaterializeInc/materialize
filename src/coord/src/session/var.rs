@@ -7,10 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// NOTE(benesch): there is a lot of duplicative code in this file in order to
-// avoid runtime type casting. If the approach gets hard to maintain, we can
-// always write a macro.
-
 use std::borrow::Borrow;
 
 use anyhow::bail;
@@ -29,79 +25,64 @@ pub trait Var {
     fn description(&self) -> &'static str;
 }
 
-impl Var for ServerVar<&'static str> {
-    fn name(&self) -> &'static str {
-        &self.name
-    }
-
-    fn value(&self) -> String {
-        self.value.to_owned()
-    }
-
-    fn description(&self) -> &'static str {
-        self.description
-    }
-}
-
-impl Var for ServerVar<&'static [&'static str]> {
-    fn name(&self) -> &'static str {
-        &self.name
-    }
-
-    fn value(&self) -> String {
-        self.value.join(", ")
-    }
-
-    fn description(&self) -> &'static str {
-        self.description
-    }
-}
-
-impl Var for ServerVar<&'static bool> {
-    fn name(&self) -> &'static str {
-        &self.name
-    }
-
-    fn value(&self) -> String {
-        match self.value {
-            true => "on",
-            false => "off",
-        }
-        .to_string()
-    }
-
-    fn description(&self) -> &'static str {
-        self.description
-    }
-}
-
 /// A `ServerVar` is the default value for a configuration parameter.
 #[derive(Debug)]
-pub struct ServerVar<V> {
+pub struct ServerVar<V>
+where
+    V: ?Sized + 'static,
+{
     pub name: unicase::Ascii<&'static str>,
-    pub value: V,
+    pub value: &'static V,
     pub description: &'static str,
 }
+
+impl<V> Var for ServerVar<V>
+where
+    V: Value + ?Sized + 'static,
+{
+    fn name(&self) -> &'static str {
+        &self.name
+    }
+
+    fn value(&self) -> String {
+        self.value.format()
+    }
+
+    fn description(&self) -> &'static str {
+        self.description
+    }
+}
+
 
 /// A `SessionVar` is the session value for a configuration parameter. If unset,
 /// the server default is used instead.
 #[derive(Debug)]
 pub struct SessionVar<V>
 where
-    V: ToOwned + ?Sized + 'static,
+    V: Value + ?Sized + 'static,
 {
     value: Option<V::Owned>,
-    parent: &'static ServerVar<&'static V>,
+    parent: &'static ServerVar<V>,
 }
 
 impl<V> SessionVar<V>
 where
-    V: ToOwned + ?Sized + 'static,
+    V: Value + ?Sized + 'static,
 {
-    pub fn new(parent: &'static ServerVar<&'static V>) -> SessionVar<V> {
+    pub fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
             value: None,
             parent,
+        }
+    }
+
+    pub fn set(&mut self, s: &str) -> Result<(), anyhow::Error> {
+        match V::parse(s) {
+            Ok(v) => {
+                self.value = Some(v);
+                Ok(())
+            }
+            Err(()) => bail!("parameter {} requires a {} value", self.name(), V::TYPE_NAME),
         }
     }
 
@@ -113,76 +94,85 @@ where
     }
 }
 
-impl SessionVar<bool> {
-    pub fn set(&mut self, value: &str) -> Result<(), anyhow::Error> {
-        if value == "t" || value == "true" || value == "on" {
-            self.value = Some(true)
-        } else if value == "f" || value == "false" || value == "off" {
-            self.value = Some(false);
-        } else {
-            bail!("parameter {} requires a boolean value", self.parent.name)
+impl<V> Var for SessionVar<V>
+where
+    V: Value + ToOwned + ?Sized + 'static,
+{
+    fn name(&self) -> &'static str {
+        &self.parent.name
+    }
+
+    fn value(&self) -> String {
+        SessionVar::value(self).format()
+    }
+
+    fn description(&self) -> &'static str {
+        self.parent.description
+    }
+}
+
+/// A value that can be stored in a session variable.
+pub trait Value: ToOwned {
+    /// The name of the value type.
+    const TYPE_NAME: &'static str;
+    /// Parses a value of this type from a string.
+    fn parse(s: &str) -> Result<Self::Owned, ()>;
+    /// Formats this value as a string.
+    fn format(&self) -> String;
+}
+
+impl Value for bool {
+    const TYPE_NAME: &'static str = "boolean";
+
+    fn parse(s: &str) -> Result<Self, ()> {
+        match s {
+            "t" | "true" | "on" => Ok(true),
+            "f" | "false" | "off" => Ok(false),
+            _ => Err(()),
         }
-        Ok(())
-    }
-}
-
-impl Var for SessionVar<bool> {
-    fn name(&self) -> &'static str {
-        &self.parent.name
     }
 
-    fn value(&self) -> String {
-        SessionVar::value(self).to_string()
-    }
-
-    fn description(&self) -> &'static str {
-        self.parent.description
-    }
-}
-
-impl SessionVar<str> {
-    pub fn set(&mut self, value: &str) -> Result<(), anyhow::Error> {
-        self.value = Some(value.to_owned());
-        Ok(())
-    }
-}
-
-impl Var for SessionVar<str> {
-    fn name(&self) -> &'static str {
-        &self.parent.name
-    }
-
-    fn value(&self) -> String {
-        SessionVar::value(self).to_owned()
-    }
-
-    fn description(&self) -> &'static str {
-        self.parent.description
-    }
-}
-
-impl SessionVar<i32> {
-    pub fn set(&mut self, value: &str) -> Result<(), anyhow::Error> {
-        match value.parse() {
-            Ok(value) => {
-                self.value = Some(value);
-                Ok(())
-            }
-            Err(_) => bail!("parameter {} requires an integer value", self.parent.name),
+    fn format(&self) -> String {
+        match self {
+            true => "on".into(),
+            false => "off".into(),
         }
     }
 }
 
-impl Var for SessionVar<i32> {
-    fn name(&self) -> &'static str {
-        &self.parent.name
+impl Value for i32 {
+    const TYPE_NAME: &'static str = "integer";
+
+    fn parse(s: &str) -> Result<i32, ()> {
+        s.parse().map_err(|_| ())
     }
 
-    fn value(&self) -> String {
-        SessionVar::value(self).to_string()
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl Value for str {
+    const TYPE_NAME: &'static str = "string";
+
+    fn parse(s: &str) -> Result<String, ()> {
+        Ok(s.to_owned())
     }
 
-    fn description(&self) -> &'static str {
-        self.parent.description
+    fn format(&self) -> String {
+        self.to_owned()
+    }
+}
+
+impl Value for [&str] {
+    const TYPE_NAME: &'static str = "string list";
+
+    fn parse(_: &str) -> Result<Self::Owned, ()> {
+        // Don't know how to parse string lists yet.
+        Err(())
+    }
+
+    fn format(&self) -> String {
+        self.join(", ")
     }
 }
