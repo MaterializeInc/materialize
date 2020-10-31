@@ -90,6 +90,27 @@ const TRANSACTION_ISOLATION: ServerVar<str> = ServerVar {
     description: "Sets the current transaction's isolation level (PostgreSQL).",
 };
 
+/// Session variables.
+///
+/// Materialize roughly follows the PostgreSQL configuration model, which works
+/// as follows. There is a global set of named configuration parameters, like
+/// `DateStyle` and `client_encoding`. These parameters can be set in several
+/// places: in an on-disk configuration file (in Postgres, named
+/// postgresql.conf), in command line arguments when the server is started, or
+/// at runtime via the `ALTER SYSTEM` or `SET` statements. Parameters that are
+/// set in a session take precedence over database defaults, which in turn take
+/// precedence over command line arguments, which in turn take precedence over
+/// settings in the on-disk configuration.
+///
+/// The Materialize configuration hierarchy at the moment is much simpler.
+/// Global defaults are hardcoded into the binary, and a select few parameters
+/// can be overridden per session. The infrastructure has been designed with
+/// an eye towards supporting additional layers to the hierarchy, however, as
+/// should the need arise.
+///
+/// The configuration parameters that exist are driven by compatibility with
+/// PostgreSQL drivers that expect them, not because they are particularly
+/// important.
 #[derive(Debug)]
 pub struct Vars {
     application_name: SessionVar<str>,
@@ -142,7 +163,8 @@ impl Vars {
             &self.standard_conforming_strings,
             &self.timezone,
             &self.transaction_isolation,
-        ].into_iter()
+        ]
+        .into_iter()
     }
 
     /// Returns an iterator over configuration parameters (and their current
@@ -156,7 +178,8 @@ impl Vars {
             &self.integer_datetimes,
             &self.server_version,
             &self.standard_conforming_strings,
-        ].into_iter()
+        ]
+        .into_iter()
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -352,7 +375,6 @@ where
     }
 }
 
-
 /// A `SessionVar` is the session value for a configuration parameter. If unset,
 /// the server default is used instead.
 #[derive(Debug)]
@@ -381,7 +403,11 @@ where
                 self.value = Some(v);
                 Ok(())
             }
-            Err(()) => bail!("parameter {} requires a {} value", self.name(), V::TYPE_NAME),
+            Err(()) => bail!(
+                "parameter {} requires a {} value",
+                self.name(),
+                V::TYPE_NAME
+            ),
         }
     }
 

@@ -468,10 +468,10 @@ where
         portal_name: String,
         max_rows: usize,
     ) -> Result<State, comm::Error> {
-        let row_desc = self
-            .coord_client
-            .session()
-            .get_prepared_statement_for_portal(&portal_name)
+        let session = self.coord_client.session();
+        let row_desc = session
+            .get_portal(&portal_name)
+            .and_then(|portal| session.get_prepared_statement(&portal.statement_name))
             .and_then(|stmt| stmt.desc().relation_desc.clone());
         let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
             Some(portal) => portal,
