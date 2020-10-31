@@ -14,6 +14,10 @@ skip = [
 
     # Waiting on chrono to migrate to time v0.2.
     { name = "time", version = "0.1.42" },
+
+    # Waiting on Rusoto to upgrade to pin-project v1.0
+    { name = "pin-project", version = "0.4.22" },
+    { name = "pin-project-internal", version = "0.4.22" }
 ]
 deny = [
     # Strum has suspect code quality and includes many unneeded features. Use
