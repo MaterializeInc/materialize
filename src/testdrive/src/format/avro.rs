@@ -221,14 +221,14 @@ where
             let key = key_schema
                 .map(|key_schema| -> Result<_, String> {
                     let key: serde_json::Value = match iter.next() {
-                        None => Err(format!("Couldn't parse Json: no key found")),
+                        None => Err("Couldn't parse Json: no key found".to_string()),
                         Some(r) => r.map_err(|e| format!("parsing json: {}", e)),
                     }?;
                     Ok(from_json(&key, key_schema.top_node())?)
                 })
                 .transpose()?;
             let value: serde_json::Value = match iter.next() {
-                None => Err(format!("Couldn't parse Json: no value found")),
+                None => Err("Couldn't parse Json: no value found".to_string()),
                 Some(r) => r.map_err(|e| format!("parsing json: {}", e)),
             }?;
             let value = from_json(&value, value_schema.top_node())?;
