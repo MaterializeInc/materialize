@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.33"
-bytes = "0.5"
+bytes = "0.6"
 chrono = "0.4"
 comm = { path = "../comm" }
 coord = { path = "../coord" }

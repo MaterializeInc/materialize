@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 backtrace = "0.3"
 bincode = "1.3"
-bytes = "0.5"
+bytes = "0.6"
 futures = "0.3"
 log = "0.4.11"
 num_enum = "0.5.1"
