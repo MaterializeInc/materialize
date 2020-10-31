@@ -570,8 +570,8 @@ impl Catalog {
         ConnCatalog {
             catalog: self,
             conn_id: session.conn_id(),
-            database: session.database().into(),
-            search_path: session.search_path(),
+            database: session.vars().database().into(),
+            search_path: session.vars().search_path(),
         }
     }
 

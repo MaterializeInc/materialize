@@ -200,7 +200,7 @@ where
         }
 
         for (name, value) in params {
-            let _ = self.coord_client.session().set(&name, &value);
+            let _ = self.coord_client.session().vars_mut().set(&name, &value);
         }
 
         let notices: Vec<_> = match self.coord_client.startup().await {
@@ -212,7 +212,7 @@ where
                         code: SqlState::SUCCESSFUL_COMPLETION,
                         message: format!(
                             "session database '{}' does not exist",
-                            self.coord_client.session().database()
+                            self.coord_client.session().vars().database()
                         ),
                         detail: None,
                         hint: Some(
@@ -235,8 +235,8 @@ where
         messages.extend(
             self.coord_client
                 .session()
-                .notify_vars()
-                .iter()
+                .vars()
+                .notify_set()
                 .map(|v| BackendMessage::ParameterStatus(v.name(), v.value())),
         );
         messages.push(BackendMessage::BackendKeyData {
@@ -700,8 +700,8 @@ where
                 let msg = if let Some(var) = self
                     .coord_client
                     .session()
-                    .notify_vars()
-                    .iter()
+                    .vars_mut()
+                    .notify_set()
                     .find(|v| v.name() == qn)
                 {
                     Some(BackendMessage::ParameterStatus(var.name(), var.value()))
