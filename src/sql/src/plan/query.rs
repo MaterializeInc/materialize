@@ -30,9 +30,9 @@ use anyhow::{anyhow, bail, ensure, Context};
 use ore::iter::IteratorExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
-    DataType, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint, JoinOperator,
-    ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, TableAlias,
-    TableFactor, TableWithJoins, Value, Values,
+    DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
+    JoinOperator, ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator,
+    TableAlias, TableFactor, TableWithJoins, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -72,27 +72,12 @@ pub fn plan_root_query(
     let qcx = QueryContext::root(scx, lifetime);
     let (mut expr, scope, mut finishing) = plan_query(&qcx, &query)?;
 
-    // Check if the `finishing.order_by` can be applied after
-    // `finishing.project`, and push `finishing.project` onto `expr` if so. This
-    // allows data to be projected down on the workers rather than the
-    // coordinator. It also improves the optimizer's demand analysis, as the
-    // optimizer can only reason about demand information in `expr` (i.e., it
-    // can't see `finishing.project`).
-    let mut unproject = vec![None; expr.arity()];
-    for (out_i, in_i) in finishing.project.iter().copied().enumerate() {
-        unproject[in_i] = Some(out_i);
-    }
-    if finishing
-        .order_by
-        .iter()
-        .all(|ob| unproject[ob.column].is_some())
-    {
-        let trivial_project = (0..finishing.project.len()).collect();
-        expr = expr.project(mem::replace(&mut finishing.project, trivial_project));
-        for ob in &mut finishing.order_by {
-            ob.column = unproject[ob.column].unwrap();
-        }
-    }
+    // Attempt to push the finishing's ordering past its projection. This allows
+    // data to be projected down on the workers rather than the coordinator. It
+    // also improves the optimizer's demand analysis, as the optimizer can only
+    // reason about demand information in `expr` (i.e., it can't see
+    // `finishing.project`).
+    try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
 
     let typ = qcx.relation_type(&expr);
     let typ = RelationType::new(
@@ -105,6 +90,37 @@ pub fn plan_root_query(
     let desc = RelationDesc::new(typ, scope.column_names());
 
     Ok((expr, desc, finishing))
+}
+
+/// Attempts to push a projection through an order by.
+///
+/// The returned bool indicates whether the pushdown was successful or not.
+/// Successful pushdown requires that all the columns referenced in `order_by`
+/// are included in `project`.
+///
+/// When successful, `expr` is wrapped in a projection node, `order_by` is
+/// rewritten to account for the pushed-down projection, and `project` is
+/// replaced with the trivial projection. When unsuccessful, no changes are made
+/// to any of the inputs.
+fn try_push_projection_order_by(
+    expr: &mut RelationExpr,
+    project: &mut Vec<usize>,
+    order_by: &mut Vec<ColumnOrder>,
+) -> bool {
+    let mut unproject = vec![None; expr.arity()];
+    for (out_i, in_i) in project.iter().copied().enumerate() {
+        unproject[in_i] = Some(out_i);
+    }
+    if order_by.iter().all(|ob| unproject[ob.column].is_some()) {
+        let trivial_project = (0..project.len()).collect();
+        *expr = expr.take().project(mem::replace(project, trivial_project));
+        for ob in order_by {
+            ob.column = unproject[ob.column].unwrap();
+        }
+        true
+    } else {
+        false
+    }
 }
 
 pub fn plan_insert_query(
@@ -334,16 +350,8 @@ fn plan_query(
         _ => bail!("OFFSET must be an integer constant"),
     };
     match &q.body {
-        SetExpr::Select(s) if !s.distinct => {
-            let plan = plan_view_select_intrusive(
-                qcx,
-                &s.projection,
-                &s.from,
-                s.selection.as_ref(),
-                &s.group_by,
-                s.having.as_ref(),
-                &q.order_by,
-            )?;
+        SetExpr::Select(s) => {
+            let plan = plan_view_select_intrusive(qcx, s, &q.order_by)?;
             let finishing = RowSetFinishing {
                 order_by: plan.order_by,
                 project: plan.project,
@@ -354,36 +362,19 @@ fn plan_query(
         }
         _ => {
             let (expr, scope) = plan_set_expr(qcx, &q.body)?;
-            let output_typ = qcx.relation_type(&expr);
-            let mut order_by = vec![];
-            let mut map_exprs = vec![];
-            for obe in &q.order_by {
-                let ecx = &ExprContext {
-                    qcx,
-                    name: "ORDER BY clause",
-                    scope: &scope,
-                    relation_type: &output_typ,
-                    allow_aggregates: true,
-                    allow_subqueries: true,
-                };
-                let expr = plan_expr_or_col_index(ecx, &obe.expr)?;
-                // If the expression is a reference to an existing column,
-                // do not introduce a new column to support it.
-                let column = if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
-                    column
-                } else {
-                    map_exprs.push(expr);
-                    output_typ.column_types.len() + map_exprs.len() - 1
-                };
-                order_by.push(ColumnOrder {
-                    column,
-                    desc: !obe.asc.unwrap_or(true),
-                });
-            }
+            let ecx = &ExprContext {
+                qcx,
+                name: "ORDER BY clause",
+                scope: &scope,
+                relation_type: &qcx.relation_type(&expr),
+                allow_aggregates: true,
+                allow_subqueries: true,
+            };
+            let (order_by, map_exprs) = plan_order_by_exprs(ecx, &q.order_by)?;
             let finishing = RowSetFinishing {
                 order_by,
                 limit,
-                project: (0..output_typ.column_types.len()).collect(),
+                project: (0..ecx.relation_type.arity()).collect(),
                 offset,
             };
             Ok((expr.map(map_exprs), scope, finishing))
@@ -611,13 +602,18 @@ struct SelectPlan {
 /// former class, see `plan_view_select`.
 fn plan_view_select_intrusive(
     qcx: &QueryContext,
-    projection: &[SelectItem],
-    from: &[TableWithJoins],
-    selection: Option<&Expr>,
-    group_by: &[Expr],
-    having: Option<&Expr>,
+    s: &Select,
     order_by_exprs: &[OrderByExpr],
 ) -> Result<SelectPlan, anyhow::Error> {
+    let Select {
+        distinct,
+        projection,
+        from,
+        selection,
+        group_by,
+        having,
+    } = s;
+
     // Step 1. Handle FROM clause, including joins.
     let (mut relation_expr, from_scope) =
         from.iter().fold(Ok(plan_join_identity(qcx)), |l, twj| {
@@ -644,14 +640,9 @@ fn plan_view_select_intrusive(
     // Step 3. Gather aggregates.
     let aggregates = {
         let mut aggregate_visitor = AggregateFuncVisitor::new(&qcx.scx);
-        for p in projection {
-            aggregate_visitor.visit_select_item(p);
-        }
+        aggregate_visitor.visit_select(&s);
         for o in order_by_exprs {
             aggregate_visitor.visit_order_by_expr(o);
-        }
-        if let Some(having) = having {
-            aggregate_visitor.visit_expr(having);
         }
         aggregate_visitor.into_result()?
     };
@@ -775,7 +766,7 @@ fn plan_view_select_intrusive(
     }
 
     // Step 7. Handle SELECT clause.
-    let (project_key, map_scope) = {
+    let (mut project_key, map_scope) = {
         let mut new_exprs = vec![];
         let mut project_key = vec![];
         let mut map_scope = group_scope.clone();
@@ -830,42 +821,111 @@ fn plan_view_select_intrusive(
         (project_key, map_scope)
     };
 
-    // Step 8. Handle intrusive ORDER BY.
+    // Step 8. Handle intrusive ORDER BY and DISTINCT.
     let order_by = {
-        let mut order_by = vec![];
-        let mut new_exprs = vec![];
-        for obe in order_by_exprs {
-            let ecx = &ExprContext {
+        let (mut order_by, mut map_exprs) = plan_projected_order_by_exprs(
+            &ExprContext {
                 qcx,
                 name: "ORDER BY clause",
                 scope: &map_scope,
                 relation_type: &qcx.relation_type(&relation_expr),
                 allow_aggregates: true,
                 allow_subqueries: true,
-            };
+            },
+            order_by_exprs,
+            &project_key,
+        )?;
 
-            let expr = match check_col_index(&ecx.name, &obe.expr, project_key.len())? {
-                Some(i) => ScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: project_key[i],
-                }),
-                None => plan_expr(ecx, &obe.expr)?.type_as_any(ecx)?,
-            };
+        match distinct {
+            None => relation_expr = relation_expr.map(map_exprs),
+            Some(Distinct::EntireRow) => {
+                // `SELECT DISTINCT` only distincts on the columns in the SELECT
+                // list, so we can't proceed if `ORDER BY` has introduced any
+                // columns for arbitrary expressions. This matches PostgreSQL.
+                if !try_push_projection_order_by(
+                    &mut relation_expr,
+                    &mut project_key,
+                    &mut order_by,
+                ) {
+                    bail!("for SELECT DISTINCT, ORDER BY expressions must appear in select list");
+                }
+                assert!(map_exprs.is_empty());
+                relation_expr = relation_expr.distinct();
+            }
+            Some(Distinct::On(exprs)) => {
+                let ecx = &ExprContext {
+                    qcx,
+                    name: "DISTINCT ON clause",
+                    scope: &map_scope,
+                    relation_type: &qcx.relation_type(&relation_expr),
+                    allow_aggregates: true,
+                    allow_subqueries: true,
+                };
 
-            // If the expression is a reference to an existing column, do not
-            // introduce a new column to support it.
-            let column = if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
-                column
-            } else {
-                new_exprs.push(expr);
-                map_scope.len() + new_exprs.len() - 1
-            };
-            order_by.push(ColumnOrder {
-                column,
-                desc: !obe.asc.unwrap_or(true),
-            });
+                let mut distinct_exprs = vec![];
+                for expr in exprs {
+                    let expr = plan_order_by_or_distinct_expr(ecx, expr, &project_key)?;
+                    distinct_exprs.push(expr);
+                }
+
+                let mut distinct_key = vec![];
+
+                // If both `DISTINCT ON` and `ORDER BY` are specified, then the
+                // `DISTINCT ON` expressions must match the initial `ORDER BY`
+                // expressions, though the order of `DISTINCT ON` expressions
+                // does not matter. This matches PostgreSQL and leaves the door
+                // open to a future optimization where the `DISTINCT ON` and
+                // `ORDER BY` operations happen in one pass.
+                //
+                // On the bright side, any columns that have already been
+                // computed by `ORDER BY` can be reused in the distinct key.
+                for ord in order_by.iter().take(distinct_exprs.len()) {
+                    // The unusual construction of `expr` here is to ensure the
+                    // temporary column expression lives long enough.
+                    let mut expr = &ScalarExpr::Column(ColumnRef {
+                        level: 0,
+                        column: ord.column,
+                    });
+                    if ord.column >= map_scope.len() {
+                        expr = &map_exprs[ord.column - map_scope.len()];
+                    };
+                    match distinct_exprs.iter().position(move |e| e == expr) {
+                        None => bail!("SELECT DISTINCT ON expressions must match initial ORDER BY expressions"),
+                        Some(pos) => {
+                            distinct_exprs.remove(pos);
+                        }
+                    }
+                    distinct_key.push(ord.column);
+                }
+
+                // Add any remaining `DISTINCT ON` expressions to the key.
+                for expr in distinct_exprs {
+                    // If the expression is a reference to an existing column,
+                    // do not introduce a new column to support it.
+                    let column = match expr {
+                        ScalarExpr::Column(ColumnRef { level: 0, column }) => column,
+                        _ => {
+                            map_exprs.push(expr);
+                            map_scope.len() + map_exprs.len() - 1
+                        }
+                    };
+                    distinct_key.push(column);
+                }
+
+                // `DISTINCT ON` is semantically a TopK with limit 1. The
+                // columns in `ORDER BY` that are not part of the distinct key,
+                // if there are any, determine the ordering within each group,
+                // per PostgreSQL semantics.
+                relation_expr = RelationExpr::TopK {
+                    input: Box::new(relation_expr.map(map_exprs)),
+                    order_key: order_by.iter().skip(distinct_key.len()).cloned().collect(),
+                    group_key: distinct_key,
+                    limit: Some(1),
+                    offset: 0,
+                }
+            }
         }
-        relation_expr = relation_expr.map(new_exprs);
+
         order_by
     };
 
@@ -949,29 +1009,72 @@ fn plan_group_by_expr<'a>(
     }
 }
 
+/// Plans a slice of `ORDER BY` expressions.
+fn plan_order_by_exprs(
+    ecx: &ExprContext,
+    order_by_exprs: &[OrderByExpr],
+) -> Result<(Vec<ColumnOrder>, Vec<ScalarExpr>), anyhow::Error> {
+    let project_key: Vec<_> = (0..ecx.scope.len()).collect();
+    plan_projected_order_by_exprs(ecx, order_by_exprs, &project_key)
+}
+
+/// Like `plan_order_by_exprs`, except that any column ordinal references are
+/// projected via `project_key` rather than being accepted directly.
+fn plan_projected_order_by_exprs(
+    ecx: &ExprContext,
+    order_by_exprs: &[OrderByExpr],
+    project_key: &[usize],
+) -> Result<(Vec<ColumnOrder>, Vec<ScalarExpr>), anyhow::Error> {
+    let mut order_by = vec![];
+    let mut map_exprs = vec![];
+    for obe in order_by_exprs {
+        let expr = plan_order_by_or_distinct_expr(ecx, &obe.expr, project_key)?;
+        // If the expression is a reference to an existing column,
+        // do not introduce a new column to support it.
+        let column = match expr {
+            ScalarExpr::Column(ColumnRef { level: 0, column }) => column,
+            _ => {
+                map_exprs.push(expr);
+                ecx.relation_type.arity() + map_exprs.len() - 1
+            }
+        };
+        order_by.push(ColumnOrder {
+            column,
+            desc: !obe.asc.unwrap_or(true),
+        });
+    }
+    Ok((order_by, map_exprs))
+}
+
+/// Plans an expression that appears in an `ORDER BY` or `DISTINCT ON` clause.
+///
+/// This is like `plan_expr_or_col_index`, except that any column ordinal
+/// references are projected via `project_key` rather than being accepted
+/// directly.
+fn plan_order_by_or_distinct_expr(
+    ecx: &ExprContext,
+    expr: &Expr,
+    project_key: &[usize],
+) -> Result<ScalarExpr, anyhow::Error> {
+    match check_col_index(&ecx.name, expr, project_key.len())? {
+        Some(i) => Ok(ScalarExpr::Column(ColumnRef {
+            level: 0,
+            column: project_key[i],
+        })),
+        None => plan_expr(ecx, expr)?.type_as_any(ecx),
+    }
+}
+
 fn plan_view_select(
     qcx: &QueryContext,
     s: &Select,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let order_by_exprs = &[];
-    let plan = plan_view_select_intrusive(
-        qcx,
-        &s.projection,
-        &s.from,
-        s.selection.as_ref(),
-        &s.group_by,
-        s.having.as_ref(),
-        order_by_exprs,
-    )?;
+    let plan = plan_view_select_intrusive(qcx, s, order_by_exprs)?;
     // We didn't provide any `order_by_exprs`, so `plan_view_select_intrusive`
     // should not have planned any ordering.
     assert!(plan.order_by.is_empty());
-
-    let mut expr = plan.expr.project(plan.project);
-    if s.distinct {
-        expr = expr.distinct();
-    }
-    Ok((expr, plan.scope))
+    Ok((plan.expr.project(plan.project), plan.scope))
 }
 
 fn plan_table_with_joins<'a>(

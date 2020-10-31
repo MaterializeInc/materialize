@@ -76,7 +76,7 @@ SELECT a FROM foo GROUP BY a ORDER BY max(b)
 0
 
 # ...unless you use DISTINCT...
-query error column "b" does not exist
+query error for SELECT DISTINCT, ORDER BY expressions must appear in select list
 SELECT DISTINCT a FROM foo ORDER BY b
 
 # ...or a set expression.
@@ -126,6 +126,22 @@ SELECT a FROM foo ORDER BY exists (SELECT * FROM bar WHERE bar.a = foo.a), a
 0
 2
 1
+
+query TI nosort
+SELECT b, a FROM foo ORDER BY b
+----
+one  1
+two  2
+zero 0
+
+# Ensure SELECT DISTINCT is not confused by permuting columns in the SELECT
+# list.
+query TI nosort
+SELECT DISTINCT b, a FROM foo ORDER BY b
+----
+one  1
+two  2
+zero 0
 
 ### sorts, limits, and offsets in subqueries ###
 
