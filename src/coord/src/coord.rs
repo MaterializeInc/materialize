@@ -1757,7 +1757,7 @@ where
         session: &Session,
         name: String,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        let variable = session.get(&name)?;
+        let variable = session.vars().get(&name)?;
         let row = Row::pack(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
@@ -1768,7 +1768,7 @@ where
         name: String,
         value: String,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        session.set(&name, &value)?;
+        session.vars_mut().set(&name, &value)?;
         Ok(ExecuteResponse::SetVariable { name })
     }
 
