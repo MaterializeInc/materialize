@@ -2554,6 +2554,16 @@ impl Parser {
                 "Cannot specify both ALL and DISTINCT in SELECT"
             );
         }
+        let distinct = if distinct && self.parse_keyword("ON") {
+            self.expect_token(&Token::LParen)?;
+            let exprs = self.parse_comma_separated(Parser::parse_expr)?;
+            self.expect_token(&Token::RParen)?;
+            Some(Distinct::On(exprs))
+        } else if distinct {
+            Some(Distinct::EntireRow)
+        } else {
+            None
+        };
         let projection = self.parse_comma_separated(Parser::parse_select_item)?;
 
         // Note that for keywords to be properly handled here, they need to be
