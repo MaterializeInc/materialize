@@ -18,11 +18,6 @@ Materialize reads Avro, Protobuf, JSON, and newline-delimited text. Need somethi
 
 Materialize can read data from Kafka topics, Kinesis streams (in preview), or tail local files.
 
-**Coming soon**:
-
--   Reading ORC and Parquet files on object storage (i.e. join your streams against your data lake in real-time)
--   Getting data in from arbitrary HTTP endpoints
-
 ## Transform, manipulate, and read your data
 
 Once you've got the data in, define views and perform reads via the PostgreSQL protocol. Use your favorite PostgreSQL CLI, including the `psql` you probably already have on your system.
