@@ -316,7 +316,7 @@ fn run() -> Result<(), anyhow::Error> {
             }
             Err(VarError::NotPresent) => match cfg!(debug_assertions) {
                 true => None,
-                false => Some("https://telemetry.materialize.com/".to_string()),
+                false => Some("https://telemetry.materialize.com".to_string()),
             },
         },
     };
