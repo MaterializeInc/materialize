@@ -51,6 +51,8 @@ Wrap your release notes at the 80 character mark.
 - Default to using a worker thread count equal to half of the machine's
   physical cores if [`--workers`](/cli/#worker-threads) is not specified.
 
+- Add the `regexp_match` function to search a string with a regular expression.
+
 {{% version-header v0.5.0 %}}
 
 - Support tables via the new [`CREATE TABLE`](/sql/create-table), [`DROP

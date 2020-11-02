@@ -13,6 +13,7 @@ use std::mem;
 
 use serde::{Deserialize, Serialize};
 
+use ore::collections::CollectionExt;
 use repr::adt::array::InvalidArrayError;
 use repr::adt::datetime::DateTimeUnits;
 use repr::adt::regex::Regex;
@@ -304,19 +305,22 @@ impl ScalarExpr {
                     *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
                 } else if let Some(err) = expr2.as_literal_err() {
                     *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
-                } else if *func == BinaryFunc::MatchLikePattern && expr2.is_literal() {
+                } else if *func == BinaryFunc::IsLikePatternMatch && expr2.is_literal() {
                     // We can at least precompile the regex.
                     let pattern = expr2.as_literal_str().unwrap();
                     *e = match like_pattern::build_regex(&pattern) {
-                        Ok(regex) => expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex))),
+                        Ok(regex) => expr1
+                            .take()
+                            .call_unary(UnaryFunc::IsRegexpMatch(Regex(regex))),
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
                     };
-                } else if let BinaryFunc::MatchRegex { case_insensitive } = func {
+                } else if let BinaryFunc::IsRegexpMatch { case_insensitive } = func {
                     if let ScalarExpr::Literal(Ok(row), _) = &**expr2 {
-                        *e = match func::build_regex(row.unpack_first(), *case_insensitive) {
-                            Ok(regex) => {
-                                expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex)))
-                            }
+                        let flags = if *case_insensitive { "i" } else { "" };
+                        *e = match func::build_regex(row.unpack_first().unwrap_str(), flags) {
+                            Ok(regex) => expr1
+                                .take()
+                                .call_unary(UnaryFunc::IsRegexpMatch(Regex(regex))),
                             Err(err) => ScalarExpr::literal(Err(err), e.typ(&relation_type)),
                         };
                     }
@@ -423,6 +427,20 @@ impl ScalarExpr {
                     *e = ScalarExpr::literal_null(e.typ(&relation_type));
                 } else if let Some(err) = exprs.iter().find_map(|e| e.as_literal_err()) {
                     *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
+                } else if *func == VariadicFunc::RegexpMatch {
+                    if exprs[1].is_literal() && exprs.get(2).map_or(true, |e| e.is_literal()) {
+                        let needle = exprs[1].as_literal_str().unwrap();
+                        let flags = match exprs.len() {
+                            3 => exprs[2].as_literal_str().unwrap(),
+                            _ => "",
+                        };
+                        *e = match func::build_regex(needle, flags) {
+                            Ok(regex) => mem::take(exprs)
+                                .into_first()
+                                .call_unary(UnaryFunc::RegexpMatch(Regex(regex))),
+                            Err(err) => ScalarExpr::literal(Err(err), e.typ(&relation_type)),
+                        };
+                    }
                 }
             }
             ScalarExpr::If { cond, then, els } => {
@@ -563,6 +581,7 @@ pub enum EvalError {
         encoding_name: String,
     },
     InvalidRegex(String),
+    InvalidRegexFlag(char),
     InvalidParameterValue(String),
     NegSqrt,
     UnknownUnits(String),
@@ -596,6 +615,7 @@ impl fmt::Display for EvalError {
             ),
             EvalError::NegSqrt => f.write_str("cannot take square root of a negative number"),
             EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
+            EvalError::InvalidRegexFlag(c) => write!(f, "invalid regular expression flag: {}", c),
             EvalError::InvalidParameterValue(s) => f.write_str(s),
             EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
             EvalError::UnsupportedDateTimeUnits(units) => {
@@ -620,6 +640,12 @@ impl From<ParseError> for EvalError {
 impl From<InvalidArrayError> for EvalError {
     fn from(e: InvalidArrayError) -> EvalError {
         EvalError::InvalidArray(e)
+    }
+}
+
+impl From<regex::Error> for EvalError {
+    fn from(e: regex::Error) -> EvalError {
+        EvalError::InvalidRegex(e.to_string())
     }
 }
 
