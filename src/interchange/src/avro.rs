@@ -1336,33 +1336,33 @@ impl DebeziumDeduplicationState {
             old_max_row: &'a usize,
             old_offset: &'a Option<i64>,
         }
-        // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
-        // duplicates, since it is always the same.
-        let should_skip = if is_snapshot {
-            None
-        } else {
-            match self.binlog_offsets.get_mut(file) {
-                Some((old_max_pos, old_max_row, old_offset)) => {
-                    if (*old_max_pos, *old_max_row) >= (pos, row) {
+        let should_skip = match self.binlog_offsets.get_mut(file) {
+            Some((old_max_pos, old_max_row, old_offset)) => {
+                if (*old_max_pos, *old_max_row) >= (pos, row) {
+                    // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
+                    // duplicates, since it is always the same.
+                    if !is_snapshot {
                         Some(SkipInfo {
                             old_max_pos,
                             old_max_row,
                             old_offset,
                         })
                     } else {
-                        // update the debezium high water mark
-                        *old_max_pos = pos;
-                        *old_max_row = row;
-                        *old_offset = coord;
                         None
                     }
-                }
-                None => {
-                    // The extra lookup is fine - this is the cold path.
-                    self.binlog_offsets
-                        .insert(file.to_owned(), (pos, row, coord));
+                } else {
+                    // update the debezium high water mark
+                    *old_max_pos = pos;
+                    *old_max_row = row;
+                    *old_offset = coord;
                     None
                 }
+            }
+            None => {
+                // The extra lookup is fine - this is the cold path.
+                self.binlog_offsets
+                    .insert(file.to_owned(), (pos, row, coord));
+                None
             }
         };
 
