@@ -97,3 +97,6 @@ $ file-delete path=deleting.csv
 
 ! SELECT * FROM deleting_csv
 Source error: File IO:
+
+! CREATE SOURCE should_fail FROM FILE '/'
+/ is a directory.

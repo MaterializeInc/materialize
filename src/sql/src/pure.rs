@@ -66,8 +66,11 @@ pub async fn purify(mut stmt: Statement) -> Result<Statement, anyhow::Error> {
             }
             // Report an error if a file cannot be opened.
             Connector::File { path, .. } => {
-                let path = path.clone();
-                file = Some(tokio::fs::File::open(path).await?);
+                let f = tokio::fs::File::open(&path).await?;
+                if f.metadata().await?.is_dir() {
+                    bail!("Expected a regular file, but {} is a directory.", path);
+                }
+                file = Some(f);
             }
             _ => (),
         }
