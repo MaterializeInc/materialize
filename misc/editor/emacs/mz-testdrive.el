@@ -88,7 +88,10 @@
             (lambda ()
               (cond
                ((eql major-mode 'sql-mode)
-                (sql-set-product "materialize")))))
+                (sql-set-product
+                 (if (assoc 'materialize sql-product-alist)
+                     "materialize"
+                   "postgres"))))))
 
   (add-to-list 'auto-mode-alist '("\\.td\\'" . mz-testdrive-mode))
   'mz-testdrive-mode)
