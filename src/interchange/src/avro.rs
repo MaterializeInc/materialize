@@ -1368,7 +1368,8 @@ impl DebeziumDeduplicationState {
 
         let mut delete_full = false;
         let should_use = match &mut self.full {
-            None => should_skip.is_none(), // Always none if in snapshot, see comment above where `should_skip` is bound.
+            // Always none if in snapshot, see comment above where `should_skip` is bound.
+            None => should_skip.is_none(),
             Some(TrackFull {
                 seen_offsets,
                 seen_snapshot_keys,
@@ -1379,14 +1380,17 @@ impl DebeziumDeduplicationState {
                 if is_snapshot {
                     let key_indices = match key_indices.as_ref() {
                         None => {
-                            // No keys, so we can't do anything sensible for snapshots. Return "all OK" and hope their data isn't corrupted.
+                            // No keys, so we can't do anything sensible for snapshots.
+                            // Return "all OK" and hope their data isn't corrupted.
                             return true;
                         }
                         Some(ki) => ki,
                     };
                     let mut row_iter = match update.after.as_ref() {
                         None => {
-                            error!("Snapshot row at pos {:?}, message_time={} in {} was unexpectedly not an insert.", coord, fmt_timestamp(upstream_time_millis), debug_name);
+                            error!(
+                                "Snapshot row at pos {:?}, message_time={} in {} was unexpectedly not an insert.",
+                                coord, fmt_timestamp(upstream_time_millis), debug_name);
                             return false;
                         }
                         Some(r) => r.iter(),
@@ -1407,7 +1411,7 @@ impl DebeziumDeduplicationState {
                         // But don't worry -- since `Row`s use a 16-byte smallvec, the clone
                         // won't involve an extra allocation unless the key overflows that.
                         //
-                        // Anyway, TODO: avoid this via `get_or_insert` once rust-lang/#60896 is resolved.
+                        // Anyway, TODO: avoid this via `get_or_insert` once rust-lang/rust#60896 is resolved.
                         let is_new = seen_keys.insert(key.clone());
                         if !is_new {
                             warn!(
