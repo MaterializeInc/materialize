@@ -23,6 +23,7 @@
 //! string representations for the corresponding PostgreSQL type. Deviations
 //! should be considered a bug.
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
 
@@ -476,10 +477,11 @@ where
     }
 }
 
-pub fn parse_list<T, E>(
-    s: &str,
+pub fn parse_list<'a, T, E>(
+    s: &'a str,
+    is_element_type_list: bool,
     mut make_null: impl FnMut() -> T,
-    mut parse_elem: impl FnMut(&str) -> Result<T, E>,
+    mut parse_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, ParseError>
 where
     E: fmt::Display,
@@ -492,105 +494,153 @@ where
 
     let mut elems = vec![];
     let mut chars = s.chars().peekable();
-    match chars.next() {
-        // start of list
+    match chars.peek() {
         Some('{') => (),
         Some(other) => bail!("expected '{{', found {}", other),
         None => bail!("unexpected end of input"),
     }
-    loop {
-        match chars.peek().copied() {
-            // end of list
-            Some('}') => {
-                // consume
-                chars.next();
-                match chars.next() {
-                    Some(other) => bail!("unexpected leftover input {}", other),
-                    None => break,
-                }
-            }
-            // whitespace, ignore
-            Some(' ') => {
-                // consume
-                chars.next();
-                continue;
-            }
-            // an escaped elem
-            Some('"') => {
-                chars.next();
-                let mut elem_text = String::new();
-                loop {
-                    match chars.next() {
-                        // end of escaped elem
-                        Some('"') => break,
-                        // a backslash-escaped character
-                        Some('\\') => match chars.next() {
-                            Some('\\') => elem_text.push('\\'),
-                            Some('"') => elem_text.push('"'),
-                            Some(other) => bail!("bad escape \\{}", other),
-                            None => bail!("unexpected end of input"),
-                        },
-                        // a normal character
-                        Some(other) => elem_text.push(other),
-                        None => bail!("unexpected end of input"),
+
+    let mut generate_elem = |elem_buf: &str| -> Result<T, ParseError> {
+        let trimmed = elem_buf.trim();
+        Ok(if trimmed.to_uppercase() == "NULL" {
+            make_null()
+        } else {
+            let mut element = String::new();
+
+            if is_element_type_list {
+                // Do not unescape nested lists; their contents will be escaped
+                // when they're the top-level list.
+                element = trimmed.to_string();
+            } else {
+                // Unescape element's text representation
+                let final_char_idx = trimmed.len() - 1;
+                let mut escape_next_char = false;
+                for (i, c) in trimmed.chars().enumerate() {
+                    match c {
+                        c if escape_next_char => {
+                            escape_next_char = false;
+                            element.push(c);
+                        }
+                        '"' if i == 0 || i == final_char_idx => {}
+                        // Replace a terminal backslash with a space, which must have been
+                        // the originally escaped character.
+                        '\\' if i == final_char_idx => {
+                            element.push(' ');
+                        }
+                        '\\' => escape_next_char = true,
+                        c => element.push(c),
                     }
                 }
-                let elem = parse_elem(&elem_text).map_err(|e| err(e.to_string()))?;
-                elems.push(elem);
             }
-            // a nested list
-            Some('{') => {
-                let mut elem_text = String::new();
-                loop {
-                    match chars.next() {
-                        Some(c) => {
-                            elem_text.push(c);
-                            if c == '}' {
-                                break;
+
+            parse_elem(element.into()).map_err(|e| err(e.to_string()))?
+        })
+    };
+
+    // Track depth for use with nested lists. `depth == 1` represents the
+    // top-level list we're parsing; `depth > 1` represents a nested list, i.e.
+    // an element in a list of lists.
+    let mut depth = 0;
+    let mut in_escape = false;
+    let mut elem_buf = String::new();
+
+    loop {
+        match chars.next() {
+            // Always escape following char.
+            Some('\\') => {
+                elem_buf.push('\\');
+                match chars.next() {
+                    Some(c) => elem_buf.push(c),
+                    None => bail!("unexpected end of input"),
+                }
+            }
+            // Begin or end escape
+            Some('"') => {
+                in_escape = !in_escape;
+                // Validate pre-/post-escape text if the escape is at the element
+                // level, i.e. not inside a nested list.
+                if depth == 1 {
+                    if in_escape {
+                        if !elem_buf.trim().is_empty() {
+                            bail!("unexpected list element")
+                        }
+                    } else {
+                        loop {
+                            match chars.peek() {
+                                Some(c) if c.is_ascii_whitespace() => {
+                                    chars.next();
+                                }
+                                Some(',') | Some('}') => break,
+                                Some(c) => bail!("expected ',' or '}}', got '{}'", c),
+                                None => bail!("unexpected end of input"),
                             }
                         }
-                        None => bail!("unexpected end of input"),
                     }
                 }
-                let elem = parse_elem(&elem_text).map_err(|e| err(e.to_string()))?;
-                elems.push(elem);
+                elem_buf.push('"');
             }
-            // an unescaped elem
-            Some(_) => {
-                let mut elem_text = String::new();
-                loop {
-                    match chars.peek().copied() {
-                        // end of unescaped elem
-                        Some('}') | Some(',') | Some(' ') => break,
-                        // a normal character
-                        Some(other) => {
-                            // consume
-                            chars.next();
-                            elem_text.push(other);
-                        }
-                        None => bail!("unexpected end of input"),
+            Some(c) if in_escape => {
+                elem_buf.push(c);
+            }
+            Some('{') => {
+                depth += 1;
+                if depth > 1 {
+                    // Do not accept `text` elements that look like lists. This
+                    // would be unintuitive for users coming from Postgres,
+                    // where something like `{{a}}::text[]` automatically
+                    // creates a 2D array. Instead, we fail as a signal to users
+                    // that you must express the top-level list's dimension.
+                    if !is_element_type_list {
+                        bail!(
+                            "unescaped '{{' at beginning of element; perhaps you \
+                            want a nested list, e.g. '{{a}}'::text list list"
+                        )
                     }
+                    elem_buf.push('{');
                 }
-                elems.push(if elem_text.trim() == "NULL" {
-                    make_null()
+            }
+            Some('}') => {
+                assert!(depth != 0);
+                if depth > 1 {
+                    // End of nested list
+                    depth -= 1;
+                    elem_buf.push('}');
                 } else {
-                    parse_elem(&elem_text).map_err(|e| err(e.to_string()))?
-                });
+                    // End of top-level list
+                    if !elem_buf.is_empty() {
+                        elems.push(generate_elem(&elem_buf)?);
+                        elem_buf.clear();
+                    }
+                    break;
+                }
             }
-            None => bail!("unexpected end of input"),
+            // Separator between top-level list's elements.
+            Some(',') if depth == 1 => match chars.peek() {
+                Some('}') | None => bail!("malformed list"),
+                _ => {
+                    if elem_buf.is_empty() {
+                        bail!("unexpected character ','");
+                    } else {
+                        elems.push(generate_elem(&elem_buf)?);
+                        elem_buf.clear();
+                    }
+                }
+            },
+            Some(c) => elem_buf.push(c),
+            None => bail!("expected terminal '}}'"),
         }
-        // consume whitespace
-        while let Some(' ') = chars.peek() {
-            chars.next();
-        }
-        // look for delimiter
-        match chars.next() {
-            // another elem
-            Some(',') => continue,
-            // end of list
-            Some('}') => break,
-            Some(other) => bail!("expected ',' or '}}', found '{}'", other),
-            None => bail!("unexpected end of input"),
+    }
+    loop {
+        match chars.peek() {
+            Some(c) if c.is_ascii_whitespace() => {
+                chars.next();
+            }
+            Some(c) => bail!(
+                "expected terminal '}}', found{} '{}'",
+                if *c == '}' { " excess" } else { "" },
+                c
+            ),
+            None => break,
         }
     }
     Ok(elems)
