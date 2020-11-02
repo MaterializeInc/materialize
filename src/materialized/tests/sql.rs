@@ -100,7 +100,7 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_tail() -> Result<(), Box<dyn Error>> {
+fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default();
@@ -118,7 +118,7 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
     fn extract_ts(data: &[u8]) -> Result<u64, Box<dyn Error>> {
         Ok(str::from_utf8(data)?
             .split_whitespace()
-            .last()
+            .next()
             .unwrap()
             .parse()?)
     }
@@ -133,23 +133,25 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
     // tailing: changes to the file will propagate through Materialize and
     // into the user's SQL console.
     let cancel_token = client.cancel_token();
-    let mut tail_reader = client.copy_out("TAIL dynamic_csv")?.split(b'\n');
+    let mut tail_reader = client
+        .copy_out("COPY (TAIL dynamic_csv) TO STDOUT")?
+        .split(b'\n');
 
     let mut events = Vec::new();
 
     append(b"City 1,ST,00001\n")?;
     let next = tail_reader.next().unwrap()?;
-    assert!(next.starts_with(&b"City 1\tST\t00001\t1\tDiff: 1 at "[..]));
+    assert!(next.ends_with(&b"1\tCity 1\tST\t00001\t1"[..]));
     events.push((extract_ts(&next).unwrap(), next.clone()));
 
     append(b"City 2,ST,00002\n")?;
     let next = tail_reader.next().unwrap()?;
-    assert!(next.starts_with(&b"City 2\tST\t00002\t2\tDiff: 1 at "[..]));
+    assert!(next.ends_with(&b"1\tCity 2\tST\t00002\t2"[..]));
     events.push((extract_ts(&next).unwrap(), next.clone()));
 
     append(b"City 3,ST,00003\n")?;
     let next = tail_reader.next().unwrap()?;
-    assert!(next.starts_with(&b"City 3\tST\t00003\t3\tDiff: 1 at "[..]));
+    assert!(next.ends_with(&b"1\tCity 3\tST\t00003\t3"[..]));
     events.push((extract_ts(&next).unwrap(), next.clone()));
 
     // The tail won't end until a cancellation request is sent.
@@ -162,7 +164,10 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
     // that occur as of or later than that timestamp.
     for (ts, _) in &events {
         let cancel_token = client.cancel_token();
-        let q = format!("TAIL dynamic_csv WITHOUT SNAPSHOT AS OF {}", ts - 1);
+        let q = format!(
+            "COPY (TAIL dynamic_csv WITHOUT SNAPSHOT AS OF {}) TO STDOUT",
+            ts - 1
+        );
         let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
 
         // Skip by the things we won't be able to see.
@@ -180,7 +185,7 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
     // tailed timestamp, and then updates afterward.
     for (ts, _) in &events {
         let cancel_token = client.cancel_token();
-        let q = format!("TAIL dynamic_csv AS OF {}", ts - 1);
+        let q = format!("COPY (TAIL dynamic_csv AS OF {}) TO STDOUT", ts - 1);
         let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
 
         for (_, expected) in events.iter() {
@@ -222,7 +227,9 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     // All records should be read into view before we start tailing.
     thread::sleep(Duration::from_millis(100));
 
-    let mut tail_reader = client.copy_out("TAIL foo WITHOUT SNAPSHOT")?.split(b'\n');
+    let mut tail_reader = client
+        .copy_out("COPY (TAIL foo WITHOUT SNAPSHOT) TO STDOUT")?
+        .split(b'\n');
     let mut without_snapshot_count = 0;
     while let Some(_value) = tail_reader.next().transpose()? {
         without_snapshot_count += 1;
@@ -230,7 +237,9 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     assert_eq!(0, without_snapshot_count);
     drop(tail_reader);
 
-    let mut tail_reader = client.copy_out("TAIL foo WITH SNAPSHOT")?.split(b'\n');
+    let mut tail_reader = client
+        .copy_out("COPY (TAIL foo WITH SNAPSHOT) TO STDOUT")?
+        .split(b'\n');
     let mut with_snapshot_count = 0;
     while let Some(_value) = tail_reader.next().transpose()? {
         with_snapshot_count += 1;
@@ -266,19 +275,21 @@ fn test_tail_unmaterialized() -> Result<(), Box<dyn Error>> {
     // tailing: changes to the file will propagate through Materialize and
     // into the user's SQL console.
     let cancel_token = client.cancel_token();
-    let mut tail_reader = client.copy_out("TAIL dynamic_csv")?.split(b'\n');
+    let mut tail_reader = client
+        .copy_out("COPY (TAIL dynamic_csv) TO STDOUT")?
+        .split(b'\n');
 
     append(b"City 1,ST,00001\n")?;
     assert!(tail_reader
         .next()
         .unwrap()?
-        .starts_with(&b"City 1\tST\t00001\t1\tDiff: 1 at "[..]));
+        .ends_with(&b"1\tCity 1\tST\t00001\t1"[..]));
 
     append(b"City 2,ST,00002\n")?;
     assert!(tail_reader
         .next()
         .unwrap()?
-        .starts_with(&b"City 2\tST\t00002\t2\tDiff: 1 at "[..]));
+        .ends_with(&b"1\tCity 2\tST\t00002\t2"[..]));
 
     // The tail won't end until a cancellation request is sent.
     cancel_token.cancel_query(postgres::NoTls)?;
@@ -314,7 +325,7 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     ))?;
 
     // Launch the ill-fated tail.
-    client.copy_out("TAIL s")?;
+    client.copy_out("COPY (TAIL s) TO STDOUT")?;
 
     // Drop order will first disconnect clients and then gracefully shut down
     // the server. We previously had a bug where the server would fail to notice

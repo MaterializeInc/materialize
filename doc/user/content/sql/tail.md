@@ -28,17 +28,13 @@ _timestamp&lowbar;expression_ | The logical time to tail from onwards (either a 
 
 ### Output
 
-`TAIL`'s output is:
-
-```shell
-[tab-separated column values] Diff: [diff value] at [logical timestamp]
-```
+`TAIL`'s output is the item's columns prepended with `timestamp` and `diff` columns.
 
 Field | Represents
 ------|-----------
-`tab-separated column values` | The row's columns' values separated by tab characters.
-`diff value` | Whether the record is an insert (`1`), delete (`-1`), or update (delete for old value, followed by insert of new value).
-`logical timestamp` | Materialize's internal logical timestamp.
+`timestamp` | Materialize's internal logical timestamp.
+`diff` | Whether the record is an insert (`1`), delete (`-1`), or update (delete for old value, followed by insert of new value).
+column values | The row's columns' values, each as its own column.
 
 ### AS OF
 
@@ -58,15 +54,15 @@ Any further updates to these results are produced at the time when they occur. T
 In this example, we'll assume `some_materialized_view` has one `text` column.
 
 ```sql
-TAIL some_materialized_view
+COPY (TAIL some_materialized_view) TO STDOUT
 ```
 ```
-insert_key   Diff: 1 at 1580000000000
-will_delete  Diff: 1 at 1580000000001
-will_delete  Diff: -1 at 1580000000003
-will_update_old  Diff: 1 at 1580000000005
-will_update_old  Diff: -1 at 1580000000007
-will_update_new  Diff: 1 at 1580000000007
+1580000000000  1 insert_key
+1580000000001  1 will_delete
+1580000000003 -1 will_delete
+1580000000005  1 will_update_old
+1580000000007 -1 will_update_old
+1580000000007  1 will_update_new
 ````
 
 This represents:
@@ -83,10 +79,10 @@ TAIL some_materialized_view AS OF now() - '30s'::INTERVAL
 
 ### Tailing through a driver
 
-In terms of the `pgwire` protocol, `TAIL` is handled as a non-standard `COPY TO`
-statement. As long as your driver lets you send your own `COPY` statement to the
-running Materialize node, you can `TAIL` updates from Materialize anywhere you'd
-like.
+`TAIL` produces rows similar to a `SELECT` statement, except that `TAIL` may never complete.
+Many drivers buffer all results until a query is complete, and so will never return.
+Instead, use [`COPY TO`](/sql/copy-to) which is unbuffered by drivers and so is suitable for streaming.
+As long as your driver lets you send your own `COPY` statement to the running Materialize node, you can `TAIL` updates from Materialize anywhere you'd like.
 
 ```python
 #!/usr/bin/env python3
@@ -100,7 +96,7 @@ def main():
     conn = psycopg2.connect(dsn)
 
     with conn.cursor() as cursor:
-        cursor.copy_expert("TAIL some_materialized_view", sys.stdout)
+        cursor.copy_expert("COPY (TAIL some_materialized_view) TO STDOUT", sys.stdout)
 
 if __name__ == '__main__':
     main()
@@ -108,3 +104,5 @@ if __name__ == '__main__':
 
 This will then stream the same output we saw above to `stdout`, though you could
 obviously do whatever you like with the output from this point.
+
+If your driver does support unbuffered result streaming, then there is no need to use `COPY TO`.

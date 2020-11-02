@@ -2009,9 +2009,13 @@ impl Parser {
     /// Parse a copy statement
     fn parse_copy(&mut self) -> Result<Statement, ParserError> {
         let relation = if self.consume_token(&Token::LParen) {
-            let query = self.parse_query()?;
+            let query = self.parse_statement()?;
             self.expect_token(&Token::RParen)?;
-            CopyRelation::Query(query)
+            match query {
+                Statement::Select(stmt) => CopyRelation::Select(stmt),
+                Statement::Tail(stmt) => CopyRelation::Tail(stmt),
+                _ => return parser_err!(self, self.peek_prev_range(), "unsupported query in COPY"),
+            }
         } else {
             let name = self.parse_object_name()?;
             let columns = self.parse_parenthesized_column_list(Optional)?;
@@ -2019,7 +2023,9 @@ impl Parser {
         };
         let (direction, target) = match self.expect_one_of_keywords(&["FROM", "TO"])? {
             "FROM" => {
-                if let CopyRelation::Query(_) = relation {
+                if let CopyRelation::Table { .. } = relation {
+                    // Ok.
+                } else {
                     return parser_err!(
                         self,
                         self.peek_prev_range(),

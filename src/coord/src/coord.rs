@@ -1305,8 +1305,9 @@ where
                 id,
                 ts,
                 with_snapshot,
+                copy_to,
             } => tx.send(
-                self.sequence_tail(session.conn_id(), id, with_snapshot, ts)
+                self.sequence_tail(session.conn_id(), id, with_snapshot, ts, copy_to)
                     .await,
                 session,
             ),
@@ -1926,12 +1927,12 @@ where
             ExecuteResponse::SendingRows(Box::pin(rows_rx))
         };
 
-        match (copy_to, resp) {
-            (None, resp) => Ok(resp),
-            (Some(format), ExecuteResponse::SendingRows(rx)) => {
-                Ok(ExecuteResponse::CopyTo { format, rx })
-            }
-            _ => bail!("unsupported rows type with COPY"),
+        match copy_to {
+            None => Ok(resp),
+            Some(format) => Ok(ExecuteResponse::CopyTo {
+                format,
+                resp: Box::new(resp),
+            }),
         }
     }
 
@@ -1941,6 +1942,7 @@ where
         source_id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
+        copy_to: Option<CopyFormat>,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
@@ -1966,7 +1968,16 @@ where
             }),
         ))
         .await;
-        Ok(ExecuteResponse::Tailing { rx })
+
+        let resp = ExecuteResponse::Tailing { rx };
+
+        match copy_to {
+            None => Ok(resp),
+            Some(format) => Ok(ExecuteResponse::CopyTo {
+                format,
+                resp: Box::new(resp),
+            }),
+        }
     }
 
     /// A policy for determining the timestamp for a peek.
