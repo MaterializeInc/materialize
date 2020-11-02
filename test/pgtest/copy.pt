@@ -1,0 +1,38 @@
+# Ensure COPY works over simple query.
+send
+Query {"query": "COPY (VALUES (1, '2'), (3, '4'), (5, '\\\t\n\rtest\\N'), (6, NULL) ORDER BY column1) TO STDOUT"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text","text"]}
+CopyData "1\t2\n"
+CopyData "3\t4\n"
+CopyData "5\t\\\\\\t\\n\\rtest\\\\N\n"
+CopyData "6\t\\N\n"
+CopyDone
+CommandComplete {"tag":"COPY 4"}
+ReadyForQuery {"status":"I"}
+
+# Ensure COPY works over prepared statements.
+send
+Parse {"query": "COPY (VALUES (1, '2'), (3, '4'), (5, '\\\t\n\rtest\\N'), (6, NULL) ORDER BY column1) TO STDOUT"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CopyOut {"format":"text","column_formats":["text","text"]}
+CopyData "1\t2\n"
+CopyData "3\t4\n"
+CopyData "5\t\\\\\\t\\n\\rtest\\\\N\n"
+CopyData "6\t\\N\n"
+CopyDone
+CommandComplete {"tag":"COPY 4"}
+ReadyForQuery {"status":"I"}

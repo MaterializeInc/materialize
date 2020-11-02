@@ -275,7 +275,8 @@ where
                 .await;
         }
 
-        let row_desc = stmt.desc().relation_desc();
+        let send_desc = stmt.desc().relation_desc();
+        let relation_desc = stmt.desc().relation_desc.clone();
 
         // Bind.
         let portal_name = String::from("");
@@ -292,7 +293,7 @@ where
             .expect("unnamed statement to be present during simple query flow");
 
         // Maybe send row description.
-        if let Some(ref desc) = row_desc {
+        if let Some(ref desc) = send_desc {
             self.conn
                 .send(BackendMessage::RowDescription(
                     message::row_description_from_desc(desc),
@@ -304,7 +305,7 @@ where
         match self.coord_client.execute(portal_name.clone()).await {
             Ok(response) => {
                 let max_rows = usize::MAX;
-                self.send_execute_response(response, row_desc, portal_name, max_rows)
+                self.send_execute_response(response, relation_desc, portal_name, max_rows)
                     .await
             }
             Err(e) => {
