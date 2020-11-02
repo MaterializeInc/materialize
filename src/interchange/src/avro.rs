@@ -1389,7 +1389,7 @@ impl DebeziumDeduplicationState {
                     let mut row_iter = match update.after.as_ref() {
                         None => {
                             error!(
-                                "Snapshot row at pos {:?}, message_time={} in {} was unexpectedly not an insert.",
+                                "Snapshot row at pos {:?}, message_time={} source={} was not an insert.",
                                 coord, fmt_timestamp(upstream_time_millis), debug_name);
                             return false;
                         }
@@ -1415,7 +1415,7 @@ impl DebeziumDeduplicationState {
                         let is_new = seen_keys.insert(key.clone());
                         if !is_new {
                             warn!(
-                                "Snapshot row with key {:?} in {} seen multiple times (most recent message_time={})",
+                                "Snapshot row with key={:?} source={} seen multiple times (most recent message_time={})",
                                 key, debug_name, fmt_timestamp(upstream_time_millis)
                             );
                         }
@@ -1457,7 +1457,7 @@ impl DebeziumDeduplicationState {
                             // position ever seen
                             (true, Some(skipinfo)) => {
                                 warn!(
-                                "Source: {}:{} created a new record behind the highest point in binlog_file={} \
+                                "Created a new record behind the highest point in source={}:{} binlog_file={} \
                                  new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{} \
                                  message_time={}",
                                 debug_name, worker_idx, file, pos, row, coord.unwrap_or(-1),
@@ -1468,7 +1468,7 @@ impl DebeziumDeduplicationState {
                             // Duplicate item below the highest seen item
                             (false, Some(skipinfo)) => {
                                 debug!(
-                                "Source: {}:{} already ingested binlog coordinates {}:{}:{} old_binlog={}:{} \
+                                "already ingested source={}:{} binlog_coordinates={}:{}:{} old_binlog={}:{} \
                                  kafka_offset={} message_time={}",
                                 debug_name, worker_idx, file, pos, row,
                                 skipinfo.old_max_pos, skipinfo.old_max_row,
