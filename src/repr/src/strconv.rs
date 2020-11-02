@@ -23,11 +23,13 @@
 //! string representations for the corresponding PostgreSQL type. Deviations
 //! should be considered a bug.
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
 
 use chrono::offset::TimeZone;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use ore::lex::LexBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -38,6 +40,10 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::decimal::Decimal;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
+
+macro_rules! bail {
+    ($($arg:tt)*) => { return Err(format!($($arg)*)) };
+}
 
 /// Yes should be provided for types that will *never* return true for [`ElementEscaper::needs_escaping`]
 #[derive(Debug)]
@@ -476,124 +482,213 @@ where
     }
 }
 
-pub fn parse_list<T, E>(
-    s: &str,
-    mut make_null: impl FnMut() -> T,
-    mut parse_elem: impl FnMut(&str) -> Result<T, E>,
+pub fn parse_list<'a, T, E>(
+    s: &'a str,
+    is_element_type_list: bool,
+    make_null: impl FnMut() -> T,
+    gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, ParseError>
 where
     E: fmt::Display,
 {
-    let err = |details| ParseError::new("list", s).with_details(details);
+    parse_list_inner(s, is_element_type_list, make_null, gen_elem)
+        .map_err(|details| ParseError::new("list", s).with_details(details))
+}
 
-    macro_rules! bail {
-        ($($arg:tt)*) => { return Err(err(format!($($arg)*))) };
-    }
-
+// `parse_list_inner`'s separation from `parse_list` simplifies error handling
+// by allowing subprocesses to return `String` errors.
+pub fn parse_list_inner<'a, T, E>(
+    s: &'a str,
+    is_element_type_list: bool,
+    mut make_null: impl FnMut() -> T,
+    mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
+) -> Result<Vec<T>, String>
+where
+    E: fmt::Display,
+{
     let mut elems = vec![];
-    let mut chars = s.chars().peekable();
-    match chars.next() {
-        // start of list
-        Some('{') => (),
-        Some(other) => bail!("expected '{{', found {}", other),
-        None => bail!("unexpected end of input"),
+    let buf = &mut LexBuf::new(s);
+
+    // Consume opening paren.
+    if !buf.consume('{') {
+        bail!(
+            "expected '{{', found {}",
+            match buf.next() {
+                Some(c) => format!("{}", c),
+                None => "empty string".to_string(),
+            }
+        )
     }
+
+    // Simplifies calls to `gen_elem` by handling errors
+    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+
+    // Consume elements.
     loop {
-        match chars.peek().copied() {
-            // end of list
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        // Check for terminals.
+        match buf.next() {
             Some('}') => {
-                // consume
-                chars.next();
-                match chars.next() {
-                    Some(other) => bail!("unexpected leftover input {}", other),
-                    None => break,
-                }
+                break;
             }
-            // whitespace, ignore
-            Some(' ') => {
-                // consume
-                chars.next();
-                continue;
+            _ if elems.len() == 0 => {
+                buf.prev();
             }
-            // an escaped elem
-            Some('"') => {
-                chars.next();
-                let mut elem_text = String::new();
-                loop {
-                    match chars.next() {
-                        // end of escaped elem
-                        Some('"') => break,
-                        // a backslash-escaped character
-                        Some('\\') => match chars.next() {
-                            Some('\\') => elem_text.push('\\'),
-                            Some('"') => elem_text.push('"'),
-                            Some(other) => bail!("bad escape \\{}", other),
-                            None => bail!("unexpected end of input"),
-                        },
-                        // a normal character
-                        Some(other) => elem_text.push(other),
-                        None => bail!("unexpected end of input"),
-                    }
-                }
-                let elem = parse_elem(&elem_text).map_err(|e| err(e.to_string()))?;
-                elems.push(elem);
-            }
-            // a nested list
+            Some(',') => {}
+            Some(c) => bail!("expected ',' or '}}', got '{}'", c),
+            None => bail!("unexpected end of input"),
+        }
+
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        // Get elements.
+        let elem = match buf.peek() {
+            Some('"') => gen(list_lex_quoted_element(buf)?)?,
             Some('{') => {
-                let mut elem_text = String::new();
-                loop {
-                    match chars.next() {
-                        Some(c) => {
-                            elem_text.push(c);
-                            if c == '}' {
-                                break;
-                            }
-                        }
-                        None => bail!("unexpected end of input"),
-                    }
+                if !is_element_type_list {
+                    bail!(
+                        "unescaped '{{' at beginning of element; perhaps you \
+                        want a nested list, e.g. '{{a}}'::text list list"
+                    )
                 }
-                let elem = parse_elem(&elem_text).map_err(|e| err(e.to_string()))?;
-                elems.push(elem);
+                gen(list_lex_embedded_list(buf)?)?
             }
-            // an unescaped elem
-            Some(_) => {
-                let mut elem_text = String::new();
-                loop {
-                    match chars.peek().copied() {
-                        // end of unescaped elem
-                        Some('}') | Some(',') | Some(' ') => break,
-                        // a normal character
-                        Some(other) => {
-                            // consume
-                            chars.next();
-                            elem_text.push(other);
-                        }
-                        None => bail!("unexpected end of input"),
-                    }
-                }
-                elems.push(if elem_text.trim() == "NULL" {
-                    make_null()
-                } else {
-                    parse_elem(&elem_text).map_err(|e| err(e.to_string()))?
-                });
-            }
+            Some(_) => match list_lex_unquoted_element(buf)? {
+                Some(elem) => gen(elem)?,
+                None => make_null(),
+            },
             None => bail!("unexpected end of input"),
-        }
-        // consume whitespace
-        while let Some(' ') = chars.peek() {
-            chars.next();
-        }
-        // look for delimiter
-        match chars.next() {
-            // another elem
-            Some(',') => continue,
-            // end of list
-            Some('}') => break,
-            Some(other) => bail!("expected ',' or '}}', found '{}'", other),
-            None => bail!("unexpected end of input"),
+        };
+        elems.push(elem);
+    }
+
+    buf.take_while(|ch| ch.is_ascii_whitespace());
+    if let Some(c) = buf.next() {
+        bail!(
+            "malformed array literal; contains '{}' after terminal '}}'",
+            c
+        )
+    }
+
+    Ok(elems)
+}
+
+fn list_lex_quoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, String> {
+    assert!(buf.consume('"'));
+    let s = buf.take_while(|ch| !matches!(ch, '"' | '\\'));
+
+    // `Cow::Borrowed` optimization for quoted strings without escapes
+    if let Some('"') = buf.peek() {
+        buf.next();
+        return Ok(s.into());
+    }
+
+    let mut s = s.to_string();
+    loop {
+        match buf.next() {
+            Some('\\') => match buf.next() {
+                Some(c) => s.push(c),
+                None => bail!("unterminated quoted string"),
+            },
+            Some('"') => break,
+            Some(c) => s.push(c),
+            None => bail!("unterminated quoted string"),
         }
     }
-    Ok(elems)
+    Ok(s.into())
+}
+
+fn list_lex_embedded_list<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, String> {
+    let pos = buf.pos();
+    assert!(matches!(buf.next(), Some('{')));
+    let mut depth = 1;
+    let mut in_escape = false;
+    while depth > 0 {
+        match buf.next() {
+            Some('\\') => {
+                buf.next(); // Next character is escaped, so ignore it
+            }
+            Some('"') => in_escape = !in_escape, // Begin or end escape
+            Some('{') if !in_escape => depth += 1,
+            Some('}') if !in_escape => depth -= 1,
+            Some(_) => (),
+            None => bail!("unterminated embedded list"),
+        }
+    }
+    let s = &buf.inner()[pos..buf.pos()];
+    Ok(Cow::Borrowed(s))
+}
+
+// Result of `None` indicates element is NULL.
+fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, str>>, String> {
+    // first char is guaranteed to be non-whitespace
+    assert!(!buf.peek().unwrap().is_ascii_whitespace());
+
+    fn is_special_char(c: char) -> bool {
+        matches!(c, '{' | '}' | ',' | '\\' | '"')
+    }
+
+    let s = buf.take_while(|ch| !is_special_char(ch) && !ch.is_ascii_whitespace());
+
+    // `Cow::Borrowed` optimization for elements without special characters.
+    match buf.peek() {
+        Some(',') | Some('}') if !s.is_empty() => {
+            return Ok(if s.to_uppercase() == "NULL" {
+                None
+            } else {
+                Some(s.into())
+            });
+        }
+        _ => {}
+    }
+
+    // Track whether there are any escaped characters to determine if the string
+    // "NULL" should be treated as a NULL, or if it had any escaped characters
+    // and should be treated as the string "NULL".
+    let mut escaped_char = false;
+
+    let mut s = s.to_string();
+    // As we go, we keep track of where to truncate to in order to remove any
+    // trailing whitespace.
+    let mut trimmed_len = s.len();
+    loop {
+        match buf.next() {
+            Some('\\') => match buf.next() {
+                Some(c) => {
+                    escaped_char = true;
+                    s.push(c);
+                    trimmed_len = s.len();
+                }
+                None => return Err("unterminated element".into()),
+            },
+            // End of element/list
+            Some(',') | Some('}') => {
+                // Commas or closing brackets as first character indicates
+                // missing element definition.
+                if s.is_empty() {
+                    bail!("malformed list literal; missing element")
+                }
+                buf.prev();
+                break;
+            }
+            Some(c) if is_special_char(c) => bail!(
+                "malformed list literal; must escape special character '{}'",
+                c
+            ),
+            Some(c) => {
+                s.push(c);
+                if !c.is_ascii_whitespace() {
+                    trimmed_len = s.len();
+                }
+            }
+            None => bail!("unterminated element"),
+        }
+    }
+    s.truncate(trimmed_len);
+    Ok(if s.to_uppercase() == "NULL" && !escaped_char {
+        None
+    } else {
+        Some(Cow::Owned(s))
+    })
 }
 
 pub fn format_array<F, T>(

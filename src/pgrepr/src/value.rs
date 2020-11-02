@@ -421,6 +421,7 @@ fn decode_list(
 ) -> Result<Vec<Option<Value>>, Box<dyn Error + Sync + Send>> {
     Ok(strconv::parse_list(
         raw,
+        matches!(elem_type, Type::List(..)),
         || None,
         |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
     )?)
