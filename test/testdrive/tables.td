@@ -179,12 +179,9 @@ a       b
 ! INSERT INTO s VALUES (1 + NULL);
 NULL value in column a violates not-null constraint
 
-> CREATE TABLE v (a timestamptz);
+> CREATE TABLE v (a timestamptz, b decimal(38, 0));
 
-> INSERT INTO v VALUES (now());
-
-! INSERT INTO v VALUES (mz_logical_timestamp());
-column "a" is of type timestamptz but expression is of type numeric
+> INSERT INTO v VALUES (now(), mz_logical_timestamp());
 
 > DROP TABLE IF EXISTS s;
 

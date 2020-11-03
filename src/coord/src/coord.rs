@@ -60,7 +60,7 @@ use sql::plan::{
     AlterIndexLogicalCompactionWindow, CopyFormat, LogicalCompactionWindow, MutationKind, Params,
     PeekWhen, Plan, PlanContext,
 };
-use transform::Optimizer;
+use transform::{Optimizer, TransformError};
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
@@ -1664,7 +1664,8 @@ where
         let view_id = self.catalog.allocate_id()?;
         let view_oid = self.catalog.allocate_oid()?;
         // Optimize the expression so that we can form an accurately typed description.
-        let optimized_expr = self.optimizer.optimize(view.expr, self.catalog.indexes())?;
+        let ts = None; // views don't execute at a logical timestamp
+        let optimized_expr = self.optimize_expr(view.expr, ts)?;
         let desc = RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
@@ -1856,26 +1857,14 @@ where
     async fn sequence_peek(
         &mut self,
         conn_id: u32,
-        mut source: RelationExpr,
+        source: RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
         copy_to: Option<CopyFormat>,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let timestamp = self.determine_timestamp(&source, when)?;
 
-        // See if the query is introspecting its own logical timestamp, and
-        // install the determined timestamp if so.
-        source.visit_scalars_mut(&mut |e| {
-            if let ScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
-                *e = ScalarExpr::literal_ok(Datum::from(timestamp as i128), f.output_type());
-            }
-        });
-
-        // TODO (wangandi): Is there anything that optimizes to a
-        // constant expression that originally contains a global get? Is
-        // there anything not containing a global get that cannot be
-        // optimized to a constant expression?
-        let source = self.optimizer.optimize(source, self.catalog.indexes())?;
+        let source = self.optimize_expr(source, Some(timestamp))?;
 
         // If this optimizes to a constant expression, we can immediately return the result.
         let resp = if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
@@ -2249,9 +2238,12 @@ where
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
+                // EXPLAINs don't execute at any particular time, but there
+                // might still be a call to mz_logical_timestamp() within.
+                // Make up a dummy time, as it has to evaluate to something.
+                let ts = 0;
                 let optimized_plan = self
-                    .optimizer
-                    .optimize(decorrelated_plan, self.catalog.indexes())?
+                    .optimize_expr(decorrelated_plan, Some(ts))?
                     .into_inner();
                 let mut explanation = optimized_plan.explain(&self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
@@ -2300,13 +2292,10 @@ where
     async fn sequence_insert(
         &mut self,
         id: GlobalId,
-        values: expr::RelationExpr,
+        values: RelationExpr,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        match self
-            .optimizer
-            .optimize(values, self.catalog.indexes())?
-            .into_inner()
-        {
+        let ts = self.get_write_ts();
+        match self.optimize_expr(values, Some(ts))?.into_inner() {
             RelationExpr::Constant { rows, typ: _ } => {
                 let desc = self.catalog.get_by_id(&id).desc()?;
                 for (row, _) in &rows {
@@ -2324,7 +2313,7 @@ where
                 self.sequence_send_diffs(id, rows, affected_rows, MutationKind::Insert)
                     .await
             }
-            other => bail!("INSERT statement expected values, found {:?}", other),
+            _ => bail!("INSERT source cannot depend on other relations"),
         }
     }
 
@@ -2714,6 +2703,28 @@ where
             )
             .await
         }
+    }
+
+    fn optimize_expr(
+        &mut self,
+        mut expr: RelationExpr,
+        ts: Option<u64>,
+    ) -> Result<OptimizedRelationExpr, TransformError> {
+        // See if the query is introspecting its own logical timestamp, and
+        // install the determined timestamp if so.
+        if let Some(ts) = ts {
+            expr.visit_scalars_mut(&mut |e| {
+                if let ScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
+                    *e = ScalarExpr::literal_ok(Datum::from(i128::from(ts)), f.output_type());
+                }
+            });
+        }
+
+        // TODO (wangandi): Is there anything that optimizes to a
+        // constant expression that originally contains a global get? Is
+        // there anything not containing a global get that cannot be
+        // optimized to a constant expression?
+        self.optimizer.optimize(expr, self.catalog.indexes())
     }
 
     /// Imports the view, source, or table with `id` into the provided
