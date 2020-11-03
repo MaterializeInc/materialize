@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::max;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
@@ -1214,6 +1215,8 @@ struct TrackFull {
     /// binlog filename to (offset to (timestamp that this binlog entry was first seen))
     seen_offsets: HashMap<String, HashMap<(usize, usize), i64>>,
     seen_snapshot_keys: HashMap<String, HashSet<Row>>,
+    /// The highest-ever seen timestamp, used in logging to let us know how far backwards time might go
+    max_seen_time: i64,
     key_indices: Option<Vec<usize>>,
     /// Optimization to avoid re-allocating the row packer over and over when extracting the key..
     key_buf: RowPacker,
@@ -1268,6 +1271,7 @@ impl TrackFull {
         Self {
             seen_offsets: Default::default(),
             seen_snapshot_keys: Default::default(),
+            max_seen_time: 0,
             key_indices,
             key_buf: Default::default(),
             range: None,
@@ -1374,6 +1378,7 @@ impl DebeziumDeduplicationState {
             Some(TrackFull {
                 seen_offsets,
                 seen_snapshot_keys,
+                max_seen_time,
                 key_indices,
                 key_buf,
                 range,
@@ -1428,6 +1433,7 @@ impl DebeziumDeduplicationState {
                         true
                     }
                 } else {
+                    *max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
                     if let Some(seen_offsets) = seen_offsets.get_mut(file) {
                         // first check if we are in a special case of range-bounded track full
                         if let Some(range) = range {
@@ -1462,23 +1468,25 @@ impl DebeziumDeduplicationState {
                                 warn!(
                                     "Created a new record behind the highest point in source={}:{} binlog_file={} \
                                      new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{} \
-                                     message_time={} message_first_seen={}",
+                                     message_time={} message_first_seen={} max_seen_time={}",
                                     debug_name, worker_idx, file, pos, row, coord.unwrap_or(-1),
                                     skipinfo.old_max_pos, skipinfo.old_max_row,
                                     fmt_timestamp(upstream_time_millis),
                                     fmt_timestamp(*original_time),
+                                    fmt_timestamp(*max_seen_time),
                                 );
                             }
                             // Duplicate item below the highest seen item
                             (false, Some(skipinfo)) => {
                                 debug!(
                                     "already ingested source={}:{} binlog_coordinates={}:{}:{} old_binlog={}:{} \
-                                     kafka_offset={} message_time={} message_first_seen={}",
+                                     kafka_offset={} message_time={} message_first_seen={} max_seen_time={}",
                                     debug_name, worker_idx, file, pos, row,
                                     skipinfo.old_max_pos, skipinfo.old_max_row,
                                     skipinfo.old_offset.unwrap_or(-1),
                                     fmt_timestamp(upstream_time_millis),
                                     fmt_timestamp(*original_time),
+                                    fmt_timestamp(*max_seen_time),
                                 );
                             }
                             // already exists, but is past the debezium high water mark.
@@ -1488,10 +1496,11 @@ impl DebeziumDeduplicationState {
                             (false, None) => {
                                 error!("We surprisingly are seeing a duplicate record that \
                                     is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={} \
-                                    message_time={} message_first_seen={}",
+                                    message_time={} message_first_seen={} max_seen_time={}",
                                    file, pos, row, coord.unwrap_or(-1),
                                    fmt_timestamp(upstream_time_millis),
                                    fmt_timestamp(*original_time),
+                                   fmt_timestamp(*max_seen_time),
                                 );
                             }
                         }
