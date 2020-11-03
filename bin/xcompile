@@ -45,7 +45,7 @@ do_cargo() {
         # Docker for Mac is unusably slow.
 
         if [[ ! -d "$root/target/sysroot" ]]; then
-            die "xcompile: fatal: run \`bin/xcompile bootstrap\` first"
+            die "$(uw "xcompile: fatal:") run \`bin/xcompile bootstrap\` from the repo root first"
         fi
 
         export CMAKE_SYSTEM_NAME=Linux
