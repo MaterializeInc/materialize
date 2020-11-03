@@ -319,16 +319,14 @@ q1  ?column?
 4567890123456789  0.6
 
 # Unspecified-type literals in output columns should resolve as text
-#
-# TODO(benesch): support pg_typeof.
-# query IT colnames
-# SELECT *, pg_typeof(f1) FROM
-#   (SELECT 'foo' AS f1 FROM generate_series(1,3)) ss ORDER BY 1
-# ----
-# f1  pg_typeof
-# foo  text
-# foo  text
-# foo  text
+query TT colnames
+SELECT *, pg_typeof(f1) FROM
+  (SELECT 'foo' AS f1 FROM generate_series(1,3)) ss ORDER BY 1
+----
+f1   pg_typeof
+foo  text
+foo  text
+foo  text
 
 query T colnames
 select 1 = all (select (select 1))

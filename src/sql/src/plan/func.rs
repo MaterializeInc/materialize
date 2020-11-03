@@ -140,7 +140,16 @@ impl TypeCategory {
 /// Builds an expression that evaluates a scalar function on the provided
 /// input expressions.
 struct Operation<R>(
-    Box<dyn Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync>,
+    Box<
+        dyn Fn(
+                &ExprContext,
+                FuncSpec,
+                Vec<CoercibleScalarExpr>,
+                ParamList,
+            ) -> Result<R, anyhow::Error>
+            + Send
+            + Sync,
+    >,
 );
 
 impl Operation<ScalarExpr> {
@@ -151,6 +160,21 @@ impl Operation<ScalarExpr> {
 }
 
 impl<R> Operation<R> {
+    fn new<F>(f: F) -> Operation<R>
+    where
+        F: Fn(
+                &ExprContext,
+                FuncSpec,
+                Vec<CoercibleScalarExpr>,
+                ParamList,
+            ) -> Result<R, anyhow::Error>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Operation(Box::new(f))
+    }
+
     /// Builds an operation that takes no arguments.
     fn nullary<F>(f: F) -> Operation<R>
     where
@@ -192,7 +216,10 @@ impl<R> Operation<R> {
     where
         F: Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
     {
-        Operation(Box::new(f))
+        Self::new(move |ecx, spec, cexprs, params| {
+            let exprs = coerce_args_to_type(ecx, spec, cexprs, params)?;
+            f(ecx, exprs)
+        })
     }
 }
 
@@ -615,12 +642,7 @@ impl<'a> ArgImplementationMatcher<'a> {
 
         // Coerce args to selected candidates' resolved types.
         let params = f.params.resolve_polymorphic_types(types)?;
-        let mut exprs = Vec::new();
-        for (i, cexpr) in cexprs.into_iter().enumerate() {
-            exprs.push(m.coerce_arg_to_type(cexpr, &params[i])?);
-        }
-
-        (f.op.0)(ecx, exprs)
+        (f.op.0)(ecx, spec, cexprs, params)
     }
 
     /// Finds an exact match based on the arguments, or, if no exact match,
@@ -833,49 +855,65 @@ impl<'a> ArgImplementationMatcher<'a> {
              explicit casts to match parameter types"
         )
     }
+}
 
-    /// Generates `ScalarExpr` necessary to coerce `Expr` into the `ScalarType`
-    /// corresponding to `ParameterType`; errors if not possible. This can only
-    /// work within the `func` module because it relies on `ParameterType`.
-    fn coerce_arg_to_type(
-        &self,
-        arg: CoercibleScalarExpr,
-        param: &ParamType,
-    ) -> Result<ScalarExpr, anyhow::Error> {
-        use ParamType::*;
-        use ScalarType::*;
+/// Generates `ScalarExpr` necessary to coerce `Expr` into the `ScalarType`
+/// corresponding to `ParameterType`; errors if not possible. This can only
+/// work within the `func` module because it relies on `ParameterType`.
+fn coerce_arg_to_type(
+    ecx: &ExprContext,
+    spec: FuncSpec,
+    arg: CoercibleScalarExpr,
+    param: &ParamType,
+) -> Result<ScalarExpr, anyhow::Error> {
+    use ParamType::*;
+    use ScalarType::*;
 
-        match param {
-            // Concrete parameter type. Coerce then cast to that type.
-            Plain(ty) => {
-                let arg = typeconv::plan_coerce(self.ecx, arg, ty.clone())?;
-                if matches!(ty, Decimal(..)) && matches!(self.ecx.scalar_type(&arg), Decimal(..)) {
-                    // Suppress decimal -> decimal casts, to avoid casting to
-                    // the default decimal scale of 0.
-                    Ok(arg)
-                } else {
-                    typeconv::plan_cast(self.spec, self.ecx, arg, CastTo::Implicit(ty.clone()))
-                }
+    match param {
+        // Concrete parameter type. Coerce then cast to that type.
+        Plain(ty) => {
+            let arg = typeconv::plan_coerce(ecx, arg, ty.clone())?;
+            if matches!(ty, Decimal(..)) && matches!(ecx.scalar_type(&arg), Decimal(..)) {
+                // Suppress decimal -> decimal casts, to avoid casting to
+                // the default decimal scale of 0.
+                Ok(arg)
+            } else {
+                typeconv::plan_cast(spec, ecx, arg, CastTo::Implicit(ty.clone()))
             }
-
-            // Polymorphic pseudotypes. As in PostgreSQL, these bail on
-            // uncoerced arguments.
-            ArrayAny | ListAny | ListElementAny | NonVecAny => match arg {
-                CoercibleScalarExpr::Coerced(arg) => Ok(arg),
-                _ => bail!("could not determine polymorphic type because input has type unknown"),
-            },
-
-            // Special "any" psuedotype. Per PostgreSQL, uncoerced literals
-            // are acceptable, but uncoerced parameters are not.
-            Any => match arg {
-                CoercibleScalarExpr::Parameter(n) => {
-                    bail!("could not determine data type of parameter ${}", n)
-                }
-                _ => arg.type_as_any(self.ecx),
-            },
         }
+
+        // Polymorphic pseudotypes. As in PostgreSQL, these bail on
+        // uncoerced arguments.
+        ArrayAny | ListAny | ListElementAny | NonVecAny => match arg {
+            CoercibleScalarExpr::Coerced(arg) => Ok(arg),
+            _ => bail!("could not determine polymorphic type because input has type unknown"),
+        },
+
+        // Special "any" psuedotype. Per PostgreSQL, uncoerced literals
+        // are acceptable, but uncoerced parameters are not.
+        Any => match arg {
+            CoercibleScalarExpr::Parameter(n) => {
+                bail!("could not determine data type of parameter ${}", n)
+            }
+            _ => arg.type_as_any(ecx),
+        },
     }
 }
+
+/// Batch version of `coerce_arg_to_type`.
+fn coerce_args_to_type(
+    ecx: &ExprContext,
+    spec: FuncSpec,
+    cexprs: Vec<CoercibleScalarExpr>,
+    params: ParamList,
+) -> Result<Vec<ScalarExpr>, anyhow::Error> {
+    let mut exprs = Vec::new();
+    for (i, cexpr) in cexprs.into_iter().enumerate() {
+        exprs.push(coerce_arg_to_type(ecx, spec, cexpr, &params[i])?);
+    }
+    Ok(exprs)
+}
+
 
 /// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
 macro_rules! params {
@@ -1094,6 +1132,26 @@ lazy_static! {
                      FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
                      WHERE o.oid = $1)"
                 )
+            },
+            "pg_typeof" => Scalar {
+                params!(Any) => Operation::new(|ecx, spec, exprs, params| {
+                    // pg_typeof reports the type *before* coercion.
+                    let name = match ecx.scalar_type(&exprs[0]) {
+                        None => "unknown",
+                        Some(ty) => pgrepr::Type::from(&ty).name(),
+                    };
+
+                    // For consistency with other functions, verify that
+                    // coercion is possible, though we don't actually care about
+                    // the coerced results.
+                    coerce_args_to_type(ecx, spec, exprs, params)?;
+
+                    // TODO(benesch): make this function have return type
+                    // regtype, when we support that type. Document the function
+                    // at that point. For now, it's useful enough to have this
+                    // halfway version that returns a string.
+                    Ok(ScalarExpr::literal(Datum::String(name), ScalarType::String))
+                })
             },
             "regexp_match" => Scalar {
                 params!(String, String) => VariadicFunc::RegexpMatch,
