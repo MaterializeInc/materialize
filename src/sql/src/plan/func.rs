@@ -17,9 +17,9 @@ use std::fmt;
 use std::rc::Rc;
 
 use anyhow::{bail, Context};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 
-use crate::catalog::CatalogItemType;
 use ore::collections::CollectionExt;
 use repr::{ColumnName, Datum, RelationType, ScalarType};
 use sql_parser::ast::{Expr, Ident, ObjectName};
@@ -30,8 +30,9 @@ use super::expr::{
 };
 use super::query::{self, ExprContext, QueryContext, QueryLifetime};
 use super::scope::Scope;
-use super::typeconv::{self, rescale_decimal, CastTo, CoerceTo};
+use super::typeconv::{self, rescale_decimal, CastTo};
 use super::StatementContext;
+use crate::catalog::CatalogItemType;
 use crate::names::PartialName;
 
 /// A specifier for a function or an operator.
@@ -110,11 +111,9 @@ impl TypeCategory {
         match param {
             ParamType::Any
             | ParamType::ArrayAny
-            | ParamType::JsonbAny
             | ParamType::ListAny
             | ParamType::ListElementAny
-            | ParamType::NonVecAny
-            | ParamType::StringAny => Self::Pseudo,
+            | ParamType::NonVecAny => Self::Pseudo,
             ParamType::Plain(t) => Self::from_type(t),
         }
     }
@@ -476,9 +475,6 @@ pub enum ParamType {
     /// A polymorphic psuedotype permitting any array type.  For more details,
     /// see [`resolve_polymorphic_types`].
     ArrayAny,
-    /// A pseudotype permitting any type, but requires it to be cast to a
-    /// [`ScalarType::Jsonb`], or an element within a `Jsonb`.
-    JsonbAny,
     /// A polymorphic pseudotype permitting a `ScalarType::List` of any element
     /// type.  For more details, see [`resolve_polymorphic_types`].
     ListAny,
@@ -493,9 +489,6 @@ pub enum ParamType {
     /// A standard parameter that accepts arguments that match its embedded
     /// `ScalarType`.
     Plain(ScalarType),
-    /// A pseudotype permitting any type, but requires it to be cast to a
-    /// `ScalarType::String`.
-    StringAny,
 }
 
 impl ParamType {
@@ -503,24 +496,16 @@ impl ParamType {
     fn accepts_type(&self, t: &ScalarType) -> bool {
         use ParamType::*;
         use ScalarType::*;
-        // This `match` expresses the values permitted by polymorphic types,
-        // which do not have valid `CastTo` values.
-        if match self {
+
+        match self {
             // To support list (and, soon, array) concatenation, we must tell
             // ourselves this white lie until
             // https://github.com/MaterializeInc/materialize/issues/4627
             ArrayAny => matches!(t, Array(..) | String),
             ListAny => matches!(t, List(..) | String),
-            ListElementAny => true,
+            Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
-            _ => false,
-        } {
-            return true;
-        }
-
-        match self.get_cast_to_for_type(t) {
-            Ok(cast_to) => typeconv::get_cast(t, &cast_to).is_some(),
-            Err(..) => false,
+            Plain(to) => typeconv::get_cast(t, &CastTo::Implicit(to.clone())).is_some(),
         }
     }
 
@@ -541,48 +526,6 @@ impl ParamType {
         } else {
             false
         }
-    }
-
-    /// Returns the [`CoerceTo`] value appropriate to coerce arguments to
-    /// types compatible with `self`.
-    fn get_coerce_to(&self) -> Result<CoerceTo, anyhow::Error> {
-        use ParamType::*;
-        use ScalarType::*;
-        Ok(match self {
-            Any | StringAny => CoerceTo::Plain(String),
-            JsonbAny => CoerceTo::JsonbAny,
-            Plain(s) => CoerceTo::Plain(s.clone()),
-            // This `bail` includes polymorphic types, which must be constrained
-            // to some concrete type before they're valid for coercion.
-            _ => bail!(
-                "arguments cannot be implicitly cast to any implementation's parameters; \
-                 try providing explicit casts"
-            ),
-        })
-    }
-
-    /// Determines which, if any, [`CastTo`] value is appropriate to cast
-    /// `arg_type` to a [`ScalarType`] compatible with `self`.
-    fn get_cast_to_for_type(&self, arg_type: &ScalarType) -> Result<CastTo, anyhow::Error> {
-        use ParamType::*;
-        use ScalarType::*;
-
-        Ok(match self {
-            // Reflexive cast because `self` accepts any type.
-            Any => CastTo::Implicit(arg_type.clone()),
-            JsonbAny => CastTo::JsonbAny,
-            Plain(Decimal(..)) if matches!(arg_type, Decimal(..)) => {
-                CastTo::Implicit(arg_type.clone())
-            }
-            Plain(s) => CastTo::Implicit(s.clone()),
-            StringAny => CastTo::Explicit(ScalarType::String),
-            // This `bail` includes polymorphic types, which must be constrained
-            // to some concrete type before they're valid for casting.
-            _ => bail!(
-                "arguments cannot be implicitly cast to any implementation's parameters; \
-                 try providing explicit casts"
-            ),
-        })
     }
 
     fn is_polymorphic(&self) -> bool {
@@ -899,11 +842,38 @@ impl<'a> ArgImplementationMatcher<'a> {
         arg: CoercibleScalarExpr,
         param: &ParamType,
     ) -> Result<ScalarExpr, anyhow::Error> {
-        let coerce_to = param.get_coerce_to()?;
-        let arg = typeconv::plan_coerce(self.ecx, arg, coerce_to)?;
-        let arg_type = self.ecx.scalar_type(&arg);
-        let cast_to = param.get_cast_to_for_type(&arg_type)?;
-        typeconv::plan_cast(self.spec, self.ecx, arg, cast_to)
+        use ParamType::*;
+        use ScalarType::*;
+
+        match param {
+            // Concrete parameter type. Coerce then cast to that type.
+            Plain(ty) => {
+                let arg = typeconv::plan_coerce(self.ecx, arg, ty.clone())?;
+                if matches!(ty, Decimal(..)) && matches!(self.ecx.scalar_type(&arg), Decimal(..)) {
+                    // Suppress decimal -> decimal casts, to avoid casting to
+                    // the default decimal scale of 0.
+                    Ok(arg)
+                } else {
+                    typeconv::plan_cast(self.spec, self.ecx, arg, CastTo::Implicit(ty.clone()))
+                }
+            }
+
+            // Polymorphic pseudotypes. As in PostgreSQL, these bail on
+            // uncoerced arguments.
+            ArrayAny | ListAny | ListElementAny | NonVecAny => match arg {
+                CoercibleScalarExpr::Coerced(arg) => Ok(arg),
+                _ => bail!("could not determine polymorphic type because input has type unknown"),
+            },
+
+            // Special "any" psuedotype. Per PostgreSQL, uncoerced literals
+            // are acceptable, but uncoerced parameters are not.
+            Any => match arg {
+                CoercibleScalarExpr::Parameter(n) => {
+                    bail!("could not determine data type of parameter ${}", n)
+                }
+                _ => arg.type_as_any(self.ecx),
+            },
+        }
     }
 }
 
@@ -997,15 +967,15 @@ lazy_static! {
                 params!(String) => UnaryFunc::CharLength
             },
             "concat" => Scalar {
-                 params!((StringAny)...) => Operation::variadic(|_ecx, mut exprs| {
-                    // Unlike all other `StringAny` casts, `concat` uses an
-                    // implicit behavior for converting bools to strings.
-                    for e in &mut exprs {
-                        if let ScalarExpr::CallUnary {
-                            func: func @ UnaryFunc::CastBoolToStringExplicit,
-                            ..
-                        } = e {
-                            *func = UnaryFunc::CastBoolToStringImplicit;
+                 params!((Any)...) => Operation::variadic(|ecx, cexprs| {
+                    let mut exprs = vec![];
+                    for expr in cexprs {
+                        if ecx.scalar_type(&expr) == ScalarType::Bool {
+                            // concat uses nonstandard bool -> string casts
+                            // to match historical baggage in PostgreSQL.
+                            exprs.push(expr.call_unary(UnaryFunc::CastBoolToStringNonstandard));
+                        } else {
+                            exprs.push(typeconv::to_string(ecx, expr));
                         }
                     }
                     Ok(ScalarExpr::CallVariadic { func: VariadicFunc::Concat, exprs })
@@ -1054,12 +1024,21 @@ lazy_static! {
             },
             "jsonb_build_array" => Scalar {
                 params!() => VariadicFunc::JsonbBuildArray,
-                params!((JsonbAny)...) => VariadicFunc::JsonbBuildArray
+                params!((Any)...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
+                    func: VariadicFunc::JsonbBuildArray,
+                    exprs: exprs.into_iter().map(|e| typeconv::to_jsonb(ecx, e)).collect(),
+                }))
             },
             "jsonb_build_object" => Scalar {
                 params!() => VariadicFunc::JsonbBuildObject,
-                params!((StringAny, JsonbAny)...) =>
-                    VariadicFunc::JsonbBuildObject
+                params!((Any, Any)...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
+                    func: VariadicFunc::JsonbBuildObject,
+                    exprs: exprs.into_iter().tuples().map(|(key, val)| {
+                        let key = typeconv::to_string(ecx, key);
+                        let val = typeconv::to_jsonb(ecx, val);
+                        vec![key, val]
+                    }).flatten().collect(),
+                }))
             },
             "jsonb_pretty" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbPretty
@@ -1173,7 +1152,7 @@ lazy_static! {
             //
             // https://www.postgresql.org/docs/current/functions-json.html
             "to_jsonb" => Scalar {
-                params!(JsonbAny) => Operation::identity()
+                params!(Any) => Operation::unary(|ecx, e| Ok(typeconv::to_jsonb(ecx, e)))
             },
             "to_timestamp" => Scalar {
                 params!(Float64) => UnaryFunc::ToTimestamp
@@ -1227,7 +1206,7 @@ lazy_static! {
                 params!(Any) => Operation::unary(|_ecx, _e| unsupported!("json_agg"))
             },
             "jsonb_agg" => Aggregate {
-                params!(JsonbAny) => Operation::unary(|_ecx, e| {
+                params!(Any) => Operation::unary(|ecx, e| {
                     // `AggregateFunc::JsonbAgg` filters out `Datum::Null` (it
                     // needs to have *some* identity input), but the semantics
                     // of the SQL function require that `Datum::Null` is treated
@@ -1236,7 +1215,7 @@ lazy_static! {
                     let json_null = ScalarExpr::literal(Datum::JsonNull, ScalarType::Jsonb);
                     let e = ScalarExpr::CallVariadic {
                         func: VariadicFunc::Coalesce,
-                        exprs: vec![e, json_null],
+                        exprs: vec![typeconv::to_jsonb(ecx, e), json_null],
                     };
                     Ok((e, AggregateFunc::JsonbAgg))
                 })

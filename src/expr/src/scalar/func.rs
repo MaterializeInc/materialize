@@ -115,18 +115,18 @@ fn abs_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().abs())
 }
 
-fn cast_bool_to_string_explicit<'a>(a: Datum<'a>) -> Datum<'a> {
-    // N.B. this function differs from `cast_bool_to_string_implicit` because
-    // the SQL specification requires `true` and `false` to be spelled out
-    // in explicit casts, while PostgreSQL prefers its more concise `t` and `f`
-    // representation in implicit casts.
+fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
     match a.unwrap_bool() {
         true => Datum::from("true"),
         false => Datum::from("false"),
     }
 }
 
-fn cast_bool_to_string_implicit<'a>(a: Datum<'a>) -> Datum<'a> {
+fn cast_bool_to_string_nonstandard<'a>(a: Datum<'a>) -> Datum<'a> {
+    // N.B. this function differs from `cast_bool_to_string_implicit` because
+    // the SQL specification requires `true` and `false` to be spelled out in
+    // explicit casts, while PostgreSQL prefers its more concise `t` and `f`
+    // representation in some contexts, for historical reasons.
     Datum::String(strconv::format_bool_static(a.unwrap_bool()))
 }
 
@@ -2329,8 +2329,8 @@ pub enum UnaryFunc {
     AbsFloat32,
     AbsFloat64,
     AbsDecimal,
-    CastBoolToStringExplicit,
-    CastBoolToStringImplicit,
+    CastBoolToString,
+    CastBoolToStringNonstandard,
     CastBoolToInt32,
     CastInt32ToBool,
     CastInt32ToFloat32,
@@ -2465,8 +2465,8 @@ impl UnaryFunc {
             UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
             UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
             UnaryFunc::AbsDecimal => Ok(abs_decimal(a)),
-            UnaryFunc::CastBoolToStringExplicit => Ok(cast_bool_to_string_explicit(a)),
-            UnaryFunc::CastBoolToStringImplicit => Ok(cast_bool_to_string_implicit(a)),
+            UnaryFunc::CastBoolToString => Ok(cast_bool_to_string(a)),
+            UnaryFunc::CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
             UnaryFunc::CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
             UnaryFunc::CastInt32ToBool => Ok(cast_int32_to_bool(a)),
             UnaryFunc::CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
@@ -2611,8 +2611,8 @@ impl UnaryFunc {
 
             CastBoolToInt32 => ScalarType::Int32.nullable(in_nullable),
 
-            CastBoolToStringExplicit
-            | CastBoolToStringImplicit
+            CastBoolToString
+            | CastBoolToStringNonstandard
             | CastInt32ToString
             | CastInt64ToString
             | CastFloat32ToString
@@ -2740,7 +2740,8 @@ impl UnaryFunc {
                 | UnaryFunc::NegFloat32
                 | UnaryFunc::NegFloat64
                 | UnaryFunc::NegDecimal
-                | UnaryFunc::CastBoolToStringExplicit
+                | UnaryFunc::CastBoolToString
+                | UnaryFunc::CastBoolToStringNonstandard
                 | UnaryFunc::CastInt32ToInt64
                 | UnaryFunc::CastInt32ToString
                 | UnaryFunc::CastInt64ToString
@@ -2773,8 +2774,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsDecimal => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
-            UnaryFunc::CastBoolToStringExplicit => f.write_str("booltostrex"),
-            UnaryFunc::CastBoolToStringImplicit => f.write_str("booltostrim"),
+            UnaryFunc::CastBoolToString => f.write_str("booltostr"),
+            UnaryFunc::CastBoolToStringNonstandard => f.write_str("booltostrns"),
             UnaryFunc::CastBoolToInt32 => f.write_str("booltoi32"),
             UnaryFunc::CastInt32ToBool => f.write_str("i32tobool"),
             UnaryFunc::CastInt32ToFloat32 => f.write_str("i32tof32"),

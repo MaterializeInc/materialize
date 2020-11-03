@@ -54,7 +54,7 @@ use crate::plan::func::{self, Func, FuncSpec};
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
-use crate::plan::typeconv::{self, CastContext, CastTo, CoerceTo};
+use crate::plan::typeconv::{self, CastContext, CastTo};
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
@@ -1822,7 +1822,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 Expr::List(exprs) => plan_list(ecx, exprs, Some(to_scalar_type.clone()))?,
                 _ => plan_expr(ecx, expr)?,
             };
-            let expr = typeconv::plan_coerce(ecx, expr, CoerceTo::Plain(to_scalar_type.clone()))?;
+            let expr = typeconv::plan_coerce(ecx, expr, to_scalar_type.clone())?;
             typeconv::plan_cast("CAST", ecx, expr, CastTo::Explicit(to_scalar_type))?.into()
         }
         Expr::Function(func) => plan_function(ecx, func)?.into(),
@@ -2164,7 +2164,7 @@ pub fn coerce_homogeneous_exprs(
     // Try to cast all expressions to `target`.
     let mut out = Vec::new();
     for expr in exprs {
-        let arg = typeconv::plan_coerce(ecx, expr, CoerceTo::Plain(target.clone()))?;
+        let arg = typeconv::plan_coerce(ecx, expr, target.clone())?;
 
         match typeconv::plan_cast(name, ecx, arg.clone(), CastTo::Implicit(target.clone())) {
             Ok(expr) => out.push(expr),
