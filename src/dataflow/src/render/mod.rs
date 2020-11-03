@@ -640,13 +640,6 @@ where
         let mut needed_additional_tokens = Vec::new();
         for import_id in import_ids {
             if let Some(addls) = self.additional_tokens.get(&import_id) {
-                // if let Some(logger) = &mut materialized_logging {
-                //     // Log the dependency.
-                //     logger.log(MaterializedEvent::DataflowDependency {
-                //         dataflow: idx_id,
-                //         source: import_id,
-                //     });
-                // }
                 needed_additional_tokens.extend_from_slice(addls);
             }
             if let Some(source_token) = self.source_tokens.get(&import_id) {

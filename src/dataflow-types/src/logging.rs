@@ -137,8 +137,10 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::SourceInfo) => RelationDesc::empty()
                 .with_column("source_name", ScalarType::String.nullable(false))
                 .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("dataflow_id", ScalarType::String.nullable(false))
                 .with_column("partition_id", ScalarType::String.nullable(false))
                 .with_column("offset", ScalarType::Int64.nullable(false))
+                .with_column("timestamp", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
 
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationDesc::empty()
