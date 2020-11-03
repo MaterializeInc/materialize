@@ -32,6 +32,7 @@ pub(crate) enum ErrorKind {
     ItemAlreadyExists(String),
     UnacceptableSchemaName(String),
     ReadOnlySystemSchema(String),
+    ReadOnlyItem(String),
     SchemaNotEmpty(String),
     InvalidTemporaryDependency(String),
     InvalidTemporarySchema,
@@ -45,6 +46,7 @@ pub(crate) enum ErrorKind {
         dependee: String,
         message: String,
     },
+    TypeRename(String),
     ExperimentalModeRequired,
     ExperimentalModeUnavailable,
 }
@@ -81,12 +83,14 @@ impl std::error::Error for Error {
             | ErrorKind::ItemAlreadyExists(_)
             | ErrorKind::UnacceptableSchemaName(_)
             | ErrorKind::ReadOnlySystemSchema(_)
+            | ErrorKind::ReadOnlyItem(_)
             | ErrorKind::SchemaNotEmpty(_)
             | ErrorKind::InvalidTemporaryDependency(_)
             | ErrorKind::InvalidTemporarySchema
             | ErrorKind::MandatoryTableIndex(_)
             | ErrorKind::UnsatisfiableLoggingDependency { .. }
             | ErrorKind::AmbiguousRename { .. }
+            | ErrorKind::TypeRename(_)
             | ErrorKind::ExperimentalModeRequired
             | ErrorKind::ExperimentalModeUnavailable => None,
             ErrorKind::Sql(e) => Some(e),
@@ -115,6 +119,7 @@ impl fmt::Display for Error {
             ErrorKind::ReadOnlySystemSchema(name) => {
                 write!(f, "system schema '{}' cannot be modified", name)
             }
+            ErrorKind::ReadOnlyItem(name) => write!(f, "system item '{}' cannot be modified", name),
             ErrorKind::SchemaNotEmpty(name) => write!(f, "cannot drop non-empty schema '{}'", name),
             ErrorKind::InvalidTemporaryDependency(name) => write!(
                 f,
@@ -150,6 +155,7 @@ impl fmt::Display for Error {
                     )
                 }
             }
+            ErrorKind::TypeRename(typ) => write!(f, "cannot rename type: {}", typ),
             ErrorKind::ExperimentalModeRequired => write!(
                 f,
                 r#"Materialize previously started with --experimental to

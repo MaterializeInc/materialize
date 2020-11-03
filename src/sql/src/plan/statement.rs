@@ -363,7 +363,7 @@ fn handle_tail(
                 copy_to,
             })
         }
-        CatalogItemType::Index | CatalogItemType::Sink => bail!(
+        CatalogItemType::Index | CatalogItemType::Sink | CatalogItemType::Type => bail!(
             "'{}' cannot be tailed because it is a {}",
             from,
             entry.item_type(),
@@ -1605,7 +1605,8 @@ fn handle_drop_item(
                 CatalogItemType::Table
                 | CatalogItemType::Source
                 | CatalogItemType::View
-                | CatalogItemType::Sink => {
+                | CatalogItemType::Sink
+                | CatalogItemType::Type => {
                     bail!(
                         "cannot drop {}: still depended upon by catalog item '{}'",
                         catalog_entry.name(),

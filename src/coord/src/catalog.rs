@@ -121,7 +121,6 @@ pub struct Schema {
     #[serde(skip)]
     pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
-    pub types: BTreeMap<String, Type>,
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +139,7 @@ pub enum CatalogItem {
     View(View),
     Sink(Sink),
     Index(Index),
+    Type(Type),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,10 +192,15 @@ pub struct Index {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Type {
-    Map {
+    Builtin {
         oid: u32,
-        key_oid: u32,
-        value_oid: u32,
+    },
+    Map {
+        create_sql: String,
+        plan_cx: PlanContext,
+        oid: u32,
+        key_id: GlobalId,
+        value_id: GlobalId,
     },
 }
 
@@ -208,6 +213,7 @@ impl CatalogItem {
             CatalogItem::Sink(_) => "sink",
             CatalogItem::View(_) => "view",
             CatalogItem::Index(_) => "index",
+            CatalogItem::Type(_) => "type",
         }
     }
 
@@ -218,6 +224,7 @@ impl CatalogItem {
             CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(name.to_string())),
             CatalogItem::View(view) => Ok(&view.desc),
             CatalogItem::Index(_) => Err(SqlCatalogError::InvalidIndexDependency(name.to_string())),
+            CatalogItem::Type(_) => Err(SqlCatalogError::InvalidTypeDependency(name.to_string())),
         }
     }
 
@@ -230,6 +237,12 @@ impl CatalogItem {
             CatalogItem::Sink(sink) => vec![sink.from],
             CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
             CatalogItem::Index(idx) => vec![idx.on],
+            CatalogItem::Type(typ) => match typ {
+                Type::Builtin { .. } => vec![],
+                Type::Map {
+                    key_id, value_id, ..
+                } => vec![*key_id, *value_id],
+            },
         }
     }
 
@@ -240,7 +253,8 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::View(_)
-            | CatalogItem::Index(_) => false,
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_) => false,
             CatalogItem::Sink(s) => match s.connector {
                 SinkConnectorState::Pending(_) => true,
                 SinkConnectorState::Ready(_) => false,
@@ -307,6 +321,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Index(i))
             }
+            CatalogItem::Type(_) => unreachable!("types cannot be renamed"),
         }
     }
 }
@@ -411,7 +426,6 @@ impl Catalog {
                     id,
                     oid,
                     items: BTreeMap::new(),
-                    types: BTreeMap::new(),
                 },
             );
             events.push(Event::CreatedSchema {
@@ -530,6 +544,19 @@ impl Catalog {
                         });
                     let oid = catalog.allocate_oid()?;
                     events.push(catalog.insert_item(view.id, oid, name, item));
+                }
+
+                Builtin::Type(typ) => {
+                    events.push(catalog.insert_item(
+                        typ.id,
+                        typ.oid,
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: PG_CATALOG_SCHEMA.into(),
+                            item: typ.name.to_owned(),
+                        },
+                        CatalogItem::Type(Type::Builtin { oid: typ.oid }),
+                    ));
                 }
 
                 _ => (),
@@ -703,13 +730,6 @@ impl Catalog {
             .ok_or_else(|| SqlCatalogError::UnknownItem(name.to_string()))
     }
 
-    /// Returns the named user-defined type, if it exists.
-    pub fn try_get_type(&self, name: &FullName, conn_id: u32) -> Option<&Type> {
-        self.get_schema(&name.database, &name.schema, conn_id)
-            .ok()
-            .and_then(|schema| schema.types.get(&name.item))
-    }
-
     pub fn try_get_by_id(&self, id: GlobalId) -> Option<&CatalogEntry> {
         self.by_id.get(&id)
     }
@@ -728,7 +748,6 @@ impl Catalog {
                 id: -1,
                 oid,
                 items: BTreeMap::new(),
-                types: BTreeMap::new(),
             },
         );
         Ok(())
@@ -847,7 +866,7 @@ impl Catalog {
                     .unwrap()
                     .push((id, index.keys.clone()));
             }
-            CatalogItem::Sink(_) => (),
+            CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
         }
 
         let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
@@ -1074,6 +1093,10 @@ impl Catalog {
                                 )));
                             }
                         };
+                        if let CatalogItem::Type(Type::Builtin { .. }) = item {
+                            return Err(Error::new(ErrorKind::ReadOnlyItem(name.item)));
+                        }
+
                         let schema_id = tx.load_schema_id(database_id, &name.schema)?;
                         let serialized_item = self.serialize_item(&item);
                         tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
@@ -1129,6 +1152,9 @@ impl Catalog {
                     let mut actions = Vec::new();
 
                     let entry = self.by_id.get(&id).unwrap();
+                    if let CatalogItem::Type(_) = entry.item() {
+                        return Err(Error::new(ErrorKind::TypeRename(entry.name().to_string())));
+                    }
 
                     let mut to_full_name = entry.name.clone();
                     to_full_name.item = to_name;
@@ -1213,7 +1239,6 @@ impl Catalog {
                             id,
                             oid,
                             items: BTreeMap::new(),
-                            types: BTreeMap::new(),
                         },
                     );
                     Event::CreatedSchema {
@@ -1376,6 +1401,17 @@ impl Catalog {
                 create_sql: sink.create_sql.clone(),
                 eval_env: Some(sink.plan_cx.clone().into()),
             },
+            CatalogItem::Type(typ) => match typ {
+                Type::Builtin { .. } => unreachable!("builtin types are not stored"),
+                Type::Map {
+                    create_sql,
+                    plan_cx,
+                    ..
+                } => SerializedCatalogItem::V1 {
+                    create_sql: create_sql.clone(),
+                    eval_env: Some(plan_cx.clone().into()),
+                },
+            },
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
@@ -1501,8 +1537,8 @@ impl Catalog {
                 CatalogItem::Table(_) => {
                     unreachable!("tables always have at least one index");
                 }
-                CatalogItem::Sink(_) | CatalogItem::Index(_) => {
-                    unreachable!("sinks and indexes cannot be depended upon");
+                CatalogItem::Sink(_) | CatalogItem::Index(_) | CatalogItem::Type(_) => {
+                    unreachable!("sinks, indexes, and user-defined types cannot be depended upon");
                 }
             }
         }
@@ -1522,8 +1558,8 @@ impl Catalog {
             CatalogItem::Table(_) => true,
             CatalogItem::Source(_) => false,
             item @ CatalogItem::View(_) => item.uses().into_iter().any(|id| self.uses_tables(id)),
-            CatalogItem::Sink(_) | CatalogItem::Index(_) => {
-                unreachable!("sinks and indexes cannot be depended upon");
+            CatalogItem::Sink(_) | CatalogItem::Index(_) | CatalogItem::Type(_) => {
+                unreachable!("sinks, indexes, and user-defined types cannot be depended upon");
             }
         }
     }
@@ -1775,7 +1811,7 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
     }
 
     fn type_exists(&self, name: &FullName) -> bool {
-        self.catalog.try_get_type(name, self.conn_id).is_some()
+        self.catalog.try_get(name, self.conn_id).is_some()
     }
 
     fn experimental_mode(&self) -> bool {
@@ -1807,6 +1843,8 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
             CatalogItem::View(View { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
+            CatalogItem::Type(Type::Map { create_sql, .. }) => create_sql,
+            CatalogItem::Type(Type::Builtin { .. }) => unimplemented!(),
         }
     }
 
@@ -1817,6 +1855,8 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Sink(Sink { plan_cx, .. }) => plan_cx,
             CatalogItem::View(View { plan_cx, .. }) => plan_cx,
             CatalogItem::Index(Index { plan_cx, .. }) => plan_cx,
+            CatalogItem::Type(Type::Map { plan_cx, .. }) => plan_cx,
+            CatalogItem::Type(Type::Builtin { .. }) => unimplemented!(),
         }
     }
 
@@ -1827,6 +1867,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Sink(_) => sql::catalog::CatalogItemType::Sink,
             CatalogItem::View(_) => sql::catalog::CatalogItemType::View,
             CatalogItem::Index(_) => sql::catalog::CatalogItemType::Index,
+            CatalogItem::Type(_) => sql::catalog::CatalogItemType::Type,
         }
     }
 
