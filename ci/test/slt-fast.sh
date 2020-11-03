@@ -83,6 +83,7 @@ tests=(
     # test/sqllogictest/cockroach/decimal.slt
     test/sqllogictest/cockroach/delete.slt
     test/sqllogictest/cockroach/discard.slt
+    test/sqllogictest/cockroach/distinct_on.slt
     test/sqllogictest/cockroach/drop_database.slt
     test/sqllogictest/cockroach/drop_table.slt
     test/sqllogictest/cockroach/drop_user.slt

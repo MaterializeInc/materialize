@@ -23,35 +23,35 @@ EXPLAIN SELECT 665
 ----
 EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })
+Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })
 
 parse-statement
 EXPLAIN RAW PLAN FOR SELECT 665
 ----
 EXPLAIN RAW PLAN FOR SELECT 665
 =>
-Explain(ExplainStatement { stage: RawPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })
+Explain(ExplainStatement { stage: RawPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })
 
 parse-statement
 EXPLAIN DECORRELATED PLAN FOR SELECT 665
 ----
 EXPLAIN DECORRELATED PLAN FOR SELECT 665
 =>
-Explain(ExplainStatement { stage: DecorrelatedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })
+Explain(ExplainStatement { stage: DecorrelatedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 ----
 EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })
+Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })
 
 parse-statement
 EXPLAIN PLAN FOR SELECT 665
 ----
 EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })
+Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR VIEW foo
