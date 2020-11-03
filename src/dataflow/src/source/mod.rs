@@ -736,29 +736,32 @@ pub struct PartitionMetrics {
     messages_ingested: DeleteOnDropCounter<'static, AtomicI64>,
     logger: Option<Logger>,
     source_name: String,
-    source_id: String,
+    source_id: SourceInstanceId,
     partition_id: String,
     last_offset: i64,
+    last_timestamp: i64,
 }
 
 impl PartitionMetrics {
     /// Record the latest offset ingested high-water mark
-    pub fn record_offset(&mut self, offset: i64) {
+    pub fn record_offset(&mut self, offset: i64, timestamp: i64) {
         if let Some(logger) = self.logger.as_mut() {
             logger.log(MaterializedEvent::SourceInfo {
                 source_name: self.source_name.clone(),
-                source_id: self.source_id.clone(),
+                source_id: self.source_id,
                 partition_id: self.partition_id.clone(),
                 offset: offset - self.last_offset,
+                timestamp: timestamp - self.last_timestamp,
             });
         }
         self.last_offset = offset;
+        self.last_timestamp = timestamp;
     }
 
     /// Initialises partition metrics for a given (source_id, partition_id)
     pub fn new(
         source_name: &str,
-        source_id: &str,
+        source_id: SourceInstanceId,
         partition_id: &str,
         logger: Option<Logger>,
     ) -> PartitionMetrics {
@@ -789,7 +792,7 @@ impl PartitionMetrics {
             )
             .unwrap();
         }
-        let labels = &[source_name, source_id, partition_id];
+        let labels = &[source_name, &source_id.to_string(), partition_id];
         PartitionMetrics {
             offset_ingested: DeleteOnDropGauge::new_with_error_handler(
                 OFFSET_INGESTED.with_label_values(labels),
@@ -813,9 +816,10 @@ impl PartitionMetrics {
             ),
             logger,
             source_name: source_name.to_string(),
-            source_id: source_id.to_string(),
+            source_id,
             partition_id: partition_id.to_string(),
             last_offset: 0,
+            last_timestamp: 0,
         }
     }
 }
@@ -826,9 +830,10 @@ impl Drop for PartitionMetrics {
         if let Some(logger) = self.logger.as_mut() {
             logger.log(MaterializedEvent::SourceInfo {
                 source_name: self.source_name.clone(),
-                source_id: self.source_id.clone(),
+                source_id: self.source_id,
                 partition_id: self.partition_id.clone(),
                 offset: -self.last_offset,
+                timestamp: -self.last_timestamp,
             });
         }
     }
@@ -960,7 +965,7 @@ where
             // Accumulate updates to BYTES_READ_COUNTER for Prometheus metrics collection
             let mut bytes_read = 0;
             // Accumulate updates to offsets for system table metrics collection
-            let mut mets = HashMap::new();
+            let mut metric_updates = HashMap::new();
 
             // Record operator has been scheduled
             consistency_info
@@ -975,12 +980,6 @@ where
                         let offset = message.offset;
                         let msg_predecessor = predecessor;
                         predecessor = Some(offset);
-
-                        if let Some(off) = mets.get_mut(&partition) {
-                            *off = offset;
-                        } else {
-                            mets.insert(partition.clone(), offset);
-                        }
 
                         // Update ingestion metrics. Guaranteed to exist as the appropriate
                         // entry gets created in SourceConstructor or when a new partition
@@ -1014,6 +1013,13 @@ where
                                 return SourceStatus::Alive;
                             }
                             Some(ts) => {
+                                if let Some((off, t)) = metric_updates.get_mut(&partition) {
+                                    *off = offset;
+                                    *t = ts;
+                                } else {
+                                    metric_updates.insert(partition.clone(), (offset, ts));
+                                }
+
                                 source_info.persist_message(
                                     &mut persistence_tx,
                                     &message,
@@ -1096,12 +1102,12 @@ where
                 }
             }
 
-            for (partition, offset) in mets {
+            for (partition, (offset, ts)) in metric_updates {
                 let partition_metrics = consistency_info
                     .partition_metrics
                     .get_mut(&partition)
                     .unwrap();
-                partition_metrics.record_offset(offset.offset);
+                partition_metrics.record_offset(offset.offset, ts as i64);
             }
 
             // Downgrade capability (if possible) before exiting

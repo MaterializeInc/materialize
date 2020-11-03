@@ -28,7 +28,7 @@ use timely::scheduling::activate::{Activator, SyncActivator};
 use dataflow_types::{
     Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
 };
-use expr::{GlobalId, PartitionId, SourceInstanceId};
+use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{debug, error, info, log_enabled, warn};
 use repr::{PersistedRecord, PersistedRecordIter, Timestamp};
@@ -51,10 +51,8 @@ pub struct KafkaSourceInfo {
     topic_name: String,
     /// Name of the source (will have format kafka-source-id)
     source_name: String,
-    /// Source instance ID (stored as a string for logging)
-    source_id: String,
-    /// Source global id (for persistence)
-    source_global_id: GlobalId,
+    /// Source instance ID
+    id: SourceInstanceId,
     /// Kafka consumer for this source
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
@@ -230,7 +228,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     PartitionId::Kafka(i),
                     PartitionMetrics::new(
                         &self.topic_name,
-                        &self.source_id,
+                        self.id,
                         &i.to_string(),
                         self.logger.clone(),
                     ),
@@ -416,7 +414,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             let value = message.payload.clone().unwrap_or_default();
 
             let persistence_data = PersistenceMessage::Data(WorkerPersistenceData {
-                source_id: self.source_global_id,
+                source_id: self.id.source_id,
                 partition_id,
                 record: PersistedRecord {
                     predecessor: predecessor.map(|p| p.offset),
@@ -458,8 +456,6 @@ impl KafkaSourceInfo {
         let worker_count = worker_count.try_into().unwrap();
         let kafka_config =
             create_kafka_config(&source_name, &addrs, group_id_prefix, &config_options);
-        let source_global_id = source_id.source_id;
-        let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
@@ -478,7 +474,7 @@ impl KafkaSourceInfo {
                         // else we would process files multiple times).
                         match metadata {
                             Ok(Some(meta)) => {
-                                assert_eq!(source_global_id, meta.source_id);
+                                assert_eq!(source_id.source_id, meta.source_id);
                                 has_partition(worker_id, worker_count, meta.partition_id)
                             }
                             _ => {
@@ -504,8 +500,7 @@ impl KafkaSourceInfo {
             buffered_metadata: HashSet::new(),
             topic_name: topic,
             source_name,
-            source_id,
-            source_global_id,
+            id: source_id,
             partition_consumers: VecDeque::new(),
             known_partitions: 0,
             consumer: Arc::new(consumer),
@@ -539,7 +534,7 @@ impl KafkaSourceInfo {
     fn create_partition_queue(&mut self, partition_id: i32) {
         info!(
             "Activating Kafka queue for {} [{}] (source {}) on worker {}",
-            self.topic_name, partition_id, self.source_id, self.worker_id
+            self.topic_name, partition_id, self.id, self.worker_id
         );
 
         // Collect old partition assignments
