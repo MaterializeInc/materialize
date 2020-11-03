@@ -157,19 +157,45 @@ a  b
 4  2
 
 > CREATE SINK input_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
   WITH (consistency = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  AS OF 1;
+  AS OF 1
 
 $ kafka-verify format=avro sink=materialize.public.input_sink
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+{"a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
 
 $ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezium
 {"id": "1", "status": "BEGIN", "event_count": null}
 {"id": "2", "status": "BEGIN", "event_count": null}
 {"id": "1", "status": "END", "event_count": {"long": 2}}
 {"id": "2", "status": "END", "event_count": {"long": 2}}
+
+! CREATE SINK bad_sink FROM input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a, a)
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Repeated column name in sink key: a
+
+> CREATE VIEW ambiguous (a, a) AS SELECT * FROM (VALUES (1, 2))
+
+! CREATE SINK bad_sink FROM ambiguous
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Ambiguous column: a
+
+> CREATE SINK input_sink_multiple_keys FROM input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b, a)
+  WITH (consistency = true) FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  AS OF 1
+
+$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys
+{"b": 1, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"b": 2, "a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+{"b": 1, "a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"b": 2, "a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}

@@ -1889,7 +1889,7 @@ impl Decoder {
     }
 }
 
-/// Builds an Avro schema that corresponds to `desc`.
+/// Builds a Debezium-encoded Avro schema that corresponds to `desc`.
 ///
 /// Requires that all column names in `desc` are present. The returned schema
 /// has some special properties to ease encoding:
@@ -1898,71 +1898,13 @@ impl Decoder {
 ///     variant is always the null variant, and the second and last variant
 ///     is the non-null variant.
 fn build_schema(columns: &[(ColumnName, ColumnType)], include_transaction: bool) -> Schema {
-    let mut fields = Vec::new();
-    for (name, typ) in columns.iter() {
-        let mut field_type = match &typ.scalar_type {
-            ScalarType::Bool => json!("boolean"),
-            ScalarType::Int32 | ScalarType::Oid => json!("int"),
-            ScalarType::Int64 => json!("long"),
-            ScalarType::Float32 => json!("float"),
-            ScalarType::Float64 => json!("double"),
-            ScalarType::Decimal(p, s) => json!({
-                "type": "bytes",
-                "logicalType": "decimal",
-                "precision": p,
-                "scale": s,
-            }),
-            ScalarType::Date => json!({
-                "type": "int",
-                "logicalType": "date",
-            }),
-            ScalarType::Time => json!({
-                "type": "long",
-                "logicalType": "time-micros",
-            }),
-            ScalarType::Timestamp | ScalarType::TimestampTz => json!({
-                "type": "long",
-                "connect.name": "io.debezium.time.MicroTimestamp",
-                "logicalType": "timestamp-micros"
-            }),
-            ScalarType::Interval => json!({
-                "type": "fixed",
-                "size": 12,
-                "logicalType": "duration"
-            }),
-            ScalarType::Bytes => json!("bytes"),
-            ScalarType::String => json!("string"),
-            ScalarType::Jsonb => json!({
-                "type": "string",
-                "connect.name": "io.debezium.data.Json",
-            }),
-            ScalarType::Uuid => json!({
-                "type": "string",
-                "logicalType": "uuid",
-            }),
-            ScalarType::Array(_t) => unimplemented!("array types"),
-            ScalarType::List(_t) => unimplemented!("list types"),
-            ScalarType::Record { .. } => unimplemented!("record types"),
-        };
-        if typ.nullable {
-            field_type = json!(["null", field_type]);
-        }
-        fields.push(json!({
-            "name": name,
-            "type": field_type,
-        }));
-    }
-
+    let row_schema = build_row_schema_json(columns, "row");
     let mut schema_fields = Vec::new();
     schema_fields.push(json!({
         "name": "before",
         "type": [
             "null",
-            {
-                "name": "row",
-                "type": "record",
-                "fields": fields,
-             }
+            row_schema
         ]
     }));
 
@@ -2057,6 +1999,7 @@ pub struct Encoder {
     columns: Vec<(ColumnName, ColumnType)>,
     writer_schema: Schema,
     include_transaction: bool,
+    key_schema_and_indices: Option<(Schema, Vec<usize>)>,
 }
 
 impl fmt::Debug for Encoder {
@@ -2068,18 +2011,45 @@ impl fmt::Debug for Encoder {
 }
 
 impl Encoder {
-    pub fn new(desc: RelationDesc, include_transaction: bool) -> Self {
+    fn key_indices(&self) -> Option<&[usize]> {
+        self.key_schema_and_indices
+            .as_ref()
+            .map(|(_, indices)| indices.as_slice())
+    }
+    pub fn new(
+        desc: RelationDesc,
+        include_transaction: bool,
+        key_indices: Option<Vec<usize>>,
+    ) -> Self {
         let columns = column_names_and_types(desc);
         let writer_schema = build_schema(&columns, include_transaction);
+        let key_schema_and_indices = key_indices.map(|key_indices| {
+            let key_columns = key_indices
+                .iter()
+                .map(|&key_idx| columns[key_idx].clone())
+                .collect::<Vec<_>>();
+            let row_schema = build_row_schema_json(&key_columns, "row");
+            (
+                Schema::parse(&row_schema).expect("valid schema constructed"),
+                key_indices,
+            )
+        });
         Encoder {
             columns,
             writer_schema,
             include_transaction,
+            key_schema_and_indices,
         }
     }
 
     pub fn writer_schema(&self) -> &Schema {
         &self.writer_schema
+    }
+
+    pub fn key_writer_schema(&self) -> Option<&Schema> {
+        self.key_schema_and_indices
+            .as_ref()
+            .map(|(schema, _)| schema)
     }
 
     fn validate_transaction_id(&self, transaction_id: &Option<String>) {
@@ -2095,79 +2065,95 @@ impl Encoder {
 
     pub fn encode_unchecked(
         &self,
-        schema_id: i32,
+        key_schema_id: Option<i32>,
+        value_schema_id: i32,
         diff_pair: DiffPair<&Row>,
         transaction_id: Option<String>,
-    ) -> Vec<u8> {
+    ) -> (Option<Vec<u8>>, Vec<u8>) {
         self.validate_transaction_id(&transaction_id);
-        let mut buf = Vec::new();
-        encode_avro_header(&mut buf, schema_id);
-        let avro = self.diff_pair_to_avro(diff_pair, transaction_id);
-        debug_assert!(avro.validate(self.writer_schema.top_node()));
-        mz_avro::encode_unchecked(&avro, &self.writer_schema, &mut buf);
-        buf
-    }
-
-    /// Encodes a repr::Row to a Avro-compliant Vec<u8>.
-    pub fn encode(
-        &self,
-        schema_id: i32,
-        diff_pair: DiffPair<&Row>,
-        transaction_id: Option<String>,
-    ) -> Vec<u8> {
-        self.validate_transaction_id(&transaction_id);
-        let mut buf = Vec::new();
-        encode_avro_header(&mut buf, schema_id);
-        buf.write_i32::<NetworkEndian>(schema_id)
-            .expect("writing to vec cannot fail");
-        mz_avro::write_avro_datum(
-            &self.writer_schema,
-            self.diff_pair_to_avro(diff_pair, transaction_id),
-            &mut buf,
-        )
-        .expect("schema constructed to match val");
-        buf
+        let mut key_buf = vec![];
+        let mut buf = vec![];
+        encode_avro_header(&mut buf, value_schema_id);
+        let (avro_key, avro_value) = self.diff_pair_to_avro(diff_pair, transaction_id);
+        debug_assert!(avro_value.validate(self.writer_schema.top_node()));
+        mz_avro::encode_unchecked(&avro_value, &self.writer_schema, &mut buf);
+        let key_buf = avro_key.map(|avro_key| {
+            encode_avro_header(&mut key_buf, key_schema_id.unwrap());
+            let key_schema = self.key_writer_schema().unwrap();
+            debug_assert!(
+                avro_key.validate(key_schema.top_node()),
+                "{:#?}\n{}",
+                avro_key,
+                key_schema.canonical_form()
+            );
+            mz_avro::encode_unchecked(&avro_key, key_schema, &mut key_buf);
+            key_buf
+        });
+        (key_buf, buf)
     }
 
     pub fn diff_pair_to_avro(
         &self,
         diff_pair: DiffPair<&Row>,
         transaction_id: Option<String>,
-    ) -> Value {
-        let before = match diff_pair.before {
-            None => Value::Union {
-                index: 0,
-                inner: Box::new(Value::Null),
-                n_variants: 2,
-                null_variant: Some(0),
-            },
-            Some(row) => {
-                let row = self.row_to_avro(row.iter());
+    ) -> (Option<Value>, Value) {
+        let (before_key, before) = match diff_pair.before {
+            None => (
+                None,
                 Value::Union {
-                    index: 1,
-                    inner: Box::new(row),
+                    index: 0,
+                    inner: Box::new(Value::Null),
                     n_variants: 2,
                     null_variant: Some(0),
-                }
+                },
+            ),
+            Some(row) => {
+                let (key, row) = self.row_to_avro(row.iter());
+                (
+                    key,
+                    Value::Union {
+                        index: 1,
+                        inner: Box::new(row),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                )
             }
         };
-        let after = match diff_pair.after {
-            None => Value::Union {
-                index: 0,
-                inner: Box::new(Value::Null),
-                n_variants: 2,
-                null_variant: Some(0),
-            },
-            Some(row) => {
-                let row = self.row_to_avro(row.iter());
+        let (after_key, after) = match diff_pair.after {
+            None => (
+                None,
                 Value::Union {
-                    index: 1,
-                    inner: Box::new(row),
+                    index: 0,
+                    inner: Box::new(Value::Null),
                     n_variants: 2,
                     null_variant: Some(0),
-                }
+                },
+            ),
+            Some(row) => {
+                let (key, row) = self.row_to_avro(row.iter());
+                (
+                    key,
+                    Value::Union {
+                        index: 1,
+                        inner: Box::new(row),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                )
             }
         };
+
+        // TODO [btv]: Decoding the key twice and then validating that they match is probably wasteful.
+        // But it doesn't matter for now since (1) in sinks we always have before or after populated, but not both,
+        // and (2) avro encoding for sinks is un-optimized anyway.
+        //
+        // Look into it if/when sink encoding becomes a bottleneck.
+        if let (Some(before_key), Some(after_key)) = (before_key.as_ref(), after_key.as_ref()) {
+            assert_eq!(before_key, after_key, "Mismatched keys in sink!");
+        }
+
+        let key = before_key.or(after_key);
 
         let transaction = if let Some(transaction_id) = transaction_id {
             let id = Value::String(transaction_id);
@@ -2184,14 +2170,14 @@ impl Encoder {
             fields.push(("transaction".into(), transaction));
         }
 
-        Value::Record(fields)
+        (key, Value::Record(fields))
     }
 
-    pub fn row_to_avro<'a, I>(&self, row: I) -> Value
+    pub fn row_to_avro<'a, I>(&self, row: I) -> (Option<Value>, Value)
     where
         I: IntoIterator<Item = Datum<'a>>,
     {
-        encode_datums_as_avro(row, &self.columns)
+        encode_datums_as_avro(row, &self.columns, self.key_indices())
     }
 }
 
@@ -2225,12 +2211,16 @@ pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType
     columns
 }
 
-/// Encodes a sequence of `Datum` as Avro, using supplied column names and types.
-pub fn encode_datums_as_avro<'a, I>(datums: I, names_types: &[(ColumnName, ColumnType)]) -> Value
+/// Encodes a sequence of `Datum` as Avro (key and value), using supplied column names and types.
+pub fn encode_datums_as_avro<'a, I>(
+    datums: I,
+    names_types: &[(ColumnName, ColumnType)],
+    key_indices: Option<&[usize]>,
+) -> (Option<Value>, Value)
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let fields = names_types
+    let value_fields: Vec<(String, Value)> = names_types
         .iter()
         .zip_eq(datums)
         .map(|((name, typ), datum)| {
@@ -2239,7 +2229,15 @@ where
             (name, TypedDatum::new(datum, typ.clone()).avro())
         })
         .collect();
-    Value::Record(fields)
+    let k = key_indices.map(|key_indices| {
+        let key_fields = key_indices
+            .iter()
+            .map(|&idx| value_fields[idx].clone())
+            .collect();
+        Value::Record(key_fields)
+    });
+    let v = Value::Record(value_fields);
+    (k, v)
 }
 
 /// Bundled information sufficient to encode as Avro.
@@ -2376,13 +2374,78 @@ impl SchemaCache {
     }
 }
 
+/// Builds the JSON for the row schema, which can be independently useful.
+fn build_row_schema_json(
+    columns: &[(ColumnName, ColumnType)],
+    name: &str,
+) -> serde_json::value::Value {
+    let mut fields = Vec::new();
+    for (name, typ) in columns.iter() {
+        let mut field_type = match &typ.scalar_type {
+            ScalarType::Bool => json!("boolean"),
+            ScalarType::Int32 | ScalarType::Oid => json!("int"),
+            ScalarType::Int64 => json!("long"),
+            ScalarType::Float32 => json!("float"),
+            ScalarType::Float64 => json!("double"),
+            ScalarType::Decimal(p, s) => json!({
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": p,
+                "scale": s,
+            }),
+            ScalarType::Date => json!({
+                "type": "int",
+                "logicalType": "date",
+            }),
+            ScalarType::Time => json!({
+                "type": "long",
+                "logicalType": "time-micros",
+            }),
+            ScalarType::Timestamp | ScalarType::TimestampTz => json!({
+                "type": "long",
+                "logicalType": "timestamp-micros"
+            }),
+            ScalarType::Interval => json!({
+                "type": "fixed",
+                "size": 12,
+                "logicalType": "duration"
+            }),
+            ScalarType::Bytes => json!("bytes"),
+            ScalarType::String => json!("string"),
+            ScalarType::Jsonb => json!({
+                "type": "string",
+            }),
+            ScalarType::Uuid => json!({
+                "type": "string",
+                "logicalType": "uuid",
+            }),
+            ScalarType::Array(_t) => unimplemented!("array types"),
+            ScalarType::List(_t) => unimplemented!("list types"),
+            ScalarType::Record { .. } => unimplemented!("record types"),
+        };
+        if typ.nullable {
+            field_type = json!(["null", field_type]);
+        }
+        fields.push(json!({
+            "name": name,
+            "type": field_type,
+        }));
+    }
+    json!({
+        "type": "record",
+        "fields": fields,
+        "name": name
+    })
+}
+
 /// Logic for the Avro representation of the CDCv2 protocol.
 pub mod cdc_v2 {
 
     use mz_avro::schema::{FullName, SchemaNode};
-    use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
+    use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, RowPacker, Timestamp};
     use serde_json::json;
 
+    use super::build_row_schema_json;
     use super::RowWrapper;
 
     use anyhow::anyhow;
@@ -2431,7 +2494,7 @@ pub mod cdc_v2 {
         pub fn encode_updates(&self, updates: &[(Row, i64, i64)]) -> Value {
             let mut enc_updates = Vec::new();
             for (data, time, diff) in updates {
-                let enc_data = super::encode_datums_as_avro(data, &self.columns);
+                let enc_data = super::encode_datums_as_avro(data, &self.columns, None).1;
                 let enc_time = Value::Long(time.clone());
                 let enc_diff = Value::Long(diff.clone());
                 let mut enc_update = Vec::new();
@@ -2561,70 +2624,6 @@ pub mod cdc_v2 {
     #[derive(Debug)]
     pub struct Decoder;
 
-    /// Builds the JSON for the row schema, which can be independently useful.
-    pub fn build_row_schema_json(
-        columns: &[(ColumnName, ColumnType)],
-        name: &str,
-    ) -> serde_json::value::Value {
-        let mut fields = Vec::new();
-        for (name, typ) in columns.iter() {
-            let mut field_type = match &typ.scalar_type {
-                ScalarType::Bool => json!("boolean"),
-                ScalarType::Int32 | ScalarType::Oid => json!("int"),
-                ScalarType::Int64 => json!("long"),
-                ScalarType::Float32 => json!("float"),
-                ScalarType::Float64 => json!("double"),
-                ScalarType::Decimal(p, s) => json!({
-                    "type": "bytes",
-                    "logicalType": "decimal",
-                    "precision": p,
-                    "scale": s,
-                }),
-                ScalarType::Date => json!({
-                    "type": "int",
-                    "logicalType": "date",
-                }),
-                ScalarType::Time => json!({
-                    "type": "long",
-                    "logicalType": "time-micros",
-                }),
-                ScalarType::Timestamp | ScalarType::TimestampTz => json!({
-                    "type": "long",
-                    "logicalType": "timestamp-micros"
-                }),
-                ScalarType::Interval => json!({
-                    "type": "fixed",
-                    "size": 12,
-                    "logicalType": "duration"
-                }),
-                ScalarType::Bytes => json!("bytes"),
-                ScalarType::String => json!("string"),
-                ScalarType::Jsonb => json!({
-                    "type": "string",
-                }),
-                ScalarType::Uuid => json!({
-                    "type": "string",
-                    "logicalType": "uuid",
-                }),
-                ScalarType::Array(_t) => unimplemented!("array types"),
-                ScalarType::List(_t) => unimplemented!("list types"),
-                ScalarType::Record { .. } => unimplemented!("record types"),
-            };
-            if typ.nullable {
-                field_type = json!(["null", field_type]);
-            }
-            fields.push(json!({
-                "name": name,
-                "type": field_type,
-            }));
-        }
-        json!({
-            "type": "record",
-            "fields": fields,
-            "name": name
-        })
-    }
-
     /// Construct the schema for the CDC V2 protocol.
     pub fn build_schema(row_schema: serde_json::Value) -> Schema {
         let updates_schema = json!({
@@ -2700,6 +2699,7 @@ pub mod cdc_v2 {
         use super::*;
         use mz_avro::AvroDeserializer;
         use mz_avro::GeneralDeserializer;
+        use repr::ScalarType;
 
         #[test]
         fn test_roundtrip() {
@@ -2847,7 +2847,8 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
-            let avro_value = Encoder::new(desc, false).row_to_avro(std::iter::once(datum));
+            let (_, avro_value) =
+                Encoder::new(desc, false, None).row_to_avro(std::iter::once(datum));
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
                 avro_value

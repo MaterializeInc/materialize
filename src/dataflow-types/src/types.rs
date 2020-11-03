@@ -633,7 +633,8 @@ pub struct KafkaSinkConsistencyConnector {
 pub struct KafkaSinkConnector {
     pub addrs: KafkaAddrs,
     pub topic: String,
-    pub schema_id: i32,
+    pub key_schema_id: Option<i32>,
+    pub value_schema_id: i32,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
@@ -641,6 +642,7 @@ pub struct KafkaSinkConnector {
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
     pub config_options: HashMap<String, String>,
+    pub key_indices: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -691,6 +693,8 @@ pub struct KafkaSinkConnectorBuilder {
     pub consistency_value_schema: Option<String>,
     pub config_options: HashMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
+    pub key_indices: Option<Vec<usize>>,
+    pub key_schema: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

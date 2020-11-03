@@ -519,6 +519,7 @@ fn kafka_sink_builder(
     topic_prefix: String,
     desc: RelationDesc,
     topic_suffix: String,
+    key_indices: Option<Vec<usize>>,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let (schema_registry_url, ccsr_with_options) = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
@@ -543,8 +544,11 @@ fn kafka_sink_builder(
         Some(_) => bail!("consistency must be a boolean"),
     };
 
-    let encoder = Encoder::new(desc, include_consistency);
+    let encoder = Encoder::new(desc, include_consistency, key_indices.clone());
     let value_schema = encoder.writer_schema().canonical_form();
+    let key_schema = encoder
+        .key_writer_schema()
+        .map(|key_schema| key_schema.canonical_form());
 
     // Use the user supplied value for replication factor, or default to 1
     let replication_factor = match with_options.remove("replication_factor") {
@@ -581,6 +585,8 @@ fn kafka_sink_builder(
         consistency_value_schema,
         config_options,
         ccsr_config,
+        key_indices,
+        key_schema,
     }))
 }
 
@@ -639,14 +645,46 @@ fn handle_create_sink(
     let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
-        Connector::Kafka { broker, topic } => kafka_sink_builder(
-            format,
-            with_options,
-            broker,
-            topic,
-            from.desc()?.clone(),
-            suffix,
-        )?,
+        Connector::Kafka { broker, topic, key } => {
+            let desc = from.desc()?;
+            let key_indices = if let Some(key) = key {
+                let key = key
+                    .into_iter()
+                    .map(normalize::column_name)
+                    .collect::<Vec<_>>();
+                let mut uniq = HashSet::new();
+                for col in key.iter() {
+                    if !uniq.insert(col) {
+                        bail!("Repeated column name in sink key: {}", col);
+                    }
+                }
+                let indices = key
+                    .into_iter()
+                    .map(|col| -> anyhow::Result<usize> {
+                        let name_idx = desc
+                            .get_by_name(&col)
+                            .map(|(idx, _type)| idx)
+                            .ok_or_else(|| anyhow!("No such column: {}", col))?;
+                        if desc.get_unambiguous_name(name_idx).is_none() {
+                            bail!("Ambiguous column: {}", col);
+                        }
+                        Ok(name_idx)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Some(indices)
+            } else {
+                None
+            };
+            kafka_sink_builder(
+                format,
+                with_options,
+                broker,
+                topic,
+                desc.clone(),
+                suffix,
+                key_indices,
+            )?
+        }
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
         Connector::AvroOcf { path } => avro_ocf_sink_builder(format, with_options, path, suffix)?,
     };

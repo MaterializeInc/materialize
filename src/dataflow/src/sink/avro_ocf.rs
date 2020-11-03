@@ -28,7 +28,7 @@ pub fn avro_ocf<G>(
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    let encoder = Encoder::new(desc, false);
+    let encoder = Encoder::new(desc, false, None);
     let schema = encoder.writer_schema();
     let sink_hash = id.hashed();
 
@@ -73,7 +73,7 @@ pub fn avro_ocf<G>(
                             after: Some(row),
                         }
                     };
-                    let value = encoder.diff_pair_to_avro(diff_pair, None);
+                    let (_key, value) = encoder.diff_pair_to_avro(diff_pair, None);
                     for _ in 0..diff.abs() {
                         let res = avro_writer.append(value.clone());
 

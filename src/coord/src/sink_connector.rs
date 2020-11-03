@@ -41,8 +41,9 @@ async fn register_kafka_topic(
     topic: &str,
     replication_factor: i32,
     ccsr: &ccsr::Client,
-    schema: &str,
-) -> Result<i32, anyhow::Error> {
+    value_schema: &str,
+    key_schema: Option<&str>,
+) -> Result<(Option<i32>, i32), anyhow::Error> {
     let res = client
         .create_topics(
             &[NewTopic::new(
@@ -69,12 +70,22 @@ async fn register_kafka_topic(
     //
     // TODO(benesch): do we need to delete the Kafka topic if publishing the
     // schema fails?
-    let schema_id = ccsr
-        .publish_schema(&format!("{}-value", topic), schema)
+    let value_schema_id = ccsr
+        .publish_schema(&format!("{}-value", topic), value_schema)
         .await
-        .context("unable to publish schema to registry in kafka sink")?;
+        .context("unable to publish value schema to registry in kafka sink")?;
 
-    Ok(schema_id)
+    let key_schema_id = if let Some(key_schema) = key_schema {
+        Some(
+            ccsr.publish_schema(&format!("{}-key", topic), key_schema)
+                .await
+                .context("unable to publish key schema to registry in kafka sink")?,
+        )
+    } else {
+        None
+    };
+
+    Ok((key_schema_id, value_schema_id))
 }
 
 async fn build_kafka(
@@ -96,24 +107,26 @@ async fn build_kafka(
         .expect("creating admin client failed");
     let ccsr = builder.ccsr_config.build();
 
-    let schema_id = register_kafka_topic(
+    let (key_schema_id, value_schema_id) = register_kafka_topic(
         &client,
         &topic,
         builder.replication_factor as i32,
         &ccsr,
         &builder.value_schema,
+        builder.key_schema.as_deref(),
     )
     .await
     .context("error registering kafka topic for sink")?;
 
     let consistency = if let Some(consistency_value_schema) = builder.consistency_value_schema {
         let consistency_topic = format!("{}-consistency", topic);
-        let consistency_schema_id = register_kafka_topic(
+        let (_, consistency_schema_id) = register_kafka_topic(
             &client,
             &consistency_topic,
             builder.replication_factor as i32,
             &ccsr,
             &consistency_value_schema,
+            None,
         )
         .await
         .context("error registering kafka consistency topic for sink")?;
@@ -127,7 +140,8 @@ async fn build_kafka(
     };
 
     Ok(SinkConnector::Kafka(KafkaSinkConnector {
-        schema_id,
+        key_schema_id,
+        value_schema_id,
         topic,
         addrs: builder.broker_addrs,
         consistency,
@@ -135,6 +149,7 @@ async fn build_kafka(
         frontier,
         strict: !with_snapshot,
         config_options: builder.config_options,
+        key_indices: builder.key_indices,
     }))
 }
 
