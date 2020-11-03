@@ -136,33 +136,45 @@ mapfile_shim() {
 
 # [m]essage-[s]uccess: message to the user that something went well
 ms() {
-    echo -ne "\e[32m$*\e[0m"
+    green "$@"
 }
 
 # [u]sage-[s]ubcommand: Paint the argument as a subcmd
 #
 # In usage text, write: "usage: $0 `us CMD`"
 us() {
-    echo -ne "\e[34m$*\e[0m"
+    blue "$@"
 }
 
 # [u]sage-[f]lag: Paint the argument as a flag
 #
 # In usage text, write: "usage: $0 `uf --FLAG`"
 uf() {
-    echo -ne "\e[32m$*\e[0m"
+    green "$@"
 }
 
 # [u]sage-[o]ption: Paint the argument as an option
 #
 # In usage text, write: "usage: $0 `uf --FLAG` `uo OPT`"
 uo() {
-    echo -ne "\e[32m$*\e[0m"
+    green "$@"
 }
 
 # [u]sage-[w]arn: Paint the argument as a warning
 #
 # In usage text, write: "usage: $0 `uw WILL DELETE EVERYTHING`"
 uw() {
+    red "$@"
+}
+
+red() {
     echo -ne "\e[31m$*\e[0m"
+}
+
+blue() {
+    echo -ne "\e[34m$*\e[0m"
+}
+
+green() {
+    echo -ne "\e[32m$*\e[0m"
 }
