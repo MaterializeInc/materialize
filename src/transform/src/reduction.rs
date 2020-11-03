@@ -617,7 +617,7 @@ pub mod negate_predicate {
     impl NegatePredicate {
         /// Transforms `NOT(a <op> b)` to `a negate(<op>) b` if it exists.
         pub fn action(&self, relation: &mut RelationExpr) {
-            relation.visit_scalars_mut(&mut |x| negate_predicate(x))
+            relation.visit_scalars_mut(&mut |x| x.visit_mut(&mut negate_predicate))
         }
     }
 

@@ -1664,7 +1664,7 @@ where
         let view_id = self.catalog.allocate_id()?;
         let view_oid = self.catalog.allocate_oid()?;
         // Optimize the expression so that we can form an accurately typed description.
-        let optimized_expr = self.optimizer.optimize(view.expr, self.catalog.indexes())?;
+        let optimized_expr = self.prep_relation_expr(view.expr, ExprPrepStyle::Static)?;
         let desc = RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
@@ -1713,9 +1713,12 @@ where
         &mut self,
         pcx: PlanContext,
         name: FullName,
-        index: sql::plan::Index,
+        mut index: sql::plan::Index,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, anyhow::Error> {
+        for key in &mut index.keys {
+            Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
+        }
         let index = catalog::Index {
             create_sql: index.create_sql,
             plan_cx: pcx,
@@ -1856,26 +1859,19 @@ where
     async fn sequence_peek(
         &mut self,
         conn_id: u32,
-        mut source: RelationExpr,
+        source: RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
         copy_to: Option<CopyFormat>,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let timestamp = self.determine_timestamp(&source, when)?;
 
-        // See if the query is introspecting its own logical timestamp, and
-        // install the determined timestamp if so.
-        source.visit_scalars_mut(&mut |e| {
-            if let ScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
-                *e = ScalarExpr::literal_ok(Datum::from(timestamp as i128), f.output_type());
-            }
-        });
-
-        // TODO (wangandi): Is there anything that optimizes to a
-        // constant expression that originally contains a global get? Is
-        // there anything not containing a global get that cannot be
-        // optimized to a constant expression?
-        let source = self.optimizer.optimize(source, self.catalog.indexes())?;
+        let source = self.prep_relation_expr(
+            source,
+            ExprPrepStyle::OneShot {
+                logical_time: timestamp,
+            },
+        )?;
 
         // If this optimizes to a constant expression, we can immediately return the result.
         let resp = if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
@@ -2250,8 +2246,7 @@ where
             }
             ExplainStage::OptimizedPlan => {
                 let optimized_plan = self
-                    .optimizer
-                    .optimize(decorrelated_plan, self.catalog.indexes())?
+                    .prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?
                     .into_inner();
                 let mut explanation = optimized_plan.explain(&self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
@@ -2300,13 +2295,12 @@ where
     async fn sequence_insert(
         &mut self,
         id: GlobalId,
-        values: expr::RelationExpr,
+        values: RelationExpr,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        match self
-            .optimizer
-            .optimize(values, self.catalog.indexes())?
-            .into_inner()
-        {
+        let prep_style = ExprPrepStyle::OneShot {
+            logical_time: self.get_write_ts(),
+        };
+        match self.prep_relation_expr(values, prep_style)?.into_inner() {
             RelationExpr::Constant { rows, typ: _ } => {
                 let desc = self.catalog.get_by_id(&id).desc()?;
                 for (row, _) in &rows {
@@ -2714,6 +2708,53 @@ where
             )
             .await
         }
+    }
+
+    /// Prepares a relation expression for execution by preparing all contained
+    /// scalar expressions (see `prep_scalar_expr`), then optimizing the
+    /// relation expression.
+    fn prep_relation_expr(
+        &mut self,
+        mut expr: RelationExpr,
+        style: ExprPrepStyle,
+    ) -> Result<OptimizedRelationExpr, anyhow::Error> {
+        expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
+
+        // TODO (wangandi): Is there anything that optimizes to a
+        // constant expression that originally contains a global get? Is
+        // there anything not containing a global get that cannot be
+        // optimized to a constant expression?
+        Ok(self.optimizer.optimize(expr, self.catalog.indexes())?)
+    }
+
+    /// Prepares a scalar expression for execution by replacing any placeholders
+    /// with their correct values.
+    ///
+    /// Specifically, calls to the special function `MzLogicalTimestamp` are
+    /// replaced according to `style`:
+    ///
+    ///   * if `OneShot`, calls are replaced according to the logical time
+    ///     specified in the `OneShot` variant.
+    ///   * if `Explain`, calls are replaced with a dummy time.
+    ///   * if `Static`, calls trigger an error indicating that static queries
+    ///     are not permitted to observe their own timestamps.
+    fn prep_scalar_expr(expr: &mut ScalarExpr, style: ExprPrepStyle) -> Result<(), anyhow::Error> {
+        // Replace calls to `MzLogicalTimestamp` as described above.
+        let ts = match style {
+            ExprPrepStyle::Explain | ExprPrepStyle::Static => 0, // dummy timestamp
+            ExprPrepStyle::OneShot { logical_time } => logical_time,
+        };
+        let mut observes_ts = false;
+        expr.visit_mut(&mut |e| {
+            if let ScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
+                observes_ts = true;
+                *e = ScalarExpr::literal_ok(Datum::from(i128::from(ts)), f.output_type());
+            }
+        });
+        if observes_ts && matches!(style, ExprPrepStyle::Static) {
+            bail!("mz_logical_timestamp cannot be used in static queries");
+        }
+        Ok(())
     }
 
     /// Imports the view, source, or table with `id` into the provided
@@ -3128,6 +3169,20 @@ where
         }),
         cluster_id,
     ))
+}
+
+/// The styles in which an expression can be prepared.
+#[derive(Clone, Copy, Debug)]
+enum ExprPrepStyle {
+    /// The expression is being prepared for output as part of an `EXPLAIN`
+    /// query.
+    Explain,
+    /// The expression is being prepared for installation in a static context,
+    /// like in a view.
+    Static,
+    /// The expression is being prepared to run once at the specified logical
+    /// time.
+    OneShot { logical_time: u64 },
 }
 
 async fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {

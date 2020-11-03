@@ -226,3 +226,13 @@ EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW ordered_view
 | | keys = ()
 
 EOF
+
+# Ensure mz_logical_timestamp doesn't panic in the context of EXPLAIN, which
+# doesn't actually execute the query at any particular timestamp.
+query T multiline
+EXPLAIN SELECT mz_logical_timestamp()
+----
+%0 =
+| Constant (0dec)
+
+EOF
