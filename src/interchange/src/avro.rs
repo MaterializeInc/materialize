@@ -20,7 +20,7 @@ use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::{NaiveDateTime, Timelike};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
@@ -1508,6 +1508,11 @@ impl DebeziumDeduplicationState {
         };
 
         if delete_full {
+            info!(
+                "Deleting debezium deduplication tracking data source={} message_time={}",
+                debug_name,
+                fmt_timestamp(upstream_time_millis)
+            );
             self.full = None;
         }
         should_use
