@@ -27,6 +27,7 @@ use std::iter;
 use std::mem;
 
 use anyhow::{anyhow, bail, ensure, Context};
+use itertools::Itertools;
 use ore::iter::IteratorExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
@@ -53,7 +54,7 @@ use crate::plan::func::{self, Func, FuncSpec};
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
-use crate::plan::typeconv::{self, CastTo, CoerceTo};
+use crate::plan::typeconv::{self, CastContext, CastTo, CoerceTo};
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
@@ -113,6 +114,7 @@ pub fn plan_insert_query(
     columns: Vec<Ident>,
     source: InsertSource,
 ) -> Result<(GlobalId, RelationExpr), anyhow::Error> {
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let name = scx.resolve_item(table_name)?;
     let table = scx.catalog.get_item(&name);
     let desc = table.desc()?;
@@ -146,7 +148,6 @@ pub fn plan_insert_query(
         {
             transform_ast::transform_values(scx, &mut values)?;
             let type_hints = desc.iter_types().map(|typ| &typ.scalar_type).collect();
-            let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
 
             if columns.is_empty() {
                 let (expr, _scope) = plan_values(&qcx, &values.0, Some(type_hints))?;
@@ -201,8 +202,8 @@ pub fn plan_insert_query(
         InsertSource::DefaultValues => unsupported!("INSERT ... DEFAULT VALUES"),
     };
 
-    // Validate that the type of the source query matches the type
-    // of the target table.
+    // Validate that the arity of the source query matches the arity of the
+    // target table.
     if typ.arity() != desc.arity() {
         bail!(
             "INSERT statement specifies {} columns, but table has {} columns",
@@ -210,18 +211,90 @@ pub fn plan_insert_query(
             desc.arity(),
         );
     }
-    for ((name, exp_typ), typ) in desc.iter().zip(&typ.column_types) {
-        if typ.scalar_type != exp_typ.scalar_type {
-            bail!(
-                "expected type {} for column {}, found {}",
-                exp_typ.scalar_type,
-                name.unwrap_or(&ColumnName::from("unnamed column")),
-                typ,
-            );
-        }
-    }
+
+    // Ensure the types of the source query match the types of the target table,
+    // installing assignment casts where necessary and possible.
+    let expr = cast_relation(
+        &qcx,
+        CastContext::Assignment,
+        expr,
+        desc.iter_types().map(|ty| &ty.scalar_type),
+    )
+    .map_err(|e| {
+        anyhow!(
+            "column \"{}\" is of type {} but expression is of type {}",
+            desc.get_name(e.column)
+                .unwrap_or(&ColumnName::from("?column?")),
+            pgrepr::Type::from(&e.target_type).name(),
+            pgrepr::Type::from(&e.source_type).name(),
+        )
+    })?;
 
     Ok((table.id(), expr))
+}
+
+struct CastRelationError {
+    column: usize,
+    source_type: ScalarType,
+    target_type: ScalarType,
+}
+
+/// Cast a relation from one type to another using the specified type of cast.
+///
+/// The length of `target_types` must match the arity of `expr`.
+fn cast_relation<'a, I>(
+    qcx: &QueryContext,
+    cast_context: CastContext,
+    expr: RelationExpr,
+    target_types: I,
+) -> Result<RelationExpr, CastRelationError>
+where
+    I: IntoIterator<Item = &'a ScalarType>,
+{
+    let ecx = &ExprContext {
+        qcx,
+        name: "values",
+        scope: &Scope::empty(Some(qcx.outer_scope.clone())),
+        relation_type: &qcx.relation_type(&expr),
+        allow_aggregates: false,
+        allow_subqueries: true,
+    };
+    let source_types = ecx
+        .relation_type
+        .column_types
+        .iter()
+        .map(|typ| &typ.scalar_type);
+    let mut map_exprs = vec![];
+    let mut project_key = vec![];
+    for (i, (typ, target_typ)) in source_types.zip_eq(target_types).enumerate() {
+        if typ != target_typ {
+            let expr = ScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: i,
+            });
+            let cast_to = match cast_context {
+                CastContext::Implicit => CastTo::Implicit(target_typ.clone()),
+                CastContext::Assignment => CastTo::Assignment(target_typ.clone()),
+                CastContext::Explicit => CastTo::Explicit(target_typ.clone()),
+            };
+            match typeconv::plan_cast("relation cast", ecx, expr, cast_to) {
+                Ok(expr) => {
+                    project_key.push(ecx.relation_type.arity() + map_exprs.len());
+                    map_exprs.push(expr);
+                }
+                Err(_) => {
+                    return Err(CastRelationError {
+                        column: i,
+                        source_type: typ.clone(),
+                        target_type: target_typ.clone(),
+                    });
+                }
+            }
+        } else {
+            project_key.push(i);
+        }
+    }
+    Ok(dbg!(expr.map(map_exprs).project(project_key)))
 }
 
 /// Evaluates an expression in the AS OF position of a TAIL statement.

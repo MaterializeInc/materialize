@@ -142,13 +142,36 @@ fn from_jsonb_f64_cast(
     from_f64_to_cast.gen_expr(ecx, e.call_unary(UnaryFunc::CastJsonbToFloat64), cast_to)
 }
 
+/// Describes the context of a cast.
+#[allow(dead_code)]
+pub enum CastContext {
+    /// Implicit casts are "no-brainer" casts that apply automatically in
+    /// expressions. They are typically lossless, such as `ScalarType::Int32` to
+    /// `ScalarType::Int64`.
+    Implicit,
+    /// Assignment casts are "reasonable" casts that make sense to apply
+    /// automatically in `INSERT` statements, but are surprising enough that
+    /// they don't apply implicitly in expressions.
+    Assignment,
+    /// Explicit casts are casts that are possible but may be surprising, like
+    /// casting `ScalarType::Json` to `ScalarType::Int32`, and therefore they do
+    /// not happen unless explicitly requested by the user with a cast operator.
+    Explicit,
+}
+
 #[derive(Debug, Eq, PartialEq, Clone, Hash)]
-/// Describes the context of the cast, the target type.
+/// Describes the target type of a cast and the context for the cast.
+///
+/// NOTE(benesch): we may want to refactor this to have one
+/// `CastTo::Plain(CastContext)` variant, rather than duplicating each of the
+/// `CastContext` variants. That's a larger refactor than I'm willing to take on
+/// right now, though.
 pub enum CastTo {
-    /// Only allow implicit casts. Typically these are lossless casts, such as
-    /// `ScalarType::Int32` to `ScalarType::Int64`.
+    /// Only allow implicit casts.
     Implicit(ScalarType),
-    /// Allow either explicit or implicit casts.
+    /// Allow assignment or implicit casts.
+    Assignment(ScalarType),
+    /// Allow explicit, assignment, or implicit casts.
     Explicit(ScalarType),
     /// Cast the source to a JSONB element directly, or cast to a compatible
     /// intermediary type (`ScalarType::String`, `ScalarType::Float64`) and then
@@ -159,7 +182,7 @@ pub enum CastTo {
 impl fmt::Display for CastTo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            CastTo::Implicit(t) | CastTo::Explicit(t) => write!(f, "{}", t),
+            CastTo::Implicit(t) | CastTo::Assignment(t) | CastTo::Explicit(t) => write!(f, "{}", t),
             CastTo::JsonbAny => write!(f, "jsonbany"),
         }
     }
@@ -168,7 +191,7 @@ impl fmt::Display for CastTo {
 impl CastTo {
     pub fn scalar_type(&self) -> ScalarType {
         match self {
-            CastTo::Implicit(t) | CastTo::Explicit(t) => t.clone(),
+            CastTo::Implicit(t) | CastTo::Assignment(t) | CastTo::Explicit(t) => t.clone(),
             CastTo::JsonbAny => ScalarType::Jsonb,
         }
     }
@@ -196,7 +219,7 @@ lazy_static! {
 
         casts! {
             // BOOL
-            (Bool, Explicit(String)) => CastBoolToStringExplicit,
+            (Bool, Assignment(String)) => CastBoolToStringExplicit,
             (Bool, Explicit(Int32)) => CastBoolToInt32,
             (Bool, JsonbAny) => CastJsonbOrNullToJsonb,
 
@@ -210,56 +233,56 @@ lazy_static! {
                 let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
                 Ok(rescale_decimal(e.call_unary(CastInt32ToDecimal), 0, s))
             }),
-            (Int32, Explicit(String)) => CastInt32ToString,
+            (Int32, Assignment(String)) => CastInt32ToString,
             (Int32, JsonbAny) => CastOp::F(to_jsonb_any_f64_cast),
 
             // INT64
             (Int64, Explicit(Bool)) => CastInt64ToBool,
-            (Int64, Explicit(Int32)) => CastInt64ToInt32,
+            (Int64, Assignment(Int32)) => CastInt64ToInt32,
             (Int64, Implicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
                 let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
                 Ok(rescale_decimal(e.call_unary(CastInt64ToDecimal), 0, s))
             }),
             (Int64, Implicit(Float32)) => CastInt64ToFloat32,
             (Int64, Implicit(Float64)) => CastInt64ToFloat64,
-            (Int64, Explicit(String)) => CastInt64ToString,
+            (Int64, Assignment(String)) => CastInt64ToString,
             (Int64, JsonbAny) => CastOp::F(to_jsonb_any_f64_cast),
 
             // OID
-            (Oid, Explicit(Int32)) => CastOidToInt32,
+            (Oid, Assignment(Int32)) => CastOidToInt32,
             (Oid, Explicit(String)) => CastInt32ToString,
 
             // FLOAT32
-            (Float32, Explicit(Int64)) => CastFloat32ToInt64,
+            (Float32, Assignment(Int64)) => CastFloat32ToInt64,
             (Float32, Implicit(Float64)) => CastFloat32ToFloat64,
-            (Float32, Explicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
+            (Float32, Assignment(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
                 let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
                 let s = ScalarExpr::literal(
                     Datum::from(i32::from(s)), to_type.scalar_type()
                 );
                 Ok(e.call_binary(s, BinaryFunc::CastFloat32ToDecimal))
             }),
-            (Float32, Explicit(String)) => CastFloat32ToString,
+            (Float32, Assignment(String)) => CastFloat32ToString,
             (Float32, JsonbAny) => CastOp::F(to_jsonb_any_f64_cast),
 
             // FLOAT64
-            (Float64, Explicit(Int32)) => CastFloat64ToInt32,
-            (Float64, Explicit(Int64)) => CastFloat64ToInt64,
-            (Float64, Explicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
+            (Float64, Assignment(Int32)) => CastFloat64ToInt32,
+            (Float64, Assignment(Int64)) => CastFloat64ToInt64,
+            (Float64, Assignment(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
                 let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
                 let s = ScalarExpr::literal(Datum::from(
                     i32::from(s)), to_type.scalar_type());
                 Ok(e.call_binary(s, BinaryFunc::CastFloat64ToDecimal))
             }),
-            (Float64, Explicit(String)) => CastFloat64ToString,
+            (Float64, Assignment(String)) => CastFloat64ToString,
             (Float64, JsonbAny) => CastJsonbOrNullToJsonb,
 
             // DECIMAL
-            (Decimal(0, 0), Explicit(Int32)) => CastOp::F(|ecx, e, _to_type| {
+            (Decimal(0, 0), Assignment(Int32)) => CastOp::F(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 Ok(e.call_unary(CastDecimalToInt32(s)))
             }),
-            (Decimal(0, 0), Explicit(Int64)) => CastOp::F(|ecx, e, _to_type| {
+            (Decimal(0, 0), Assignment(Int64)) => CastOp::F(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 Ok(e.call_unary(CastDecimalToInt64(s)))
             }),
@@ -284,7 +307,7 @@ lazy_static! {
                 let (_, t) = to_type.scalar_type().unwrap_decimal_parts();
                 Ok(rescale_decimal(e, f, t))
             }),
-            (Decimal(0, 0), Explicit(String)) => CastOp::F(|ecx, e, _to_type| {
+            (Decimal(0, 0), Assignment(String)) => CastOp::F(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 Ok(e.call_unary(CastDecimalToString(s)))
             }),
@@ -293,33 +316,33 @@ lazy_static! {
             // DATE
             (Date, Implicit(Timestamp)) => CastDateToTimestamp,
             (Date, Implicit(TimestampTz)) => CastDateToTimestampTz,
-            (Date, Explicit(String)) => CastDateToString,
+            (Date, Assignment(String)) => CastDateToString,
             (Date, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
 
             // TIME
             (Time, Implicit(Interval)) => CastTimeToInterval,
-            (Time, Explicit(String)) => CastTimeToString,
+            (Time, Assignment(String)) => CastTimeToString,
             (Time, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
 
             // TIMESTAMP
-            (Timestamp, Explicit(Date)) => CastTimestampToDate,
+            (Timestamp, Assignment(Date)) => CastTimestampToDate,
             (Timestamp, Implicit(TimestampTz)) => CastTimestampToTimestampTz,
-            (Timestamp, Explicit(String)) => CastTimestampToString,
+            (Timestamp, Assignment(String)) => CastTimestampToString,
             (Timestamp, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
 
             // TIMESTAMPTZ
-            (TimestampTz, Explicit(Date)) => CastTimestampTzToDate,
-            (TimestampTz, Explicit(Timestamp)) => CastTimestampTzToTimestamp,
-            (TimestampTz, Explicit(String)) => CastTimestampTzToString,
+            (TimestampTz, Assignment(Date)) => CastTimestampTzToDate,
+            (TimestampTz, Assignment(Timestamp)) => CastTimestampTzToTimestamp,
+            (TimestampTz, Assignment(String)) => CastTimestampTzToString,
             (TimestampTz, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
 
             // INTERVAL
-            (Interval, Explicit(Time)) => CastIntervalToTime,
-            (Interval, Explicit(String)) => CastIntervalToString,
+            (Interval, Assignment(Time)) => CastIntervalToTime,
+            (Interval, Assignment(String)) => CastIntervalToString,
             (Interval, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
 
             // BYTES
-            (Bytes, Explicit(String)) => CastBytesToString,
+            (Bytes, Assignment(String)) => CastBytesToString,
             (Bytes, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
 
             // STRING
@@ -345,19 +368,19 @@ lazy_static! {
 
             // RECORD
             (Record { fields: vec![] }, JsonbAny) => CastOp::F(to_jsonb_any_record_cast),
-            (Record { fields: vec![] }, Explicit(String)) => CastOp::F(|ecx, e, _to_type| {
+            (Record { fields: vec![] }, Assignment(String)) => CastOp::F(|ecx, e, _to_type| {
                 let ty = ecx.scalar_type(&e);
                 Ok(e.call_unary(CastRecordToString { ty }))
             }),
 
             // ARRAY
-            (Array(Box::new(String)), Explicit(String)) => CastOp::F(|ecx, e, _to_type| {
+            (Array(Box::new(String)), Assignment(String)) => CastOp::F(|ecx, e, _to_type| {
                 let ty = ecx.scalar_type(&e);
                 Ok(e.call_unary(CastArrayToString { ty }))
             }),
 
             // LIST
-            (List(Box::new(String)), Explicit(String)) => CastOp::F(|ecx, e, _to_type| {
+            (List(Box::new(String)), Assignment(String)) => CastOp::F(|ecx, e, _to_type| {
                 let ty = ecx.scalar_type(&e);
                 Ok(e.call_unary(CastListToString { ty }))
             }),
@@ -369,11 +392,11 @@ lazy_static! {
             (Jsonb, Explicit(Float32)) => CastOp::F(from_jsonb_f64_cast),
             (Jsonb, Explicit(Float64)) => CastJsonbToFloat64,
             (Jsonb, Explicit(Decimal(0, 0))) => CastOp::F(from_jsonb_f64_cast),
-            (Jsonb, Explicit(String)) => CastJsonbToString,
+            (Jsonb, Assignment(String)) => CastJsonbToString,
             (Jsonb, JsonbAny) => CastJsonbOrNullToJsonb,
 
             // UUID
-            (Uuid, Explicit(String)) => CastUuidToString
+            (Uuid, Assignment(String)) => CastUuidToString
         }
     };
 }
@@ -392,17 +415,24 @@ pub fn get_cast<'a>(from: &ScalarType, cast_to: &CastTo) -> Option<&'a CastOp> {
 
     let cast_to = match cast_to {
         Implicit(t) => Implicit(t.desaturate()),
+        Assignment(t) => Assignment(t.desaturate()),
         Explicit(t) => Explicit(t.desaturate()),
         JsonbAny => JsonbAny,
     };
 
-    let cast = VALID_CASTS.get(&(from.desaturate(), cast_to.clone()));
+    let mut cast = VALID_CASTS.get(&(from.desaturate(), cast_to.clone()));
 
-    match (cast, cast_to) {
-        // If no explicit implementation, look for an implicit one.
-        (None, CastTo::Explicit(t)) => VALID_CASTS.get(&(from.desaturate(), CastTo::Implicit(t))),
-        (c, _) => c,
+    // If no explicit implementation, look for an assignment one.
+    if let (None, CastTo::Explicit(t)) = (cast, cast_to.clone()) {
+        cast = VALID_CASTS.get(&(from.desaturate(), CastTo::Assignment(t)));
     }
+
+    // If no assignment implementation, look for an implicit one.
+    if let (None, CastTo::Explicit(t)) | (None, CastTo::Assignment(t)) = (cast, cast_to) {
+        cast = VALID_CASTS.get(&(from.desaturate(), CastTo::Implicit(t)));
+    }
+
+    cast
 }
 
 pub fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {

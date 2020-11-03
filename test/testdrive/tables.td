@@ -138,14 +138,30 @@ INSERT statement specifies 1 columns, but table has 2 columns
 NULL value in column b violates not-null constraint
 
 ! INSERT INTO t VALUES ('d', 4);
-expected type string for column b, found i32
+invalid input syntax for int4: invalid digit found in string: "d"
 
 ! INSERT INTO t WITH v AS (SELECT 1) VALUES (1)
 complicated INSERT bodies not yet supported
 
 > INSERT INTO t VALUES (NULL, 'd');
 
+# Test that literal coercion occurs.
 > INSERT INTO t VALUES ('4', 'e')
+
+# Test that assignment casts occur when possible...
+> INSERT INTO t VALUES (5.0, 'f');
+> INSERT INTO t VALUES (6.7::float8, 'g')
+
+# ...but not when impossible.
+! INSERT INTO t VALUES (DATE '2020-01-01', 'bad')
+column "a" is of type int4 but expression is of type date
+
+# Attempting to insert JSON into an int column is particularly interesting.
+# While there is an "explicit" cast from `jsonb` to `int`, there is no
+# "assignment" cast, and INSERT is only allowed to use assignment/implicit
+# casts.
+! INSERT INTO t VALUES (JSON '1', 'bad')
+column "a" is of type int4 but expression is of type jsonb
 
 > SELECT * FROM t;
 a       b
@@ -155,6 +171,8 @@ a       b
 3       "c"
 <null>  "d"
 4       "e"
+5       "f"
+7       "g"
 
 > CREATE TABLE s (a int NOT NULL);
 
@@ -166,7 +184,7 @@ NULL value in column a violates not-null constraint
 > INSERT INTO v VALUES (now());
 
 ! INSERT INTO v VALUES (mz_logical_timestamp());
-expected type timestamptz for column a, found decimal(38, 0)
+column "a" is of type timestamptz but expression is of type numeric
 
 > DROP TABLE IF EXISTS s;
 
@@ -249,10 +267,10 @@ a    b
 INSERT statement specifies column notpresent, but it is not present in table
 
 ! INSERT INTO t (a, b) VALUES ('str', 1);
-expected type string for column b, found i32
+invalid input syntax for int4: invalid digit found in string: "str"
 
 ! INSERT INTO t (b, a) VALUES (1, 'str');
-expected type string for column b, found i32
+invalid input syntax for int4: invalid digit found in string: "str"
 
 ! INSERT INTO t (c, b, a) VALUES (1, 1, 'str');
 INSERT statement specifies column c, but it is not present in table
