@@ -1336,11 +1336,7 @@ impl DebeziumDeduplicationState {
             RowCoordinates::MySql { pos, row } => (pos, row),
             RowCoordinates::Postgres { lsn } => (lsn, 0),
         };
-        struct SkipInfo<'a> {
-            old_max_pos: &'a usize,
-            old_max_row: &'a usize,
-            old_offset: &'a Option<i64>,
-        }
+
         // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
         // duplicates, since it is always the same.
         let should_skip = if is_snapshot {
@@ -1458,52 +1454,19 @@ impl DebeziumDeduplicationState {
                         let original_time =
                             seen.or_insert_with(|| upstream_time_millis.unwrap_or(0));
 
-                        match (is_new, should_skip) {
-                            // new item that correctly is past the highest item we've ever seen
-                            (true, None) => {}
-                            // new item that violates Debezium "guarantee" that the no new
-                            // records will ever be sent with a position below the highest
-                            // position ever seen
-                            (true, Some(skipinfo)) => {
-                                warn!(
-                                    "Created a new record behind the highest point in source={}:{} binlog_file={} \
-                                     new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{} \
-                                     message_time={} message_first_seen={} max_seen_time={}",
-                                    debug_name, worker_idx, file, pos, row, coord.unwrap_or(-1),
-                                    skipinfo.old_max_pos, skipinfo.old_max_row,
-                                    fmt_timestamp(upstream_time_millis),
-                                    fmt_timestamp(*original_time),
-                                    fmt_timestamp(*max_seen_time),
-                                );
-                            }
-                            // Duplicate item below the highest seen item
-                            (false, Some(skipinfo)) => {
-                                debug!(
-                                    "already ingested source={}:{} binlog_coordinates={}:{}:{} old_binlog={}:{} \
-                                     kafka_offset={} message_time={} message_first_seen={} max_seen_time={}",
-                                    debug_name, worker_idx, file, pos, row,
-                                    skipinfo.old_max_pos, skipinfo.old_max_row,
-                                    skipinfo.old_offset.unwrap_or(-1),
-                                    fmt_timestamp(upstream_time_millis),
-                                    fmt_timestamp(*original_time),
-                                    fmt_timestamp(*max_seen_time),
-                                );
-                            }
-                            // already exists, but is past the debezium high water mark.
-                            //
-                            // This should be impossible because we set the high-water mark
-                            // every time we insert something
-                            (false, None) => {
-                                error!("We surprisingly are seeing a duplicate record that \
-                                    is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={} \
-                                    message_time={} message_first_seen={} max_seen_time={}",
-                                   file, pos, row, coord.unwrap_or(-1),
-                                   fmt_timestamp(upstream_time_millis),
-                                   fmt_timestamp(*original_time),
-                                   fmt_timestamp(*max_seen_time),
-                                );
-                            }
-                        }
+                        log_duplication_info(
+                            file,
+                            pos,
+                            row,
+                            coord,
+                            upstream_time_millis,
+                            debug_name,
+                            worker_idx,
+                            is_new,
+                            &should_skip,
+                            original_time,
+                            max_seen_time,
+                        );
 
                         is_new
                     } else {
@@ -1525,6 +1488,90 @@ impl DebeziumDeduplicationState {
             self.full = None;
         }
         should_use
+    }
+}
+
+/// Helper to track information for logging on deduplication
+struct SkipInfo<'a> {
+    old_max_pos: &'a usize,
+    old_max_row: &'a usize,
+    old_offset: &'a Option<i64>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn log_duplication_info(
+    file: &str,
+    pos: usize,
+    row: usize,
+    coord: Option<i64>,
+    upstream_time_millis: Option<i64>,
+    debug_name: &str,
+    worker_idx: usize,
+    is_new: bool,
+    should_skip: &Option<SkipInfo>,
+    original_time: &mut i64,
+    max_seen_time: &mut i64,
+) {
+    match (is_new, should_skip) {
+        // new item that correctly is past the highest item we've ever seen
+        (true, None) => {}
+        // new item that violates Debezium "guarantee" that the no new
+        // records will ever be sent with a position below the highest
+        // position ever seen
+        (true, Some(skipinfo)) => {
+            warn!(
+                "Created a new record behind the highest point in source={}:{} binlog_file={} \
+                 new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{} \
+                 message_time={} message_first_seen={} max_seen_time={}",
+                debug_name,
+                worker_idx,
+                file,
+                pos,
+                row,
+                coord.unwrap_or(-1),
+                skipinfo.old_max_pos,
+                skipinfo.old_max_row,
+                fmt_timestamp(upstream_time_millis),
+                fmt_timestamp(*original_time),
+                fmt_timestamp(*max_seen_time),
+            );
+        }
+        // Duplicate item below the highest seen item
+        (false, Some(skipinfo)) => {
+            debug!(
+                "already ingested source={}:{} binlog_coordinates={}:{}:{} old_binlog={}:{} \
+                 kafka_offset={} message_time={} message_first_seen={} max_seen_time={}",
+                debug_name,
+                worker_idx,
+                file,
+                pos,
+                row,
+                skipinfo.old_max_pos,
+                skipinfo.old_max_row,
+                skipinfo.old_offset.unwrap_or(-1),
+                fmt_timestamp(upstream_time_millis),
+                fmt_timestamp(*original_time),
+                fmt_timestamp(*max_seen_time),
+            );
+        }
+        // already exists, but is past the debezium high water mark.
+        //
+        // This should be impossible because we set the high-water mark
+        // every time we insert something
+        (false, None) => {
+            error!(
+                "We surprisingly are seeing a duplicate record that \
+                    is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={} \
+                    message_time={} message_first_seen={} max_seen_time={}",
+                file,
+                pos,
+                row,
+                coord.unwrap_or(-1),
+                fmt_timestamp(upstream_time_millis),
+                fmt_timestamp(*original_time),
+                fmt_timestamp(*max_seen_time),
+            );
+        }
     }
 }
 
