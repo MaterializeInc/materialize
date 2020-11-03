@@ -86,14 +86,14 @@ bootstrap() {
 
     run rustup target add x86_64-unknown-linux-gnu
 
-    mkdir -p target/sysroot/x86_64-unknown-linux-gnu
+    mkdir -p "$root"/target/sysroot/x86_64-unknown-linux-gnu
 }
 
 clean() {
-    run rm -rf target/sysroot
+    run rm -rf "$root"/target/sysroot
     # N.B.: `cargo clean --target=x86_64-unknown-linux-gnu-cc` cleans the entire
     # target directory, not just the directory for the specified target triple.
-    run rm -rf target/x86_64-unknown-linux-gnu
+    run rm -rf "$root"/target/x86_64-unknown-linux-gnu
 }
 
 main "$@"
