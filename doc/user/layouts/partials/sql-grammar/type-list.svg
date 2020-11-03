@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="363" height="97">
+   <polygon points="9 61 1 57 1 65"/>
+   <polygon points="17 61 9 57 9 65"/>
+   <rect x="31" y="47" width="48" height="32" rx="10"/>
+   <rect x="29"
+         y="45"
+         width="48"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="65">LIST</text>
+   <rect x="99" y="47" width="24" height="32" rx="10"/>
+   <rect x="97"
+         y="45"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="107" y="65">[</text>
+   <rect x="183" y="47" width="68" height="32"/>
+   <rect x="181" y="45" width="68" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="191" y="65">element</text>
+   <rect x="183" y="3" width="24" height="32" rx="10"/>
+   <rect x="181"
+         y="1"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="191" y="21">,</text>
+   <rect x="311" y="47" width="24" height="32" rx="10"/>
+   <rect x="309"
+         y="45"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="319" y="65">]</text>
+   <path class="line"
+         d="m17 61 h2 m0 0 h10 m48 0 h10 m0 0 h10 m24 0 h10 m40 0 h10 m68 0 h10 m-108 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m88 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-88 0 h10 m24 0 h10 m0 0 h44 m-128 44 h20 m128 0 h20 m-168 0 q10 0 10 10 m148 0 q0 -10 10 -10 m-158 10 v14 m148 0 v-14 m-148 14 q0 10 10 10 m128 0 q10 0 10 -10 m-138 10 h10 m0 0 h118 m20 -34 h10 m24 0 h10 m3 0 h-3"/>
+   <polygon points="353 61 361 57 361 65"/>
+   <polygon points="353 61 345 57 345 65"/>
+</svg>
