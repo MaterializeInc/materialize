@@ -1145,6 +1145,7 @@ pub enum DebeziumDeduplicationStrategy {
         pad_start: Option<NaiveDateTime>,
         start: NaiveDateTime,
         end: NaiveDateTime,
+        pad_end: Option<NaiveDateTime>,
     },
 }
 
@@ -1156,6 +1157,7 @@ impl DebeziumDeduplicationStrategy {
         start: &str,
         end: &str,
         pad_start: Option<&str>,
+        pad_end: Option<&str>,
     ) -> anyhow::Result<DebeziumDeduplicationStrategy> {
         let fallback_parse = |s: &str| {
             for format in &["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
@@ -1177,6 +1179,7 @@ impl DebeziumDeduplicationStrategy {
         let start = fallback_parse(start)?;
         let end = fallback_parse(end)?;
         let pad_start = pad_start.map(fallback_parse).transpose()?;
+        let pad_end = pad_end.map(fallback_parse).transpose()?;
 
         if start >= end {
             bail!(
@@ -1189,6 +1192,7 @@ impl DebeziumDeduplicationStrategy {
             start,
             end,
             pad_start,
+            pad_end,
         })
     }
 }
@@ -1261,6 +1265,7 @@ struct TrackRange {
     pad_start: i64,
     start: i64,
     end: i64,
+    pad_end: i64,
 }
 
 impl TrackFull {
@@ -1283,15 +1288,20 @@ impl TrackFull {
         start: NaiveDateTime,
         end: NaiveDateTime,
         pad_start: Option<NaiveDateTime>,
+        pad_end: Option<NaiveDateTime>,
     ) -> Self {
         let mut tracker = Self::from_keys(key_indices);
         let pad_start = pad_start
             .unwrap_or_else(|| (start - chrono::Duration::hours(1)))
             .timestamp_millis();
+        let pad_end = pad_end
+            .unwrap_or_else(|| (end + chrono::Duration::hours(1)))
+            .timestamp_millis();
         tracker.range = Some(TrackRange {
             pad_start,
             start: start.timestamp_millis(),
             end: end.timestamp_millis(),
+            pad_end,
         });
         tracker
     }
@@ -1306,11 +1316,13 @@ impl DebeziumDeduplicationState {
                 start,
                 end,
                 pad_start,
+                pad_end,
             } => Some(TrackFull::from_keys_in_range(
                 key_indices,
                 start,
                 end,
                 pad_start,
+                pad_end,
             )),
         };
         DebeziumDeduplicationState {
@@ -1430,6 +1442,7 @@ impl DebeziumDeduplicationState {
                     }
                 } else {
                     *max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
+                    let mut prefer_should_skip = false;
                     if let Some(seen_offsets) = seen_offsets.get_mut(file) {
                         // first check if we are in a special case of range-bounded track full
                         if let Some(range) = range {
@@ -1442,6 +1455,9 @@ impl DebeziumDeduplicationState {
                                     return should_skip.is_none();
                                 }
                                 if upstream_time_millis > range.end {
+                                    prefer_should_skip = true;
+                                }
+                                if upstream_time_millis > range.pad_end {
                                     // don't abort early, but we will clean up after this validation
                                     delete_full = true;
                                 }
@@ -1468,7 +1484,11 @@ impl DebeziumDeduplicationState {
                             max_seen_time,
                         );
 
-                        is_new
+                        if prefer_should_skip {
+                            should_skip.is_none()
+                        } else {
+                            is_new
+                        }
                     } else {
                         let mut hs = HashMap::new();
                         hs.insert((pos, row), upstream_time_millis.unwrap_or(0));

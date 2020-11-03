@@ -207,7 +207,6 @@ a b
 1 2
 2 3
 
-
 # Source with new-style three-valued "snapshot".
 $ set new-dbz-schema={
     "type": "record",
@@ -351,9 +350,10 @@ $ kafka-create-topic topic=misordered-dbz-in-range-data
 
 # timestamps:
 # * 1599990000000 = 2020-09-13 09:40 -- more than an hour before the duplicate items
-# * 1599999600000 = 2020-09-13 12:20 -- in the hard-coded padding window
+# * 1599999600000 = 2020-09-13 12:20 -- in the default pad start window
 # * 1600000000000 = 2020-09-13 12:26 -- duplicate items
-# * 1600005000000 = 2020-09-13 13:50 -- no longer possibly duplicate
+# * 1600005000000 = 2020-09-13 13:50 -- no longer possibly duplicate, but before pad_end
+# * 1600006500000 = 2020-09-13 14:15 -- after pad end, used for misordered_dbz_after_pad source
 
 $ kafka-ingest format=avro topic=misordered-dbz-in-range-data schema=${new-dbz-schema} timestamp=1599990000000
 {"before": null, "after": {"row":{"a": 1, "b": 0}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "false"}}}
@@ -381,7 +381,8 @@ $ kafka-ingest format=avro topic=misordered-dbz-in-range-data schema=${new-dbz-s
   WITH (
       deduplication = 'full_in_range',
       deduplication_start = '2020-09-13 12:26:00',
-      deduplication_end = '2020-09-13 13:00:00'
+      deduplication_end = '2020-09-13 13:00:00',
+      deduplication_pad_end = '2020-09-13 14:00:00'
   )
   FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
   ENVELOPE DEBEZIUM
@@ -396,14 +397,15 @@ a b
 5 0
 8 0
 
-# same thing, but with an explicit pad start
+# same thing, but with explicit pad start and end
 > CREATE MATERIALIZED SOURCE misordered_dbz_in_range_with_start
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-misordered-dbz-in-range-data-${testdrive.seed}'
   WITH (
       deduplication = 'full_in_range',
       deduplication_pad_start = '2020-09-13 10:00:00',
       deduplication_start = '2020-09-13 12:26:00',
-      deduplication_end = '2020-09-13 13:00:00'
+      deduplication_end = '2020-09-13 13:00:00',
+      deduplication_pad_end = '2020-09-13 14:00:00'
   )
   FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
   ENVELOPE DEBEZIUM
@@ -418,6 +420,33 @@ a b
 5 0
 8 0
 
+# full dedupe catches reversed, invalid data, even after we have entered the
+# padding zone, but only in the full-check zone
+$ kafka-ingest format=avro topic=misordered-dbz-in-range-data schema=${new-dbz-schema} timestamp=1600000000000
+{"before": null, "after": {"row":{"a": 5, "b": 1}}, "source": {"file": "binlog", "pos": 5, "row": 1, "snapshot": {"string": "false"}}}
+
+# but inserting past the end of the pad_end...
+$ kafka-ingest format=avro topic=misordered-dbz-in-range-data schema=${new-dbz-schema} timestamp=1600006500000
+{"before": null, "after": {"row":{"a": 9, "b": 0}}, "source": {"file": "binlog", "pos": 9, "row": 0, "snapshot": {"string": "false"}}}
+
+# ...means we no longer have any way of checking for not-dupe messages in the window.
+# This should not show up in the final check.
+$ kafka-ingest format=avro topic=misordered-dbz-in-range-data schema=${new-dbz-schema} timestamp=1600000000000
+{"before": null, "after": {"row":{"a": 5, "b": 2}}, "source": {"file": "binlog", "pos": 5, "row": 2, "snapshot": {"string": "false"}}}
+
+> SELECT * FROM misordered_dbz_in_range_with_start
+a b
+---
+1 0
+4 0
+3 1
+6 0
+5 0
+8 0
+5 1
+9 0
+
+# end dbz misordering tests
 
 ! CREATE SOURCE recurisve
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'ignored'
