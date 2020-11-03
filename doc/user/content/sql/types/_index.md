@@ -22,13 +22,14 @@ Type | Aliases | Use | Size (bytes) | Syntax
 [`integer`](integer) | `int4`, `int` | Signed integer | 4 | `123`
 [`interval`](interval) | | Duration of time | 32 | `INTERVAL '1-2 3 4:5:6.7'`
 [`jsonb`](jsonb) | `json` | JSON | Variable | `'{"1":2,"3":4}'::jsonb`
+[`list`](list) | | Multidimensional list | Variable | `LIST[[1,2],[3]]`
 [`record`](record) | | Tuple with arbitrary contents | Variable | `ROW($expr, ...)`
 [`oid`](oid) | | PostgreSQL object identifier | 4 | `123`
 [`text`](text) | `string` | Unicode string | Variable | `'foo'`
 [`time`](time) | | Time without date | 4 | `TIME '01:23:45'`
 [`timestamp`](timestamp) | | Date and time | 8 | `TIMESTAMP '2007-02-01 15:04:05'`
 [`timestamp with time zone`](timestamp) | `timestamptz` | Date and time with timezone | 8 | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
-[Arrays](array) | | Multidimensional array | Variable | `ARRAY[...]`
+[Arrays](array) (`[]`) | | Multidimensional array | Variable | `ARRAY[...]`
 
 The names listed in the "Type" column represent the names specified in the SQL
 standard. For compatibility with other SQL database systems, Materialize often

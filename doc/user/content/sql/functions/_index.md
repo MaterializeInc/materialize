@@ -89,3 +89,9 @@ Operation | Computes
 ### JSON
 
 {{% json-operators %}}
+
+### List
+
+List operators are [polymorphic](../types/list/#polymorphism).
+
+{{% list-operators %}}
