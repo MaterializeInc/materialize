@@ -13,8 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::parser::ParserError;
-
 /// A cursor over a string with a variety of lexing convenience methods.
 pub struct LexBuf<'a> {
     buf: &'a str,
@@ -134,16 +132,11 @@ impl<'a> LexBuf<'a> {
         self.pos
     }
 
-    /// Constructs an error with the provided message whose range begins at
-    /// `pos` and ends at the internal cursor's current position.
-    pub fn err<S>(&self, pos: usize, message: S) -> ParserError
-    where
-        S: Into<String>,
-    {
-        ParserError {
-            sql: self.buf.into(),
-            message: message.into(),
-            range: pos..self.pos,
-        }
+    /// Returns the string that the lexical buffer wraps.
+    ///
+    /// Note that the entire string is returned, regardless of the position of
+    /// the buffer's internal cursor.
+    pub fn inner(&self) -> &str {
+        &self.buf
     }
 }
