@@ -34,7 +34,7 @@ goofus,gallant
 ! CREATE SINK bad_schema_registry FROM src
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://materialize.io:8080'
-unable to publish schema to registry in kafka sink
+unable to publish value schema to registry in kafka sink
 
 > SHOW SINKS
 name
