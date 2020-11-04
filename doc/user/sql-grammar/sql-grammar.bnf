@@ -195,7 +195,7 @@ sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
     'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url
-    ('KEYS' '(' key_column ( ',' key_column )* ')')?
+    ('KEY' '(' key_column ( ',' key_column )* ')')?
 lit_cast ::=
   type val
 op_cast ::=
