@@ -35,11 +35,10 @@
 use std::convert::TryFrom;
 use std::ops::Range;
 
-use crate::keywords::ALL_KEYWORDS;
-use crate::lexer::buf::LexBuf;
-use crate::parser::ParserError;
+use ore::lex::LexBuf;
 
-mod buf;
+use crate::keywords::ALL_KEYWORDS;
+use crate::parser::ParserError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -109,6 +108,12 @@ impl Word {
     }
 }
 
+macro_rules! bail {
+    ($buf:expr, $pos:expr, $($fmt:expr),*) => {
+        return Err(err($buf, $pos, format!($($fmt),*)))
+    }
+}
+
 /// Lexes a SQL query.
 ///
 /// Returns a list of tokens alongside their corresponding byte offset in the
@@ -151,7 +156,7 @@ pub fn lex(query: &str) -> Result<Vec<(Token, Range<usize>)>, ParserError> {
             ']' => Token::RBracket,
             #[rustfmt::skip]
             '+'|'-'|'*'|'/'|'<'|'>'|'='|'~'|'!'|'@'|'#'|'%'|'^'|'&'|'|'|'`'|'?' => lex_op(buf)?,
-            _ => return Err(buf.err(pos, format!("unexpected character in input: {}", ch))),
+            _ => bail!(buf, pos, "unexpected character in input: {}", ch),
         };
         tokens.push((token, pos..buf.pos()))
     }
@@ -178,7 +183,7 @@ fn lex_multiline_comment(buf: &mut LexBuf) -> Result<(), ParserError> {
             _ => (),
         }
     }
-    Err(buf.err(pos, "unterminated multiline comment"))
+    bail!(buf, pos, "unterminated multiline comment")
 }
 
 fn lex_ident(buf: &mut LexBuf) -> Token {
@@ -188,7 +193,7 @@ fn lex_ident(buf: &mut LexBuf) -> Token {
     );
     let word_uppercase = word.to_uppercase();
     Token::Word(Word {
-        value: word,
+        value: word.into(),
         quoted: false,
         keyword: if ALL_KEYWORDS.contains(&word_uppercase.as_str()) {
             word_uppercase
@@ -206,7 +211,7 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, ParserError> {
             Some('"') if buf.consume('"') => s.push('"'),
             Some('"') => break,
             Some(c) => s.push(c),
-            None => return Err(buf.err(pos, "unterminated quoted identifier")),
+            None => bail!(buf, pos, "unterminated quoted identifier"),
         }
     }
     Ok(Token::Word(Word {
@@ -225,7 +230,7 @@ fn lex_string(buf: &mut LexBuf) -> Result<String, ParserError> {
                 Some('\'') if buf.consume('\'') => s.push('\''),
                 Some('\'') => break,
                 Some(c) => s.push(c),
-                None => return Err(buf.err(pos, "unterminated quoted string")),
+                None => bail!(buf, pos, "unterminated quoted string"),
             }
         }
         if !lex_to_adjacent_string(buf) {
@@ -240,7 +245,7 @@ fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
         buf.next_n(n)
             .and_then(|s| u32::from_str_radix(s, 16).ok())
             .and_then(|codepoint| char::try_from(codepoint).ok())
-            .ok_or_else(|| buf.err(pos, "invalid unicode escape"))
+            .ok_or_else(|| err(buf, pos, "invalid unicode escape"))
     }
 
     // We do not support octal (\o) or hexadecimal (\x) escapes, since it is
@@ -252,13 +257,13 @@ fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
     fn lex_octal_escape(buf: &mut LexBuf) -> ParserError {
         let pos = buf.pos() - 2;
         buf.take_while(|ch| matches!(ch, '0'..='7'));
-        buf.err(pos, "octal escapes are not supported")
+        err(buf, pos, "octal escapes are not supported")
     }
 
     fn lex_hexadecimal_escape(buf: &mut LexBuf) -> ParserError {
         let pos = buf.pos() - 2;
         buf.take_while(|ch| matches!(ch, '0'..='9' | 'A'..='F' | 'a'..='f'));
-        buf.err(pos, "hexadecimal escapes are not supported")
+        err(buf, pos, "hexadecimal escapes are not supported")
     }
 
     let mut s = String::new();
@@ -279,10 +284,10 @@ fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
                     Some('0'..='7') => return Err(lex_octal_escape(buf)),
                     Some('x') => return Err(lex_hexadecimal_escape(buf)),
                     Some(c) => s.push(c),
-                    None => return Err(buf.err(pos, "unterminated quoted string")),
+                    None => bail!(buf, pos, "unterminated quoted string"),
                 },
                 Some(c) => s.push(c),
-                None => return Err(buf.err(pos, "unterminated quoted string")),
+                None => bail!(buf, pos, "unterminated quoted string"),
             }
         }
         if !lex_to_adjacent_string(buf) {
@@ -305,7 +310,7 @@ fn lex_dollar_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
     if let Some(s) = buf.take_to_delimiter(&tag) {
         Ok(Token::String(s.into()))
     } else {
-        Err(buf.err(pos, "unterminated dollar-quoted string"))
+        Err(err(buf, pos, "unterminated dollar-quoted string"))
     }
 }
 
@@ -314,18 +319,18 @@ fn lex_parameter(buf: &mut LexBuf) -> Result<Token, ParserError> {
     let n = buf
         .take_while(|ch| matches!(ch, '0'..='9'))
         .parse()
-        .map_err(|_| buf.err(pos, "invalid parameter number"))?;
+        .map_err(|_| err(buf, pos, "invalid parameter number"))?;
     Ok(Token::Parameter(n))
 }
 
 fn lex_number(buf: &mut LexBuf) -> Token {
     buf.prev();
-    let mut s = buf.take_while(|ch| matches!(ch, '0'..='9'));
+    let mut s = buf.take_while(|ch| matches!(ch, '0'..='9')).to_owned();
 
     // Optional decimal component.
     if buf.consume('.') {
         s.push('.');
-        buf.take_while_into(|ch| matches!(ch, '0'..='9'), &mut s);
+        s.push_str(buf.take_while(|ch| matches!(ch, '0'..='9')));
     }
 
     // Optional exponent.
@@ -336,7 +341,7 @@ fn lex_number(buf: &mut LexBuf) -> Token {
         } else {
             buf.consume('+');
         }
-        buf.take_while_into(|ch| matches!(ch, '0'..='9'), &mut s);
+        s.push_str(buf.take_while(|ch| matches!(ch, '0'..='9')));
     }
 
     Token::Number(s)
@@ -386,5 +391,18 @@ fn lex_op(buf: &mut LexBuf) -> Result<Token, ParserError> {
         "!=" => Ok(Token::Op("<>".into())),
         // Emit all other operators as is.
         _ => Ok(Token::Op(s)),
+    }
+}
+
+/// Constructs an error with the provided message whose range begins at
+/// `pos` and ends at the buffer's current position.
+fn err<S>(buf: &LexBuf, pos: usize, message: S) -> ParserError
+where
+    S: Into<String>,
+{
+    ParserError {
+        sql: buf.inner().into(),
+        message: message.into(),
+        range: pos..buf.pos(),
     }
 }

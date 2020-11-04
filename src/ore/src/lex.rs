@@ -13,9 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::parser::ParserError;
+//! Lexing utilities.
 
 /// A cursor over a string with a variety of lexing convenience methods.
+#[derive(Debug)]
 pub struct LexBuf<'a> {
     buf: &'a str,
     pos: usize,
@@ -33,18 +34,6 @@ impl<'a> LexBuf<'a> {
     /// internal cursor.
     pub fn peek(&self) -> Option<char> {
         self.buf[self.pos..].chars().next()
-    }
-
-    /// Returns the next character in the buffer, if any, advancing the internal
-    /// cursor past the character.
-    ///
-    /// It is safe to call `next` after it returns `None`.
-    pub fn next(&mut self) -> Option<char> {
-        let c = self.peek();
-        if let Some(c) = c {
-            self.pos += c.len_utf8();
-        }
-        c
     }
 
     /// Returns a slice containing the next `n` characters in the buffer.
@@ -114,29 +103,19 @@ impl<'a> LexBuf<'a> {
     ///
     /// Advances the cursor to the character that failed the predicate, or to
     /// the end of the string if no character failed the predicate.
-    pub fn take_while<P>(&mut self, predicate: P) -> String
+    pub fn take_while<P>(&mut self, mut predicate: P) -> &str
     where
         P: FnMut(char) -> bool,
     {
-        let mut buf = String::new();
-        self.take_while_into(predicate, &mut buf);
-        buf
-    }
-
-    /// Like [`LexBuf::take_while`], but writes characters into `buf` rather
-    /// than returning a new string.
-    pub fn take_while_into<P>(&mut self, mut predicate: P, buf: &mut String)
-    where
-        P: FnMut(char) -> bool,
-    {
+        let pos = self.pos;
         while let Some(ch) = self.peek() {
             if predicate(ch) {
                 self.next();
-                buf.push(ch);
             } else {
                 break;
             }
         }
+        &self.buf[pos..self.pos]
     }
 
     /// Reports the current position of the cursor in the buffer.
@@ -144,16 +123,27 @@ impl<'a> LexBuf<'a> {
         self.pos
     }
 
-    /// Constructs an error with the provided message whose range begins at
-    /// `pos` and ends at the internal cursor's current position.
-    pub fn err<S>(&self, pos: usize, message: S) -> ParserError
-    where
-        S: Into<String>,
-    {
-        ParserError {
-            sql: self.buf.into(),
-            message: message.into(),
-            range: pos..self.pos,
+    /// Returns the string that the lexical buffer wraps.
+    ///
+    /// Note that the entire string is returned, regardless of the position of
+    /// the buffer's internal cursor.
+    pub fn inner(&self) -> &str {
+        &self.buf
+    }
+}
+
+impl<'a> Iterator for LexBuf<'a> {
+    type Item = char;
+
+    /// Returns the next character in the buffer, if any, advancing the internal
+    /// cursor past the character.
+    ///
+    /// It is safe to call `next` after it returns `None`.
+    fn next(&mut self) -> Option<char> {
+        let c = self.peek();
+        if let Some(c) = c {
+            self.pos += c.len_utf8();
         }
+        c
     }
 }
