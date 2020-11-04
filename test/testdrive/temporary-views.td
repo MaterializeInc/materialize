@@ -54,10 +54,10 @@ catalog item 'double_temp_v' already exists
 
 ##### Temporary materialized views.
 ! CREATE TEMPORARY MATERIALIZED VIEW foo AS SELECT * FROM v;
-Expected VIEW after CREATE TEMPORARY, found: MATERIALIZED
+Expected VIEW after CREATE TEMPORARY, found MATERIALIZED
 
 ! CREATE TEMP MATERIALIZED VIEW foo AS SELECT * FROM v;
-Expected VIEW after CREATE TEMPORARY, found: MATERIALIZED
+Expected VIEW after CREATE TEMPORARY, found MATERIALIZED
 
 
 ##### Temporary sources.
@@ -71,14 +71,14 @@ $ set schema={
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-Expected VIEW after CREATE TEMPORARY, found: SOURCE
+Expected VIEW after CREATE TEMPORARY, found SOURCE
 
 
 ##### Temporary sinks.
 ! CREATE TEMPORARY SINK data_sink FROM data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Expected VIEW after CREATE TEMPORARY, found: SINK
+Expected VIEW after CREATE TEMPORARY, found SINK
 
 #####################################################################
 

@@ -133,9 +133,9 @@ v2
 
 # DROP DATABASE should not support RESTRICT or CASCADE.
 ! DROP DATABASE d RESTRICT
-Expected end of statement, found: RESTRICT
+Expected end of statement, found RESTRICT
 ! DROP DATABASE d RESTRICT
-Expected end of statement, found: RESTRICT
+Expected end of statement, found RESTRICT
 
 # DROP DATABASE should succeed even when there are objects in the database.
 > DROP DATABASE d

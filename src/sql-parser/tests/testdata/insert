@@ -74,4 +74,4 @@ error:
 Parse error:
 INSERT INTO customer DEFAULT VALUES, DEFAULT VALUES
                                    ^
-Expected end of statement, found: ,
+Expected end of statement, found comma

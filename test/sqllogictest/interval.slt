@@ -493,14 +493,14 @@ statement error SECOND precision must be \(0, 6\), have SECOND\(7\)
 SELECT INTERVAL '1 day 2-3 4' SECOND(7);
 
 # Only allow precision notation for trailing SECOND .
-statement error Expected end of statement, found: SECOND
+statement error Expected end of statement, found SECOND
 SELECT INTERVAL '2-3 3:4' SECOND(1) to SECOND
 
-statement error Expected end of statement, found: \(
+statement error Expected end of statement, found left parenthesis
 SELECT INTERVAL '2-3 3:4' DAY(1)
 
 # Only allow positive integer nanosecond precision
-statement error Expected literal int, found: -
+statement error Expected literal int, found operator
 SELECT INTERVAL '1 day 2-3 4' SECOND(-1);
 
 # Arbitrary punctuation delimiters
