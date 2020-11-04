@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 #![allow(clippy::op_ref)]
-
 use differential_dataflow::lattice::Lattice;
 use dogsdogsdogs::altneu::AltNeu;
+use std::collections::HashSet;
 use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
@@ -49,6 +49,10 @@ where
 
             // Collects error streams for the ambient scope.
             let mut scope_errs = Vec::new();
+
+            // Deduplicate the error streams of multiply used arrangements.
+            let mut local_err_dedup = HashSet::new();
+            let mut trace_err_dedup = HashSet::new();
 
             // We'll need a new scope, to hold `AltNeu` wrappers, and we'll want
             // to import all traces as alt and neu variants (unless we do a more
@@ -160,7 +164,9 @@ where
                                             )
                                         }) {
                                         ArrangementFlavor::Local(oks, errs) => {
-                                            scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                            if local_err_dedup.insert((&inputs[*other], &next_key[..])) {
+                                                scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                            }
                                             if other > &relation {
                                                 let oks = oks
                                                     .enter_at(
@@ -182,7 +188,9 @@ where
                                             }
                                         }
                                         ArrangementFlavor::Trace(_gid, oks, errs) => {
-                                            scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                            if trace_err_dedup.insert((&inputs[*other], &next_key[..])) {
+                                                scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                            }
                                             if other > &relation {
                                                 let oks = oks
                                                     .enter_at(
