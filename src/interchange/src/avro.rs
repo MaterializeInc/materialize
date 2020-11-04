@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::max;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
@@ -16,10 +17,11 @@ use std::{cell::RefCell, iter, rc::Rc};
 
 use anyhow::{anyhow, bail};
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
+use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::{NaiveDateTime, Timelike};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
@@ -1210,9 +1212,11 @@ struct DebeziumDeduplicationState {
 /// are unique and thus we can get deduplicate based on those.
 #[derive(Debug)]
 struct TrackFull {
-    /// binlog filename to offset
-    seen_offsets: HashMap<String, HashSet<(usize, usize)>>,
+    /// binlog filename to (offset to (timestamp that this binlog entry was first seen))
+    seen_offsets: HashMap<String, HashMap<(usize, usize), i64>>,
     seen_snapshot_keys: HashMap<String, HashSet<Row>>,
+    /// The highest-ever seen timestamp, used in logging to let us know how far backwards time might go
+    max_seen_time: i64,
     key_indices: Option<Vec<usize>>,
     /// Optimization to avoid re-allocating the row packer over and over when extracting the key..
     key_buf: RowPacker,
@@ -1267,6 +1271,7 @@ impl TrackFull {
         Self {
             seen_offsets: Default::default(),
             seen_snapshot_keys: Default::default(),
+            max_seen_time: 0,
             key_indices,
             key_buf: Default::default(),
             range: None,
@@ -1331,11 +1336,7 @@ impl DebeziumDeduplicationState {
             RowCoordinates::MySql { pos, row } => (pos, row),
             RowCoordinates::Postgres { lsn } => (lsn, 0),
         };
-        struct SkipInfo<'a> {
-            old_max_pos: &'a usize,
-            old_max_row: &'a usize,
-            old_offset: &'a Option<i64>,
-        }
+
         // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
         // duplicates, since it is always the same.
         let should_skip = if is_snapshot {
@@ -1368,10 +1369,12 @@ impl DebeziumDeduplicationState {
 
         let mut delete_full = false;
         let should_use = match &mut self.full {
-            None => should_skip.is_none(), // Always none if in snapshot, see comment above where `should_skip` is bound.
+            // Always none if in snapshot, see comment above where `should_skip` is bound.
+            None => should_skip.is_none(),
             Some(TrackFull {
                 seen_offsets,
                 seen_snapshot_keys,
+                max_seen_time,
                 key_indices,
                 key_buf,
                 range,
@@ -1379,14 +1382,17 @@ impl DebeziumDeduplicationState {
                 if is_snapshot {
                     let key_indices = match key_indices.as_ref() {
                         None => {
-                            // No keys, so we can't do anything sensible for snapshots. Return "all OK" and hope their data isn't corrupted.
+                            // No keys, so we can't do anything sensible for snapshots.
+                            // Return "all OK" and hope their data isn't corrupted.
                             return true;
                         }
                         Some(ki) => ki,
                     };
                     let mut row_iter = match update.after.as_ref() {
                         None => {
-                            error!("Snapshot row at pos {:?}, message_time={} in {} was unexpectedly not an insert.", coord, fmt_timestamp(upstream_time_millis), debug_name);
+                            error!(
+                                "Snapshot row at pos {:?}, message_time={} source={} was not an insert.",
+                                coord, fmt_timestamp(upstream_time_millis), debug_name);
                             return false;
                         }
                         Some(r) => r.iter(),
@@ -1407,11 +1413,11 @@ impl DebeziumDeduplicationState {
                         // But don't worry -- since `Row`s use a 16-byte smallvec, the clone
                         // won't involve an extra allocation unless the key overflows that.
                         //
-                        // Anyway, TODO: avoid this via `get_or_insert` once rust-lang/#60896 is resolved.
+                        // Anyway, TODO: avoid this via `get_or_insert` once rust-lang/rust#60896 is resolved.
                         let is_new = seen_keys.insert(key.clone());
                         if !is_new {
                             warn!(
-                                "Snapshot row with key {:?} in {} seen multiple times (most recent message_time={})",
+                                "Snapshot row with key={:?} source={} seen multiple times (most recent message_time={})",
                                 key, debug_name, fmt_timestamp(upstream_time_millis)
                             );
                         }
@@ -1423,6 +1429,7 @@ impl DebeziumDeduplicationState {
                         true
                     }
                 } else {
+                    *max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
                     if let Some(seen_offsets) = seen_offsets.get_mut(file) {
                         // first check if we are in a special case of range-bounded track full
                         if let Some(range) = range {
@@ -1431,7 +1438,7 @@ impl DebeziumDeduplicationState {
                                     return should_skip.is_none();
                                 }
                                 if upstream_time_millis < range.start {
-                                    seen_offsets.insert((pos, row));
+                                    seen_offsets.insert((pos, row), upstream_time_millis);
                                     return should_skip.is_none();
                                 }
                                 if upstream_time_millis > range.end {
@@ -1442,53 +1449,29 @@ impl DebeziumDeduplicationState {
                         }
 
                         // Now we know that we are in either trackfull or a range-bounded trackfull
+                        let seen = seen_offsets.entry((pos, row));
+                        let is_new = matches!(seen, std::collections::hash_map::Entry::Vacant(_));
+                        let original_time =
+                            seen.or_insert_with(|| upstream_time_millis.unwrap_or(0));
 
-                        let is_new = seen_offsets.insert((pos, row));
-
-                        match (is_new, should_skip) {
-                            // new item that correctly is past the highest item we've ever seen
-                            (true, None) => {}
-                            // new item that violates Debezium "guarantee" that the no new
-                            // records will ever be sent with a position below the highest
-                            // position ever seen
-                            (true, Some(skipinfo)) => {
-                                warn!(
-                                "Source: {}:{} created a new record behind the highest point in binlog_file={} \
-                                 new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{} \
-                                 message_time={}",
-                                debug_name, worker_idx, file, pos, row, coord.unwrap_or(-1),
-                                skipinfo.old_max_pos, skipinfo.old_max_row,
-                                fmt_timestamp(upstream_time_millis)
-                            );
-                            }
-                            // Duplicate item below the highest seen item
-                            (false, Some(skipinfo)) => {
-                                debug!(
-                                "Source: {}:{} already ingested binlog coordinates {}:{}:{} old_binlog={}:{} \
-                                 kafka_offset={} message_time={}",
-                                debug_name, worker_idx, file, pos, row,
-                                skipinfo.old_max_pos, skipinfo.old_max_row,
-                                skipinfo.old_offset.unwrap_or(-1),
-                                fmt_timestamp(upstream_time_millis)
-                            );
-                            }
-                            // already exists, but is past the debezium high water mark.
-                            //
-                            // This should be impossible because we set the high-water mark
-                            // every time we insert something
-                            (false, None) => {
-                                error!("We surprisingly are seeing a duplicate record that \
-                                    is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={} \
-                                    message_time={}",
-                                   file, pos, row, coord.unwrap_or(-1),
-                                   fmt_timestamp(upstream_time_millis));
-                            }
-                        }
+                        log_duplication_info(
+                            file,
+                            pos,
+                            row,
+                            coord,
+                            upstream_time_millis,
+                            debug_name,
+                            worker_idx,
+                            is_new,
+                            &should_skip,
+                            original_time,
+                            max_seen_time,
+                        );
 
                         is_new
                     } else {
-                        let mut hs = HashSet::new();
-                        hs.insert((pos, row));
+                        let mut hs = HashMap::new();
+                        hs.insert((pos, row), upstream_time_millis.unwrap_or(0));
                         seen_offsets.insert(file.to_owned(), hs);
                         true
                     }
@@ -1497,17 +1480,107 @@ impl DebeziumDeduplicationState {
         };
 
         if delete_full {
+            info!(
+                "Deleting debezium deduplication tracking data source={} message_time={}",
+                debug_name,
+                fmt_timestamp(upstream_time_millis)
+            );
             self.full = None;
         }
         should_use
     }
 }
 
-fn fmt_timestamp(ts: Option<i64>) -> NaiveDateTime {
+/// Helper to track information for logging on deduplication
+struct SkipInfo<'a> {
+    old_max_pos: &'a usize,
+    old_max_row: &'a usize,
+    old_offset: &'a Option<i64>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn log_duplication_info(
+    file: &str,
+    pos: usize,
+    row: usize,
+    coord: Option<i64>,
+    upstream_time_millis: Option<i64>,
+    debug_name: &str,
+    worker_idx: usize,
+    is_new: bool,
+    should_skip: &Option<SkipInfo>,
+    original_time: &mut i64,
+    max_seen_time: &mut i64,
+) {
+    match (is_new, should_skip) {
+        // new item that correctly is past the highest item we've ever seen
+        (true, None) => {}
+        // new item that violates Debezium "guarantee" that the no new
+        // records will ever be sent with a position below the highest
+        // position ever seen
+        (true, Some(skipinfo)) => {
+            warn!(
+                "Created a new record behind the highest point in source={}:{} binlog_file={} \
+                 new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{} \
+                 message_time={} message_first_seen={} max_seen_time={}",
+                debug_name,
+                worker_idx,
+                file,
+                pos,
+                row,
+                coord.unwrap_or(-1),
+                skipinfo.old_max_pos,
+                skipinfo.old_max_row,
+                fmt_timestamp(upstream_time_millis),
+                fmt_timestamp(*original_time),
+                fmt_timestamp(*max_seen_time),
+            );
+        }
+        // Duplicate item below the highest seen item
+        (false, Some(skipinfo)) => {
+            debug!(
+                "already ingested source={}:{} binlog_coordinates={}:{}:{} old_binlog={}:{} \
+                 kafka_offset={} message_time={} message_first_seen={} max_seen_time={}",
+                debug_name,
+                worker_idx,
+                file,
+                pos,
+                row,
+                skipinfo.old_max_pos,
+                skipinfo.old_max_row,
+                skipinfo.old_offset.unwrap_or(-1),
+                fmt_timestamp(upstream_time_millis),
+                fmt_timestamp(*original_time),
+                fmt_timestamp(*max_seen_time),
+            );
+        }
+        // already exists, but is past the debezium high water mark.
+        //
+        // This should be impossible because we set the high-water mark
+        // every time we insert something
+        (false, None) => {
+            error!(
+                "We surprisingly are seeing a duplicate record that \
+                    is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={} \
+                    message_time={} message_first_seen={} max_seen_time={}",
+                file,
+                pos,
+                row,
+                coord.unwrap_or(-1),
+                fmt_timestamp(upstream_time_millis),
+                fmt_timestamp(*original_time),
+                fmt_timestamp(*max_seen_time),
+            );
+        }
+    }
+}
+
+fn fmt_timestamp(ts: impl Into<Option<i64>>) -> DelayedFormat<StrftimeItems<'static>> {
     let (seconds, nanos) = ts
+        .into()
         .map(|ts| (ts / 1000, (ts % 1000) * 1_000_000))
         .unwrap_or((0, 0));
-    NaiveDateTime::from_timestamp(seconds, nanos as u32)
+    NaiveDateTime::from_timestamp(seconds, nanos as u32).format("%Y-%m-%dT%H:%S:%S%.f")
 }
 
 /// Additional context needed for decoding
