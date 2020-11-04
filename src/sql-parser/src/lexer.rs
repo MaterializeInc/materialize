@@ -188,7 +188,7 @@ fn lex_ident(buf: &mut LexBuf) -> Token {
     );
     let word_uppercase = word.to_uppercase();
     Token::Word(Word {
-        value: word,
+        value: word.into(),
         quoted: false,
         keyword: if ALL_KEYWORDS.contains(&word_uppercase.as_str()) {
             word_uppercase
@@ -320,12 +320,12 @@ fn lex_parameter(buf: &mut LexBuf) -> Result<Token, ParserError> {
 
 fn lex_number(buf: &mut LexBuf) -> Token {
     buf.prev();
-    let mut s = buf.take_while(|ch| matches!(ch, '0'..='9'));
+    let mut s = buf.take_while(|ch| matches!(ch, '0'..='9')).to_owned();
 
     // Optional decimal component.
     if buf.consume('.') {
         s.push('.');
-        buf.take_while_into(|ch| matches!(ch, '0'..='9'), &mut s);
+        s.push_str(buf.take_while(|ch| matches!(ch, '0'..='9')));
     }
 
     // Optional exponent.
@@ -336,7 +336,7 @@ fn lex_number(buf: &mut LexBuf) -> Token {
         } else {
             buf.consume('+');
         }
-        buf.take_while_into(|ch| matches!(ch, '0'..='9'), &mut s);
+        s.push_str(buf.take_while(|ch| matches!(ch, '0'..='9')));
     }
 
     Token::Number(s)

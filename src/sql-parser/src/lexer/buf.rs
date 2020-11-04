@@ -114,29 +114,19 @@ impl<'a> LexBuf<'a> {
     ///
     /// Advances the cursor to the character that failed the predicate, or to
     /// the end of the string if no character failed the predicate.
-    pub fn take_while<P>(&mut self, predicate: P) -> String
+    pub fn take_while<P>(&mut self, mut predicate: P) -> &str
     where
         P: FnMut(char) -> bool,
     {
-        let mut buf = String::new();
-        self.take_while_into(predicate, &mut buf);
-        buf
-    }
-
-    /// Like [`LexBuf::take_while`], but writes characters into `buf` rather
-    /// than returning a new string.
-    pub fn take_while_into<P>(&mut self, mut predicate: P, buf: &mut String)
-    where
-        P: FnMut(char) -> bool,
-    {
+        let pos = self.pos;
         while let Some(ch) = self.peek() {
             if predicate(ch) {
                 self.next();
-                buf.push(ch);
             } else {
                 break;
             }
         }
+        &self.buf[pos..self.pos]
     }
 
     /// Reports the current position of the cursor in the buffer.
