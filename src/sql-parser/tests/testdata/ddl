@@ -456,7 +456,7 @@ error:
 Parse error:
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
                                                                    ^^^^^^
-Expected a list of columns in parentheses, found: FORMAT
+Expected a list of columns in parentheses, found FORMAT
 
 parse-statement
 CREATE SINK foo FROM bar INTO AVRO OCF 'baz'
