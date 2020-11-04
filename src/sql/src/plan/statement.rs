@@ -1108,14 +1108,14 @@ fn handle_create_source(
                 bail!("`start_offset` is not yet implemented for BYO consistency sources.")
             }
 
-            let enable_persistence = match with_options.remove("persistence") {
+            let enable_persistence = match with_options.remove("cache") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
-                Some(_) => bail!("persistence must be a bool!"),
+                Some(_) => bail!("cache must be a bool!"),
             };
 
             if enable_persistence && consistency != Consistency::RealTime {
-                unsupported!("BYO source persistence")
+                unsupported!("BYO source caching")
             }
 
             let mut start_offsets = HashMap::new();

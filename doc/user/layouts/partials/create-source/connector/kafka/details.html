@@ -9,17 +9,17 @@
   [SSL-encrypted](#ssl-encrypted-kafka-details) or
   [Kerberized Kafka clusters](#kerberized-kafka-details).
 
-#### Persisted Kafka sources
+#### Cached Kafka sources
 
 To avoid re-reading data from Kafka on restart, Materialize lets you create
-persistent sources, which persist input messages from Kafka topics to files on
-the Materialize instance's local hard drive. For more details on persistence,
-see [Deployment: Persistence][persistence].
+cached sources, which cache input messages from Kafka topics to files on
+the Materialize instance's local hard drive. For more details on source caching,
+see [Deployment: Source Caching][caching].
 
 [Example][example]
 
-[persistence]: /ops/deployment/#persistence
-[example]: #persisting-records-to-local-disk
+[caching]: /ops/deployment/#source-caching
+[example]: #caching-records-to-local-disk
 
 #### SSL-encrypted Kafka details
 

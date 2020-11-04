@@ -147,7 +147,7 @@ async fn create_upsert_text_source(
 
     let query = if enable_persistence {
         format!(
-            "{} WITH (persistence = true) FORMAT TEXT ENVELOPE UPSERT",
+            "{} WITH (cache = true) FORMAT TEXT ENVELOPE UPSERT",
             query_prefix
         )
     } else {

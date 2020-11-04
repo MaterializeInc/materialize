@@ -217,7 +217,7 @@ impl Persister {
                         self.handle_persistence_message(data)?
                     } else {
                         // TODO not sure if this should be a stronger error
-                        error!("Persistence thread receiver hung up. Shutting down persistence");
+                        error!("Source caching thread receiver hung up. Shutting down caching.");
                         break;
                    };
 
@@ -249,7 +249,7 @@ impl Persister {
                         // It's possible that there was a delay between when the coordinator
                         // deleted a source and when dataflow threads learned about that delete.
                         error!(
-                            "Received data for source {} that has disabled persistence. Ignoring.",
+                            "Received data for source {} that has disabled caching. Ignoring.",
                             data.source_id
                         );
                     } else {
@@ -259,7 +259,10 @@ impl Persister {
                         // anything to the dataflow workers, but this could become possible in the future.
 
                         self.disabled_sources.insert(data.source_id);
-                        error!("Received data for unknown source {}. Disabling persistence on the source.", data.source_id);
+                        error!(
+                            "Received data for unknown source {}. Disabling caching on the source.",
+                            data.source_id
+                        );
                     }
 
                     return Ok(false);
@@ -273,14 +276,14 @@ impl Persister {
                 // Check if we already have a source
                 if self.sources.contains_key(&source_id) {
                     error!(
-                            "Received signal to enable persistence for {} but it is already persisted. Ignoring.",
+                            "Received signal to enable caching for {} but it is already cached. Ignoring.",
                             source_id
                         );
                     return Ok(false);
                 }
 
                 if self.disabled_sources.contains(&source_id) {
-                    error!("Received signal to enable persistence for {} but it has already been disabled. Ignoring.", source_id);
+                    error!("Received signal to enable caching for {} but it has already been disabled. Ignoring.", source_id);
                     return Ok(false);
                 }
 
@@ -301,7 +304,7 @@ impl Persister {
                     self.config.max_pending_records,
                 );
                 self.sources.insert(source_id, source);
-                info!("Enabled persistence for source: {}", source_id);
+                info!("Enabled caching for source: {}", source_id);
             }
             PersistenceMessage::DropSource(id) => {
                 if !self.sources.contains_key(&id) {
@@ -313,7 +316,7 @@ impl Persister {
                 } else {
                     self.sources.remove(&id);
                     self.disabled_sources.insert(id);
-                    info!("Disabled persistence for source: {}", id);
+                    info!("Disabled caching for source: {}", id);
                 }
             }
             PersistenceMessage::Shutdown => {
@@ -326,7 +329,7 @@ impl Persister {
 
     pub async fn run(&mut self) {
         info!(
-            "Persistence thread starting with max_pending_records: {}, path: {}",
+            "Caching thread starting with max_pending_records: {}, path: {}",
             self.config.max_pending_records,
             self.config.path.display()
         );
@@ -336,8 +339,8 @@ impl Persister {
         match ret {
             Ok(_) => (),
             Err(e) => {
-                error!("Persistence thread encountered error: {:#}", e);
-                error!("All persisted sources on this process will not continue to be persisted.");
+                error!("Caching thread encountered error: {:#}", e);
+                error!("All cached sources on this process will not continue to be cached.");
             }
         }
     }
@@ -388,7 +391,7 @@ fn augment_connector_inner(
                 Ok(entries) => entries,
                 Err(e) => {
                     error!(
-                        "Failed to read from persistence data from {}: {}",
+                        "Failed to read from cached source data from {}: {}",
                         source_path.display(),
                         e
                     );
@@ -401,7 +404,7 @@ fn augment_connector_inner(
                     let path = file.path();
                     if let Some(metadata) = RecordFileMetadata::from_path(&path)? {
                         if metadata.source_id != source_id {
-                            error!("Ignoring persistence file with invalid source id. Received: {} expected: {} path: {}",
+                            error!("Ignoring cache file with invalid source id. Received: {} expected: {} path: {}",
                                    metadata.source_id,
                                    source_id,
                                    path.display());
@@ -409,7 +412,7 @@ fn augment_connector_inner(
                         }
 
                         if metadata.cluster_id != cluster_id {
-                            error!("Ignoring persistence file with invalid cluster id. Received: {} expected: {} path: {}",
+                            error!("Ignoring cache file with invalid cluster id. Received: {} expected: {} path: {}",
                             metadata.cluster_id,
                             cluster_id,
                             path.display());

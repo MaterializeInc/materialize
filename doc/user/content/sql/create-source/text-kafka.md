@@ -37,12 +37,12 @@ This creates a source that...
 - Uses message keys to determine what should be inserted, deleted, and updated.
 - Treats both message keys and values as text.
 
-### Persisting records to local disk
+### Caching records to local disk
 
 ```sql
-CREATE SOURCE persisted_records
+CREATE SOURCE cached_records
 FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
-WITH (persistence = true)
+WITH (cache = true)
 FORMAT TEXT
 ```
 
@@ -51,7 +51,7 @@ This creates a source that...
 - Is append-only.
 - Decodes data received from the `data` topic published by Kafka running on
   `localhost:9092` as text.
-- Persists messages from the `data` topic to local disk.
+- Caches messages from the `data` topic to local disk.
 
 ## Related pages
 

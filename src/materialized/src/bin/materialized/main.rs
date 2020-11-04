@@ -116,8 +116,8 @@ fn run() -> Result<(), anyhow::Error> {
     );
     opts.optopt(
         "",
-        "persistence-max-pending-records",
-        "maximum number of records that have to be present before materialize will persist them immediately. (default 1000000)",
+        "cache-max-pending-records",
+        "maximum number of records that have to be present before materialize will cache them immediately. (default 1000000)",
         "N",
     );
 
@@ -255,7 +255,7 @@ fn run() -> Result<(), anyhow::Error> {
         Some(d) => parse_duration::parse(&d)?,
     };
     let persistence_max_pending_records =
-        popts.opt_get_default("persistence-max-pending-records", 1000000)?;
+        popts.opt_get_default("cache-max-pending-records", 1000000)?;
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
@@ -280,10 +280,10 @@ fn run() -> Result<(), anyhow::Error> {
 
     // Configure source persistence.
     let persistence = if experimental_mode {
-        let persistence_directory = data_directory.join("persistence/");
+        let persistence_directory = data_directory.join("cache/");
         fs::create_dir_all(&persistence_directory).with_context(|| {
             format!(
-                "creating persistence directory: {}",
+                "creating source caching directory: {}",
                 persistence_directory.display()
             )
         })?;
