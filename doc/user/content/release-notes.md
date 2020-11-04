@@ -59,7 +59,7 @@ Wrap your release notes at the 80 character mark.
 
 - Add the `regexp_match` function to search a string with a regular expression.
 
-- Allow adding keys to [sinks](/sql/create-sink).
+- Allow adding keys to [Kafka sinks](/sql/create-sink).
 
 {{% version-header v0.5.0 %}}
 
