@@ -35,11 +35,10 @@
 use std::convert::TryFrom;
 use std::ops::Range;
 
-use crate::keywords::ALL_KEYWORDS;
-use crate::lexer::buf::LexBuf;
-use crate::parser::ParserError;
+use ore::lex::LexBuf;
 
-mod buf;
+use crate::keywords::ALL_KEYWORDS;
+use crate::parser::ParserError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {

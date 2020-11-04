@@ -13,7 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Lexing utilities.
+
 /// A cursor over a string with a variety of lexing convenience methods.
+#[derive(Debug)]
 pub struct LexBuf<'a> {
     buf: &'a str,
     pos: usize,
@@ -31,18 +34,6 @@ impl<'a> LexBuf<'a> {
     /// internal cursor.
     pub fn peek(&self) -> Option<char> {
         self.buf[self.pos..].chars().next()
-    }
-
-    /// Returns the next character in the buffer, if any, advancing the internal
-    /// cursor past the character.
-    ///
-    /// It is safe to call `next` after it returns `None`.
-    pub fn next(&mut self) -> Option<char> {
-        let c = self.peek();
-        if let Some(c) = c {
-            self.pos += c.len_utf8();
-        }
-        c
     }
 
     /// Returns a slice containing the next `n` characters in the buffer.
@@ -138,5 +129,21 @@ impl<'a> LexBuf<'a> {
     /// the buffer's internal cursor.
     pub fn inner(&self) -> &str {
         &self.buf
+    }
+}
+
+impl<'a> Iterator for LexBuf<'a> {
+    type Item = char;
+
+    /// Returns the next character in the buffer, if any, advancing the internal
+    /// cursor past the character.
+    ///
+    /// It is safe to call `next` after it returns `None`.
+    fn next(&mut self) -> Option<char> {
+        let c = self.peek();
+        if let Some(c) = c {
+            self.pos += c.len_utf8();
+        }
+        c
     }
 }
