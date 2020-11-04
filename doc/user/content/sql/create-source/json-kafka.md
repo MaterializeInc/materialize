@@ -43,12 +43,12 @@ CREATE MATERIALIZED VIEW jsonified_kafka_source AS
   )
 ```
 
-### Persisting records to local disk
+### Caching records to local disk
 
 ```sql
 CREATE SOURCE json_kafka
 FROM KAFKA BROKER 'localhost:9092' TOPIC 'json'
-WITH (persistence = true)
+WITH (cache = true)
 FORMAT BYTES;
 ```
 
@@ -56,7 +56,7 @@ This creates a source that...
 
 - Is append-only.
 - Has one column, `data`, which represents the stream's incoming bytes.
-- Persists messages from the `json` topic to local disk.
+- Caches messages from the `json` topic to local disk.
 
 ## Related pages
 
