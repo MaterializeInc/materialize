@@ -310,7 +310,7 @@ where
             project_key.push(i);
         }
     }
-    Ok(dbg!(expr.map(map_exprs).project(project_key)))
+    Ok(expr.map(map_exprs).project(project_key))
 }
 
 /// Evaluates an expression in the AS OF position of a TAIL statement.
