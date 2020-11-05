@@ -86,7 +86,7 @@ impl<'a> LexBuf<'a> {
     /// Returns `None` if `delim` is not found in the buffer. The internal
     /// cursor is advanced past the end of `delim`, or to the end of the buffer
     /// if `delim` is not found.
-    pub fn take_to_delimiter(&mut self, delim: &str) -> Option<&str> {
+    pub fn take_to_delimiter(&mut self, delim: &str) -> Option<&'a str> {
         if let Some(pos) = self.buf[self.pos..].find(delim) {
             let s = &self.buf[self.pos..self.pos + pos];
             self.pos += pos + delim.len();
@@ -103,7 +103,7 @@ impl<'a> LexBuf<'a> {
     ///
     /// Advances the cursor to the character that failed the predicate, or to
     /// the end of the string if no character failed the predicate.
-    pub fn take_while<P>(&mut self, mut predicate: P) -> &str
+    pub fn take_while<P>(&mut self, mut predicate: P) -> &'a str
     where
         P: FnMut(char) -> bool,
     {
@@ -127,7 +127,7 @@ impl<'a> LexBuf<'a> {
     ///
     /// Note that the entire string is returned, regardless of the position of
     /// the buffer's internal cursor.
-    pub fn inner(&self) -> &str {
+    pub fn inner(&self) -> &'a str {
         &self.buf
     }
 }
