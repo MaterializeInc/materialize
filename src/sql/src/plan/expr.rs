@@ -23,7 +23,7 @@ use ore::collections::CollectionExt;
 use repr::*;
 
 use crate::plan::query::ExprContext;
-use crate::plan::typeconv;
+use crate::plan::typeconv::{self, CastContext};
 use crate::plan::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
@@ -185,31 +185,28 @@ pub enum CoercibleScalarExpr {
 }
 
 impl CoercibleScalarExpr {
-    pub fn type_as(self, ecx: &ExprContext, ty: ScalarType) -> Result<ScalarExpr, anyhow::Error> {
-        let expr = typeconv::plan_coerce(ecx, self, ty.clone())?;
+    pub fn type_as(self, ecx: &ExprContext, ty: &ScalarType) -> Result<ScalarExpr, anyhow::Error> {
+        let expr = typeconv::plan_coerce(ecx, self, ty)?;
         let expr_ty = ecx.scalar_type(&expr);
-        if ty != expr_ty {
+        if ty != &expr_ty {
             bail!("{} must have type {}, not type {}", ecx.name, ty, expr_ty);
         }
         Ok(expr)
     }
 
     pub fn type_as_any(self, ecx: &ExprContext) -> Result<ScalarExpr, anyhow::Error> {
-        typeconv::plan_coerce(ecx, self, ScalarType::String)
+        typeconv::plan_coerce(ecx, self, &ScalarType::String)
     }
 
-    pub fn explicit_cast_to(
+    pub fn cast_to(
         self,
         op: &str,
         ecx: &ExprContext,
-        ty: ScalarType,
+        ccx: CastContext,
+        ty: &ScalarType,
     ) -> Result<ScalarExpr, anyhow::Error> {
-        let expr = typeconv::plan_coerce(ecx, self, ty.clone())?;
-        if ty != ecx.scalar_type(&expr) {
-            typeconv::plan_cast(op, ecx, expr, typeconv::CastTo::Explicit(ty))
-        } else {
-            Ok(expr)
-        }
+        let expr = typeconv::plan_coerce(ecx, self, ty)?;
+        typeconv::plan_cast(op, ecx, ccx, expr, ty)
     }
 }
 

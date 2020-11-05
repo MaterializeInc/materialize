@@ -30,7 +30,7 @@ use super::expr::{
 };
 use super::query::{self, ExprContext, QueryContext, QueryLifetime};
 use super::scope::Scope;
-use super::typeconv::{self, rescale_decimal, CastTo};
+use super::typeconv::{self, rescale_decimal, CastContext};
 use super::StatementContext;
 use crate::catalog::CatalogItemType;
 use crate::names::PartialName;
@@ -532,7 +532,7 @@ impl ParamType {
             ListAny => matches!(t, List(..) | String),
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
-            Plain(to) => typeconv::get_cast(t, &CastTo::Implicit(to.clone())).is_some(),
+            Plain(to) => typeconv::get_cast(CastContext::Implicit, t, to).is_some(),
         }
     }
 
@@ -889,13 +889,13 @@ fn coerce_arg_to_type(
     match param {
         // Concrete parameter type. Coerce then cast to that type.
         Plain(ty) => {
-            let arg = typeconv::plan_coerce(ecx, arg, ty.clone())?;
+            let arg = typeconv::plan_coerce(ecx, arg, ty)?;
             if matches!(ty, Decimal(..)) && matches!(ecx.scalar_type(&arg), Decimal(..)) {
                 // Suppress decimal -> decimal casts, to avoid casting to
                 // the default decimal scale of 0.
                 Ok(arg)
             } else {
-                typeconv::plan_cast(spec, ecx, arg, CastTo::Implicit(ty.clone()))
+                typeconv::plan_cast(spec, ecx, CastContext::Implicit, arg, ty)
             }
         }
 
@@ -1527,8 +1527,8 @@ lazy_static! {
                 params!(Decimal(0, 0)) => Operation::identity(),
                 params!(Int32) => Operation::unary(|ecx, e| {
                       super::typeconv::plan_cast(
-                          "internal.avg_promotion", ecx, e,
-                          CastTo::Explicit(ScalarType::Decimal(10, 0)),
+                          "internal.avg_promotion", ecx, CastContext::Explicit,
+                          e, &ScalarType::Decimal(10, 0),
                       )
                 })
             },
@@ -1769,8 +1769,9 @@ lazy_static! {
                     let rhs = typeconv::plan_cast(
                         "text_concat",
                         ecx,
+                        CastContext::Explicit,
                         rhs,
-                        typeconv::CastTo::Explicit(ScalarType::String)
+                        &ScalarType::String,
                     )?;
                     Ok(lhs.call_binary(rhs, TextConcat))
                 }),
@@ -1778,8 +1779,9 @@ lazy_static! {
                     let lhs = typeconv::plan_cast(
                         "text_concat",
                         ecx,
+                        CastContext::Explicit,
                         lhs,
-                        typeconv::CastTo::Explicit(ScalarType::String)
+                        &ScalarType::String,
                     )?;
                     Ok(lhs.call_binary(rhs, TextConcat))
                 }),

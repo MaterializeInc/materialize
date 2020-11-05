@@ -54,7 +54,7 @@ use crate::plan::func::{self, Func, FuncSpec};
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
-use crate::plan::typeconv::{self, CastContext, CastTo};
+use crate::plan::typeconv::{self, CastContext};
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
@@ -260,7 +260,7 @@ struct CastRelationError {
 /// The length of `target_types` must match the arity of `expr`.
 fn cast_relation<'a, I>(
     qcx: &QueryContext,
-    cast_context: CastContext,
+    ccx: CastContext,
     expr: RelationExpr,
     target_types: I,
 ) -> Result<RelationExpr, CastRelationError>
@@ -288,12 +288,7 @@ where
                 level: 0,
                 column: i,
             });
-            let cast_to = match cast_context {
-                CastContext::Implicit => CastTo::Implicit(target_typ.clone()),
-                CastContext::Assignment => CastTo::Assignment(target_typ.clone()),
-                CastContext::Explicit => CastTo::Explicit(target_typ.clone()),
-            };
-            match typeconv::plan_cast("relation cast", ecx, expr, cast_to) {
+            match typeconv::plan_cast("relation cast", ecx, ccx, expr, target_typ) {
                 Ok(expr) => {
                     project_key.push(ecx.relation_type.arity() + map_exprs.len());
                     map_exprs.push(expr);
@@ -596,7 +591,7 @@ fn plan_values(
     let mut col_types = Vec::with_capacity(ncols);
     for (index, col) in cols.iter().enumerate() {
         let type_hint = if let Some(type_hints) = &type_hints {
-            Some(type_hints[index].clone())
+            Some(type_hints[index])
         } else {
             None
         };
@@ -706,7 +701,7 @@ fn plan_view_select_intrusive(
         };
         let expr = plan_expr(ecx, &selection)
             .map_err(|e| anyhow::anyhow!("WHERE clause error: {}", e))?
-            .type_as(ecx, ScalarType::Bool)?;
+            .type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
@@ -834,7 +829,7 @@ fn plan_view_select_intrusive(
             allow_aggregates: true,
             allow_subqueries: true,
         };
-        let expr = plan_expr(ecx, having)?.type_as(ecx, ScalarType::Bool)?;
+        let expr = plan_expr(ecx, having)?.type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
@@ -1585,7 +1580,7 @@ fn plan_join_constraint<'a>(
                 allow_aggregates: false,
                 allow_subqueries: true,
             };
-            let on = plan_expr(ecx, expr)?.type_as(ecx, ScalarType::Bool)?;
+            let on = plan_expr(ecx, expr)?.type_as(ecx, &ScalarType::Bool)?;
             if let JoinKind::Inner { .. } = kind {
                 for (l, r) in find_trivial_column_equivalences(&on) {
                     // When we can statically prove that two columns are
@@ -1818,12 +1813,12 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 // PostgreSQL compatibility trouble.
                 //
                 // See: https://github.com/postgres/postgres/blob/31f403e95/src/backend/parser/parse_expr.c#L2762-L2768
-                Expr::Array(exprs) => plan_array(ecx, exprs, Some(to_scalar_type.clone()))?,
-                Expr::List(exprs) => plan_list(ecx, exprs, Some(to_scalar_type.clone()))?,
+                Expr::Array(exprs) => plan_array(ecx, exprs, Some(&to_scalar_type))?,
+                Expr::List(exprs) => plan_list(ecx, exprs, Some(&to_scalar_type))?,
                 _ => plan_expr(ecx, expr)?,
             };
-            let expr = typeconv::plan_coerce(ecx, expr, to_scalar_type.clone())?;
-            typeconv::plan_cast("CAST", ecx, expr, CastTo::Explicit(to_scalar_type))?.into()
+            let expr = typeconv::plan_coerce(ecx, expr, &to_scalar_type)?;
+            typeconv::plan_cast("CAST", ecx, CastContext::Explicit, expr, &to_scalar_type)?.into()
         }
         Expr::Function(func) => plan_function(ecx, func)?.into(),
 
@@ -1832,7 +1827,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             let ecx = ecx.with_name("NOT argument");
             ScalarExpr::CallUnary {
                 func: UnaryFunc::Not,
-                expr: Box::new(plan_expr(&ecx, expr)?.type_as(&ecx, ScalarType::Bool)?),
+                expr: Box::new(plan_expr(&ecx, expr)?.type_as(&ecx, &ScalarType::Bool)?),
             }
             .into()
         }
@@ -1840,8 +1835,8 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             let ecx = ecx.with_name("AND argument");
             ScalarExpr::CallBinary {
                 func: BinaryFunc::And,
-                expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, ScalarType::Bool)?),
-                expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, ScalarType::Bool)?),
+                expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?),
+                expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?),
             }
             .into()
         }
@@ -1849,8 +1844,8 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             let ecx = ecx.with_name("OR argument");
             ScalarExpr::CallBinary {
                 func: BinaryFunc::Or,
-                expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, ScalarType::Bool)?),
-                expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, ScalarType::Bool)?),
+                expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?),
+                expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?),
             }
             .into()
         }
@@ -1898,10 +1893,11 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             };
 
             expr.call_binary(
-                plan_expr(ecx, subscript)?.explicit_cast_to(
+                plan_expr(ecx, subscript)?.cast_to(
                     "subscript (indexing)",
                     ecx,
-                    ScalarType::Int64,
+                    CastContext::Explicit,
+                    &ScalarType::Int64,
                 )?,
                 func,
             )
@@ -1940,13 +1936,23 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
 
             for p in positions {
                 let start = if let Some(start) = &p.start {
-                    plan_expr(ecx, start)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
+                    plan_expr(ecx, start)?.cast_to(
+                        op_str,
+                        ecx,
+                        CastContext::Explicit,
+                        &ScalarType::Int64,
+                    )?
                 } else {
                     ScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)
                 };
 
                 let end = if let Some(end) = &p.end {
-                    plan_expr(ecx, end)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
+                    plan_expr(ecx, end)?.cast_to(
+                        op_str,
+                        ecx,
+                        CastContext::Explicit,
+                        &ScalarType::Int64,
+                    )?
                 } else {
                     ScalarExpr::literal(Datum::Int64(i64::MAX - 1), ScalarType::Int64)
                 };
@@ -1967,16 +1973,16 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
 
             let (lhs, rhs) = if let Some(typ) = ecx.scalar_type(&lhs) {
                 (
-                    lhs.type_as(ecx, typ.clone())?,
+                    lhs.type_as(ecx, &typ)?,
                     rhs.type_as(
                         &ecx.with_name("ANY operand array"),
-                        ScalarType::Array(Box::new(typ)),
+                        &ScalarType::Array(Box::new(typ)),
                     )?,
                 )
             } else if let Some(ScalarType::Array(array_type)) = ecx.scalar_type(&rhs) {
                 (
-                    lhs.type_as(&ecx.with_name("ANY operand"), *array_type.clone())?,
-                    rhs.type_as(ecx, ScalarType::Array(array_type))?,
+                    lhs.type_as(&ecx.with_name("ANY operand"), &array_type)?,
+                    rhs.type_as(ecx, &ScalarType::Array(array_type))?,
                 )
             } else {
                 (lhs.type_as_any(ecx)?, rhs.type_as_any(ecx)?)
@@ -2067,12 +2073,12 @@ where
 fn plan_array(
     ecx: &ExprContext,
     exprs: &[Expr],
-    type_hint: Option<ScalarType>,
+    type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     ecx.qcx.scx.require_experimental_mode("ARRAY")?;
     let (elem_type, exprs) = if exprs.is_empty() {
         if let Some(ScalarType::Array(elem_type)) = type_hint {
-            (*elem_type, vec![])
+            ((**elem_type).clone(), vec![])
         } else {
             bail!("cannot determine type of empty array");
         }
@@ -2087,7 +2093,7 @@ fn plan_array(
             });
         }
         let type_hint = match type_hint {
-            Some(ScalarType::Array(elem_type)) => Some(*elem_type),
+            Some(ScalarType::Array(elem_type)) => Some(&**elem_type),
             _ => None,
         };
         let out = coerce_homogeneous_exprs("ARRAY expression", ecx, out, type_hint)?;
@@ -2103,17 +2109,17 @@ fn plan_array(
 fn plan_list(
     ecx: &ExprContext,
     exprs: &[Expr],
-    type_hint: Option<ScalarType>,
+    type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (elem_type, exprs) = if exprs.is_empty() {
         if let Some(ScalarType::List(elem_type)) = type_hint {
-            (*elem_type, vec![])
+            ((**elem_type).clone(), vec![])
         } else {
             bail!("cannot determine type of empty list");
         }
     } else {
         let type_hint = match type_hint {
-            Some(ScalarType::List(elem_type)) => Some(*elem_type),
+            Some(ScalarType::List(elem_type)) => Some(&**elem_type),
             _ => None,
         };
         let mut out = vec![];
@@ -2121,7 +2127,7 @@ fn plan_list(
             out.push(match expr {
                 // Special case nested LIST expressions so we can plumb
                 // the type hint through.
-                Expr::List(exprs) => plan_list(ecx, exprs, type_hint.clone())?,
+                Expr::List(exprs) => plan_list(ecx, exprs, type_hint)?,
                 _ => plan_expr(ecx, expr)?,
             });
         }
@@ -2150,7 +2156,7 @@ pub fn coerce_homogeneous_exprs(
     name: &str,
     ecx: &ExprContext,
     exprs: Vec<CoercibleScalarExpr>,
-    type_hint: Option<ScalarType>,
+    type_hint: Option<&ScalarType>,
 ) -> Result<Vec<ScalarExpr>, anyhow::Error> {
     assert!(!exprs.is_empty());
 
@@ -2164,9 +2170,8 @@ pub fn coerce_homogeneous_exprs(
     // Try to cast all expressions to `target`.
     let mut out = Vec::new();
     for expr in exprs {
-        let arg = typeconv::plan_coerce(ecx, expr, target.clone())?;
-
-        match typeconv::plan_cast(name, ecx, arg.clone(), CastTo::Implicit(target.clone())) {
+        let arg = typeconv::plan_coerce(ecx, expr, &target)?;
+        match typeconv::plan_cast(name, ecx, CastContext::Implicit, arg.clone(), &target) {
             Ok(expr) => out.push(expr),
             Err(_) => bail!(
                 "{} does not have uniform type: {:?} vs {:?}",
@@ -2219,7 +2224,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         //     <agg>(CASE WHEN <cond> THEN <expr> ELSE <identity>)
         //
         // where <identity> is the identity input for <agg>.
-        let cond = plan_expr(&ecx.with_name("FILTER"), filter)?.type_as(ecx, ScalarType::Bool)?;
+        let cond = plan_expr(&ecx.with_name("FILTER"), filter)?.type_as(ecx, &ScalarType::Bool)?;
         let expr_typ = ecx.scalar_type(&expr);
         expr = ScalarExpr::If {
             cond: Box::new(cond),
@@ -2402,7 +2407,7 @@ fn plan_case<'a>(
             Some(operand) => operand.clone().equals(c.clone()),
             None => c.clone(),
         };
-        let cexpr = plan_expr(ecx, &c)?.type_as(ecx, ScalarType::Bool)?;
+        let cexpr = plan_expr(ecx, &c)?.type_as(ecx, &ScalarType::Bool)?;
         cond_exprs.push(cexpr);
         result_exprs.push(r);
     }
