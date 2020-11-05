@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
+
 use bytes::BytesMut;
 use postgres::error::SqlState;
 
@@ -316,10 +318,46 @@ pub struct FieldDescription {
     pub format: pgrepr::Format,
 }
 
-pub fn encode_copy_row_text(row: Row, typ: &RelationType) -> Vec<u8> {
+pub fn encode_copy_row_binary(
+    row: Row,
+    typ: &RelationType,
+    out: &mut Vec<u8>,
+) -> Result<(), std::io::Error> {
+    const NULL_BYTES: [u8; 4] = (-1i32).to_be_bytes();
+
+    // 16-bit int of number of tuples.
+    let count = i16::try_from(typ.column_types.len()).expect("exceeded column length");
+    out.extend(&count.to_be_bytes());
+    let mut buf = BytesMut::new();
+    for (field, typ) in row
+        .iter()
+        .zip(&typ.column_types)
+        .map(|(datum, typ)| (pgrepr::Value::from_datum(datum, &typ.scalar_type), typ))
+    {
+        match field {
+            None => out.extend(&NULL_BYTES),
+            Some(field) => {
+                buf.clear();
+                field.encode_binary(&pgrepr::Type::from(&typ.scalar_type), &mut buf)?;
+                out.extend(
+                    &i32::try_from(buf.len())
+                        .expect("exceeded datum size")
+                        .to_be_bytes(),
+                );
+                out.extend(&buf);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn encode_copy_row_text(
+    row: Row,
+    typ: &RelationType,
+    out: &mut Vec<u8>,
+) -> Result<(), std::io::Error> {
     let delim = b'\t';
     let null = b"\\N";
-    let mut out = Vec::new();
     let mut buf = BytesMut::new();
     for (idx, field) in pgrepr::values_from_row(row, typ).into_iter().enumerate() {
         if idx > 0 {
@@ -343,7 +381,7 @@ pub fn encode_copy_row_text(row: Row, typ: &RelationType) -> Vec<u8> {
         }
     }
     out.push(b'\n');
-    out
+    Ok(())
 }
 
 pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
