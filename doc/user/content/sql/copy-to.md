@@ -19,7 +19,8 @@ _option_ |
 
 Name | Value
 -----|-------
-`FORMAT` | `TEXT` for text output (the default)
+`FORMAT` | `text` for text output (the default)
+`FORMAT` | `binary` for binary output
 
 ## Example
 
@@ -29,8 +30,8 @@ Name | Value
 COPY (SELECT * FROM some_view) TO STDOUT
 ```
 
-### Tailing a view
+### Tailing a view with binary output
 
 ```sql
-COPY (TAIL some_view) TO STDOUT
+COPY (TAIL some_view) TO STDOUT WITH (FORMAT binary)
 ```

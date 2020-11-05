@@ -49,6 +49,7 @@ Wrap your release notes at the 80 character mark.
 {{% version-header v0.5.2 %}}
 
 - Support the [`pg_typeof` function](/sql/functions#postgresql-compatibility-func).
+- [`COPY TO`](/sql/copy-to) now supports `FORMAT binary`.
 
 {{% version-header v0.5.1 %}}
 
