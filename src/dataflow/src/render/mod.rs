@@ -106,7 +106,7 @@ use std::rc::Weak;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::arrangement::Arrange;
+use differential_dataflow::operators::arrange::arrangement::{Arrange, ArrangeByKey};
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::operators::consolidate::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
@@ -714,7 +714,15 @@ where
                 Some(button)
             }
             SinkConnector::Tail(c) => {
-                sink::tail(&collection.inner, sink_id, c);
+                // Map by sink_id is not needed for correctness, but will spread the work
+                // around when there are multiple TAILs running, and additionally will move a
+                // single TAIL's work to a single worker.
+                // Arranging will cause updates to be presented in time order.
+                let stream = collection
+                    .map(move |row| (sink_id, row))
+                    .arrange_by_key()
+                    .stream;
+                sink::tail(stream, sink_id, c);
                 None
             }
             SinkConnector::AvroOcf(c) => {
