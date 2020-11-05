@@ -26,7 +26,7 @@ use tokio::time::{self, Duration};
 use coord::{session::RowBatchStream, ExecuteResponse, StartupMessage};
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
-use repr::{Datum, RelationDesc, RowArena};
+use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::Statement;
 use sql::plan::CopyFormat;
 
@@ -872,8 +872,12 @@ where
         row_desc: RelationDesc,
         mut stream: RowBatchStream,
     ) -> Result<State, comm::Error> {
-        match format {
-            CopyFormat::Text => {}
+        let (encode_fn, encode_format): (
+            fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
+            pgrepr::Format,
+        ) = match format {
+            CopyFormat::Text => (message::encode_copy_row_text, pgrepr::Format::Text),
+            CopyFormat::Binary => (message::encode_copy_row_binary, pgrepr::Format::Binary),
             _ => {
                 return self
                     .error(
@@ -885,15 +889,30 @@ where
         };
 
         let typ = row_desc.typ();
-        let column_formats = iter::repeat(pgrepr::Format::Text)
+        let column_formats = iter::repeat(encode_format)
             .take(typ.column_types.len())
             .collect();
         self.conn
             .send(BackendMessage::CopyOutResponse {
-                overall_format: pgrepr::Format::Text,
+                overall_format: encode_format,
                 column_formats,
             })
             .await?;
+
+        // In Postgres, binary copy has a header that is followed (in the same
+        // CopyData) by the first row. In order to replicate their behavior, use a
+        // common vec that we can extend one time now and then fill up with the encode
+        // functions.
+        let mut out = Vec::new();
+
+        if let CopyFormat::Binary = format {
+            // 11-byte signature.
+            out.extend(b"PGCOPY\n\xFF\r\n\0");
+            // 32-bit flags field.
+            out.extend(&[0, 0, 0, 0]);
+            // 32-bit header extension length field.
+            out.extend(&[0, 0, 0, 0]);
+        }
 
         let mut count = 0;
         loop {
@@ -903,11 +922,11 @@ where
                     let rows = rows?;
                     count += rows.len();
                     for row in rows {
+                        encode_fn(row, typ, &mut out)?;
                         self.conn
-                            .send(BackendMessage::CopyData(message::encode_copy_row_text(
-                                row, typ,
-                            )))
+                            .send(BackendMessage::CopyData(out.clone()))
                             .await?;
+                        out.clear();
                     }
                 }
                 Err(time::Elapsed { .. }) => {
@@ -933,6 +952,13 @@ where
                 }
             }
             self.conn.flush().await?;
+        }
+        // Send required trailers.
+        if let CopyFormat::Binary = format {
+            let trailer: i16 = -1;
+            self.conn
+                .send(BackendMessage::CopyData(trailer.to_be_bytes().to_vec()))
+                .await?;
         }
 
         let tag = format!("COPY {}", count);

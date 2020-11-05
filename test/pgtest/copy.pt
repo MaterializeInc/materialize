@@ -36,3 +36,21 @@ CopyData "6\t\\N\n"
 CopyDone
 CommandComplete {"tag":"COPY 4"}
 ReadyForQuery {"status":"I"}
+
+# Verify binary output.
+send
+Query {"query": "COPY (VALUES (1, '2'), (3, '4'), (5, '\\\t\n\rtest\\N'), (6, NULL) ORDER BY column1) TO STDOUT WITH (FORMAT binary)"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"binary","column_formats":["binary","binary"]}
+CopyData "[80, 71, 67, 79, 80, 89, 10, 255, 13, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 1, 50]"
+CopyData "\u0000\u0002\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0003\u0000\u0000\u0000\u00014"
+CopyData "\u0000\u0002\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0005\u0000\u0000\u0000\n\\\t\n\rtest\\N"
+CopyData "[0, 2, 0, 0, 0, 4, 0, 0, 0, 6, 255, 255, 255, 255]"
+CopyData "[255, 255]"
+CopyDone
+CommandComplete {"tag":"COPY 4"}
+ReadyForQuery {"status":"I"}
