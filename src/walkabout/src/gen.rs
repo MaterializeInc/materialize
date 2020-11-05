@@ -14,7 +14,8 @@
 
 use fstrings::{f, format_args_f};
 
-use self::buf::CodegenBuf;
+use ore::codegen::CodegenBuf;
+
 use crate::ir::{Ir, Item, Type};
 
 /// Generates a visitor for an immutable AST.
@@ -136,69 +137,4 @@ fn visit_fn_name(c: &Config, s: &str) -> String {
         out.push_str("_mut");
     }
     out
-}
-
-mod buf {
-    pub struct CodegenBuf {
-        inner: String,
-        level: usize,
-    }
-
-    impl CodegenBuf {
-        pub fn new() -> CodegenBuf {
-            CodegenBuf {
-                inner: String::new(),
-                level: 0,
-            }
-        }
-
-        pub fn into_string(self) -> String {
-            self.inner
-        }
-
-        pub fn writeln<S>(&mut self, s: S)
-        where
-            S: AsRef<str>,
-        {
-            self.write_indent();
-            self.inner.push_str(s.as_ref());
-            self.inner.push('\n');
-        }
-
-        pub fn start_block<S>(&mut self, s: S)
-        where
-            S: AsRef<str>,
-        {
-            self.write_indent();
-            self.inner.push_str(s.as_ref());
-            if !s.as_ref().is_empty() {
-                self.inner.push(' ');
-            }
-            self.inner.push_str("{\n");
-            self.level += 1;
-        }
-
-        pub fn restart_block<S>(&mut self, s: S)
-        where
-            S: AsRef<str>,
-        {
-            self.level -= 1;
-            self.write_indent();
-            self.inner.push_str("} ");
-            self.inner.push_str(s.as_ref());
-            self.inner.push_str(" {\n");
-            self.level += 1;
-        }
-
-        pub fn end_block(&mut self) {
-            self.level -= 1;
-            self.writeln("}");
-        }
-
-        fn write_indent(&mut self) {
-            for _ in 0..self.level {
-                self.inner.push_str("    ");
-            }
-        }
-    }
 }

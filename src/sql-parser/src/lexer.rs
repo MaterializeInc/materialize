@@ -37,12 +37,13 @@ use std::ops::Range;
 
 use ore::lex::LexBuf;
 
-use crate::keywords::ALL_KEYWORDS;
+use crate::keywords::Keyword;
 use crate::parser::ParserError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Word(Word),
+    Keyword(Keyword),
+    Ident(String),
     String(String),
     HexString(String),
     Number(String),
@@ -64,7 +65,8 @@ pub enum Token {
 impl Token {
     pub fn name(&self) -> &str {
         match self {
-            Token::Word(w) => w.name(),
+            Token::Keyword(kw) => kw.as_str(),
+            Token::Ident(_) => "identifier",
             Token::String(_) => "string literal",
             Token::HexString(_) => "hex string literal",
             Token::Number(_) => "number",
@@ -81,29 +83,6 @@ impl Token {
             Token::Colon => "colon",
             Token::DoubleColon => "double colon",
             Token::Semicolon => "semicolon",
-        }
-    }
-}
-
-/// A keyword (like SELECT) or an optionally quoted SQL identifier.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Word {
-    /// The value of the word, without the enclosing quotes, and with the
-    /// escape sequences (if any) processed.
-    pub value: String,
-    /// Whether the word was quoted.
-    pub quoted: bool,
-    /// If the word was not quoted and it matched one of the known keywords,
-    /// this will have one of the values from dialect::keywords, otherwise empty
-    pub keyword: String,
-}
-
-impl Word {
-    pub fn name(&self) -> &str {
-        if !self.keyword.is_empty() {
-            &self.keyword
-        } else {
-            "identifier"
         }
     }
 }
@@ -191,16 +170,10 @@ fn lex_ident(buf: &mut LexBuf) -> Token {
     let word = buf.take_while(
         |ch| matches!(ch, 'A'..='Z' | 'a'..='z' | '\u{80}'..='\u{ff}' | '0'..='9' | '$' | '_'),
     );
-    let word_uppercase = word.to_uppercase();
-    Token::Word(Word {
-        value: word.into(),
-        quoted: false,
-        keyword: if ALL_KEYWORDS.contains(&word_uppercase.as_str()) {
-            word_uppercase
-        } else {
-            "".into()
-        },
-    })
+    match word.parse() {
+        Ok(kw) => Token::Keyword(kw),
+        Err(_) => Token::Ident(word.to_lowercase()),
+    }
 }
 
 fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, ParserError> {
@@ -214,11 +187,7 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, ParserError> {
             None => bail!(buf, pos, "unterminated quoted identifier"),
         }
     }
-    Ok(Token::Word(Word {
-        value: s,
-        quoted: true,
-        keyword: "".into(),
-    }))
+    Ok(Token::Ident(s))
 }
 
 fn lex_string(buf: &mut LexBuf) -> Result<String, ParserError> {
