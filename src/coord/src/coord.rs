@@ -1180,8 +1180,8 @@ where
             iter::once((
                 Row::pack(&[
                     Datum::String(&id.to_string()),
-                    Datum::String(name),
                     Datum::Int32(oid as i32),
+                    Datum::String(name),
                     Datum::String(&key_id.to_string()),
                     Datum::String(&value_id.to_string()),
                 ]),
@@ -1289,6 +1289,10 @@ where
                     .await,
                 session,
             ),
+
+            Plan::CreateType { name, typ } => {
+                tx.send(self.sequence_create_type(pcx, name, typ).await, session)
+            }
 
             Plan::DropDatabase { name } => {
                 tx.send(self.sequence_drop_database(name).await, session)
@@ -1729,6 +1733,32 @@ where
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_create_type(
+        &mut self,
+        pcx: PlanContext,
+        name: FullName,
+        typ: sql::plan::Type,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
+        let typ = catalog::Type::Map {
+            create_sql: typ.create_sql,
+            plan_cx: pcx,
+            key_id: typ.key_id,
+            value_id: typ.value_id,
+        };
+        let id = self.catalog.allocate_id()?;
+        let oid = self.catalog.allocate_oid()?;
+        let op = catalog::Op::CreateItem {
+            id,
+            oid,
+            name,
+            item: CatalogItem::Type(typ),
+        };
+        match self.catalog_transact(vec![op]).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedType),
             Err(err) => Err(err),
         }
     }

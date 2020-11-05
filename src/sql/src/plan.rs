@@ -102,6 +102,10 @@ pub enum Plan {
         index: Index,
         if_not_exists: bool,
     },
+    CreateType {
+        name: FullName,
+        typ: Type,
+    },
     DropDatabase {
         name: String,
     },
@@ -194,6 +198,13 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<::expr::ScalarExpr>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Type {
+    pub create_sql: String,
+    pub key_id: GlobalId,
+    pub value_id: GlobalId,
 }
 
 /// Specifies when a `Peek` should occur.
