@@ -1870,13 +1870,13 @@ impl Parser {
         let token = self.peek_token();
         let option = if let Ok(value) = self.parse_value() {
             SqlOption::Value { name, value }
-        } else if let Some(Token::Word(ident)) = token {
-            SqlOption::Ident {
-                name,
-                ident: ident.to_ident(),
-            }
         } else {
-            self.expected(self.peek_range(), "option value", token)?
+            self.prev_token();
+            if let Ok(object_name) = self.parse_object_name() {
+                SqlOption::ObjectName { name, object_name }
+            } else {
+                self.expected(self.peek_range(), "option value", token)?
+            }
         };
         Ok(option)
     }

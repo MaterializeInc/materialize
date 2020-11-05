@@ -13,9 +13,9 @@ use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, ObjectName, SqlOption,
-    Statement, TableFactor, Value,
+    CreateIndexStatement, CreateMapTypeStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateTableStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior,
+    ObjectName, SqlOption, Statement, TableFactor, Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -52,10 +52,18 @@ pub fn options(options: &[SqlOption]) -> HashMap<String, Value> {
         .iter()
         .map(|o| match o {
             SqlOption::Value { name, value } => (ident(name.clone()), value.clone()),
-            SqlOption::Ident { name, ident: id } => {
-                (ident(name.clone()), Value::String(ident(id.clone())))
-            }
+            SqlOption::ObjectName { name, object_name } => (
+                ident(name.clone()),
+                Value::String(object_name.to_ast_string()),
+            ),
         })
+        .collect()
+}
+
+pub fn option_objects(options: &[SqlOption]) -> HashMap<String, SqlOption> {
+    options
+        .iter()
+        .map(|o| (ident(o.name().clone()), o.clone()))
         .collect()
 }
 
@@ -247,6 +255,27 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
                 }
             }
             *if_not_exists = false;
+        }
+
+        Statement::CreateMapType(CreateMapTypeStatement { name, with_options }) => {
+            *name = allocate_name(name)?;
+            for option in with_options {
+                match option {
+                    SqlOption::ObjectName { object_name, .. } => {
+                        *object_name = resolve_item(object_name)?;
+                    }
+                    SqlOption::Value {
+                        name,
+                        value: Value::String(val),
+                    } => {
+                        *option = SqlOption::ObjectName {
+                            name: name.clone(),
+                            object_name: resolve_item(&ObjectName(vec![Ident::new(val.clone())]))?,
+                        }
+                    }
+                    _ => (),
+                }
+            }
         }
 
         _ => unreachable!(),

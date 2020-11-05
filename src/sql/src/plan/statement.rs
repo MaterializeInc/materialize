@@ -52,7 +52,7 @@ use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
     query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, CopyFormat, Index,
-    LogicalCompactionWindow, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, View,
+    LogicalCompactionWindow, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -273,7 +273,7 @@ pub fn handle_statement(
         Statement::CreateSource(stmt) => handle_create_source(scx, stmt),
         Statement::CreateTable(stmt) => handle_create_table(scx, stmt),
         Statement::CreateView(stmt) => handle_create_view(scx, stmt, params),
-        Statement::CreateMapType(stmt) => handle_create_type(scx, stmt),
+        Statement::CreateMapType(stmt) => handle_create_map_type(scx, stmt),
         Statement::DropDatabase(stmt) => handle_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => handle_drop_objects(scx, stmt),
         Statement::AlterObjectRename(stmt) => handle_alter_object_rename(scx, stmt),
@@ -903,21 +903,45 @@ fn handle_create_view(
     })
 }
 
-fn handle_create_type(
+fn handle_create_map_type(
     scx: &StatementContext,
-    CreateMapTypeStatement { name, with_options }: CreateMapTypeStatement,
+    stmt: CreateMapTypeStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let mut with_options = normalize::options(&with_options);
-    let _key_type = match with_options.remove("key_type") {
-        Some(Value::String(s)) => Some(s),
-        Some(_) => bail!("key_type must be a string"),
+    let create_sql = normalize::create_statement(scx, Statement::CreateMapType(stmt.clone()))?;
+    let CreateMapTypeStatement { name, with_options } = stmt;
+
+    let mut with_options = normalize::option_objects(&with_options);
+    let key_name = match with_options.remove("key_type") {
+        Some(SqlOption::Value {
+            value: Value::String(val),
+            ..
+        }) => ObjectName(vec![Ident::new(val)]),
+        Some(SqlOption::ObjectName { object_name, .. }) => object_name,
+        Some(_) => bail!("key_type must be a string or identifier"),
         None => bail!("key_type parameter required"),
     };
-    let _value_type = match with_options.remove("value_type") {
-        Some(Value::String(s)) => Some(s),
-        Some(_) => bail!("value_type must be a string"),
+    let key = scx
+        .catalog
+        .resolve_item(&normalize::object_name(key_name)?)?;
+    if key.item.to_uppercase().as_str() != "TEXT" {
+        bail!("key_type must be text")
+    }
+    let key_id = scx.catalog.get_item(&key).id();
+
+    let value_name = match with_options.remove("value_type") {
+        Some(SqlOption::Value {
+            value: Value::String(val),
+            ..
+        }) => ObjectName(vec![Ident::new(val)]),
+        Some(SqlOption::ObjectName { object_name, .. }) => object_name,
+        Some(_) => bail!("value_type must be a string or identifier"),
         None => bail!("value_type parameter required"),
     };
+    let value = scx
+        .catalog
+        .resolve_item(&normalize::object_name(value_name)?)?;
+    let value_id = scx.catalog.get_item(&value).id();
+
     if !with_options.is_empty() {
         bail!(
             "unexpected parameters for CREATE TYPE: {}",
@@ -930,8 +954,14 @@ fn handle_create_type(
         bail!("type \"{}\" already exists", name.to_string());
     }
 
-    // todo@jldlaughlin: Return an error for any non-String, integral key types.
-    unsupported!("CREATE TYPE");
+    Ok(Plan::CreateType {
+        name,
+        typ: Type {
+            create_sql,
+            key_id,
+            value_id,
+        },
+    })
 }
 
 fn extract_timestamp_frequency_option(

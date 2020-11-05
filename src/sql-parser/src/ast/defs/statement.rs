@@ -1108,15 +1108,21 @@ impl_display!(ShowStatementFilter);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SqlOption {
-    Value { name: Ident, value: Value },
-    Ident { name: Ident, ident: Ident },
+    Value {
+        name: Ident,
+        value: Value,
+    },
+    ObjectName {
+        name: Ident,
+        object_name: ObjectName,
+    },
 }
 
 impl SqlOption {
     pub fn name(&self) -> &Ident {
         match self {
             SqlOption::Value { name, .. } => name,
-            SqlOption::Ident { name, .. } => name,
+            SqlOption::ObjectName { name, .. } => name,
         }
     }
 }
@@ -1129,10 +1135,10 @@ impl AstDisplay for SqlOption {
                 f.write_str(" = ");
                 f.write_node(value);
             }
-            SqlOption::Ident { name, ident } => {
+            SqlOption::ObjectName { name, object_name } => {
                 f.write_node(name);
                 f.write_str(" = ");
-                f.write_node(ident);
+                f.write_node(object_name);
             }
         }
     }

@@ -192,13 +192,10 @@ pub struct Index {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Type {
-    Builtin {
-        oid: u32,
-    },
+    Builtin,
     Map {
         create_sql: String,
         plan_cx: PlanContext,
-        oid: u32,
         key_id: GlobalId,
         value_id: GlobalId,
     },
@@ -555,7 +552,7 @@ impl Catalog {
                             schema: PG_CATALOG_SCHEMA.into(),
                             item: typ.name.to_owned(),
                         },
-                        CatalogItem::Type(Type::Builtin { oid: typ.oid }),
+                        CatalogItem::Type(Type::Builtin),
                     ));
                 }
 
@@ -602,6 +599,8 @@ impl Catalog {
         }
     }
 
+    // Leaving the system's search path empty allows us to catch issues
+    // where catalog object names have not been normalized correctly.
     pub fn for_system_session(&self) -> ConnCatalog {
         ConnCatalog {
             catalog: self,
@@ -1480,6 +1479,12 @@ impl Catalog {
                 connector: SinkConnectorState::Pending(sink.connector_builder),
                 with_snapshot,
                 as_of,
+            }),
+            Plan::CreateType { typ, .. } => CatalogItem::Type(Type::Map {
+                create_sql: typ.create_sql,
+                plan_cx: pcx,
+                key_id: typ.key_id,
+                value_id: typ.value_id,
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })
