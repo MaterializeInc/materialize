@@ -1201,7 +1201,7 @@ mod tests {
 
             // When run under miri this catchs undefined bytes written to data
             // eg by calling push_copy! on a type which contains undefined padding values
-            dbg!(row.data());
+            println!("{:?}", row.data());
 
             let datums2 = row.iter().collect::<Vec<_>>();
             let datums3 = row.unpack();

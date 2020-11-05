@@ -29,6 +29,9 @@ extra_lints=(
 
     # the `todo!` macro should not appear in production code.
     clippy::todo
+
+    # The dbg macro should only be used when debugging, not in production code
+    clippy::dbg_macro
 )
 
 # Add lints to this list freely, but please add a comment with justification
