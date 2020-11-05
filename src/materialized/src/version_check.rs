@@ -10,30 +10,44 @@
 use std::time::Duration;
 
 use anyhow::bail;
-use log::warn;
+use log::{debug, log, Level};
+use semver::{Identifier, Version};
 use serde::{Deserialize, Serialize};
 
-use crate::VERSION;
 use ore::retry::RetryBuilder;
 
+use crate::VERSION;
+
 // Runs fetch_latest_version in a backoff loop until it succeeds once, prints a
-// warning if there is another version, then returns.
+// warning if there is a newer version, then returns.
 pub async fn check_version_loop(telemetry_url: String, cluster_id: String) {
-    let current_version = VERSION;
+    let current_version = Version::parse(VERSION).expect("crate version is not valid semver");
 
     let latest_version = RetryBuilder::new()
         .max_sleep(None)
         .initial_backoff(Duration::from_secs(1))
         .build()
-        .retry(|_state| fetch_latest_version(&telemetry_url, &cluster_id, &current_version))
+        .retry(|_state| fetch_latest_version(&telemetry_url, &cluster_id, &VERSION))
         .await
-        .unwrap();
+        .expect("retry loop never terminates");
 
-    if latest_version != current_version {
-        warn!(
-            "A new version of materialized is available: {}.",
-            latest_version
-        );
+    match Version::parse(&latest_version) {
+        Ok(latest_version) if latest_version > current_version => {
+            // We assume users running development builds are sophisticated, and
+            // may be intentionally not running the latest release, so downgrade
+            // the message from warn to info level.
+            let level = match current_version.pre.as_slice() {
+                [Identifier::AlphaNumeric(s)] if s == "dev" => Level::Info,
+                _ => Level::Warn,
+            };
+            log!(
+                level,
+                "a new version of materialized is available: {}",
+                latest_version
+            );
+        }
+        Ok(_) => (),
+        Err(e) => debug!("unable to parse fetched latest version: {}", e),
     }
 }
 

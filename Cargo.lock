@@ -1882,6 +1882,7 @@ dependencies = [
  "repr",
  "reqwest",
  "rlimit",
+ "semver",
  "serde",
  "serde_json",
  "shell-words",
