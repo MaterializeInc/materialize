@@ -595,266 +595,283 @@ pub struct Candidate<'a, R> {
     preferred_types: usize,
 }
 
-#[derive(Clone, Debug)]
-/// Determines best implementation to use given some user-provided arguments.
-/// For more detail, see `ArgImplementationMatcher::select_implementation`.
-pub struct ArgImplementationMatcher<'a> {
-    spec: FuncSpec<'a>,
-    ecx: &'a ExprContext<'a>,
+/// Selects the best implementation given the provided `args` using a
+/// process similar to [PostgreSQL's parser][pgparser], and returns the
+/// `ScalarExpr` to invoke that function.
+///
+/// Inline comments prefixed with number are taken from the "Function Type
+/// Resolution" section of the aforelinked page.
+///
+/// # Errors
+/// - When the provided arguments are not valid for any implementation, e.g.
+///   cannot be converted to the appropriate types.
+/// - When all implementations are equally valid.
+///
+/// [pgparser]: https://www.postgresql.org/docs/current/typeconv-oper.html
+pub fn select_impl<R>(
+    ecx: &ExprContext,
+    spec: FuncSpec,
+    impls: &[FuncImpl<R>],
+    args: Vec<CoercibleScalarExpr>,
+) -> Result<R, anyhow::Error>
+where
+    R: fmt::Debug,
+{
+    let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
+    select_impl_inner(ecx, spec, impls, args, &types).with_context(|| {
+        let types: Vec<_> = types
+            .into_iter()
+            .map(|ty| match ty {
+                Some(ty) => ty.to_string(),
+                None => "unknown".to_string(),
+            })
+            .collect();
+        match (spec, types.as_slice()) {
+            (FuncSpec::Func(name), _) => {
+                format!("Cannot call function {}({})", name, types.join(", "))
+            }
+            (FuncSpec::Op(name), [typ]) => format!("no overload for {} {}", name, typ),
+            (FuncSpec::Op(name), [ltyp, rtyp]) => {
+                format!("no overload for {} {} {}", ltyp, name, rtyp)
+            }
+            (FuncSpec::Op(_), [..]) => unreachable!("non-unary non-binary operator"),
+        }
+    })
 }
 
-impl<'a> ArgImplementationMatcher<'a> {
-    /// Selects the best implementation given the provided `args` using a
-    /// process similar to [PostgreSQL's parser][pgparser], and returns the
-    /// `ScalarExpr` to invoke that function.
-    ///
-    /// Inline comments prefixed with number are taken from the "Function Type
-    /// Resolution" section of the aforelinked page.
-    ///
-    /// # Errors
-    /// - When the provided arguments are not valid for any implementation, e.g.
-    ///   cannot be converted to the appropriate types.
-    /// - When all implementations are equally valid.
-    ///
-    /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-oper.html
-    pub fn select_implementation<R>(
-        ecx: &'a ExprContext<'a>,
-        spec: FuncSpec<'a>,
-        impls: &[FuncImpl<R>],
-        cexprs: Vec<CoercibleScalarExpr>,
-        types: &[Option<ScalarType>],
-    ) -> Result<R, anyhow::Error>
-    where
-        R: fmt::Debug,
-    {
-        let m = Self { spec, ecx };
+fn select_impl_inner<R>(
+    ecx: &ExprContext,
+    spec: FuncSpec,
+    impls: &[FuncImpl<R>],
+    cexprs: Vec<CoercibleScalarExpr>,
+    types: &[Option<ScalarType>],
+) -> Result<R, anyhow::Error>
+where
+    R: fmt::Debug,
+{
+    // 4.a. Discard candidate functions for which the input types do not
+    // match and cannot be converted (using an implicit conversion) to
+    // match. unknown literals are assumed to be convertible to anything for
+    // this purpose.
+    let impls: Vec<_> = impls
+        .iter()
+        .filter(|i| i.params.matches_argtypes(types))
+        .collect();
+
+    let f = find_match(types, impls)?;
+
+    // Coerce args to selected candidates' resolved types.
+    let params = f.params.resolve_polymorphic_types(types)?;
+    (f.op.0)(ecx, spec, cexprs, params)
+}
+
+/// Finds an exact match based on the arguments, or, if no exact match, finds
+/// the best match available. Patterned after [PostgreSQL's type conversion
+/// matching algorithm][pgparser].
+///
+/// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
+fn find_match<'a, R: std::fmt::Debug>(
+    types: &[Option<ScalarType>],
+    impls: Vec<&'a FuncImpl<R>>,
+) -> Result<&'a FuncImpl<R>, anyhow::Error> {
+    let all_types_known = types.iter().all(|t| t.is_some());
+
+    // Check for exact match.
+    if all_types_known {
+        let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).collect();
+        let matching_impls: Vec<&FuncImpl<_>> = impls
+            .iter()
+            .filter(|i| i.params.exact_match(&known_types))
+            .cloned()
+            .collect();
+
+        if matching_impls.len() == 1 {
+            return Ok(&matching_impls[0]);
+        }
+    }
+
+    // No exact match. Apply PostgreSQL's best match algorithm. Generate
+    // candidates by assessing their compatibility with each implementation's
+    // parameters.
+    let mut candidates: Vec<Candidate<_>> = Vec::new();
+    macro_rules! maybe_get_last_candidate {
+        () => {
+            if candidates.len() == 1 {
+                return Ok(&candidates[0].fimpl);
+            }
+        };
+    }
+    let mut max_exact_matches = 0;
+    for fimpl in impls {
+        let mut exact_matches = 0;
+        let mut preferred_types = 0;
+
+        for (i, arg_type) in types.iter().enumerate() {
+            let param_type = &fimpl.params[i];
+
+            match arg_type {
+                Some(arg_type) => {
+                    if param_type == arg_type {
+                        exact_matches += 1;
+                    }
+                    if param_type.is_preferred_by(arg_type) {
+                        preferred_types += 1;
+                    }
+                }
+                None => {
+                    if param_type.prefers_self() {
+                        preferred_types += 1;
+                    }
+                }
+            }
+        }
 
         // 4.a. Discard candidate functions for which the input types do not
         // match and cannot be converted (using an implicit conversion) to
         // match. unknown literals are assumed to be convertible to anything for
         // this purpose.
-        let impls: Vec<_> = impls
-            .iter()
-            .filter(|i| i.params.matches_argtypes(types))
-            .collect();
-
-        let f = m.find_match(types, impls)?;
-
-        // Coerce args to selected candidates' resolved types.
-        let params = f.params.resolve_polymorphic_types(types)?;
-        (f.op.0)(ecx, spec, cexprs, params)
+        max_exact_matches = std::cmp::max(max_exact_matches, exact_matches);
+        candidates.push(Candidate {
+            fimpl,
+            exact_matches,
+            preferred_types,
+        });
     }
 
-    /// Finds an exact match based on the arguments, or, if no exact match,
-    /// finds the best match available. Patterned after [PostgreSQL's type
-    /// conversion matching algorithm][pgparser].
-    ///
-    /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
-    fn find_match<'b, R: std::fmt::Debug>(
-        &self,
-        types: &[Option<ScalarType>],
-        impls: Vec<&'b FuncImpl<R>>,
-    ) -> Result<&'b FuncImpl<R>, anyhow::Error> {
-        let all_types_known = types.iter().all(|t| t.is_some());
-
-        // Check for exact match.
-        if all_types_known {
-            let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).collect();
-            let matching_impls: Vec<&FuncImpl<_>> = impls
-                .iter()
-                .filter(|i| i.params.exact_match(&known_types))
-                .cloned()
-                .collect();
-
-            if matching_impls.len() == 1 {
-                return Ok(&matching_impls[0]);
-            }
-        }
-
-        // No exact match. Apply PostgreSQL's best match algorithm.
-        // Generate candidates by assessing their compatibility with each
-        // implementation's parameters.
-        let mut candidates: Vec<Candidate<_>> = Vec::new();
-        macro_rules! maybe_get_last_candidate {
-            () => {
-                if candidates.len() == 1 {
-                    return Ok(&candidates[0].fimpl);
-                }
-            };
-        }
-        let mut max_exact_matches = 0;
-        for fimpl in impls {
-            let mut exact_matches = 0;
-            let mut preferred_types = 0;
-
-            for (i, arg_type) in types.iter().enumerate() {
-                let param_type = &fimpl.params[i];
-
-                match arg_type {
-                    Some(arg_type) => {
-                        if param_type == arg_type {
-                            exact_matches += 1;
-                        }
-                        if param_type.is_preferred_by(arg_type) {
-                            preferred_types += 1;
-                        }
-                    }
-                    None => {
-                        if param_type.prefers_self() {
-                            preferred_types += 1;
-                        }
-                    }
-                }
-            }
-
-            // 4.a. Discard candidate functions for which the input types do not match
-            // and cannot be converted (using an implicit conversion) to match.
-            // unknown literals are assumed to be convertible to anything for this
-            // purpose.
-            max_exact_matches = std::cmp::max(max_exact_matches, exact_matches);
-            candidates.push(Candidate {
-                fimpl,
-                exact_matches,
-                preferred_types,
-            });
-        }
-
-        if candidates.is_empty() {
-            bail!(
-                "arguments cannot be implicitly cast to any implementation's parameters; \
-                 try providing explicit casts"
-            )
-        }
-
-        maybe_get_last_candidate!();
-
-        // 4.c. Run through all candidates and keep those with the most exact matches on
-        // input types. Keep all candidates if none have exact matches.
-        candidates.retain(|c| c.exact_matches >= max_exact_matches);
-
-        maybe_get_last_candidate!();
-
-        // 4.d. Run through all candidates and keep those that accept preferred types
-        // (of the input data type's type category) at the most positions where
-        // type conversion will be required.
-        let mut max_preferred_types = 0;
-        for c in &candidates {
-            max_preferred_types = std::cmp::max(max_preferred_types, c.preferred_types);
-        }
-        candidates.retain(|c| c.preferred_types >= max_preferred_types);
-
-        maybe_get_last_candidate!();
-
-        if all_types_known {
-            bail!(
-                "unable to determine which implementation to use; try providing \
-                 explicit casts to match parameter types"
-            )
-        }
-
-        let mut found_known = false;
-        let mut types_match = true;
-        let mut common_type: Option<ScalarType> = None;
-
-        for (i, arg_type) in types.iter().enumerate() {
-            let mut selected_category: Option<TypeCategory> = None;
-            let mut found_string_candidate = false;
-            let mut categories_match = true;
-
-            match arg_type {
-                // 4.e. If any input arguments are unknown, check the type
-                // categories accepted at those argument positions by the
-                // remaining candidates.
-                None => {
-                    for c in candidates.iter() {
-                        let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
-                        match selected_category {
-                            Some(ref mut selected_category) => {
-                                // 4.e. cont: ...if all the remaining candidates
-                                // accept the same type category, select that category.
-                                categories_match =
-                                    selected_category == &this_category && categories_match;
-                                // 4.e. cont: [except for...] select the string
-                                // category if any candidate accepts that category.
-                                // (This bias towards string is appropriate since an
-                                // unknown-type literal looks like a string.)
-                                if this_category == TypeCategory::String {
-                                    *selected_category = TypeCategory::String;
-                                    found_string_candidate = true;
-                                }
-                            }
-                            None => selected_category = Some(this_category.clone()),
-                        }
-                    }
-
-                    // 4.e. cont: Otherwise fail because the correct choice
-                    // cannot be deduced without more clues. (ed: this doesn't
-                    // mean fail entirely, simply moving onto 4.f)
-                    if !found_string_candidate && !categories_match {
-                        break;
-                    }
-
-                    // 4.e. cont: Now discard candidates that do not accept the
-                    // selected type category. Furthermore, if any candidate
-                    // accepts a preferred type in that category, discard
-                    // candidates that accept non-preferred types for that
-                    // argument.
-                    let selected_category = selected_category.unwrap();
-
-                    let preferred_type = selected_category.preferred_type();
-                    let mut found_preferred_type_candidate = false;
-                    candidates.retain(|c| {
-                        if let Some(typ) = &preferred_type {
-                            found_preferred_type_candidate = c.fimpl.params[i].accepts_type(typ)
-                                || found_preferred_type_candidate;
-                        }
-                        selected_category == TypeCategory::from_param(&c.fimpl.params[i])
-                    });
-
-                    if found_preferred_type_candidate {
-                        let preferred_type = preferred_type.unwrap();
-                        candidates.retain(|c| c.fimpl.params[i].accepts_type(&preferred_type));
-                    }
-                }
-                Some(typ) => {
-                    found_known = true;
-                    // Track if all known types are of the same type; use this
-                    // info in 4.f.
-                    match common_type {
-                        Some(ref common_type) => types_match = common_type == typ && types_match,
-                        None => common_type = Some(typ.clone()),
-                    }
-                }
-            }
-        }
-
-        maybe_get_last_candidate!();
-
-        // 4.f. If there are both unknown and known-type arguments, and all the
-        // known-type arguments have the same type, assume that the unknown
-        // arguments are also of that type, and check which candidates can
-        // accept that type at the unknown-argument positions.
-        // (ed: We know unknown argument exists if we're in this part of the code.)
-        if found_known && types_match {
-            let common_type = common_type.unwrap();
-            let common_typed: Vec<_> = types
-                .iter()
-                .map(|t| match t {
-                    Some(t) => Some(t.clone()),
-                    None => Some(common_type.clone()),
-                })
-                .collect();
-
-            candidates.retain(|c| c.fimpl.params.matches_argtypes(&common_typed));
-
-            maybe_get_last_candidate!();
-        }
-
+    if candidates.is_empty() {
         bail!(
-            "unable to determine which implementation to use; try providing \
-             explicit casts to match parameter types"
+            "arguments cannot be implicitly cast to any implementation's parameters; \
+            try providing explicit casts"
         )
     }
+
+    maybe_get_last_candidate!();
+
+    // 4.c. Run through all candidates and keep those with the most exact
+    // matches on input types. Keep all candidates if none have exact matches.
+    candidates.retain(|c| c.exact_matches >= max_exact_matches);
+
+    maybe_get_last_candidate!();
+
+    // 4.d. Run through all candidates and keep those that accept preferred
+    // types (of the input data type's type category) at the most positions
+    // where type conversion will be required.
+    let mut max_preferred_types = 0;
+    for c in &candidates {
+        max_preferred_types = std::cmp::max(max_preferred_types, c.preferred_types);
+    }
+    candidates.retain(|c| c.preferred_types >= max_preferred_types);
+
+    maybe_get_last_candidate!();
+
+    if all_types_known {
+        bail!(
+            "unable to determine which implementation to use; try providing \
+            explicit casts to match parameter types"
+        )
+    }
+
+    let mut found_known = false;
+    let mut types_match = true;
+    let mut common_type: Option<ScalarType> = None;
+
+    for (i, arg_type) in types.iter().enumerate() {
+        let mut selected_category: Option<TypeCategory> = None;
+        let mut found_string_candidate = false;
+        let mut categories_match = true;
+
+        match arg_type {
+            // 4.e. If any input arguments are unknown, check the type
+            // categories accepted at those argument positions by the remaining
+            // candidates.
+            None => {
+                for c in candidates.iter() {
+                    let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
+                    match selected_category {
+                        Some(ref mut selected_category) => {
+                            // 4.e. cont: ...if all the remaining candidates
+                            // accept the same type category, select that category.
+                            categories_match =
+                                selected_category == &this_category && categories_match;
+                            // 4.e. cont: [except for...] select the string
+                            // category if any candidate accepts that category.
+                            // (This bias towards string is appropriate since an
+                            // unknown-type literal looks like a string.)
+                            if this_category == TypeCategory::String {
+                                *selected_category = TypeCategory::String;
+                                found_string_candidate = true;
+                            }
+                        }
+                        None => selected_category = Some(this_category.clone()),
+                    }
+                }
+
+                // 4.e. cont: Otherwise fail because the correct choice cannot
+                // be deduced without more clues.
+                // (ed: this doesn't mean fail entirely, simply moving onto 4.f)
+                if !found_string_candidate && !categories_match {
+                    break;
+                }
+
+                // 4.e. cont: Now discard candidates that do not accept the
+                // selected type category. Furthermore, if any candidate accepts
+                // a preferred type in that category, discard candidates that
+                // accept non-preferred types for that argument.
+                let selected_category = selected_category.unwrap();
+
+                let preferred_type = selected_category.preferred_type();
+                let mut found_preferred_type_candidate = false;
+                candidates.retain(|c| {
+                    if let Some(typ) = &preferred_type {
+                        found_preferred_type_candidate =
+                            c.fimpl.params[i].accepts_type(typ) || found_preferred_type_candidate;
+                    }
+                    selected_category == TypeCategory::from_param(&c.fimpl.params[i])
+                });
+
+                if found_preferred_type_candidate {
+                    let preferred_type = preferred_type.unwrap();
+                    candidates.retain(|c| c.fimpl.params[i].accepts_type(&preferred_type));
+                }
+            }
+            Some(typ) => {
+                found_known = true;
+                // Track if all known types are of the same type; use this info
+                // in 4.f.
+                match common_type {
+                    Some(ref common_type) => types_match = common_type == typ && types_match,
+                    None => common_type = Some(typ.clone()),
+                }
+            }
+        }
+    }
+
+    maybe_get_last_candidate!();
+
+    // 4.f. If there are both unknown and known-type arguments, and all the
+    // known-type arguments have the same type, assume that the unknown
+    // arguments are also of that type, and check which candidates can accept
+    // that type at the unknown-argument positions.
+    // (ed: We know unknown argument exists if we're in this part of the code.)
+    if found_known && types_match {
+        let common_type = common_type.unwrap();
+        let common_typed: Vec<_> = types
+            .iter()
+            .map(|t| match t {
+                Some(t) => Some(t.clone()),
+                None => Some(common_type.clone()),
+            })
+            .collect();
+
+        candidates.retain(|c| c.fimpl.params.matches_argtypes(&common_typed));
+
+        maybe_get_last_candidate!();
+    }
+
+    bail!(
+        "unable to determine which implementation to use; try providing \
+        explicit casts to match parameter types"
+    )
 }
 
 /// Generates `ScalarExpr` necessary to coerce `Expr` into the `ScalarType`
@@ -913,7 +930,6 @@ fn coerce_args_to_type(
     }
     Ok(exprs)
 }
-
 
 /// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
 macro_rules! params {
@@ -1593,41 +1609,6 @@ pub fn resolve_func(
         }
     }
     bail!("function \"{}\" does not exist", name)
-}
-
-/// Selects the correct function implementation from a list of implementations
-/// given the provided arguments.
-pub fn select_impl<R>(
-    ecx: &ExprContext,
-    spec: FuncSpec,
-    impls: &[FuncImpl<R>],
-    args: Vec<CoercibleScalarExpr>,
-) -> Result<R, anyhow::Error>
-where
-    R: fmt::Debug,
-{
-    let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
-    ArgImplementationMatcher::select_implementation(ecx, spec, impls, args, &types).with_context(
-        || {
-            let types: Vec<_> = types
-                .into_iter()
-                .map(|ty| match ty {
-                    Some(ty) => ty.to_string(),
-                    None => "unknown".to_string(),
-                })
-                .collect();
-            match (spec, types.as_slice()) {
-                (FuncSpec::Func(name), _) => {
-                    format!("Cannot call function {}({})", name, types.join(", "))
-                }
-                (FuncSpec::Op(name), [typ]) => format!("no overload for {} {}", name, typ),
-                (FuncSpec::Op(name), [ltyp, rtyp]) => {
-                    format!("no overload for {} {} {}", ltyp, name, rtyp)
-                }
-                (FuncSpec::Op(_), [..]) => unreachable!("non-unary non-binary operator"),
-            }
-        },
-    )
 }
 
 lazy_static! {
