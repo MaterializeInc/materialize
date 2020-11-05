@@ -14,11 +14,11 @@
 > CREATE TYPE custom AS MAP (key_type='text', value_type=bool);
 
 # Without qualifiers, should default to builtin bool.
-> SELECT value_id FROM mz_map_types WHERE name = 'custom'
-s4000
+> SELECT mz_internal.mz_classify_object_id(value_id) FROM mz_map_types WHERE name = 'custom'
+system
 
 > CREATE TYPE another_custom AS MAP (key_type='text', value_type=public.bool);
 
 # Qualified name should point to user-defined bool.
-> SELECT SUBSTRING(value_id, 1, 1) FROM mz_map_types WHERE name = 'another_custom'
-u
+> SELECT mz_internal.mz_classify_object_id(value_id) FROM mz_map_types WHERE name = 'another_custom'
+user

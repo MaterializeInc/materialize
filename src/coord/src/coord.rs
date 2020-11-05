@@ -1290,8 +1290,8 @@ where
                 session,
             ),
 
-            Plan::CreateMapType { name, typ } => {
-                tx.send(self.sequence_create_map_type(pcx, name, typ).await, session)
+            Plan::CreateType { name, typ } => {
+                tx.send(self.sequence_create_type(pcx, name, typ).await, session)
             }
 
             Plan::DropDatabase { name } => {
@@ -1737,7 +1737,7 @@ where
         }
     }
 
-    async fn sequence_create_map_type(
+    async fn sequence_create_type(
         &mut self,
         pcx: PlanContext,
         name: FullName,

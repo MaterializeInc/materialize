@@ -102,7 +102,7 @@ pub enum Plan {
         index: Index,
         if_not_exists: bool,
     },
-    CreateMapType {
+    CreateType {
         name: FullName,
         typ: Type,
     },

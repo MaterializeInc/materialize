@@ -34,7 +34,7 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::session::Session;
+use crate::session::{Session, Vars};
 
 mod config;
 mod error;
@@ -192,9 +192,7 @@ pub struct Index {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Type {
-    Builtin {
-        oid: u32,
-    },
+    Builtin,
     Map {
         create_sql: String,
         plan_cx: PlanContext,
@@ -554,7 +552,7 @@ impl Catalog {
                             schema: PG_CATALOG_SCHEMA.into(),
                             item: typ.name.to_owned(),
                         },
-                        CatalogItem::Type(Type::Builtin { oid: typ.oid }),
+                        CatalogItem::Type(Type::Builtin),
                     ));
                 }
 
@@ -606,7 +604,7 @@ impl Catalog {
             catalog: self,
             conn_id: SYSTEM_CONN_ID,
             database: "materialize".into(),
-            search_path: &[],
+            search_path: Vars::default().search_path(),
         }
     }
 
@@ -1480,7 +1478,7 @@ impl Catalog {
                 with_snapshot,
                 as_of,
             }),
-            Plan::CreateMapType { typ, .. } => CatalogItem::Type(Type::Map {
+            Plan::CreateType { typ, .. } => CatalogItem::Type(Type::Map {
                 create_sql: typ.create_sql,
                 plan_cx: pcx,
                 key_id: typ.key_id,

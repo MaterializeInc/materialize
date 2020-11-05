@@ -879,7 +879,7 @@ fn handle_create_map_type(
             ..
         }) => ObjectName(vec![Ident::new(val)]),
         Some(SqlOption::ObjectName { object_name, .. }) => object_name,
-        Some(_) => bail!("key_type must be a string"),
+        Some(_) => bail!("key_type must be a string or identifier"),
         None => bail!("key_type parameter required"),
     };
     let key = scx
@@ -896,7 +896,7 @@ fn handle_create_map_type(
             ..
         }) => ObjectName(vec![Ident::new(val)]),
         Some(SqlOption::ObjectName { object_name, .. }) => object_name,
-        Some(_) => bail!("value_type must be a string"),
+        Some(_) => bail!("value_type must be a string or identifier"),
         None => bail!("value_type parameter required"),
     };
     let value = scx
@@ -916,7 +916,7 @@ fn handle_create_map_type(
         bail!("type \"{}\" already exists", name.to_string());
     }
 
-    Ok(Plan::CreateMapType {
+    Ok(Plan::CreateType {
         name,
         typ: Type {
             create_sql,
