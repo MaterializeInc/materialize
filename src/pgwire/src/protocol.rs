@@ -648,6 +648,7 @@ where
             ExecuteResponse::CreatedView { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "view")
             }
+            ExecuteResponse::CreatedType => command_complete!("CREATE TYPE"),
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),

@@ -198,7 +198,6 @@ pub enum Type {
     Map {
         create_sql: String,
         plan_cx: PlanContext,
-        oid: u32,
         key_id: GlobalId,
         value_id: GlobalId,
     },
@@ -1480,6 +1479,12 @@ impl Catalog {
                 connector: SinkConnectorState::Pending(sink.connector_builder),
                 with_snapshot,
                 as_of,
+            }),
+            Plan::CreateMapType { typ, .. } => CatalogItem::Type(Type::Map {
+                create_sql: typ.create_sql,
+                plan_cx: pcx,
+                key_id: typ.key_id,
+                value_id: typ.value_id,
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })

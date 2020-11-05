@@ -125,6 +125,8 @@ pub enum ExecuteResponse {
     CreatedView {
         existed: bool,
     },
+    /// The requested type was created.
+    CreatedType,
     /// The specified number of rows were deleted from the requested table.
     Deleted(usize),
     /// The requested database was dropped.
