@@ -103,7 +103,7 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let config = util::Config::default();
+    let config = util::Config::default().threads(2);
     let (_server, mut client) = util::start_server(config)?;
 
     let temp_dir = tempfile::tempdir()?;
