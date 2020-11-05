@@ -32,7 +32,7 @@ _timestamp&lowbar;expression_ | The logical time to tail from onwards (either a 
 
 Field | Represents
 ------|-----------
-`timestamp` | Materialize's internal logical timestamp.
+`timestamp` | Materialize's internal logical timestamp. This is guaranteed to never decrease from any previous timestamp.
 `diff` | Whether the record is an insert (`1`), delete (`-1`), or update (delete for old value, followed by insert of new value).
 column values | The row's columns' values, each as its own column.
 
