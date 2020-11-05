@@ -17,7 +17,7 @@ instructions install the latest release of Materialize, **{{< version >}}**. The
 developer builds are available at https://mtrlz.dev/. For prior releases,
 see the [Versions page](/versions).
 
-**Have any questions?** [Contact us](https://materialize.io/contact/)
+**Have any questions?** [Contact us](https://materialize.com/contact/)
 
 ## Docker
 

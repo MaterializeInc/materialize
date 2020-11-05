@@ -424,7 +424,7 @@ function View(props) {
 
   let dotLink = null;
   if (dot) {
-    const link = new URL('https://materialize.io/memory-visualization/');
+    const link = new URL('https://materialize.com/memory-visualization/');
     // Pass information as a JSON object to allow for easily extending this in
     // the future. The hash is used instead of search because it reduces privacy
     // concerns and avoids server-side URL size limits.

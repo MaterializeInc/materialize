@@ -17,9 +17,9 @@ as an officially supported demo, a new demo must:
 - Have CI tests that run for every PR.
 
 Currently, there are three officially supported demos:
-- [Business Intelligence](https://materialize.io/docs/demos/business-intelligence/)
-- [Log Parsing](https://materialize.io/docs/demos/log-parsing/)
-- [Microservice](https://materialize.io/docs/demos/microservice/)
+- [Business Intelligence](https://materialize.com/docs/demos/business-intelligence/)
+- [Log Parsing](https://materialize.com/docs/demos/log-parsing/)
+- [Microservice](https://materialize.com/docs/demos/microservice/)
 
 ## Play Demos
 

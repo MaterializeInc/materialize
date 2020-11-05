@@ -1,8 +1,8 @@
 [![Build status](https://badge.buildkite.com/97d6604e015bf633d1c2a12d166bb46f3b43a927d3952c999a.svg?branch=main)](https://buildkite.com/materialize/tests)
-[![Doc reference](https://img.shields.io/badge/doc-reference-orange)](https://materialize.io/docs)
+[![Doc reference](https://img.shields.io/badge/doc-reference-orange)](https://materialize.com/docs)
 [![Chat on Slack](https://img.shields.io/badge/chat-on%20slack-purple)](https://join.slack.com/t/materializecommunity/shared_invite/zt-igbcmoxh-5V7XXMBIeDe7PFHO6sG6Dw)
 
-[<img src="https://materialize.io/wp-content/uploads/2020/01/materialize_logo_primary.png" width=60%>](https://materialize.io)
+[<img src="https://materialize.com/wp-content/uploads/2020/01/materialize_logo_primary.png" width=60%>](https://materialize.com)
 
 Materialize is a streaming database for real-time applications.
 
@@ -89,17 +89,17 @@ If you want to use an ORM, [chat with us](https://github.com/MaterializeInc/mate
 
 ## Get started
 
-Check out [our getting started guide](https://materialize.io/docs/get-started/).
+Check out [our getting started guide](https://materialize.com/docs/get-started/).
 
 ## Documentation
 
-Check out [our documentation](https://materialize.io/docs/).
+Check out [our documentation](https://materialize.com/docs/).
 
 ## License
 
 Materialize is source-available and [licensed](LICENSE) under the BSL 1.1, converting to the open-source Apache 2.0 license after 4 years. As stated in the BSL, Materialize is free forever on a single node.
 
-Materialize is also available as [a paid cloud service](https://materialize.io/download/) with additional features such as high availability via multi-active replication.
+Materialize is also available as [a paid cloud service](https://materialize.com/download/) with additional features such as high availability via multi-active replication.
 
 ## How does it work?
 

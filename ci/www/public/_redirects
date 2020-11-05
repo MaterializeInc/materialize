@@ -1,9 +1,13 @@
+# Redirect materialize.io to materialize.com
+http://materialize.io/* https://materialize.com/:splat 301!
+https://materialize.io/* https://materialize.com/:splat 301!
+
 # Force HTTP to HTTPS.
-http://materialize.io/* https://materialize.io/:splat 301!
+http://materialize.com/* https://materialize.com/:splat 301!
 
 # Evergreen, readable shortlinks.
 #
-# The materialize.io/s/ namespace is reserved for shortlinks. The idea is that
+# The materialize.com/s/ namespace is reserved for shortlinks. The idea is that
 # even if we change hosting providers, or switch platforms for the marketing
 # website, the /s path can always be easily reserved for shortlinks.
 #

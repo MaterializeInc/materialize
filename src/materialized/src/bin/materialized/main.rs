@@ -455,7 +455,7 @@ Thank you for trying Materialize!
 We are interested in any and all feedback you have, which may be able
 to improve both our software and your queries! Please reach out at:
 
-    Web: https://materialize.io
+    Web: https://materialize.com
     GitHub issues: https://github.com/MaterializeInc/materialize/issues
     Email: support@materialize.io
     Twitter: @MaterializeInc
@@ -480,7 +480,7 @@ the node anew.
 - You must always start this node in experimental mode; it can no
 longer be started in non-experimental/regular mode.
 
-For more details, see https://materialize.io/docs/cli#experimental-mode
+For more details, see https://materialize.com/docs/cli#experimental-mode
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 "
         );
@@ -544,7 +544,7 @@ fn handle_panic(panic_info: &PanicInfo) {
 We rely on bug reports to diagnose and fix these errors. Please
 copy and paste the above details and file a report at:
 
-    https://materialize.io/s/bug
+    https://materialize.com/s/bug
 
 To protect your privacy, we do not collect crash reports automatically."#,
     );

@@ -4,7 +4,7 @@ This is the root directory of the Materialize developer documentation, which
 describes our engineering process and philosophy.
 
 For a more general introduction to Materialize, see the [user
-documentation](https://materialize.io/docs). For API documentation, see
+documentation](https://materialize.com/docs). For API documentation, see
 [mtrlz.dev](https://mtrlz.dev).
 
 ## New contributors
@@ -12,9 +12,9 @@ documentation](https://materialize.io/docs). For API documentation, see
 If you're a new contributor, we recommend reading the following chapters in the
 user documentation, if you haven't already:
 
-  1. [Get Started](https://materialize.io/docs/get-started/)
-  2. [What Is Materialized?](https://materialize.io/docs/overview/what-is-materialize/)
-  3. [Architecture Overview](https://materialize.io/docs/overview/architecture/)
+  1. [Get Started](https://materialize.com/docs/get-started/)
+  2. [What Is Materialized?](https://materialize.com/docs/overview/what-is-materialize/)
+  3. [Architecture Overview](https://materialize.com/docs/overview/architecture/)
 
 Then, once you're up to speed, dive into the [developer guide](guide.md). The
 guide is intended to be skimmed from start to finish, to give you the lay of the

@@ -1902,7 +1902,7 @@ impl<'a> StatementContext<'a> {
         if !self.experimental_mode() {
             bail!(
                 "{} requires experimental mode; see \
-                https://materialize.io/docs/cli/#experimental-mode",
+                https://materialize.com/docs/cli/#experimental-mode",
                 feature_name
             )
         }

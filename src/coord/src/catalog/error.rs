@@ -161,12 +161,12 @@ impl fmt::Display for Error {
                 r#"Materialize previously started with --experimental to
 enable experimental features, so now must be started in experimental
 mode. For more details, see
-https://materialize.io/docs/cli#experimental-mode"#
+https://materialize.com/docs/cli#experimental-mode"#
             ),
             ErrorKind::ExperimentalModeUnavailable => write!(
                 f,
                 r#"Experimental mode is only available on new nodes. For
-more details, see https://materialize.io/docs/cli#experimental-mode"#
+more details, see https://materialize.com/docs/cli#experimental-mode"#
             ),
         }
     }

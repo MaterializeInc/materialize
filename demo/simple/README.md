@@ -11,7 +11,7 @@ series of Docker images glued together via Docker Compose. As a secondary
 benefit, you can run the demo via Linux, an EC2 VM instance, or a Mac laptop.
 
 For a better sense of what this deployment looks like, see our [architecture
-documentation](https://materialize.io/docs/overview/architecture)––the only
+documentation](https://materialize.com/docs/overview/architecture)––the only
 components not accounted for there are:
 
 - Kafka's infrastructure (e.g. Zookeeper)

@@ -6,7 +6,7 @@ contains both Prometheus and Grafana (and some other tools) so that folks can ve
 quickly introspect their materialized, before they're ready to necessarily spin up
 production monitoring pointing at materialized.
 
-User documentation is at https://materialize.io/docs/monitoring/ (or
+User documentation is at https://materialize.com/docs/monitoring/ (or
 [doc/user/content/monitoring/_index.md][doc] locally).
 
 

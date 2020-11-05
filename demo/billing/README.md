@@ -93,4 +93,4 @@ for client 1 you could run:
 SELECT * FROM billing_monthly_statement WHERE client_id = 1;
 ```
 
-Check out our [docs](https://materialize.io/docs/) for more info on what you can do!
+Check out our [docs](https://materialize.com/docs/) for more info on what you can do!

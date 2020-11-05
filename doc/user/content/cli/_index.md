@@ -240,4 +240,4 @@ parameter.
 
 Unless disabled with `--disable-telemetry`, upon startup `materialized`
 reports its current version and cluster id to a central server operated by
-materialize.io. If a newer version is available a warning will be logged.
+materialize.com. If a newer version is available a warning will be logged.

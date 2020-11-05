@@ -41,7 +41,7 @@ Strive for some variety of verbs. "Support new feature" gets boring as a release
 note.
 
 Use relative links (/path/to/doc), not absolute links
-(https://materialize.io/docs/path/to/doc).
+(https://materialize.com/docs/path/to/doc).
 
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
@@ -313,7 +313,7 @@ Wrap your release notes at the 80 character mark.
 - Change the default [`TAIL` snapshot behavior](/sql/tail/#with-snapshot-or-without-snapshot)
   from `WITHOUT SNAPSHOT` to `WITH SNAPSHOT`. **Backwards-incompatible change.**
 
-- Actively shut down [Kafka sinks](https://materialize.io/docs/sql/create-sink/#kafka-sinks)
+- Actively shut down [Kafka sinks](https://materialize.com/docs/sql/create-sink/#kafka-sinks)
   that encounter an unrecoverable error, rather than attempting to produce data
   until the sink is dropped {{% gh 3419 %}}.
 
@@ -387,7 +387,7 @@ Wrap your release notes at the 80 character mark.
   created if you had used [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view).
 
 - Permit control over the timestamp selection logic on a per-Kafka-source basis
-  via three new [`WITH` options](https://materialize.io/docs/sql/create-source/avro-kafka/#with-options):
+  via three new [`WITH` options](https://materialize.com/docs/sql/create-source/avro-kafka/#with-options):
     - `timestamp_frequency_ms`
     - `max_timestamp_batch_size`
     - `topic_metadata_refresh_interval_ms`
