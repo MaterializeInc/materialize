@@ -57,6 +57,7 @@ Wrap your release notes at the 80 character mark.
   physical cores if [`--workers`](/cli/#worker-threads) is not specified.
 - [`TAIL`](/sql/tail) now sends rows instead of being implemented as a
   `COPY TO` operation. It has gained `timestamp` and `diff` columns.
+  **Backwards-incompatible change.**
 - [`COPY TO`](/sql/copy-to) has been added to
   allow any query to send data via the [Postgres
   COPY](https://www.postgresql.org/docs/current/sql-copy.html)
