@@ -9,8 +9,11 @@ exclude = ["tests/testdata"]
 [dependencies]
 lazy_static = "1.4.0"
 log = "0.4.11"
+itertools = "0.9"
+phf = { version = "0.8", features = ["unicase"] }
 ore = { path = "../ore" }
 repr = { path = "../repr" }
+unicase = "2.4"
 stacker = "0.1.12"
 
 [dev-dependencies]
@@ -19,4 +22,7 @@ matches = "0.1"
 
 [build-dependencies]
 anyhow = "1.0.33"
+ore = { path = "../ore" }
+phf_codegen = "0.8"
+unicase = "2.4"
 walkabout = { path = "../walkabout" }
