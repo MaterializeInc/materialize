@@ -1620,7 +1620,21 @@ lazy_static! {
         builtins! {
             // ARITHMETIC
             "+" => Scalar {
-                params!(Any) => Operation::identity(),
+                params!(Any) => Operation::new(|ecx, _spec, exprs, _params| {
+                    // Unary plus has unusual compatibility requirements.
+                    //
+                    // In PostgreSQL, it is only defined for numeric types, so
+                    // `+$1` and `+'1'` get coerced to `Float64` per the usual
+                    // rules, but `+'1'::text` is rejected.
+                    //
+                    // In SQLite, unary plus can be applied to *any* type, and
+                    // is always the identity function.
+                    //
+                    // To try to be compatible with both PostgreSQL and SQlite,
+                    // we accept explicitly-typed arguments of any type, but try
+                    // to coerce unknown-type arguments as `Float64`.
+                    typeconv::plan_coerce(ecx, exprs.into_element(), &ScalarType::Float64)
+                }),
                 params!(Int32, Int32) => AddInt32,
                 params!(Int64, Int64) => AddInt64,
                 params!(Float32, Float32) => AddFloat32,
