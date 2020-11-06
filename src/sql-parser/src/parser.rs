@@ -1645,7 +1645,7 @@ impl Parser {
 
     fn parse_drop(&mut self) -> Result<Statement, ParserError> {
         let object_type = match self.parse_one_of_keywords(&[
-            "DATABASE", "SCHEMA", "TABLE", "VIEW", "SOURCE", "SINK", "INDEX",
+            "DATABASE", "SCHEMA", "TABLE", "VIEW", "SOURCE", "SINK", "INDEX", "TYPE",
         ]) {
             Some("DATABASE") => {
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
@@ -1659,10 +1659,11 @@ impl Parser {
             Some("SOURCE") => ObjectType::Source,
             Some("SINK") => ObjectType::Sink,
             Some("INDEX") => ObjectType::Index,
+            Some("TYPE") => ObjectType::Type,
             _ => {
                 return self.expected(
                     self.peek_range(),
-                    "DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, or INDEX after DROP",
+                    "DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, INDEX, or TYPE after DROP",
                     self.peek_token(),
                 )
             }
@@ -2575,7 +2576,7 @@ impl Parser {
         let extended = self.parse_keyword("EXTENDED");
         if extended {
             self.expect_one_of_keywords(&[
-                "SCHEMAS", "INDEX", "INDEXES", "KEYS", "TABLES", "COLUMNS", "FULL",
+                "SCHEMAS", "INDEX", "INDEXES", "KEYS", "TABLES", "COLUMNS", "TYPES", "FULL",
             ])?;
             self.prev_token();
         }
@@ -2583,12 +2584,13 @@ impl Parser {
         let full = self.parse_keyword("FULL");
         if full {
             if extended {
-                self.expect_one_of_keywords(&["SCHEMAS", "COLUMNS", "TABLES"])?;
+                self.expect_one_of_keywords(&["SCHEMAS", "COLUMNS", "TABLES", "TYPES"])?;
             } else {
                 self.expect_one_of_keywords(&[
                     "SCHEMAS",
                     "COLUMNS",
                     "TABLES",
+                    "TYPES",
                     "VIEWS",
                     "SINKS",
                     "SOURCES",
@@ -2607,7 +2609,7 @@ impl Parser {
         if self.parse_one_of_keywords(&["COLUMNS", "FIELDS"]).is_some() {
             self.parse_show_columns(extended, full)
         } else if let Some(object_type) =
-            self.parse_one_of_keywords(&["SCHEMAS", "SOURCES", "VIEWS", "SINKS", "TABLES"])
+            self.parse_one_of_keywords(&["SCHEMAS", "SOURCES", "VIEWS", "SINKS", "TABLES", "TYPES"])
         {
             Ok(Statement::ShowObjects(ShowObjectsStatement {
                 object_type: match object_type {
@@ -2616,6 +2618,7 @@ impl Parser {
                     "VIEWS" => ObjectType::View,
                     "SINKS" => ObjectType::Sink,
                     "TABLES" => ObjectType::Table,
+                    "TYPES" => ObjectType::Type,
                     val => panic!(
                         "`parse_one_of_keywords` returned an impossible value: {}",
                         val

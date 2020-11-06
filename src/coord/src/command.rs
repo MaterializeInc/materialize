@@ -141,8 +141,10 @@ pub enum ExecuteResponse {
     DroppedView,
     /// The requested index was dropped.
     DroppedIndex,
-    /// The requested sink wqs dropped.
+    /// The requested sink was dropped.
     DroppedSink,
+    /// The requested type was dropped.
+    DroppedType,
     /// The provided query was empty.
     EmptyQuery,
     /// The specified number of rows were inserted into the requested table.

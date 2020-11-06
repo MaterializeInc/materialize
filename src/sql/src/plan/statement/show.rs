@@ -130,6 +130,7 @@ pub fn show_objects<'a>(
         ObjectType::Source => show_sources(scx, full, materialized, from, filter),
         ObjectType::View => show_views(scx, full, materialized, from, filter),
         ObjectType::Sink => show_sinks(scx, full, from, filter),
+        ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }
@@ -323,6 +324,55 @@ fn show_sinks<'a>(
     } else {
         format!(
             "SELECT name FROM mz_catalog.mz_sinks WHERE schema_id = {}",
+            schema_spec.id,
+        )
+    };
+    Ok(ShowSelect::new(scx, query, filter))
+}
+
+fn show_types<'a>(
+    scx: &'a StatementContext<'a>,
+    extended: bool,
+    full: bool,
+    from: Option<ObjectName>,
+    filter: Option<ShowStatementFilter>,
+) -> Result<ShowSelect<'a>, anyhow::Error> {
+    let schema_spec = if let Some(from) = from {
+        scx.resolve_schema(from)?.1
+    } else {
+        scx.resolve_default_schema()?
+    };
+
+    let query = if !full & !extended {
+        format!(
+            "SELECT name FROM mz_catalog.mz_map_types WHERE schema_id = {}",
+            schema_spec.id,
+        )
+    } else if full & !extended {
+        format!(
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
+            FROM mz_catalog.mz_map_types
+            WHERE schema_id = {}",
+            schema_spec.id,
+        )
+    } else if !full & extended {
+        format!(
+            "SELECT name
+            FROM mz_catalog.mz_map_types
+            WHERE schema_id = {}
+            UNION
+            SELECT name AS type
+            FROM mz_catalog.mz_builtin_types",
+            schema_spec.id,
+        )
+    } else {
+        format!(
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
+            FROM mz_catalog.mz_map_types
+            WHERE schema_id = {}
+            UNION
+            SELECT name, 'system'
+            FROM mz_catalog.mz_builtin_types",
             schema_spec.id,
         )
     };

@@ -659,6 +659,7 @@ where
             ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),
             ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
             ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
+            ExecuteResponse::DroppedType => command_complete!("DROP TYPE"),
             ExecuteResponse::EmptyQuery => {
                 self.conn.send(BackendMessage::EmptyQueryResponse).await?;
                 Ok(State::Ready)
