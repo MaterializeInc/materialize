@@ -65,6 +65,8 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
     if create_branch is not None:
         git.create_branch(create_branch)
 
+    confirm_on_latest_rc()
+
     change_line(BIN_CARGO_TOML, "version", f'version = "{version}"')
     change_line(
         LICENSE,
@@ -151,6 +153,19 @@ def confirm_version_is_next(version: str) -> None:
     else:
         click.confirm(
             f"The bump {latest_tag} -> {this_tag} is suspicious, are you sure?",
+            abort=True,
+        )
+
+
+def confirm_on_latest_rc() -> None:
+    tags = git.get_version_tags()
+    latest_tag = tags[0]
+    if not git.is_ancestor(f"v{latest_tag}", "HEAD"):
+        ancestor_tag = git.describe()
+        click.confirm(
+            f"You are about to create a release based on: {ancestor_tag}\n"
+            f"Which is not the latest prerelease:         v{latest_tag}\n"
+            "Are you sure?",
             abort=True,
         )
 
