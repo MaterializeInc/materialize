@@ -132,6 +132,14 @@ in the infrastructure repository. All of these tests can be run in parallel.
   $ bin/mkrelease --checkout ${tag}-rc1 $tag
   git push origin $tag
   ```
+- [ ] Incorporate this tag into `main`'s history as well:
+
+  ```
+  next=v<NEXT_VERSION>-dev
+  bin/mkrelease --no-tag -b continue-$next $next
+  ```
+
+  - [ ] Open a PR with that branch, and land it.
 
 ### Verify the Release Build and Deploy
 
