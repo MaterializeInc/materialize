@@ -47,19 +47,16 @@ production readiness.
   ```shell
   tag=v<VERSION>-rc<N>
   bin/mkrelease -b rel-$tag $tag
-  git push origin $tag
   ```
 
-- [ ] *After* you have pushed that tag, on `main`, do the same thing for the
-  dev version, without creating a tag:
+- [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
+
+  Without switching to `main`, perform:
 
   ```shell
   next=v<NEXT_VERSION>-dev
   bin/mkrelease --no-tag -b prepare-$next $next
   ```
-
-  This must be done after the tag has been pushed, or Git will delete the tag
-  that isn't on the server.
 
   - [ ] Open a PR with this change, and land it.
 
