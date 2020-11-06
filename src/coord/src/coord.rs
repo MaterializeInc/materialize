@@ -1166,11 +1166,13 @@ where
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn report_map_type_update(
         &mut self,
         id: GlobalId,
         name: &str,
         oid: u32,
+        schema_id: i64,
         key_id: GlobalId,
         value_id: GlobalId,
         diff: isize,
@@ -1181,6 +1183,7 @@ where
                 Row::pack(&[
                     Datum::String(&id.to_string()),
                     Datum::Int32(oid as i32),
+                    Datum::Int64(schema_id),
                     Datum::String(name),
                     Datum::String(&key_id.to_string()),
                     Datum::String(&value_id.to_string()),
@@ -1806,6 +1809,7 @@ where
             ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
+            ObjectType::Type => ExecuteResponse::DroppedType,
         })
     }
 
@@ -2440,7 +2444,7 @@ where
                             key_id, value_id, ..
                         }) => {
                             self.report_map_type_update(
-                                *id, &name.item, *oid, *key_id, *value_id, 1,
+                                *id, &name.item, *oid, *schema_id, *key_id, *value_id, 1,
                             )
                             .await;
                         }
@@ -2503,6 +2507,7 @@ where
                                 *id,
                                 &from_name.item,
                                 *oid,
+                                *schema_id,
                                 *key_id,
                                 *value_id,
                                 -1,
@@ -2512,6 +2517,7 @@ where
                                 *id,
                                 &to_name.item,
                                 *oid,
+                                *schema_id,
                                 *key_id,
                                 *value_id,
                                 1,
@@ -2643,6 +2649,7 @@ where
                                 entry.id(),
                                 &entry.name().item,
                                 entry.oid(),
+                                *schema_id,
                                 *key_id,
                                 *value_id,
                                 -1,

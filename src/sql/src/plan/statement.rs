@@ -1574,7 +1574,8 @@ fn handle_drop_objects(
         | ObjectType::Table
         | ObjectType::View
         | ObjectType::Index
-        | ObjectType::Sink => handle_drop_items(scx, object_type, if_exists, names, cascade),
+        | ObjectType::Sink
+        | ObjectType::Type => handle_drop_items(scx, object_type, if_exists, names, cascade),
     }
 }
 
@@ -1810,7 +1811,8 @@ impl PartialEq<ObjectType> for CatalogItemType {
             | (CatalogItemType::Table, ObjectType::Table)
             | (CatalogItemType::Sink, ObjectType::Sink)
             | (CatalogItemType::View, ObjectType::View)
-            | (CatalogItemType::Index, ObjectType::Index) => true,
+            | (CatalogItemType::Index, ObjectType::Index)
+            | (CatalogItemType::Type, ObjectType::Type) => true,
             (_, _) => false,
         }
     }

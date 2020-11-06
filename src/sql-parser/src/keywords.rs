@@ -476,6 +476,7 @@ define_keywords!(
     TRUNCATE,
     TYPE,
     TYPED,
+    TYPES,
     UESCAPE,
     UNBOUNDED,
     UNCOMMITTED,

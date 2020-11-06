@@ -9,16 +9,42 @@
 
 > SELECT * FROM mz_map_types;
 
-> CREATE TYPE bool AS MAP (key_type=text, value_type='int4');
+> SHOW TYPES
 
-> CREATE TYPE custom AS MAP (key_type='text', value_type=bool);
+> CREATE TYPE bool AS MAP (key_type=text, value_type='int4')
+
+> CREATE TYPE custom AS MAP (key_type='text', value_type=bool)
 
 # Without qualifiers, should default to builtin bool.
 > SELECT mz_internal.mz_classify_object_id(value_id) FROM mz_map_types WHERE name = 'custom'
 system
 
-> CREATE TYPE another_custom AS MAP (key_type='text', value_type=public.bool);
+> CREATE TYPE another_custom AS MAP (key_type='text', value_type=public.bool)
 
 # Qualified name should point to user-defined bool.
 > SELECT mz_internal.mz_classify_object_id(value_id) FROM mz_map_types WHERE name = 'another_custom'
 user
+
+> SHOW TYPES
+name
+----
+another_custom
+bool
+custom
+
+> SHOW FULL TYPES
+name             type
+----------------------
+bool             user
+custom           user
+another_custom   user
+
+! DROP TYPE bool
+cannot drop item pg_catalog.bool because it is required by the database system
+
+! DROP TYPE public.bool
+cannot drop materialize.public.bool: still depended upon by catalog item 'materialize.public.another_custom'
+
+> DROP TYPE another_custom
+
+> DROP TYPE public.bool

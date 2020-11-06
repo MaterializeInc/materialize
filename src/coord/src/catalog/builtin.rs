@@ -399,6 +399,7 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("key_id", ScalarType::String.nullable(false))
             .with_column("value_id", ScalarType::String.nullable(false)),
