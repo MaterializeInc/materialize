@@ -23,7 +23,7 @@ Flag | Default | Modifies
 [`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
 [`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file
-[`--workers`](#worker-threads) | REQ | Dataflow worker threads
+[`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
 [`-w`](#worker-threads) | REQ |  Dataflow worker threads
 `-v` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
@@ -51,6 +51,10 @@ distributed clusters, see
 
 {{< version-changed v0.4.0 >}}
 Rename the `--threads` flag to `--workers`.
+{{</ version-changed >}}
+
+{{< version-changed v0.5.1 >}}
+When unspecified, default to using half of the machine's physical cores.
 {{</ version-changed >}}
 
 #### How many worker threads should you run?

@@ -30,11 +30,23 @@ _timestamp&lowbar;expression_ | The logical time to tail from onwards (either a 
 
 `TAIL`'s output is the item's columns prepended with `timestamp` and `diff` columns.
 
-Field | Represents
-------|-----------
-`timestamp` | Materialize's internal logical timestamp. This is guaranteed to never decrease from any previous timestamp.
-`diff` | Whether the record is an insert (`1`), delete (`-1`), or update (delete for old value, followed by insert of new value).
+Field         | Type        | Represents
+--------------|-------------|-----------
+`timestamp`   | [`numeric`] | Materialize's internal logical timestamp. This is guaranteed to never decrease from any previous timestamp.
+`diff`        | [`bigint`]  | Whether the record is an insert (`1`), delete (`-1`), or update (delete for old value, followed by insert of new value).
 column values | The row's columns' values, each as its own column.
+
+{{< version-changed v0.5.1 >}}
+The timestamp and diff information moved to leading, well-typed columns.
+Previously the timestamp and diff information was encoded in a human-readable
+string in a trailing [`text`](/sql/types/text) column.
+{{</ version-changed >}}
+
+{{< version-changed v0.5.1 >}}
+`TAIL` sends rows to the client normally, i.e., as if they were sent by a
+[`SELECT`](/sql/select) statement. Previously `TAIL` was implicitly wrapped in
+a [`COPY TO`](/sql/copy-to) statement.
+{{</ version-changed >}}
 
 ### AS OF
 
@@ -106,3 +118,6 @@ This will then stream the same output we saw above to `stdout`, though you could
 obviously do whatever you like with the output from this point.
 
 If your driver does support unbuffered result streaming, then there is no need to use `COPY TO`.
+
+[`bigint`]: /sql/types/bigint
+[`numeric`]: /sql/types/numeric
