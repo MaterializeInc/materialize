@@ -57,7 +57,7 @@ SELECT LIST[[[[1], [2]]], [[[3]]]]
 {{{{1},{2}}},{{{3}}}}
 
 # List(Int) cannot be cast to List(List(Int))
-query error CAST does not support casting from i32 to i32 list
+query error CAST does not support casting from i32 list to i32 list list
 select LIST[1, null] :: INT LIST LIST
 
 query T
@@ -1086,6 +1086,82 @@ SELECT list_length_max((LIST[1]::INT LIST), -1)
 query error invalid dimension: -1; must use value within \[1, 1\]
 SELECT list_length_max((LIST[1]::INT LIST), LIST[-1][1])
 
+# 🔬🔬 list_prepend
+
+# 🔬🔬🔬 element + list
+
+query T
+SELECT list_prepend(1, LIST[2, 3])
+----
+{1,2,3}
+
+# 🔬🔬🔬 list + list list (element + list)
+
+query T
+SELECT list_prepend(LIST[1], LIST[[2], [3]])
+----
+{{1},{2},{3}}
+
+# 🔬🔬🔬 NULL elements
+
+# 🔬🔬🔬🔬 element + list
+
+query T
+SELECT list_prepend(NULL, LIST[1])
+----
+{NULL,1}
+
+query T
+SELECT list_prepend(NULL::INT, LIST[1])
+----
+{NULL,1}
+
+query T
+SELECT list_prepend(1, NULL::INT LIST)
+----
+{1}
+
+query T
+SELECT list_prepend(NULL::INT, NULL::INT LIST)
+----
+{NULL}
+
+# 🔬🔬🔬🔬 list + list list (element + list)
+
+query T
+SELECT list_prepend(NULL, LIST[[1]])
+----
+{NULL,{1}}
+
+query T
+SELECT list_prepend(LIST[1], NULL)
+----
+{{1}}
+
+query T
+SELECT list_prepend(NULL::INT LIST, NULL)
+----
+{NULL}
+
+query T
+SELECT list_prepend(NULL, NULL::INT LIST LIST)
+----
+{NULL}
+
+# 🔬🔬🔬 errors
+
+query error
+SELECT list_prepend(NULL, NULL)
+
+query error
+SELECT list_prepend('a', LIST[1])
+
+query error
+SELECT list_prepend(LIST[1], LIST[2])
+
+query error
+SELECT list_prepend(LIST[1], 1)
+
 # 🔬🔬 unnest
 
 query I rowsort
@@ -1160,7 +1236,7 @@ NULL
 query error invalid input syntax for int4: invalid digit found in string: "dog"
 SELECT LIST['1', 'dog']::int list
 
-query error CAST does not support casting from date to i32
+query error CAST does not support casting from date list to i32 list
 SELECT LIST[DATE '2008-02-01']::int list
 
 # 🔬🔬🔬 Multi-dimensional and jagged lists
@@ -1243,81 +1319,359 @@ SELECT length(LIST['1','2']::text)
 query error Cannot call function length\(string list\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT length(LIST['1','2'])
 
-# 🔬🔬 list_prepend
+# 🔬🔬 text to list
 
-# 🔬🔬🔬 element + list
+# 🔬🔬🔬 text to int list
 
-query T
-SELECT list_prepend(1, LIST[2, 3])
+query I
+SELECT * FROM unnest('{1,2,3}'::int list)
 ----
-{1,2,3}
+1
+2
+3
 
-# 🔬🔬🔬 list + list list (element + list)
-
-query T
-SELECT list_prepend(LIST[1], LIST[[2], [3]])
+query T rowsort
+SELECT * FROM unnest('{{1,2},{3}}'::int list list)
 ----
-{{1},{2},{3}}
+{1,2}
+{3}
 
-# 🔬🔬🔬 NULL elements
-
-# 🔬🔬🔬🔬 element + list
-
-query T
-SELECT list_prepend(NULL, LIST[1])
+query T rowsort
+SELECT * FROM unnest('{{{1},{2}},{{3}}}'::int list list list);
 ----
-{NULL,1}
+{{1},{2}}
+{{3}}
 
 query T
-SELECT list_prepend(NULL::INT, LIST[1])
+SELECT '{NULL}'::int list;
 ----
-{NULL,1}
+{NULL}
 
 query T
-SELECT list_prepend(1, NULL::INT LIST)
+SELECT '{}'::int list
+----
+{}
+
+# 🔬🔬🔬 text to text list
+
+query T
+SELECT '{"a"," b","c ", d,e }'::text list
+----
+{a," b","c ",d,e}
+
+query T
+SELECT '{{"a"," b","c "},{ d,e }}'::text list list
+----
+{{a," b","c "},{d,e}}
+
+# NULL-esque string handling
+query TI rowsort
+SELECT unnest, length(unnest) from  unnest('{NULL,nUlL,"NULL"}'::text list) ORDER BY length
+----
+NULL  4
+NULL  NULL
+NULL  NULL
+
+# Test some escape values
+query TI rowsort
+SELECT unnest, length(unnest) from  unnest('{"a,b","\\","a\\b\"c\\d\""}'::text list) ORDER BY length
+----
+\  1
+a,b  3
+a\b"c\d"  8
+
+query T
+SELECT '{NULL}'::text list;
+----
+{NULL}
+
+query T
+SELECT '{}'::text list
+----
+{}
+
+# 🔬🔬🔬🔬 Quote escapes
+
+# Preserves leading and trailing spaces within escape, but not outside of escape
+query T
+SELECT '{ " a " }'::text list
+----
+{" a "}
+
+# Escapes content
+query T
+SELECT '{"} \""}'::text list
+----
+{"} \""}
+
+query T
+SELECT '{"{a}"}'::text list
+----
+{"{a}"}
+
+query T
+SELECT '{"",""}'::text list
+----
+{"",""}
+
+# This demos that the double quotes from the input are actually stripped
+query TI
+SELECT unnest, length(unnest) FROM unnest('{"",""}'::text list);
+----
+(empty) 0
+(empty) 0
+
+# Mixture of escape and non-escaped elements
+query T
+SELECT '{"{",a}'::text list
+----
+{"{",a}
+
+# Escape gets reset after each element
+query T
+SELECT '{"{",\\}'::text list
+----
+{"{","\\"}
+
+# Elements within double quotes gets unescaped before being cast
+query T
+SELECT '{{a, "", "\""}, "{a, \"\", \"\\\"\"}"}'::text list list
+----
+{{a,"","\""},{a,"","\""}}
+
+# Unquoted elements cannot have special characters interleaved within them
+query error invalid input syntax for list: malformed list literal; must escape special character '"': "\{a"b"\}"
+SELECT '{a"b"}'::text list
+
+query error invalid input syntax for list: malformed list literal; must escape special character '\{': "\{a\{b\}"
+SELECT '{a{b}'::text list
+
+query error invalid input syntax for list: malformed array literal; contains 'b' after terminal '\}': "\{a\}b\}"
+SELECT '{a}b}'::text list
+
+# No non-whitespace characters after the escape
+query error invalid input syntax for list: expected ',' or '\}', got 'b': "\{"a"b\}"
+SELECT '{"a"b}'::text list
+
+query error invalid input syntax for list: expected ',' or '\}', got '"': "\{""""\}"
+SELECT '{""""}'::text list
+
+query error invalid input syntax for list: expected ',' or '\}', got '"': "\{"""\}"
+SELECT '{"""}'::text list
+
+# 🔬🔬🔬🔬 Unquoted escapes
+
+# Escapes work on special characters
+query T
+SELECT '{\{, \}, \", \,}'::text list
+----
+{"{","}","\"",","}
+
+# Preserves escaped white space
+query T
+SELECT '{\ a}'::text list
+----
+{" a"}
+
+query T
+SELECT '{a \ }'::text list
+----
+{"a  "}
+
+query T
+SELECT '{\ a \ }'::text list
+----
+{" a  "}
+
+query T
+SELECT '{a \ \ }'::text list
+----
+{"a   "}
+
+# list lists are only escaped once; if they were escaped at each level, they
+# would no longer escape leading or trailing whitespace
+query T
+SELECT '{{\ a}}'::text list list
+----
+{{" a"}}
+
+query T
+SELECT '{{a \ }}'::text list list
+----
+{{"a  "}}
+
+query T
+SELECT '{{\ a \ }}'::text list list
+----
+{{" a  "}}
+
+query T
+SELECT '{{a \ \ }}'::text list list
+----
+{{"a   "}}
+
+# Unescaped space is trimmed
+query T
+SELECT '{\ \ a     ,     b \  }'::text list
+----
+{"  a","b  "}
+
+query T
+SELECT '{     a \ \ , \ b     }'::text list
+----
+{"a   "," b"}
+
+query T
+SELECT '{a \ \     ,   \  b   }'::text list
+----
+{"a   ","  b"}
+
+query T
+SELECT '{ {     a \ }     }'::text list list
+----
+{{"a  "}}
+
+query T
+SELECT '{     {a \     } }'::text list list
+----
+{{"a  "}}
+
+query T
+SELECT '{     \ a}'::text list
+----
+{" a"}
+
+# Leading/trailing escaped special characters are honored
+query T
+SELECT '{\"a\"}'::text list
+----
+{"\"a\""}
+
+query T
+SELECT '{\{a\}}'::text list
+----
+{"{a}"}
+
+# Escaping backslashes works
+query T
+SELECT '{ \\\\a\\\\ }'::text list
+----
+{"\\\\a\\\\"}
+
+# Escaping a non-special character has no visible effect on the output; normal
+# whitespacing rules apply
+query T
+SELECT '{ \a }'::text list
+----
+{a}
+
+# Escaping a character in NULL turns it into the string "NULL"
+query T
+SELECT '{N\ULL}'::text list
+----
+{"NULL"}
+
+# Escaping terminal character means it isn't available to close the list
+query error invalid input syntax for list: unterminated element
+SELECT '{\}'::text list
+
+query error invalid input syntax for list: unexpected end of input
+SELECT '{{\}}'::text list list
+
+# 🔬🔬🔬 text to other lists
+
+query T
+SELECT '{1y 2d 3h, "4y 5d 6h"}'::interval list
+----
+{"1 year 2 days 03:00:00","4 years 5 days 06:00:00"}
+
+query T
+SELECT '{2001-02-03, "2004-05-06"}'::date list
+----
+{2001-02-03,2004-05-06}
+
+query T
+SELECT '{NULL}'::date list;
+----
+{NULL}
+
+# 🔬🔬🔬 misc. checks
+
+# Elements within double quotes have their double quotes before being cast to
+# their element type
+query T
+SELECT '{"1"}'::int list
 ----
 {1}
 
 query T
-SELECT list_prepend(NULL::INT, NULL::INT LIST)
+SELECT '{"1"}'::text list
 ----
-{NULL}
-
-# 🔬🔬🔬🔬 list + list list (element + list)
+{1}
 
 query T
-SELECT list_prepend(NULL, LIST[[1]])
+SELECT '{"{}"}'::int list list
 ----
-{NULL,{1}}
+{{}}
 
 query T
-SELECT list_prepend(LIST[1], NULL)
+SELECT '{"{}"}'::text list list
 ----
-{{1}}
+{{}}
+
+# Empty lists
+query T
+SELECT '{  }'::text list
+----
+{}
 
 query T
-SELECT list_prepend(NULL::INT LIST, NULL)
+SELECT '{ {   } }'::text list list
 ----
-{NULL}
-
-query T
-SELECT list_prepend(NULL, NULL::INT LIST LIST)
-----
-{NULL}
+{{}}
 
 # 🔬🔬🔬 errors
 
-query error
-SELECT list_prepend(NULL, NULL)
+# Empty string is invalid
+query error invalid input syntax for list: expected '\{', found empty string: ""
+SELECT ''::text list
 
-query error
-SELECT list_prepend('a', LIST[1])
+# Not a list
+query error invalid input syntax for list: expected '\{', found 1: "1"
+SELECT '1'::int list
 
-query error
-SELECT list_prepend(LIST[1], LIST[2])
+# Invalid element
+query error invalid input syntax for list: invalid input syntax for int4: invalid digit found in string: "a": "\{a\}"
+SELECT '{a}'::int list
 
-query error
-SELECT list_prepend(LIST[1], 1)
+# 'NULL' isn't a valid string for a list; just use unescaped NULL
+query error invalid input syntax for list: expected '\{', found N: "NULL"
+SELECT 'NULL'::int list
+
+# Too many leading brackets
+query error invalid input syntax for list: unescaped '\{' at beginning of element
+SELECT '{{1}}'::int list
+
+# Too many leading brackets
+query error invalid input syntax for list: unescaped '\{' at beginning of element
+SELECT '{{1}'::int list
+
+query error invalid input syntax for list: unexpected end of input: "\{\{1\}"
+SELECT '{{1}'::int list list
+
+# Too many following brackets
+query error invalid input syntax for list: malformed array literal; contains '\}' after terminal '\}': "\{1\}\}"
+SELECT '{1}}'::int list
+
+query error invalid input syntax for list: invalid input syntax for list: expected '\{', found 1: "1": "\{1\}\}"
+SELECT '{1}}'::int list list
+
+# Cannot have commas followed or preceded by empty elements
+query error invalid input syntax for list: malformed list literal; missing element: "\{a,  \}"
+SELECT '{a,  }'::text list
+
+query error invalid input syntax for list: malformed list literal; missing element: "\{  ,a\}"
+SELECT '{  ,a}'::text list
 
 # 🔬 Built-in operations
 

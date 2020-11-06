@@ -501,23 +501,26 @@ pub fn plan_coerce<'a>(
 }
 
 /// Plans a cast between from a [`ScalarType::List`]s to another.
-pub fn plan_cast_between_lists<D>(
-    caller_name: D,
+pub fn plan_cast_to_list(
     ecx: &ExprContext,
     ccx: CastContext,
     expr: ScalarExpr,
     from: &ScalarType,
     to: &ScalarType,
-) -> Result<ScalarExpr, anyhow::Error>
-where
-    D: fmt::Display,
-{
-    let from_element_typ = from.unwrap_list_element_type();
-    let to_element_typ = to.unwrap_list_element_type();
+) -> Result<ScalarExpr, anyhow::Error> {
+    assert!(matches!(to, ScalarType::List(..)));
 
-    if from_element_typ == to_element_typ {
+    if from == to {
         return Ok(expr);
     }
+
+    let from_element_typ = match from {
+        ScalarType::List(f) => *f.clone(),
+        ScalarType::String => ScalarType::String,
+        _ => bail!("invalid cast from {} to list", from),
+    };
+
+    let to_element_typ = to.unwrap_list_element_type();
 
     // Reconstruct an expression context where the expression is evaluated on
     // the "first column" of some imaginary row.
@@ -527,13 +530,13 @@ where
     let relation_type = RelationType {
         column_types: vec![ColumnType {
             nullable: true,
-            scalar_type: from_element_typ.clone(),
+            scalar_type: from_element_typ,
         }],
         keys: vec![vec![0]],
     };
     let ecx = ExprContext {
         qcx: &qcx,
-        name: "plan_cast_between_lists",
+        name: "plan_cast_to_list",
         scope: &Scope::empty(None),
         relation_type: &relation_type,
         allow_aggregates: false,
@@ -548,14 +551,24 @@ where
     // Determine the `ScalarExpr` required to cast our column to the target
     // element type. We'll need to call this on each element of the original
     // list to perform the cast.
-    let cast_expr = plan_cast(caller_name, &ecx, ccx, col_expr, to_element_typ)?;
+    let cast_expr = plan_cast("plan_cast_to_list", &ecx, ccx, col_expr, to_element_typ)?;
 
-    Ok(expr.call_unary(UnaryFunc::CastList1ToList2 {
-        return_ty: to.clone(),
-        cast_expr: Box::new(cast_expr
-            .lower_uncorrelated()
-            .expect("lower_uncorrelated should not fail given that there is no correlation in the input col_expr")
-        ),
+    let return_ty = to.clone();
+    let cast_expr = Box::new(cast_expr.lower_uncorrelated().expect(
+        "lower_uncorrelated should not fail given that there is no correlation \
+        in the input col_expr",
+    ));
+
+    Ok(expr.call_unary(match from {
+        ScalarType::List(..) => UnaryFunc::CastList1ToList2 {
+            return_ty,
+            cast_expr,
+        },
+        ScalarType::String => UnaryFunc::CastStringToList {
+            return_ty,
+            cast_expr,
+        },
+        _ => unreachable!("already prevented match on incompatible types in plan_cast_to_list"),
     }))
 }
 
@@ -578,26 +591,31 @@ pub fn plan_cast<'a, D>(
 where
     D: fmt::Display,
 {
-    match (ecx.scalar_type(&expr), cast_to) {
-        (ScalarType::List(t), ScalarType::List(_)) => {
-            plan_cast_between_lists(caller_name, ecx, ccx, expr, &ScalarType::List(t), cast_to)
+    let from_typ = ecx.scalar_type(&expr);
+    let cast_bail = || {
+        bail!(
+            "{} does not support {}casting from {} to {}",
+            caller_name,
+            if ccx == CastContext::Implicit {
+                "implicitly "
+            } else {
+                ""
+            },
+            from_typ,
+            &cast_to,
+        )
+    };
+
+    if let ScalarType::List(..) = cast_to {
+        match plan_cast_to_list(ecx, ccx, expr, &from_typ, &cast_to) {
+            Ok(e) => Ok(e),
+            Err(_) => cast_bail(),
         }
-        (from_typ, _) => {
-            let cast_op = match get_cast(ccx, &from_typ, cast_to) {
-                Some(cast_op) => cast_op,
-                None => bail!(
-                    "{} does not support {}casting from {} to {}",
-                    caller_name,
-                    if ccx == CastContext::Implicit {
-                        "implicitly "
-                    } else {
-                        ""
-                    },
-                    from_typ,
-                    cast_to
-                ),
-            };
-            (cast_op.0)(ecx, expr, cast_to)
-        }
+    } else {
+        let cast_op = match get_cast(ccx, &from_typ, cast_to) {
+            Some(cast_op) => cast_op,
+            None => return cast_bail(),
+        };
+        (cast_op.0)(ecx, expr, cast_to)
     }
 }

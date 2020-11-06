@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
@@ -347,6 +348,28 @@ fn cast_string_to_date<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     strconv::parse_date(a.unwrap_str())
         .map(Datum::Date)
         .err_into()
+}
+
+fn cast_string_to_list<'a>(
+    a: Datum<'a>,
+    list_typ: &ScalarType,
+    cast_expr: &'a ScalarExpr,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let parsed_datums = strconv::parse_list(
+        a.unwrap_str(),
+        matches!(list_typ.unwrap_list_element_type(), ScalarType::List(..)),
+        || Datum::Null,
+        |elem_text| {
+            let elem_text = match elem_text {
+                Cow::Owned(s) => temp_storage.push_string(s),
+                Cow::Borrowed(s) => s,
+            };
+            cast_expr.eval(&[Datum::String(elem_text)], temp_storage)
+        },
+    )?;
+
+    Ok(temp_storage.make_datum(|packer| packer.push_list(parsed_datums)))
 }
 
 fn cast_string_to_time<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -2364,6 +2387,13 @@ pub enum UnaryFunc {
     CastStringToFloat32,
     CastStringToFloat64,
     CastStringToDate,
+    CastStringToList {
+        // Target list's type
+        return_ty: ScalarType,
+        // The expression to cast the discovered list elements to the list's
+        // elements' type
+        cast_expr: Box<ScalarExpr>,
+    },
     CastStringToTime,
     CastStringToTimestamp,
     CastStringToTimestampTz,
@@ -2500,6 +2530,10 @@ impl UnaryFunc {
             UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
             UnaryFunc::CastStringToDecimal(scale) => cast_string_to_decimal(a, *scale),
             UnaryFunc::CastStringToDate => cast_string_to_date(a),
+            UnaryFunc::CastStringToList {
+                cast_expr,
+                return_ty,
+            } => cast_string_to_list(a, return_ty, &*cast_expr, temp_storage),
             UnaryFunc::CastStringToTime => cast_string_to_time(a),
             UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
             UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
@@ -2679,7 +2713,9 @@ impl UnaryFunc {
 
             CastUuidToString => ScalarType::String.nullable(true),
 
-            CastList1ToList2 { return_ty, .. } => (return_ty.clone()).nullable(false),
+            CastList1ToList2 { return_ty, .. } | CastStringToList { return_ty, .. } => {
+                (return_ty.clone()).nullable(false)
+            }
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),
@@ -2810,6 +2846,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
             UnaryFunc::CastStringToDecimal(_) => f.write_str("strtodec"),
             UnaryFunc::CastStringToDate => f.write_str("strtodate"),
+            UnaryFunc::CastStringToList { .. } => f.write_str("strtolist"),
             UnaryFunc::CastStringToTime => f.write_str("strtotime"),
             UnaryFunc::CastStringToTimestamp => f.write_str("strtots"),
             UnaryFunc::CastStringToTimestampTz => f.write_str("strtotstz"),
