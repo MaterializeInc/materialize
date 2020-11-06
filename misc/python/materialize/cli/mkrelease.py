@@ -60,12 +60,6 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
     the_tag = f"v{version}"
     confirm_version_is_next(version)
 
-    if git.is_dirty():
-        raise errors.MzConfigurationError(
-            "working directory is not clean, stash or commit your changes"
-        )
-        sys.exit(1)
-
     if checkout is not None:
         git.checkout(checkout)
     if create_branch is not None:
