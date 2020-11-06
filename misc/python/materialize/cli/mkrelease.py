@@ -135,19 +135,29 @@ def confirm_version_is_next(version: str) -> None:
     latest_tag = tags[0]
     this_tag = semver.VersionInfo.parse(version)
     if this_tag.minor == latest_tag.minor:
-        if this_tag.patch != latest_tag.patch + 1:
-            # The only time this is okay is if it's an rc bump
-            if (
-                this_tag.patch == latest_tag.patch
-                and this_tag.prerelease is not None
-                and latest_tag.prerelease is not None
-            ):
-                pass
-            elif this_tag.prerelease is None and latest_tag.prerelease is not None:
-                say("Congratulations on the successful release!")
-            else:
-                say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
-                sys.exit(1)
+        if (
+            this_tag.patch == latest_tag.patch
+            and this_tag.prerelease is not None
+            and latest_tag.prerelease is not None
+        ):
+            # rc bump
+            pass
+        elif (
+            this_tag.patch == latest_tag.patch + 1
+            and this_tag.prerelease is not None
+            and latest_tag.prerelease is None
+        ):
+            # first rc
+            pass
+        elif (
+            this_tag.patch == latest_tag.patch
+            and this_tag.prerelease is None
+            and latest_tag.prerelease is not None
+        ):
+            say("Congratulations on the successful release!")
+        else:
+            say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
+            sys.exit(1)
     elif this_tag.minor == latest_tag.minor + 1 and this_tag.patch == 0:
         click.confirm("Are you sure you want to bump the minor version?", abort=True)
     else:
