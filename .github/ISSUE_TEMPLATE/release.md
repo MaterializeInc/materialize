@@ -145,7 +145,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 - [ ] Find your build in buildkite, for example
   https://buildkite.com/materialize/tests/builds?branch=v0.4.3
-- [ ] Wait for the completion of the "Deploy" step
+- [ ] Wait for the completion of the "Deploy", your tag will be listed as the branch at:
+  https://buildkite.com/materialize/deploy/builds
+
+  **NOTE:** the deploy step will appear green in the "tests" page before it is actually run,
+  because the tests only mark that the async job got kicked off, so check that second link.
 
 ### Create Homebrew bottle and update tap
 
