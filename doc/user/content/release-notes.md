@@ -54,19 +54,44 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.5.1 %}}
 
-- Default to using a worker thread count equal to half of the machine's
-  physical cores if [`--workers`](/cli/#worker-threads) is not specified.
-- [`TAIL`](/sql/tail) now sends rows instead of being implemented as a
-  `COPY TO` operation. It has gained `timestamp` and `diff` columns.
+- Send the rows returned by the [`TAIL`](/sql/tail) statement to the client
+  normally (i.e., as if the rows were returned by a [`SELECT`](/sql/select)
+  statement) rather than via the PostgreSQL [`COPY` protocol][pg-copy]. The new
+  format additionally moves the timestamp and diff information to dedicated
+  `timestamp` and `diff` columns at the beginning of each row.
   **Backwards-incompatible change.**
-- [`COPY TO`](/sql/copy-to) has been added to
-  allow any query to send data via the [Postgres
-  COPY](https://www.postgresql.org/docs/current/sql-copy.html)
-  protocol. This can be used to replace the old `TAIL` behavior.
 
-- Add the `regexp_match` function to search a string with a regular expression.
+  To replicate the old behavior of sending `TAIL` results via the `COPY`
+  protocol, explicitly wrap the `TAIL` statement in a [`COPY TO`](/sql/copy-to)
+  statement:
 
-- Allow adding keys to [Kafka sinks](/sql/create-sink).
+  ```
+  COPY (TAIL some_materialized_view) TO STDOUT
+  ```
+
+- Add the [`COPY TO`](/sql/copy-to) statement, which sends the results of
+  the statement it wraps via the special PostgreSQL [`COPY` protocol][pg-copy].
+
+- When creating a Kafka sink, permit specifying the columns to include in the
+  key of each record via the new `KEY` connector option in [`CREATE
+  SINK`](/sql/create-sink/#kafka-connector).
+
+- Default to using a worker thread count equal to half of the machine's
+  physical cores if the [`--workers`](/cli/#worker-threads) command-line
+  option is not specified.
+
+- Add the [`regexp_match`](/sql/functions#string-func) function to search a
+  string for a match against a regular expression.
+
+- Support [`SELECT DISTINCT ON (...)`](/sql/select/#syntax) to deduplicate the
+  output of a query based on only the specified columns in each row.
+  Prior to this release, the [`SELECT`](/sql/select) documentation incorrectly
+  claimed support for this feature.
+
+- Reduce memory usage in:
+  - Queries involving `min` and `max` aggregations {{% gh 4523 %}}.
+  - Indexes containing `text` or `bytea` data, especially when each
+    individual string or byte array is short {{% gh 4646 %}}.
 
 {{% version-header v0.5.0 %}}
 
@@ -669,6 +694,7 @@ Wrap your release notes at the 80 character mark.
 * [What is Materialize?](/overview/what-is-materialize/)
 * [Architecture overview](/overview/architecture/)
 
+[`bytea`]: /sql/types/bytea
 [`CREATE MATERIALIZED VIEW`]: /sql/create-materialized-view
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE VIEW`]: /sql/create-view
@@ -679,4 +705,5 @@ Wrap your release notes at the 80 character mark.
 [`text`]: /sql/types/text
 [`timestamp`]: /sql/types/timestamp
 [`timestamptz`]: /sql/types/timestamptz
+[pg-copy]: https://www.postgresql.org/docs/current/sql-copy.html
 [PgJDBC]: https://jdbc.postgresql.org
