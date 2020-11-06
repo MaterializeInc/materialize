@@ -29,7 +29,7 @@ create_sink ::=
    'CREATE SINK' 'IF NOT EXISTS'? sink_name
    'FROM' item_name
    'INTO' (
-    kafka_connector |
+    sink_kafka_connector |
    'AVRO OCF' path-prefix
    )
    ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
@@ -191,10 +191,11 @@ join_expr ::=
 	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' | 'ON' expression ) select_post
 join_type ::=
     ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' | )
-kafka_connector ::=
+sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
     'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url
+    ('KEY' '(' key_column ( ',' key_column )* ')')?
 lit_cast ::=
   type val
 op_cast ::=

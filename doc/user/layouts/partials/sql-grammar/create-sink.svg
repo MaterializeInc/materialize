@@ -39,9 +39,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="187" y="119">INTO</text>
-   <rect x="271" y="101" width="122" height="32"/>
-   <rect x="269" y="99" width="122" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="279" y="119">kafka_connector</text>
+   <rect x="271" y="101" width="154" height="32"/>
+   <rect x="269" y="99" width="154" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="279" y="119">sink_kafka_connector</text>
    <rect x="271" y="145" width="92" height="32" rx="10"/>
    <rect x="269"
          y="143"
@@ -81,7 +81,7 @@
    <rect x="347" y="229" width="158" height="32" class="nonterminal"/>
    <text class="nonterminal" x="357" y="249">timestamp_expression</text>
    <path class="line"
-         d="m19 17 h2 m0 0 h10 m112 0 h10 m20 0 h10 m0 0 h128 m-158 0 h20 m138 0 h20 m-178 0 q10 0 10 10 m158 0 q0 -10 10 -10 m-168 10 v12 m158 0 v-12 m-158 12 q0 10 10 10 m138 0 q10 0 10 -10 m-148 10 h10 m118 0 h10 m20 -32 h10 m86 0 h10 m0 0 h10 m60 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-482 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m88 0 h10 m0 0 h10 m52 0 h10 m20 0 h10 m122 0 h10 m0 0 h76 m-238 0 h20 m218 0 h20 m-258 0 q10 0 10 10 m238 0 q0 -10 10 -10 m-248 10 v24 m238 0 v-24 m-238 24 q0 10 10 10 m218 0 q10 0 10 -10 m-228 10 h10 m92 0 h10 m0 0 h10 m86 0 h10 m22 -44 l2 0 m2 0 l2 0 m2 0 l2 0 m-508 98 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h174 m-204 0 h20 m184 0 h20 m-224 0 q10 0 10 10 m204 0 q0 -10 10 -10 m-214 10 v12 m204 0 v-12 m-204 12 q0 10 10 10 m184 0 q10 0 10 -10 m-194 10 h10 m136 0 h10 m0 0 h28 m-194 -10 v20 m204 0 v-20 m-204 20 v24 m204 0 v-24 m-204 24 q0 10 10 10 m184 0 q10 0 10 -10 m-194 10 h10 m164 0 h10 m40 -76 h10 m0 0 h248 m-278 0 h20 m258 0 h20 m-298 0 q10 0 10 10 m278 0 q0 -10 10 -10 m-288 10 v12 m278 0 v-12 m-278 12 q0 10 10 10 m258 0 q10 0 10 -10 m-268 10 h10 m60 0 h10 m0 0 h10 m158 0 h10 m23 -32 h-3"/>
+         d="m19 17 h2 m0 0 h10 m112 0 h10 m20 0 h10 m0 0 h128 m-158 0 h20 m138 0 h20 m-178 0 q10 0 10 10 m158 0 q0 -10 10 -10 m-168 10 v12 m158 0 v-12 m-158 12 q0 10 10 10 m138 0 q10 0 10 -10 m-148 10 h10 m118 0 h10 m20 -32 h10 m86 0 h10 m0 0 h10 m60 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-482 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m88 0 h10 m0 0 h10 m52 0 h10 m20 0 h10 m154 0 h10 m0 0 h44 m-238 0 h20 m218 0 h20 m-258 0 q10 0 10 10 m238 0 q0 -10 10 -10 m-248 10 v24 m238 0 v-24 m-238 24 q0 10 10 10 m218 0 q10 0 10 -10 m-228 10 h10 m92 0 h10 m0 0 h10 m86 0 h10 m22 -44 l2 0 m2 0 l2 0 m2 0 l2 0 m-508 98 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h174 m-204 0 h20 m184 0 h20 m-224 0 q10 0 10 10 m204 0 q0 -10 10 -10 m-214 10 v12 m204 0 v-12 m-204 12 q0 10 10 10 m184 0 q10 0 10 -10 m-194 10 h10 m136 0 h10 m0 0 h28 m-194 -10 v20 m204 0 v-20 m-204 20 v24 m204 0 v-24 m-204 24 q0 10 10 10 m184 0 q10 0 10 -10 m-194 10 h10 m164 0 h10 m40 -76 h10 m0 0 h248 m-278 0 h20 m258 0 h20 m-298 0 q10 0 10 10 m278 0 q0 -10 10 -10 m-288 10 v12 m278 0 v-12 m-278 12 q0 10 10 10 m258 0 q10 0 10 -10 m-268 10 h10 m60 0 h10 m0 0 h10 m158 0 h10 m23 -32 h-3"/>
    <polygon points="545 213 553 209 553 217"/>
    <polygon points="545 213 537 209 537 217"/>
 </svg>
