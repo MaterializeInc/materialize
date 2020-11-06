@@ -816,7 +816,7 @@ submit a PR to fix it!
 [google-guide]: https://google.github.io/eng-practices/review/
 [imperative]: https://en.wikipedia.org/wiki/Imperative_mood
 [pr-phrasings]: https://docs.github.com/en/github/managing-your-work-on-github/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword
-[release notes]: https://materialize.io/docs/release-notes/
+[release notes]: https://materialize.com/docs/release-notes/
 [reqwest]: https://github.com/seanmonstar/reqwest
 [rust-rdkafka]: https://github.com/fede1024/rust-rdkafka
 [rust-prometheus]: https://github.com/MaterializeInc/rust-prometheus

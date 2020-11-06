@@ -174,10 +174,10 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - Use the following contents as the description, updating the version
     number appropriately:
     ```markdown
-    * [Release notes](https://materialize.io/docs/release-notes/#v0.#.#)
-    * [Binary tarballs](https://materialize.io/docs/versions/)
-    * [Installation instructions](https://materialize.io/docs/install/)
-    * [Documentation](https://materialize.io/docs/)
+    * [Release notes](https://materialize.com/docs/release-notes/#v0.#.#)
+    * [Binary tarballs](https://materialize.com/docs/versions/)
+    * [Installation instructions](https://materialize.com/docs/install/)
+    * [Documentation](https://materialize.com/docs/)
     ```
 
 ### Update the main branch for the next version

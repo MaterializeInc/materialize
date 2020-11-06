@@ -209,9 +209,9 @@ See the [symbiosis crate documentation](https://mtrlz.dev/api/symbiosis) for
 more details.
 
 **Note:** As of August 2020, we're laying the groundwork to phase out symbiosis
-mode with [tables](https://materialize.io/docs/sql/create-table). But we're
+mode with [tables](https://materialize.com/docs/sql/create-table). But we're
 stuck with symbiosis mode until tables support `UPDATE` and `DELETE`—at the time
-of writing they only support [`INSERT`](https://materialize.io/docs/sql/insert).
+of writing they only support [`INSERT`](https://materialize.com/docs/sql/insert).
 
 ## Web UI
 

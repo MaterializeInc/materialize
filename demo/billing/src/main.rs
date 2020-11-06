@@ -14,7 +14,7 @@
 //! a Kafka topic and a local file, and perform time based aggregates.
 //!
 //! Further details can be found on the Materialize docs:
-//! <https://materialize.io/docs/demos/microservice/>
+//! <https://materialize.com/docs/demos/microservice/>
 
 #![deny(missing_debug_implementations, missing_docs)]
 

@@ -67,7 +67,7 @@ pub const BUILD_SHA: &str = run_command_str!(
         git rev-parse --verify HEAD 2>/dev/null || {
             printf "error: unable to determine Git SHA; " >&2
             printf "either build from working Git clone " >&2
-            printf "(see https://materialize.io/docs/install/#build-from-source), " >&2
+            printf "(see https://materialize.com/docs/install/#build-from-source), " >&2
             printf "or specify SHA manually by setting MZ_DEV_BUILD_SHA environment variable" >&2
             exit 1
         }
