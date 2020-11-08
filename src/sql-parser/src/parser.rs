@@ -1318,7 +1318,7 @@ impl Parser {
             // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
             // accept `WITH (...)` here.
             let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-                self.parse_with_options()?
+                self.parse_opt_with_sql_options()?
             } else {
                 vec![]
             };
@@ -1383,7 +1383,7 @@ impl Parser {
         let col_names = self.parse_parenthesized_column_list(Optional)?;
         self.expect_keyword(FROM)?;
         let connector = self.parse_connector()?;
-        let with_options = self.parse_with_options()?;
+        let with_options = self.parse_opt_with_sql_options()?;
         let format = if self.parse_keyword(FORMAT) {
             Some(self.parse_format()?)
         } else {
@@ -1419,7 +1419,7 @@ impl Parser {
             if let Some(Token::LParen) = self.next_token() {
                 self.prev_token();
                 self.prev_token();
-                with_options = self.parse_with_options()?;
+                with_options = self.parse_opt_with_sql_options()?;
             }
         }
         let format = if self.parse_keyword(FORMAT) {
@@ -1501,7 +1501,7 @@ impl Parser {
         // ANSI SQL and Postgres support RECURSIVE here, but we don't support it either.
         let name = self.parse_object_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
-        let with_options = self.parse_with_options()?;
+        let with_options = self.parse_opt_with_sql_options()?;
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
         // Optional `WITH [ CASCADED | LOCAL ] CHECK OPTION` is widely supported here.
@@ -1640,7 +1640,7 @@ impl Parser {
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns()?;
-        let with_options = self.parse_with_options()?;
+        let with_options = self.parse_opt_with_sql_options()?;
 
         Ok(Statement::CreateTable(CreateTableStatement {
             name: table_name,
@@ -1794,7 +1794,7 @@ impl Parser {
         }
     }
 
-    fn parse_with_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+    fn parse_opt_with_sql_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
         if self.parse_keyword(WITH) {
             self.parse_options()
         } else {
@@ -1824,6 +1824,49 @@ impl Parser {
             }
         };
         Ok(option)
+    }
+
+    fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption>, ParserError> {
+        if self.parse_keyword(WITH) {
+            self.parse_with_options(true)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    fn parse_with_options(&mut self, require_equals: bool) -> Result<Vec<WithOption>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let options =
+            self.parse_comma_separated(|parser| parser.parse_with_option(require_equals))?;
+        self.expect_token(&Token::RParen)?;
+        Ok(options)
+    }
+
+    /// If require_equals is true, parse options of the form `KEY = VALUE` or just
+    /// `KEY`. If require_equals is false, additionally support `KEY VALUE` (but still the others).
+    fn parse_with_option(&mut self, require_equals: bool) -> Result<WithOption, ParserError> {
+        let key = self.parse_identifier()?;
+        let has_eq = self.consume_token(&Token::Eq);
+        // No = was encountered and require_equals is false, so the next token might be
+        // a value and might not. The only valid things that indicate no value would
+        // be `)` for end-of-options or `,` for another-option. Either of those means
+        // there's no value, anything else means we expect a valid value.
+        let has_value = !matches!(self.peek_token(), Some(Token::RParen) | Some(Token::Comma));
+        if has_value && !has_eq && require_equals {
+            return self.expected(self.peek_range(), Token::Eq.name(), self.peek_token());
+        }
+        let value = if has_value {
+            if let Some(value) = self.maybe_parse(Parser::parse_value) {
+                Some(WithOptionValue::Value(value))
+            } else if let Some(object_name) = self.maybe_parse(Parser::parse_object_name) {
+                Some(WithOptionValue::ObjectName(object_name))
+            } else {
+                return self.expected(self.peek_range(), "option value", self.peek_token());
+            }
+        } else {
+            None
+        };
+        Ok(WithOption { key, value })
     }
 
     fn parse_alter(&mut self) -> Result<Statement, ParserError> {
@@ -1916,7 +1959,9 @@ impl Parser {
             _ => unreachable!(),
         };
         let mut options = vec![];
-        // WITH must be followed by LParen.
+        // WITH must be followed by LParen. The WITH in COPY is optional for backward
+        // compat with Postgres but is required elsewhere, which is why we don't use
+        // parse_with_options here.
         let has_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
             true
@@ -1924,8 +1969,8 @@ impl Parser {
             self.consume_token(&Token::LParen)
         };
         if has_options {
-            options = self.parse_comma_separated(Parser::parse_copy_option)?;
-            self.expect_token(&Token::RParen)?;
+            self.prev_token();
+            options = self.parse_with_options(false)?;
         }
         Ok(Statement::Copy(CopyStatement {
             relation,
@@ -1933,16 +1978,6 @@ impl Parser {
             target,
             options,
         }))
-    }
-
-    fn parse_copy_option(&mut self) -> Result<CopyOption, ParserError> {
-        Ok(match self.expect_one_of_keywords(&[FORMAT])? {
-            FORMAT => {
-                let format = self.expect_one_of_keywords(&[CSV, TEXT, BINARY])?;
-                CopyOption::Format(format.to_string())
-            }
-            _ => unreachable!(),
-        })
     }
 
     /// Parse a literal value (numbers, strings, date/time, booleans)
@@ -3112,22 +3147,11 @@ impl Parser {
 
     fn parse_tail(&mut self) -> Result<Statement, ParserError> {
         let name = self.parse_object_name()?;
-
-        let with_snapshot = if self.parse_keyword(WITH) {
-            self.expect_keyword(SNAPSHOT)?;
-            true
-        } else if self.parse_keyword(WITHOUT) {
-            self.expect_keyword(SNAPSHOT)?;
-            false
-        } else {
-            // If neither WITH nor WITHOUT SNAPSHOT is provided,
-            // default to WITH SNAPSHOT.
-            true
-        };
+        let options = self.parse_opt_with_options()?;
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::Tail(TailStatement {
             name,
-            with_snapshot,
+            options,
             as_of,
         }))
     }

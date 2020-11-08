@@ -9,6 +9,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::convert::TryFrom;
 use std::fmt;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -33,15 +34,16 @@ use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
+use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Connector, CopyDirection, CopyOption, CopyRelation, CopyStatement, CopyTarget,
+    ColumnOption, Connector, CopyDirection, CopyRelation, CopyStatement, CopyTarget,
     CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement, CreateSchemaStatement,
     CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
     DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
     Format, Ident, IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query,
     SelectStatement, SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption,
-    Statement, TailStatement, Value,
+    Statement, TailStatement, Value, WithOption, WithOptionValue,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -358,21 +360,22 @@ fn handle_tail(
     scx: &StatementContext,
     TailStatement {
         name,
+        options,
         as_of,
-        with_snapshot,
     }: TailStatement,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
     let from = scx.resolve_item(name)?;
     let entry = scx.catalog.get_item(&from);
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
+    let options = TailOptions::try_from(options)?;
 
     match entry.item_type() {
         CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
             Ok(Plan::Tail {
                 id: entry.id(),
                 ts,
-                with_snapshot,
+                with_snapshot: options.snapshot.unwrap_or(true),
                 copy_to,
             })
         }
@@ -393,19 +396,17 @@ fn handle_copy(
         options,
     }: CopyStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let mut format = CopyFormat::Text;
-    for opt in options {
-        match opt {
-            CopyOption::Format(fmt) => {
-                format = match fmt.to_lowercase().as_str() {
-                    "text" => CopyFormat::Text,
-                    "csv" => CopyFormat::Csv,
-                    "binary" => CopyFormat::Binary,
-                    _ => bail!("unknown FORMAT: {}", fmt),
-                };
-            }
+    let options = CopyOptions::try_from(options)?;
+    let format = if let Some(format) = options.format {
+        match format.to_lowercase().as_str() {
+            "text" => CopyFormat::Text,
+            "csv" => CopyFormat::Csv,
+            "binary" => CopyFormat::Binary,
+            _ => bail!("unknown FORMAT: {}", format),
         }
-    }
+    } else {
+        CopyFormat::Text
+    };
     match (&direction, &target) {
         (CopyDirection::To, CopyTarget::Stdout) => match relation {
             CopyRelation::Table { .. } => bail!("table with COPY TO unsupported"),
@@ -1936,3 +1937,76 @@ impl<'a> StatementContext<'a> {
         Ok(out)
     }
 }
+
+macro_rules! with_option_type {
+    ($name:ident, String) => {
+        if let Some(WithOptionValue::Value(Value::String(value))) = $name {
+            value
+        } else if let Some(WithOptionValue::ObjectName(name)) = $name {
+            name.to_ast_string()
+        } else {
+            bail!("expected String");
+        }
+    };
+    ($name:ident, bool) => {
+        if let Some(WithOptionValue::Value(Value::Boolean(value))) = $name {
+            value
+        } else if $name.is_none() {
+            // Bools, if they have no '= value', are true.
+            true
+        } else {
+            bail!("expected bool");
+        }
+    };
+}
+
+/// This macro accepts a struct definition and will generate it and a `try_from`
+/// method that takes a `Vec<WithOption>` which will extract and type check
+/// options based on the struct field names and types. Field names must match
+/// exactly the lowercased option name. Supported types are:
+///
+/// - `String`: expects a SQL string (`WITH (name = "value")`) or identifier
+///   (`WITH (name = text)`).
+/// - `bool`: expects either a SQL bool (`WITH (name = true)`) or a valueless
+///   option which will be interpreted as true: (`WITH (name)`.
+macro_rules! with_options {
+  (struct $name:ident {
+        $($field_name:ident: $field_type:ident,)*
+    }) => {
+        struct $name {
+            $($field_name: Option<$field_type>,)*
+        }
+
+        impl TryFrom<Vec<WithOption>> for $name {
+            type Error = anyhow::Error;
+
+            fn try_from(mut options: Vec<WithOption>) -> Result<Self, Self::Error> {
+                let v = Self {
+                    $($field_name: {
+                        match options.iter().position(|opt| opt.key.as_str() == stringify!($field_name)) {
+                            None => None,
+                            Some(pos) => {
+                                let value: Option<WithOptionValue> = options.swap_remove(pos).value;
+                                let value: $field_type = with_option_type!(value, $field_type);
+                                Some(value)
+                            },
+                        }
+                    },
+                    )*
+                };
+                if !options.is_empty() {
+                    bail!("unexpected options");
+                }
+                Ok(v)
+            }
+        }
+    }
+}
+
+with_options! { struct CopyOptions {
+    format: String,
+} }
+
+with_options! { struct TailOptions {
+    snapshot: bool,
+} }
