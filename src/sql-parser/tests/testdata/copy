@@ -44,16 +44,16 @@ Copy(CopyStatement { relation: Table { name: ObjectName([Ident("t")]), columns: 
 parse-statement
 COPY t TO STDOUT WITH (FORMAT TEXT)
 ----
-COPY t TO STDOUT WITH (FORMAT TEXT)
+COPY t TO STDOUT WITH (format = text)
 =>
-Copy(CopyStatement { relation: Table { name: ObjectName([Ident("t")]), columns: [] }, direction: To, target: Stdout, options: [Format("TEXT")] })
+Copy(CopyStatement { relation: Table { name: ObjectName([Ident("t")]), columns: [] }, direction: To, target: Stdout, options: [WithOption { key: Ident("format"), value: Some(ObjectName(ObjectName([Ident("text")]))) }] })
 
 parse-statement
-COPY t TO STDOUT (FORMAT text)
+COPY t TO STDOUT (format = text)
 ----
-COPY t TO STDOUT WITH (FORMAT TEXT)
+COPY t TO STDOUT WITH (format = text)
 =>
-Copy(CopyStatement { relation: Table { name: ObjectName([Ident("t")]), columns: [] }, direction: To, target: Stdout, options: [Format("TEXT")] })
+Copy(CopyStatement { relation: Table { name: ObjectName([Ident("t")]), columns: [] }, direction: To, target: Stdout, options: [WithOption { key: Ident("format"), value: Some(ObjectName(ObjectName([Ident("text")]))) }] })
 
 parse-statement
 COPY t TO STDOUT ()
@@ -62,7 +62,7 @@ error:
 Parse error:
 COPY t TO STDOUT ()
                   ^
-Expected one of FORMAT, found right parenthesis
+Expected identifier, found right parenthesis
 
 parse-statement
 COPY t TO STDIN
