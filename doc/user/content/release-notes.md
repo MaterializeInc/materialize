@@ -51,6 +51,8 @@ Wrap your release notes at the 80 character mark.
 - Support the [`pg_typeof` function](/sql/functions#postgresql-compatibility-func).
 - [`COPY TO`](/sql/copy-to) now supports `FORMAT binary`.
 - [`TAIL`](/sql/tail) is now guaranteed to produce output ordered by timestamp.
+- Syntax for [`TAIL`](/sql/tail) has changed. `WITH SNAPSHOT` is now
+  `WITH (SNAPSHOT)`. `WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
 
 {{% version-header v0.5.1 %}}
 
