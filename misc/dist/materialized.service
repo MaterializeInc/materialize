@@ -17,3 +17,6 @@ User=_Materialize
 Group=_Materialize
 
 ExecStart=/usr/bin/materialized -D /var/lib/materialize/mzdata -w 1
+
+[Install]
+WantedBy=multi-user.target
