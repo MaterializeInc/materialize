@@ -121,6 +121,11 @@ def first_remote_matching(pattern: str) -> Optional[str]:
     return None
 
 
+def describe() -> str:
+    """Describe the relationship between the current commit and the most recent tag"""
+    return spawn.capture(["git", "describe"], unicode=True).strip()
+
+
 # Work tree mutation
 
 
