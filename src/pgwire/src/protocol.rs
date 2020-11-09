@@ -9,11 +9,13 @@
 
 use std::cmp;
 use std::convert::TryFrom;
+use std::future::Future;
 use std::iter;
+use std::mem;
 use std::time::Instant;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::stream::StreamExt;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::debug;
@@ -22,11 +24,12 @@ use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
 
-use coord::{ExecuteResponse, StartupMessage};
-use dataflow_types::{PeekResponse, Update};
+use coord::{session::RowBatchStream, ExecuteResponse, StartupMessage};
+use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
-use repr::{Datum, RelationDesc, Row, RowArena};
+use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::Statement;
+use sql::plan::CopyFormat;
 
 use crate::codec::FramedConn;
 use crate::message::{
@@ -84,25 +87,31 @@ pub struct StateMachine<A> {
 
 impl<A> StateMachine<A>
 where
-    A: AsyncRead + AsyncWrite + Unpin,
+    A: AsyncRead + AsyncWrite + Send + Unpin,
 {
-    pub async fn run(
+    // Manually desugar this (don't use `async fn run`) here because a much better
+    // error message is produced if there are problems with Send or other traits
+    // somewhere within the Future.
+    #[allow(clippy::manual_async_fn)]
+    pub fn run(
         mut self,
         version: i32,
         params: Vec<(String, String)>,
-    ) -> Result<(), comm::Error> {
-        let mut state = self.startup(version, params).await?;
+    ) -> impl Future<Output = Result<(), comm::Error>> + Send {
+        async move {
+            let mut state = self.startup(version, params).await?;
 
-        loop {
-            state = match state {
-                State::Ready => self.advance_ready().await?,
-                State::Drain => self.advance_drain().await?,
-                State::Done => break,
+            loop {
+                state = match state {
+                    State::Ready => self.advance_ready().await?,
+                    State::Drain => self.advance_drain().await?,
+                    State::Done => break,
+                }
             }
-        }
 
-        self.coord_client.terminate().await;
-        Ok(())
+            self.coord_client.terminate().await;
+            Ok(())
+        }
     }
 
     async fn advance_ready(&mut self) -> Result<State, comm::Error> {
@@ -192,7 +201,7 @@ where
         }
 
         for (name, value) in params {
-            let _ = self.coord_client.session().set(&name, &value);
+            let _ = self.coord_client.session().vars_mut().set(&name, &value);
         }
 
         let notices: Vec<_> = match self.coord_client.startup().await {
@@ -204,7 +213,7 @@ where
                         code: SqlState::SUCCESSFUL_COMPLETION,
                         message: format!(
                             "session database '{}' does not exist",
-                            self.coord_client.session().database()
+                            self.coord_client.session().vars().database()
                         ),
                         detail: None,
                         hint: Some(
@@ -227,8 +236,8 @@ where
         messages.extend(
             self.coord_client
                 .session()
-                .notify_vars()
-                .iter()
+                .vars()
+                .notify_set()
                 .map(|v| BackendMessage::ParameterStatus(v.name(), v.value())),
         );
         messages.push(BackendMessage::BackendKeyData {
@@ -267,7 +276,8 @@ where
                 .await;
         }
 
-        let row_desc = stmt.desc().cloned();
+        let send_desc = stmt.desc().relation_desc();
+        let relation_desc = stmt.desc().relation_desc.clone();
 
         // Bind.
         let portal_name = String::from("");
@@ -284,10 +294,10 @@ where
             .expect("unnamed statement to be present during simple query flow");
 
         // Maybe send row description.
-        if let Some(desc) = &row_desc {
+        if let Some(ref desc) = send_desc {
             self.conn
                 .send(BackendMessage::RowDescription(
-                    message::row_description_from_desc(&desc),
+                    message::row_description_from_desc(desc),
                 ))
                 .await?;
         }
@@ -296,7 +306,7 @@ where
         match self.coord_client.execute(portal_name.clone()).await {
             Ok(response) => {
                 let max_rows = usize::MAX;
-                self.send_execute_response(response, row_desc, portal_name, max_rows)
+                self.send_execute_response(response, relation_desc, portal_name, max_rows)
                     .await
             }
             Err(e) => {
@@ -388,11 +398,11 @@ where
         raw_params: Vec<Option<Vec<u8>>>,
         result_formats: Vec<pgrepr::Format>,
     ) -> Result<State, comm::Error> {
-        let stmt = match self
+        let stmt = self
             .coord_client
             .session()
-            .get_prepared_statement(&statement_name)
-        {
+            .get_prepared_statement(&statement_name);
+        let stmt = match stmt {
             Some(stmt) => stmt,
             None => {
                 return self
@@ -437,6 +447,8 @@ where
         let result_formats = match pad_formats(
             result_formats,
             stmt.desc()
+                .relation_desc
+                .clone()
                 .map(|desc| desc.typ().column_types.len())
                 .unwrap_or(0),
         ) {
@@ -458,11 +470,11 @@ where
         portal_name: String,
         max_rows: usize,
     ) -> Result<State, comm::Error> {
-        let row_desc = self
-            .coord_client
-            .session()
-            .get_prepared_statement_for_portal(&portal_name)
-            .and_then(|stmt| stmt.desc().cloned());
+        let session = self.coord_client.session();
+        let row_desc = session
+            .get_portal(&portal_name)
+            .and_then(|portal| session.get_prepared_statement(&portal.statement_name))
+            .and_then(|stmt| stmt.desc().relation_desc.clone());
         let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
             Some(portal) => portal,
             None => {
@@ -474,8 +486,7 @@ where
                     .await;
             }
         };
-        if portal.remaining_rows.is_some() {
-            let rows = portal.remaining_rows.take().unwrap();
+        if let Some(rows) = portal.remaining_rows.take() {
             return self
                 .send_rows(
                     row_desc.expect("portal missing row desc on resumption"),
@@ -499,7 +510,8 @@ where
     }
 
     async fn describe_statement(&mut self, name: String) -> Result<State, comm::Error> {
-        match self.coord_client.session().get_prepared_statement(&name) {
+        let stmt = self.coord_client.session().get_prepared_statement(&name);
+        match stmt {
             Some(stmt) => {
                 self.conn
                     .send(BackendMessage::ParameterDescription(
@@ -520,19 +532,21 @@ where
     }
 
     async fn describe_portal(&mut self, name: String) -> Result<State, comm::Error> {
-        let portal = match self.coord_client.session().get_portal(&name) {
-            Some(portal) => portal,
+        let stmt_name = self
+            .coord_client
+            .session()
+            .get_portal(&name)
+            .map(|portal| portal.statement_name.clone());
+        match stmt_name {
+            Some(stmt_name) => self.send_describe_rows(stmt_name).await,
             None => {
-                return self
-                    .error(
-                        SqlState::INVALID_SQL_STATEMENT_NAME,
-                        "portal does not exist",
-                    )
-                    .await
+                self.error(
+                    SqlState::INVALID_SQL_STATEMENT_NAME,
+                    "portal does not exist",
+                )
+                .await
             }
-        };
-        let stmt_name = portal.statement_name.clone();
-        self.send_describe_rows(stmt_name).await
+        }
     }
 
     async fn close_statement(&mut self, name: String) -> Result<State, comm::Error> {
@@ -553,10 +567,9 @@ where
     }
 
     async fn sync(&mut self) -> Result<State, comm::Error> {
+        let txn_state = self.coord_client.session().transaction().into();
         self.conn
-            .send(BackendMessage::ReadyForQuery(
-                self.coord_client.session().transaction().into(),
-            ))
+            .send(BackendMessage::ReadyForQuery(txn_state))
             .await?;
         self.flush().await
     }
@@ -567,7 +580,7 @@ where
             .session()
             .get_prepared_statement(&stmt_name)
             .expect("send_describe_statement called incorrectly");
-        match stmt.desc() {
+        match stmt.desc().relation_desc() {
             Some(desc) => {
                 self.conn
                     .send(BackendMessage::RowDescription(
@@ -637,6 +650,7 @@ where
             ExecuteResponse::CreatedView { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "view")
             }
+            ExecuteResponse::CreatedType => command_complete!("CREATE TYPE"),
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
@@ -645,6 +659,7 @@ where
             ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),
             ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
             ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
+            ExecuteResponse::DroppedType => command_complete!("DROP TYPE"),
             ExecuteResponse::EmptyQuery => {
                 self.conn.send(BackendMessage::EmptyQueryResponse).await?;
                 Ok(State::Ready)
@@ -672,7 +687,13 @@ where
                     }
                     PeekResponse::Error(text) => self.error(SqlState::INTERNAL_ERROR, text).await,
                     PeekResponse::Rows(rows) => {
-                        self.send_rows(row_desc, portal_name, rows, max_rows).await
+                        self.send_rows(
+                            row_desc,
+                            portal_name,
+                            Box::new(stream::iter(vec![Ok(rows)])),
+                            max_rows,
+                        )
+                        .await
                     }
                 }
             }
@@ -683,8 +704,8 @@ where
                 let msg = if let Some(var) = self
                     .coord_client
                     .session()
-                    .notify_vars()
-                    .iter()
+                    .vars_mut()
+                    .notify_set()
                     .find(|v| v.name() == qn)
                 {
                     Some(BackendMessage::ParameterStatus(var.name(), var.value()))
@@ -702,7 +723,39 @@ where
             ExecuteResponse::Tailing { rx } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::Tailing");
-                self.stream_rows(row_desc, rx).await
+                self.send_rows(row_desc, portal_name, Box::new(rx), max_rows)
+                    .await
+            }
+            ExecuteResponse::CopyTo { format, resp } => {
+                let row_desc =
+                    row_desc.expect("missing row description for ExecuteResponse::CopyTo");
+                let rows: RowBatchStream = match *resp {
+                    ExecuteResponse::Tailing { rx } => Box::new(rx),
+                    ExecuteResponse::SendingRows(rx) => match rx.await? {
+                        // TODO(mjibson): This logic is duplicated from SendingRows. Dedup?
+                        PeekResponse::Canceled => {
+                            return self
+                                .error(
+                                    SqlState::QUERY_CANCELED,
+                                    "canceling statement due to user request",
+                                )
+                                .await;
+                        }
+                        PeekResponse::Error(text) => {
+                            return self.error(SqlState::INTERNAL_ERROR, text).await;
+                        }
+                        PeekResponse::Rows(rows) => Box::new(stream::iter(vec![Ok(rows)])),
+                    },
+                    _ => {
+                        return self
+                            .error(
+                                SqlState::INTERNAL_ERROR,
+                                "unsupported COPY response type".to_string(),
+                            )
+                            .await;
+                    }
+                };
+                self.copy_rows(format, row_desc, rows).await
             }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
@@ -714,7 +767,7 @@ where
         &mut self,
         row_desc: RelationDesc,
         portal_name: String,
-        mut rows: Vec<Row>,
+        mut rows: RowBatchStream,
         max_rows: usize,
     ) -> Result<State, comm::Error> {
         let portal = self
@@ -723,7 +776,8 @@ where
             .get_portal_mut(&portal_name)
             .expect("valid portal name for send rows");
 
-        if let Some(row) = rows.first() {
+        let mut batch = rows.try_next().await?;
+        if let Some([row, ..]) = batch.as_deref() {
             let datums = row.unpack();
             let col_types = &row_desc.typ().column_types;
             if datums.len() != col_types.len() {
@@ -763,17 +817,38 @@ where
                 .collect(),
         );
 
-        let nrows = cmp::min(max_rows, rows.len());
-        self.conn
-            .send_all(rows.drain(..nrows).map(move |row| {
-                BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
-            }))
-            .await?;
-        ROWS_RETURNED.inc_by(u64::cast_from(nrows));
+        let mut total_sent_rows = 0;
+        // want_rows is the maximum number of rows the client wants.
+        let mut want_rows = if max_rows == 0 { usize::MAX } else { max_rows };
+
+        // Send rows while the client still wants them and there are still rows to send.
+        while let Some(batch_rows) = batch {
+            let mut batch_rows = batch_rows;
+            // Drain panics if it's > len, so cap it.
+            let drain_rows = cmp::min(want_rows, batch_rows.len());
+            self.conn
+                .send_all(batch_rows.drain(..drain_rows).map(|row| {
+                    BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
+                }))
+                .await?;
+            total_sent_rows += drain_rows;
+            want_rows -= drain_rows;
+            // If we have sent the number of requested rows, put the remainder of the batch
+            // back and stop sending.
+            if want_rows == 0 {
+                rows = Box::new(stream::iter(vec![Ok(batch_rows)]).chain(rows));
+                break;
+            }
+            self.conn.flush().await?;
+            batch = rows.try_next().await?;
+        }
+
+        ROWS_RETURNED.inc_by(u64::cast_from(total_sent_rows));
 
         // Always return rows back, even if it's empty. This prevents an unclosed
-        // portal from re-executing after it has been emptied.
-        portal.set_remaining_rows(rows);
+        // portal from re-executing after it has been emptied. into_inner unwraps the
+        // Take.
+        portal.set_remaining_rows(Box::new(rows));
 
         // If max_rows is not specified, we will always send back a CommandComplete. If
         // max_rows is specified, we only send CommandComplete if there were more rows
@@ -781,10 +856,10 @@ where
         // were remaining before sending (not that are remaining after sending), then
         // we still send a PortalSuspended. The number of remaining rows after the rows
         // have been sent doesn't matter. This matches postgres.
-        if max_rows == 0 || max_rows > nrows {
+        if max_rows == 0 || max_rows > total_sent_rows {
             self.conn
                 .send(BackendMessage::CommandComplete {
-                    tag: format!("SELECT {}", nrows),
+                    tag: format!("SELECT {}", total_sent_rows),
                 })
                 .await?;
         } else {
@@ -794,34 +869,65 @@ where
         Ok(State::Ready)
     }
 
-    async fn stream_rows(
+    async fn copy_rows(
         &mut self,
+        format: CopyFormat,
         row_desc: RelationDesc,
-        mut rx: comm::mpsc::Receiver<Vec<Update>>,
+        mut stream: RowBatchStream,
     ) -> Result<State, comm::Error> {
+        let (encode_fn, encode_format): (
+            fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
+            pgrepr::Format,
+        ) = match format {
+            CopyFormat::Text => (message::encode_copy_row_text, pgrepr::Format::Text),
+            CopyFormat::Binary => (message::encode_copy_row_binary, pgrepr::Format::Binary),
+            _ => {
+                return self
+                    .error(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        format!("COPY TO format {:?} not supported", format),
+                    )
+                    .await
+            }
+        };
+
         let typ = row_desc.typ();
-        let column_formats = iter::repeat(pgrepr::Format::Text)
+        let column_formats = iter::repeat(encode_format)
             .take(typ.column_types.len())
             .collect();
         self.conn
             .send(BackendMessage::CopyOutResponse {
-                overall_format: pgrepr::Format::Text,
+                overall_format: encode_format,
                 column_formats,
             })
             .await?;
 
+        // In Postgres, binary copy has a header that is followed (in the same
+        // CopyData) by the first row. In order to replicate their behavior, use a
+        // common vec that we can extend one time now and then fill up with the encode
+        // functions.
+        let mut out = Vec::new();
+
+        if let CopyFormat::Binary = format {
+            // 11-byte signature.
+            out.extend(b"PGCOPY\n\xFF\r\n\0");
+            // 32-bit flags field.
+            out.extend(&[0, 0, 0, 0]);
+            // 32-bit header extension length field.
+            out.extend(&[0, 0, 0, 0]);
+        }
+
         let mut count = 0;
         loop {
-            match time::timeout(Duration::from_secs(1), rx.next()).await {
+            match time::timeout(Duration::from_secs(1), stream.next()).await {
                 Ok(None) => break,
-                Ok(Some(updates)) => {
-                    let updates = updates?;
-                    count += updates.len();
-                    for update in updates {
+                Ok(Some(rows)) => {
+                    let rows = rows?;
+                    count += rows.len();
+                    for row in rows {
+                        encode_fn(row, typ, &mut out)?;
                         self.conn
-                            .send(BackendMessage::CopyData(message::encode_update(
-                                update, typ,
-                            )))
+                            .send(BackendMessage::CopyData(mem::take(&mut out)))
                             .await?;
                     }
                 }
@@ -844,10 +950,22 @@ where
                     // desired notifications via POLLRDHUP [0].
                     //
                     // [0]: https://lkml.org/lkml/2003/7/12/116
+
+                    // TODO(mjibson): Sending an empty CopyData message is not consistent with the
+                    // spec which says CopyData messages are "always one per row". We can perhaps
+                    // use an empty NoticeResponse here instead, which is documented as being a
+                    // thing that can happen during this mode.
                     self.conn.send(BackendMessage::CopyData(vec![])).await?;
                 }
             }
             self.conn.flush().await?;
+        }
+        // Send required trailers.
+        if let CopyFormat::Binary = format {
+            let trailer: i16 = -1;
+            self.conn
+                .send(BackendMessage::CopyData(trailer.to_be_bytes().to_vec()))
+                .await?;
         }
 
         let tag = format!("COPY {}", count);

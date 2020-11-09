@@ -6,7 +6,7 @@ If you have questions, please [create a Github issue](https://github.com/Materia
 
 ## Getting started
 
-The best place to start using Materialize is probably the documentation [instructions](https://materialize.io/docs).
+The best place to start using Materialize is probably the documentation [instructions](https://materialize.com/docs).
 
 ## Developing Materialize
 
@@ -28,8 +28,8 @@ printed from the `materialized` binary.
 
 When landing large or substantial changes, we want to make sure users are aware of the work you're doing! This means we require:
 
-- Coordination with a technical writer to generate or update user-facing documentation that will show up on <materialize.io/docs>. If you have questions, open an issue with the `A-docs` tag.
-- Generating release notes by describing your change in `doc/user/release-notes.md`. If there any questions about which version the feature will be released in, consult <materialize.io/docs/versions> or chat with us.
+- Coordination with a technical writer to generate or update user-facing documentation that will show up on <materialize.com/docs>. If you have questions, open an issue with the `A-docs` tag.
+- Generating release notes by describing your change in `doc/user/release-notes.md`. If there any questions about which version the feature will be released in, consult <materialize.com/docs/versions> or chat with us.
 
 #### Changes that require documentation
 

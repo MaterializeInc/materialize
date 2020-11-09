@@ -101,8 +101,6 @@ docker run --network host -e MATERIALIZED_URL=localhost:6875 materialize/dashboa
 [graf-import]: https://grafana.com/docs/grafana/latest/reference/export_import/#importing-a-dashboard
 [dc-example]: https://github.com/MaterializeInc/materialize/blob/d793b112758c840c1240eefdd56ca6f7e4f484cf/demo/billing/mzcompose.yml#L60-L70
 
-
-
 ## Health check
 
 {{< warning >}}
@@ -110,8 +108,20 @@ The health check is not part of Materialize's stable interface.
 Backwards-incompatible changes to the health check may be made at any time.
 {{< /warning >}}
 
-Materialize supports a minimal health check endpoint at `<materialized
-host>/status`.
+Materialize supports a minimal HTTP health check endpoint at `http://<materialized
+host>:6875/status`.
+
+## Memory usage visualization
+
+{{< warning >}}
+The memory usage visualization is not part of Materialize's stable interface.
+Backwards-incompatible changes to the visualization may be made at any time.
+{{< /warning >}}
+
+Materialize exposes an interactive, web-based memory usage visualization at
+`http://<materialized host>:6875/memory` to aid in diagnosing unexpected memory
+consumption. The visualization can display a diagram of the operators in each
+running dataflow overlaid with the number of rows stored by each operator.
 
 ## Prometheus
 

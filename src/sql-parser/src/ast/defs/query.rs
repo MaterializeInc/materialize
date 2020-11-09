@@ -170,7 +170,7 @@ impl_display!(SetOperator);
 /// to a set operation like `UNION`.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct Select {
-    pub distinct: bool,
+    pub distinct: Option<Distinct>,
     /// projection expressions
     pub projection: Vec<SelectItem>,
     /// FROM
@@ -186,8 +186,9 @@ pub struct Select {
 impl AstDisplay for Select {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("SELECT ");
-        if self.distinct {
-            f.write_str("DISTINCT ");
+        if let Some(distinct) = &self.distinct {
+            f.write_node(distinct);
+            f.write_str(" ");
         }
         f.write_node(&display::comma_separated(&self.projection));
         if !self.from.is_empty() {
@@ -224,6 +225,26 @@ impl Select {
     pub fn selection(mut self, selection: Option<Expr>) -> Select {
         self.selection = selection;
         self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Distinct {
+    EntireRow,
+    On(Vec<Expr>),
+}
+impl_display!(Distinct);
+
+impl AstDisplay for Distinct {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Distinct::EntireRow => f.write_str("DISTINCT"),
+            Distinct::On(cols) => {
+                f.write_str("DISTINCT ON (");
+                f.write_node(&display::comma_separated(cols));
+                f.write_str(")");
+            }
+        }
     }
 }
 

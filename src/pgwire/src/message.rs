@@ -7,12 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
+use std::io;
+
 use bytes::BytesMut;
 use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
-use dataflow_types::Update;
-use repr::{ColumnName, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnName, RelationDesc, RelationType, Row, ScalarType};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -317,12 +319,64 @@ pub struct FieldDescription {
     pub format: pgrepr::Format,
 }
 
-pub fn encode_update(update: Update, typ: &RelationType) -> Vec<u8> {
-    let mut out = Vec::new();
+pub fn encode_copy_row_binary(
+    row: Row,
+    typ: &RelationType,
+    out: &mut Vec<u8>,
+) -> Result<(), io::Error> {
+    const NULL_BYTES: [u8; 4] = (-1i32).to_be_bytes();
+
+    // 16-bit int of number of tuples.
+    let count = i16::try_from(typ.column_types.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            "column count does not fit into an i16",
+        )
+    })?;
+
+    out.extend(&count.to_be_bytes());
     let mut buf = BytesMut::new();
-    for field in pgrepr::values_from_row(update.row, typ) {
+    for (field, typ) in row
+        .iter()
+        .zip(&typ.column_types)
+        .map(|(datum, typ)| (pgrepr::Value::from_datum(datum, &typ.scalar_type), typ))
+    {
         match field {
-            None => out.extend(b"\\N"),
+            None => out.extend(&NULL_BYTES),
+            Some(field) => {
+                buf.clear();
+                field.encode_binary(&pgrepr::Type::from(&typ.scalar_type), &mut buf)?;
+                out.extend(
+                    &i32::try_from(buf.len())
+                        .map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                "field length does not fit into an i32",
+                            )
+                        })?
+                        .to_be_bytes(),
+                );
+                out.extend(&buf);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn encode_copy_row_text(
+    row: Row,
+    typ: &RelationType,
+    out: &mut Vec<u8>,
+) -> Result<(), io::Error> {
+    let delim = b'\t';
+    let null = b"\\N";
+    let mut buf = BytesMut::new();
+    for (idx, field) in pgrepr::values_from_row(row, typ).into_iter().enumerate() {
+        if idx > 0 {
+            out.push(delim);
+        }
+        match field {
+            None => out.extend(null),
             Some(field) => {
                 buf.clear();
                 field.encode_text(&mut buf);
@@ -332,15 +386,14 @@ pub fn encode_update(update: Update, typ: &RelationType) -> Vec<u8> {
                         b'\n' => out.extend(b"\\n"),
                         b'\r' => out.extend(b"\\r"),
                         b'\t' => out.extend(b"\\t"),
-                        b => out.push(*b),
+                        _ => out.push(*b),
                     }
                 }
             }
         }
-        out.push(b'\t');
     }
-    out.extend(format!("Diff: {} at {}\n", update.diff, update.timestamp).bytes());
-    out
+    out.push(b'\n');
+    Ok(())
 }
 
 pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {

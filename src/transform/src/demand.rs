@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use expr::{AggregateExpr, AggregateFunc, Id, RelationExpr, ScalarExpr};
+use expr::{AggregateExpr, AggregateFunc, Id, JoinInputMapper, RelationExpr, ScalarExpr};
 use repr::Datum;
 
 use crate::TransformArgs;
@@ -146,31 +146,14 @@ impl Demand {
                 demand,
                 implementation: _,
             } => {
-                let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                let input_arities = input_types
-                    .iter()
-                    .map(|i| i.column_types.len())
-                    .collect::<Vec<_>>();
-
-                let mut offset = 0;
-                let mut prior_arities = Vec::new();
-                for input in 0..inputs.len() {
-                    prior_arities.push(offset);
-                    offset += input_arities[input];
-                }
-
-                let input_relation = input_arities
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                    .collect::<Vec<_>>();
+                let input_mapper = JoinInputMapper::new(inputs);
 
                 // Each produced column that is equivalent to a prior column should be remapped
                 // so that upstream uses depend only on the first column, simplifying the demand
                 // analysis. In principle we could choose any representative, if it turns out
                 // that some other column would have been more helpful, but we don't have a great
                 // reason to do that at the moment.
-                let mut permutation: Vec<usize> = (0..input_arities.iter().sum()).collect();
+                let mut permutation: Vec<usize> = (0..input_mapper.total_columns()).collect();
                 for equivalence in equivalences.iter() {
                     let mut first_column = None;
                     for expr in equivalence.iter() {
@@ -199,11 +182,7 @@ impl Demand {
                 }
 
                 // Populate child demands from external and internal demands.
-                let mut new_columns = vec![HashSet::new(); inputs.len()];
-                for column in columns.iter() {
-                    let input = input_relation[*column];
-                    new_columns[input].insert(*column - prior_arities[input]);
-                }
+                let new_columns = input_mapper.split_column_set_by_input(&columns);
 
                 // Recursively indicate the requirements.
                 for (input, columns) in inputs.iter_mut().zip(new_columns) {

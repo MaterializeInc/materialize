@@ -51,6 +51,16 @@ information about the sinks available in a Materialize.
 The following sections describe the available objects in the `mz_catalog`
 schema.
 
+### `mz_avro_ocf_sinks`
+
+The `mz_avro_ocf_sinks` table contains a row for each Avro OCF sink in the
+system.
+
+Field     | Type     | Meaning
+----------|----------|--------
+`sink_id` | [`text`] | The ID of the sink.
+`path`    | `bytea`  | The path to the Avro OCF file into which the sink is writing.
+
 ### `mz_columns`
 
 The `mz_columns` contains a row for each column in each table, source, and view
@@ -102,6 +112,15 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
+
+### `mz_kafka_sinks`
+
+The `mz_kafka_sinks` table contains a row for each Kafka sink in the system.
+
+Field     | Type     | Meaning
+----------|----------|--------
+`sink_id` | [`text`] | The ID of the sink.
+`topic`   | [`text`] | The name of the Kafka topic into which the sink is writing.
 
 ### `mz_objects`
 
@@ -193,8 +212,12 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_class`](https://www.postgresql.org/docs/current/catalog-pg-class.html)
   * [`pg_database`](https://www.postgresql.org/docs/current/catalog-pg-database.html)
   * [`pg_description`](https://www.postgresql.org/docs/current/catalog-pg-description.html)
+  * [`pg_enum`](https://www.postgresql.org/docs/current/catalog-pg-enum.html)
   * [`pg_index`](https://www.postgresql.org/docs/current/catalog-pg-index.html)
   * [`pg_namespace`](https://www.postgresql.org/docs/current/catalog-pg-namespace.html)
+  * [`pg_proc`](https://www.postgresql.org/docs/current/catalog-pg-proc.html)
+  * [`pg_range`](https://www.postgresql.org/docs/current/catalog-pg-range.html)
+  * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
 
 These compatibility shims are largely incomplete. Most are lacking some columns
 that are present in PostgreSQL, or if they do include the column the result set

@@ -47,19 +47,16 @@ production readiness.
   ```shell
   tag=v<VERSION>-rc<N>
   bin/mkrelease -b rel-$tag $tag
-  git push origin $tag
   ```
 
-- [ ] *After* you have pushed that tag, on `main`, do the same thing for the
-  dev version, without creating a tag:
+- [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
+
+  Without switching to `main`, perform:
 
   ```shell
   next=v<NEXT_VERSION>-dev
   bin/mkrelease --no-tag -b prepare-$next $next
   ```
-
-  This must be done after the tag has been pushed, or Git will delete the tag
-  that isn't on the server.
 
   - [ ] Open a PR with this change, and land it.
 
@@ -107,10 +104,10 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 - [ ] Let the tests run for at least 24 hours, with the following success criteria:
 
-  - [ ] Chbench should not have slower ingest than the previous release.
-  - [ ] The billing-demo container should run and finish without error.
-  - [ ] The "Time behind external source" dashboard panel in Grafana should have
-    remained at 0ms or similar for the entirety of the run.
+  - [ ] chbench: The ingest rate should not be slower than the previous release.
+  - [ ] billing-demo: The container should run and finish without error.
+  - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
+    have remained at 0ms or similar for the entirety of the run.
 
 - [ ] Let the chaos tests run for 24 hours, with the following success criteria:
 
@@ -135,12 +132,24 @@ in the infrastructure repository. All of these tests can be run in parallel.
   $ bin/mkrelease --checkout ${tag}-rc1 $tag
   git push origin $tag
   ```
+- [ ] Incorporate this tag into `main`'s history as well:
+
+  ```
+  next=v<NEXT_VERSION>-dev
+  bin/mkrelease --no-tag -b continue-$next $next
+  ```
+
+  - [ ] Open a PR with that branch, and land it.
 
 ### Verify the Release Build and Deploy
 
 - [ ] Find your build in buildkite, for example
   https://buildkite.com/materialize/tests/builds?branch=v0.4.3
-- [ ] Wait for the completion of the "Deploy" step
+- [ ] Wait for the completion of the "Deploy", your tag will be listed as the branch at:
+  https://buildkite.com/materialize/deploy/builds
+
+  **NOTE:** the deploy step will appear green in the "tests" page before it is actually run,
+  because the tests only mark that the async job got kicked off, so check that second link.
 
 ### Create Homebrew bottle and update tap
 
@@ -174,10 +183,10 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - Use the following contents as the description, updating the version
     number appropriately:
     ```markdown
-    * [Release notes](https://materialize.io/docs/release-notes/#v0.#.#)
-    * [Binary tarballs](https://materialize.io/docs/versions/)
-    * [Installation instructions](https://materialize.io/docs/install/)
-    * [Documentation](https://materialize.io/docs/)
+    * [Release notes](https://materialize.com/docs/release-notes/#v0.#.#)
+    * [Binary tarballs](https://materialize.com/docs/versions/)
+    * [Installation instructions](https://materialize.com/docs/install/)
+    * [Documentation](https://materialize.com/docs/)
     ```
 
 ### Update the main branch for the next version

@@ -10,8 +10,8 @@ anyhow = "1.0.33"
 aws-util = { path = "../../../src/aws-util" }
 bytes = "0.5.6"
 chrono = "0.4"
-env_logger = "0.7.1"
-futures = "0.3.6"
+env_logger = "0.8.1"
+futures = "0.3.7"
 futures-channel = "0.3.5"
 log = "0.4.11"
 ore = { path = "../../../src/ore" }
@@ -19,7 +19,7 @@ rand = "0.7.3"
 rusoto_core = "0.45.0"
 rusoto_credential = "0.45.0"
 rusoto_kinesis = "0.45.0"
-structopt = "0.3.19"
+structopt = "0.3.20"
 tokio = { version = "0.2.22", features = ["full"] }
 tokio-postgres = "0.5.5"
 test-util = { path = "../../test-util" }

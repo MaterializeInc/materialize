@@ -22,7 +22,7 @@ ore = { path = "../ore" }
 parse_duration = "2.1.0"
 pgrepr = { path = "../pgrepr" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
-regex = "1.4.0"
+regex = "1.4.1"
 repr = { path = "../repr" }
 reqwest = { version = "0.10.8" }
 rusoto_core = "0.45.0"

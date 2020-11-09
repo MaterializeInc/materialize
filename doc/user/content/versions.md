@@ -53,7 +53,7 @@ are using an unsupported version, please check that the issue reproduces on a
 supported version before engaging with our support team.
 
 Additional support options, including guaranteed SLAs, can be arranged upon
-request. Please reach out to our sales team at <https://materialize.io/contact/>.
+request. Please reach out to our sales team at <https://materialize.com/contact/>.
 
 ## Versioning policy
 

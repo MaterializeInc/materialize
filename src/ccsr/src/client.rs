@@ -73,7 +73,7 @@ impl Client {
     pub async fn publish_schema(&self, subject: &str, schema: &str) -> Result<i32, PublishError> {
         let req = self
             .make_request(Method::POST, format!("/subjects/{}/versions", subject))
-            .body(json!({ "schema": schema }).to_string());
+            .json(&json!({ "schema": schema }));
         let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
     }

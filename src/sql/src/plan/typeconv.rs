@@ -10,256 +10,172 @@
 //! Maintains a catalog of valid casts between [`repr::ScalarType`]s, as well as
 //! other cast-related functions.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 
 use anyhow::bail;
 use lazy_static::lazy_static;
 
 use expr::VariadicFunc;
-use repr::{ColumnName, Datum, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarType};
 
-use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc};
-use super::query::ExprContext;
+use super::expr::{BinaryFunc, CoercibleScalarExpr, ColumnRef, ScalarExpr, UnaryFunc};
+use super::query::{ExprContext, QueryContext};
+use super::scope::Scope;
 
-/// Describes methods of planning a conversion between [`ScalarType`]s, which
-/// can be invoked with [`CastOp::gen_expr`].
-pub enum CastOp {
-    U(UnaryFunc),
-    F(fn(&ExprContext, ScalarExpr, CastTo) -> Result<ScalarExpr, anyhow::Error>),
-}
-
-impl fmt::Debug for CastOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CastOp::U(u) => write!(f, "CastOp::U({:?})", u),
-            CastOp::F(_) => write!(f, "CastOp::F"),
-        }
-    }
-}
-
-// Provides a shorthand for writing `CastOp::U`.
-impl From<UnaryFunc> for CastOp {
-    fn from(u: UnaryFunc) -> CastOp {
-        CastOp::U(u)
-    }
-}
+/// A function that, when invoked, casts the input expression to the
+/// target type.
+pub struct CastOp(
+    Box<
+        dyn Fn(&ExprContext, ScalarExpr, &ScalarType) -> Result<ScalarExpr, anyhow::Error>
+            + Send
+            + Sync,
+    >,
+);
 
 impl CastOp {
-    /// Generates the [`ScalarExpr`] to cast between [`ScalarType`]s.
-    pub fn gen_expr(
-        &self,
-        ecx: &ExprContext,
-        e: ScalarExpr,
-        cast_to: CastTo,
-    ) -> Result<ScalarExpr, anyhow::Error> {
-        match self {
-            CastOp::U(u) => Ok(e.call_unary(u.clone())),
-            CastOp::F(f) => f(ecx, e, cast_to),
-        }
+    fn new<F>(f: F) -> CastOp
+    where
+        F: Fn(&ExprContext, ScalarExpr, &ScalarType) -> Result<ScalarExpr, anyhow::Error>
+            + Send
+            + Sync
+            + 'static,
+    {
+        CastOp(Box::new(f))
     }
 }
 
-// Used when the [`ScalarExpr`] is already of the desired [`ScalarType`].
-fn noop_cast(_: &ExprContext, e: ScalarExpr, _: CastTo) -> Result<ScalarExpr, anyhow::Error> {
-    Ok(e)
-}
-
-// Cast `e` to `String`, and then to `Jsonb`.
-fn to_jsonb_any_string_cast(
-    ecx: &ExprContext,
-    e: ScalarExpr,
-    _: CastTo,
-) -> Result<ScalarExpr, anyhow::Error> {
-    let s = ecx.scalar_type(&e);
-    let to = CastTo::Explicit(ScalarType::String);
-
-    let cast_op = get_cast(&s, &to).unwrap();
-
-    Ok(cast_op
-        .gen_expr(ecx, e, to)?
-        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb))
-}
-
-// Cast `e` to `Float64`, and then to `Jsonb`.
-fn to_jsonb_any_f64_cast(
-    ecx: &ExprContext,
-    e: ScalarExpr,
-    _: CastTo,
-) -> Result<ScalarExpr, anyhow::Error> {
-    let s = ecx.scalar_type(&e);
-    let to = CastTo::Explicit(ScalarType::Float64);
-
-    let cast_op = get_cast(&s, &to).unwrap();
-
-    Ok(cast_op
-        .gen_expr(ecx, e, to)?
-        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb))
-}
-
-fn to_jsonb_any_record_cast(
-    ecx: &ExprContext,
-    e: ScalarExpr,
-    _: CastTo,
-) -> Result<ScalarExpr, anyhow::Error> {
-    let fields = match ecx.scalar_type(&e) {
-        ScalarType::Record { fields } => fields,
-        _ => unreachable!(),
-    };
-
-    let mut exprs = vec![];
-    for (i, (name, _ty)) in fields.iter().enumerate() {
-        exprs.push(ScalarExpr::literal(
-            Datum::String(name.as_str()),
-            ScalarType::String,
-        ));
-        exprs.push(plan_cast(
-            "to_jsonb_any_record",
-            ecx,
-            e.clone().call_unary(UnaryFunc::RecordGet(i)),
-            CastTo::JsonbAny,
-        )?);
+impl From<UnaryFunc> for CastOp {
+    fn from(u: UnaryFunc) -> CastOp {
+        CastOp::new(move |_ecx, expr, _ty| Ok(expr.call_unary(u.clone())))
     }
-
-    Ok(ScalarExpr::CallVariadic {
-        func: VariadicFunc::JsonbBuildObject,
-        exprs,
-    })
 }
 
 // Cast `e` (`Jsonb`) to `Float64` and then to `cast_to`.
 fn from_jsonb_f64_cast(
     ecx: &ExprContext,
     e: ScalarExpr,
-    cast_to: CastTo,
+    cast_to: &ScalarType,
 ) -> Result<ScalarExpr, anyhow::Error> {
-    let from_f64_to_cast = get_cast(&ScalarType::Float64, &cast_to).unwrap();
-    from_f64_to_cast.gen_expr(ecx, e.call_unary(UnaryFunc::CastJsonbToFloat64), cast_to)
+    let from_f64_to_cast = get_cast(CastContext::Explicit, &ScalarType::Float64, &cast_to).unwrap();
+    (from_f64_to_cast.0)(ecx, e.call_unary(UnaryFunc::CastJsonbToFloat64), cast_to)
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Hash)]
-/// Describes the context of the cast, the target type.
-pub enum CastTo {
-    /// Only allow implicit casts. Typically these are lossless casts, such as
-    /// `ScalarType::Int32` to `ScalarType::Int64`.
-    Implicit(ScalarType),
-    /// Allow either explicit or implicit casts.
-    Explicit(ScalarType),
-    /// Cast the source to a JSONB element directly, or cast to a compatible
-    /// intermediary type (`ScalarType::String`, `ScalarType::Float64`) and then
-    /// to a JSONB element.
-    JsonbAny,
+/// Describes the context of a cast.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CastContext {
+    /// Implicit casts are "no-brainer" casts that apply automatically in
+    /// expressions. They are typically lossless, such as `ScalarType::Int32` to
+    /// `ScalarType::Int64`.
+    Implicit,
+    /// Assignment casts are "reasonable" casts that make sense to apply
+    /// automatically in `INSERT` statements, but are surprising enough that
+    /// they don't apply implicitly in expressions.
+    Assignment,
+    /// Explicit casts are casts that are possible but may be surprising, like
+    /// casting `ScalarType::Json` to `ScalarType::Int32`, and therefore they do
+    /// not happen unless explicitly requested by the user with a cast operator.
+    Explicit,
 }
 
-impl fmt::Display for CastTo {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CastTo::Implicit(t) | CastTo::Explicit(t) => write!(f, "{}", t),
-            CastTo::JsonbAny => write!(f, "jsonbany"),
-        }
-    }
-}
-
-impl CastTo {
-    pub fn scalar_type(&self) -> ScalarType {
-        match self {
-            CastTo::Implicit(t) | CastTo::Explicit(t) => t.clone(),
-            CastTo::JsonbAny => ScalarType::Jsonb,
-        }
-    }
+/// The implementation of a cast.
+struct CastImpl {
+    ///
+    op: CastOp,
+    context: CastContext,
 }
 
 macro_rules! casts(
     {
         $(
-            $from_castto:expr => $castop:expr
+            $from_to:expr => $cast_context:ident: $cast_op:expr
         ),+
     } => {{
-        let mut m: HashMap<(ScalarType, CastTo), CastOp> = HashMap::new();
+        let mut m: HashMap<(ScalarType, ScalarType), CastImpl> = HashMap::new();
         $(
-            m.insert($from_castto, $castop.into());
+            m.insert($from_to, CastImpl {
+                op: CastOp::from($cast_op),
+                context: CastContext::$cast_context,
+            });
         )+
         m
     }};
 );
 
 lazy_static! {
-    static ref VALID_CASTS: HashMap<(ScalarType, CastTo), CastOp> = {
-        use CastTo::*;
+    /// Used when the [`ScalarExpr`] is already of the desired [`ScalarType`].
+    static ref NOOP_CAST: CastOp = CastOp::new(|_ecx: &ExprContext, e, _cast_to: &ScalarType| Ok(e));
+
+    static ref VALID_CASTS: HashMap<(ScalarType, ScalarType), CastImpl> = {
         use ScalarType::*;
         use UnaryFunc::*;
 
         casts! {
             // BOOL
-            (Bool, Explicit(String)) => CastBoolToStringExplicit,
-            (Bool, Explicit(Int32)) => CastBoolToInt32,
-            (Bool, JsonbAny) => CastJsonbOrNullToJsonb,
+            (Bool, Int32) => Explicit: CastBoolToInt32,
+            (Bool, String) => Assignment: CastBoolToString,
 
             //INT32
-            (Int32, Explicit(Bool)) => CastInt32ToBool,
-            (Int32, Implicit(Oid)) => CastInt32ToOid,
-            (Int32, Implicit(Int64)) => CastInt32ToInt64,
-            (Int32, Implicit(Float32)) => CastInt32ToFloat32,
-            (Int32, Implicit(Float64)) => CastInt32ToFloat64,
-            (Int32, Implicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
-                let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
+            (Int32, Bool) => Explicit: CastInt32ToBool,
+            (Int32, Oid) => Implicit: CastInt32ToOid,
+            (Int32, Int64) => Implicit: CastInt32ToInt64,
+            (Int32, Float32) => Implicit: CastInt32ToFloat32,
+            (Int32, Float64) => Implicit: CastInt32ToFloat64,
+            (Int32, Decimal(0, 0)) => Implicit: CastOp::new(|_ecx, e, to_type| {
+                let (_, s) = to_type.unwrap_decimal_parts();
                 Ok(rescale_decimal(e.call_unary(CastInt32ToDecimal), 0, s))
             }),
-            (Int32, Explicit(String)) => CastInt32ToString,
-            (Int32, JsonbAny) => CastOp::F(to_jsonb_any_f64_cast),
+            (Int32, String) => Assignment: CastInt32ToString,
 
             // INT64
-            (Int64, Explicit(Bool)) => CastInt64ToBool,
-            (Int64, Explicit(Int32)) => CastInt64ToInt32,
-            (Int64, Implicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
-                let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
+            (Int64, Bool) => Explicit: CastInt64ToBool,
+            (Int64, Int32) => Assignment: CastInt64ToInt32,
+            (Int64, Decimal(0, 0)) => Implicit: CastOp::new(|_ecx, e, to_type| {
+                let (_, s) = to_type.unwrap_decimal_parts();
                 Ok(rescale_decimal(e.call_unary(CastInt64ToDecimal), 0, s))
             }),
-            (Int64, Implicit(Float32)) => CastInt64ToFloat32,
-            (Int64, Implicit(Float64)) => CastInt64ToFloat64,
-            (Int64, Explicit(String)) => CastInt64ToString,
-            (Int64, JsonbAny) => CastOp::F(to_jsonb_any_f64_cast),
+            (Int64, Float32) => Implicit: CastInt64ToFloat32,
+            (Int64, Float64) => Implicit: CastInt64ToFloat64,
+            (Int64, String) => Assignment: CastInt64ToString,
 
             // OID
-            (Oid, Explicit(Int32)) => CastOidToInt32,
-            (Oid, Explicit(String)) => CastInt32ToString,
+            (Oid, Int32) => Assignment: CastOidToInt32,
+            (Oid, String) => Explicit: CastInt32ToString,
 
             // FLOAT32
-            (Float32, Explicit(Int64)) => CastFloat32ToInt64,
-            (Float32, Implicit(Float64)) => CastFloat32ToFloat64,
-            (Float32, Explicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
-                let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
-                let s = ScalarExpr::literal(
-                    Datum::from(i32::from(s)), to_type.scalar_type()
-                );
+            (Float32, Int64) => Assignment: CastFloat32ToInt64,
+            (Float32, Float64) => Implicit: CastFloat32ToFloat64,
+            (Float32, Decimal(0, 0)) => Assignment: CastOp::new(|_ecx, e, to_type| {
+                let (_, s) = to_type.unwrap_decimal_parts();
+                let s = ScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
                 Ok(e.call_binary(s, BinaryFunc::CastFloat32ToDecimal))
             }),
-            (Float32, Explicit(String)) => CastFloat32ToString,
-            (Float32, JsonbAny) => CastOp::F(to_jsonb_any_f64_cast),
+            (Float32, String) => Assignment: CastFloat32ToString,
 
             // FLOAT64
-            (Float64, Explicit(Int32)) => CastFloat64ToInt32,
-            (Float64, Explicit(Int64)) => CastFloat64ToInt64,
-            (Float64, Explicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
-                let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
-                let s = ScalarExpr::literal(Datum::from(
-                    i32::from(s)), to_type.scalar_type());
+            (Float64, Int32) => Assignment: CastFloat64ToInt32,
+            (Float64, Int64) => Assignment: CastFloat64ToInt64,
+            (Float64, Decimal(0, 0)) => Assignment: CastOp::new(|_ecx, e, to_type| {
+                let (_, s) = to_type.unwrap_decimal_parts();
+                let s = ScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
                 Ok(e.call_binary(s, BinaryFunc::CastFloat64ToDecimal))
             }),
-            (Float64, Explicit(String)) => CastFloat64ToString,
-            (Float64, JsonbAny) => CastJsonbOrNullToJsonb,
+            (Float64, String) => Assignment: CastFloat64ToString,
 
             // DECIMAL
-            (Decimal(0, 0), Explicit(Int32)) => CastOp::F(|ecx, e, _to_type| {
+            (Decimal(0, 0), Int32) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 Ok(e.call_unary(CastDecimalToInt32(s)))
             }),
-            (Decimal(0, 0), Explicit(Int64)) => CastOp::F(|ecx, e, _to_type| {
+            (Decimal(0, 0), Int64) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 Ok(e.call_unary(CastDecimalToInt64(s)))
             }),
-            (Decimal(0, 0), Implicit(Float32)) => CastOp::F(|ecx, e, _to_type| {
+            (Decimal(0, 0), Float32) => Implicit: CastOp::new(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 let factor = 10_f32.powi(i32::from(s));
                 let factor =
@@ -267,130 +183,121 @@ lazy_static! {
                 Ok(e.call_unary(CastSignificandToFloat32)
                     .call_binary(factor, BinaryFunc::DivFloat32))
             }),
-            (Decimal(0, 0), Implicit(Float64)) => CastOp::F(|ecx, e, _to_type| {
+            (Decimal(0, 0), Float64) => Implicit: CastOp::new(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 let factor = 10_f64.powi(i32::from(s));
-                let factor =
-                    ScalarExpr::literal(Datum::from(factor), Float32);
+                let factor = ScalarExpr::literal(Datum::from(factor), Float32);
                 Ok(e.call_unary(CastSignificandToFloat64)
                     .call_binary(factor, BinaryFunc::DivFloat64))
             }),
-            (Decimal(0, 0), Implicit(Decimal(0, 0))) => CastOp::F(|ecx, e, to_type| {
+            (Decimal(0, 0), Decimal(0, 0)) => Implicit: CastOp::new(|ecx, e, to_type| {
                 let (_, f) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                let (_, t) = to_type.scalar_type().unwrap_decimal_parts();
+                let (_, t) = to_type.unwrap_decimal_parts();
                 Ok(rescale_decimal(e, f, t))
             }),
-            (Decimal(0, 0), Explicit(String)) => CastOp::F(|ecx, e, _to_type| {
+            (Decimal(0, 0), String) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 Ok(e.call_unary(CastDecimalToString(s)))
             }),
-            (Decimal(0, 0), JsonbAny) => CastOp::F(to_jsonb_any_f64_cast),
 
             // DATE
-            (Date, Implicit(Timestamp)) => CastDateToTimestamp,
-            (Date, Implicit(TimestampTz)) => CastDateToTimestampTz,
-            (Date, Explicit(String)) => CastDateToString,
-            (Date, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
+            (Date, Timestamp) => Implicit: CastDateToTimestamp,
+            (Date, TimestampTz) => Implicit: CastDateToTimestampTz,
+            (Date, String) => Assignment: CastDateToString,
 
             // TIME
-            (Time, Implicit(Interval)) => CastTimeToInterval,
-            (Time, Explicit(String)) => CastTimeToString,
-            (Time, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
+            (Time, Interval) => Implicit: CastTimeToInterval,
+            (Time, String) => Assignment: CastTimeToString,
 
             // TIMESTAMP
-            (Timestamp, Explicit(Date)) => CastTimestampToDate,
-            (Timestamp, Implicit(TimestampTz)) => CastTimestampToTimestampTz,
-            (Timestamp, Explicit(String)) => CastTimestampToString,
-            (Timestamp, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
+            (Timestamp, Date) => Assignment: CastTimestampToDate,
+            (Timestamp, TimestampTz) => Implicit: CastTimestampToTimestampTz,
+            (Timestamp, String) => Assignment: CastTimestampToString,
 
             // TIMESTAMPTZ
-            (TimestampTz, Explicit(Date)) => CastTimestampTzToDate,
-            (TimestampTz, Explicit(Timestamp)) => CastTimestampTzToTimestamp,
-            (TimestampTz, Explicit(String)) => CastTimestampTzToString,
-            (TimestampTz, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
+            (TimestampTz, Date) => Assignment: CastTimestampTzToDate,
+            (TimestampTz, Timestamp) => Assignment: CastTimestampTzToTimestamp,
+            (TimestampTz, String) => Assignment: CastTimestampTzToString,
 
             // INTERVAL
-            (Interval, Explicit(Time)) => CastIntervalToTime,
-            (Interval, Explicit(String)) => CastIntervalToString,
-            (Interval, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
+            (Interval, Time) => Assignment: CastIntervalToTime,
+            (Interval, String) => Assignment: CastIntervalToString,
 
             // BYTES
-            (Bytes, Explicit(String)) => CastBytesToString,
-            (Bytes, JsonbAny) => CastOp::F(to_jsonb_any_string_cast),
+            (Bytes, String) => Assignment: CastBytesToString,
 
             // STRING
-            (String, Explicit(Bool)) => CastStringToBool,
-            (String, Explicit(Int32)) => CastStringToInt32,
-            (String, Explicit(Int64)) => CastStringToInt64,
-            (String, Explicit(Oid)) => CastStringToInt32,
-            (String, Explicit(Float32)) => CastStringToFloat32,
-            (String, Explicit(Float64)) => CastStringToFloat64,
-            (String, Explicit(Decimal(0,0))) => CastOp::F(|_ecx, e, to_type| {
-                let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
+            (String, Bool) => Explicit: CastStringToBool,
+            (String, Int32) => Explicit: CastStringToInt32,
+            (String, Int64) => Explicit: CastStringToInt64,
+            (String, Oid) => Explicit: CastStringToInt32,
+            (String, Float32) => Explicit: CastStringToFloat32,
+            (String, Float64) => Explicit: CastStringToFloat64,
+            (String, Decimal(0, 0)) => Explicit: CastOp::new(|_ecx, e, to_type| {
+                let (_, s) = to_type.unwrap_decimal_parts();
                 Ok(e.call_unary(CastStringToDecimal(s)))
             }),
-            (String, Explicit(Date)) => CastStringToDate,
-            (String, Explicit(Time)) => CastStringToTime,
-            (String, Explicit(Timestamp)) => CastStringToTimestamp,
-            (String, Explicit(TimestampTz)) => CastStringToTimestampTz,
-            (String, Explicit(Interval)) => CastStringToInterval,
-            (String, Explicit(Bytes)) => CastStringToBytes,
-            (String, Explicit(Jsonb)) => CastStringToJsonb,
-            (String, Explicit(Uuid)) => CastStringToUuid,
-            (String, JsonbAny) => CastJsonbOrNullToJsonb,
+            (String, Date) => Explicit: CastStringToDate,
+            (String, Time) => Explicit: CastStringToTime,
+            (String, Timestamp) => Explicit: CastStringToTimestamp,
+            (String, TimestampTz) => Explicit: CastStringToTimestampTz,
+            (String, Interval) => Explicit: CastStringToInterval,
+            (String, Bytes) => Explicit: CastStringToBytes,
+            (String, Jsonb) => Explicit: CastStringToJsonb,
+            (String, Uuid) => Explicit: CastStringToUuid,
 
             // RECORD
-            (Record { fields: vec![] }, JsonbAny) => CastOp::F(to_jsonb_any_record_cast),
-            (Record { fields: vec![] }, Explicit(String)) => CastOp::F(|ecx, e, _to_type| {
+            (Record { fields: vec![] }, String) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let ty = ecx.scalar_type(&e);
                 Ok(e.call_unary(CastRecordToString { ty }))
             }),
 
             // ARRAY
-            (Array(Box::new(String)), Explicit(String)) => CastOp::F(|ecx, e, _to_type| {
+            (Array(Box::new(String)), String) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let ty = ecx.scalar_type(&e);
                 Ok(e.call_unary(CastArrayToString { ty }))
             }),
 
+            // LIST
+            (List(Box::new(String)), String) => Assignment: CastOp::new(|ecx, e, _to_type| {
+                let ty = ecx.scalar_type(&e);
+                Ok(e.call_unary(CastListToString { ty }))
+            }),
+
             // JSONB
-            (Jsonb, Explicit(Bool)) => CastJsonbToBool,
-            (Jsonb, Explicit(Int32)) => CastOp::F(from_jsonb_f64_cast),
-            (Jsonb, Explicit(Int64)) => CastOp::F(from_jsonb_f64_cast),
-            (Jsonb, Explicit(Float32)) => CastOp::F(from_jsonb_f64_cast),
-            (Jsonb, Explicit(Float64)) => CastJsonbToFloat64,
-            (Jsonb, Explicit(Decimal(0, 0))) => CastOp::F(from_jsonb_f64_cast),
-            (Jsonb, Explicit(String)) => CastJsonbToString,
-            (Jsonb, JsonbAny) => CastJsonbOrNullToJsonb,
+            (Jsonb, Bool) => Explicit: CastJsonbToBool,
+            (Jsonb, Int32) => Explicit: CastOp::new(from_jsonb_f64_cast),
+            (Jsonb, Int64) => Explicit: CastOp::new(from_jsonb_f64_cast),
+            (Jsonb, Float32) => Explicit: CastOp::new(from_jsonb_f64_cast),
+            (Jsonb, Float64) => Explicit: CastJsonbToFloat64,
+            (Jsonb, Decimal(0, 0)) => Explicit: CastOp::new(from_jsonb_f64_cast),
+            (Jsonb, String) => Assignment: CastJsonbToString,
 
             // UUID
-            (Uuid, Explicit(String)) => CastUuidToString
+            (Uuid, String) => Assignment: CastUuidToString
         }
     };
 }
 
 /// Get a cast, if one exists, from a [`ScalarType`] to another, with control
-/// over allowing implicit or explicit casts using [`CastTo`].
+/// over allowing implicit or explicit casts using [`CastTo`]. For casts between
+/// `ScalarType::List`s, see [`plan_cast_between_lists`].
 ///
 /// Use the returned [`CastOp`] with [`CastOp::gen_expr`].
-pub fn get_cast<'a>(from: &ScalarType, cast_to: &CastTo) -> Option<&'a CastOp> {
-    use CastTo::*;
+pub fn get_cast(ccx: CastContext, from: &ScalarType, to: &ScalarType) -> Option<&'static CastOp> {
+    use CastContext::*;
 
-    if *from == cast_to.scalar_type() {
-        return Some(&CastOp::F(noop_cast));
+    if from == to {
+        return Some(&NOOP_CAST);
     }
 
-    let cast_to = match cast_to {
-        Implicit(t) => Implicit(t.desaturate()),
-        Explicit(t) => Explicit(t.desaturate()),
-        JsonbAny => JsonbAny,
-    };
+    let cast = VALID_CASTS.get(&(from.desaturate(), to.desaturate()))?;
 
-    let cast = VALID_CASTS.get(&(from.desaturate(), cast_to.clone()));
-
-    match (cast, cast_to) {
-        // If no explicit implementation, look for an implicit one.
-        (None, CastTo::Explicit(t)) => VALID_CASTS.get(&(from.desaturate(), CastTo::Implicit(t))),
-        (c, _) => c,
+    match (ccx, cast.context) {
+        (Explicit, Implicit) | (Explicit, Assignment) | (Explicit, Explicit) => Some(&cast.op),
+        (Assignment, Implicit) | (Assignment, Assignment) => Some(&cast.op),
+        (Implicit, Implicit) => Some(&cast.op),
+        _ => None,
     }
 }
 
@@ -407,6 +314,63 @@ pub fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
             let factor = ScalarExpr::literal(Datum::from(factor), ScalarType::Decimal(38, s1 - s2));
             expr.call_binary(factor, BinaryFunc::DivDecimal)
         }
+    }
+}
+
+/// Converts an expression to `ScalarType::String`.
+///
+/// All types are convertible to string, so this never fails.
+pub fn to_string(ecx: &ExprContext, expr: ScalarExpr) -> ScalarExpr {
+    plan_cast(
+        "to_string",
+        ecx,
+        CastContext::Explicit,
+        expr,
+        &ScalarType::String,
+    )
+    .expect("cast known to exist")
+}
+
+/// Converts an expression to `ScalarType::Jsonb`.
+///
+/// The rules are as follows:
+///   * `ScalarType::Boolean`s become JSON booleans.
+///   * All numeric types are converted to `Float64`s, then become JSON numbers.
+///   * Records are converted to a JSON object where the record's field names
+///     are the keys of the object, and the record's fields are recursively
+///     converted to JSON by `to_jsonb`.
+///   * Other types are converted to strings by their usual cast function an
+//      become JSON strings.
+///   * A `Datum::Null` of any type becomes a JSON null.
+pub fn to_jsonb(ecx: &ExprContext, expr: ScalarExpr) -> ScalarExpr {
+    use ScalarType::*;
+
+    match ecx.scalar_type(&expr) {
+        Bool => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Int32 | Int64 | Float32 | Float64 | Decimal(..) => {
+            plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
+                .expect("cast known to exist")
+                .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
+        }
+        Record { fields } => {
+            let mut exprs = vec![];
+            for (i, (name, _ty)) in fields.iter().enumerate() {
+                exprs.push(ScalarExpr::literal(
+                    Datum::String(name.as_str()),
+                    ScalarType::String,
+                ));
+                exprs.push(to_jsonb(
+                    ecx,
+                    expr.clone().call_unary(UnaryFunc::RecordGet(i)),
+                ));
+            }
+            ScalarExpr::CallVariadic {
+                func: VariadicFunc::JsonbBuildObject,
+                exprs,
+            }
+        }
+        Jsonb => expr,
+        _ => to_string(ecx, expr).call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
     }
 }
 
@@ -454,14 +418,14 @@ fn guess_compatible_cast_type(types: &[ScalarType]) -> Option<&ScalarType> {
 /// https://www.postgresql.org/docs/12/typeconv-union-case.html
 pub fn guess_best_common_type(
     types: &[Option<ScalarType>],
-    type_hint: Option<ScalarType>,
+    type_hint: Option<&ScalarType>,
 ) -> Option<ScalarType> {
     // Remove unknown types.
     let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).cloned().collect();
 
     if known_types.is_empty() {
         if type_hint.is_some() {
-            return type_hint;
+            return type_hint.cloned();
         }
         return Some(ScalarType::String);
     }
@@ -489,145 +453,34 @@ pub fn guess_best_common_type(
     None
 }
 
-/// Controls coercion behavior for `plan_coerce`.
-///
-/// Note that `CoerceTo` cannot affect already coerced elements, i.e.,
-/// the [`CoercibleScalarExpr::Coerced`] variant.
-#[derive(Clone, Debug)]
-pub enum CoerceTo {
-    /// Coerce to the specified scalar type.
-    Plain(ScalarType),
-    /// Coerce using special JSONB coercion rules. The following table
-    /// summarizes the differences between the normal and special JSONB
-    /// conversion rules.
-    ///
-    /// +--------------+---------------+--------------------+-------------------------+
-    /// |              | NULL          | 'literal'          | '"literal"'             |
-    /// +--------------|---------------|--------------------|-------------------------|
-    /// | Plain(Jsonb) | NULL::jsonb   | <error: bad json>  | '"literal"'::jsonb      |
-    /// | JsonbAny     | 'null'::jsonb | '"literal"'::jsonb | '"\"literal\""'::jsonb  |
-    /// +--------------+---------------+--------------------+-------------------------+
-    JsonbAny,
-}
-
 pub fn plan_coerce<'a>(
     ecx: &'a ExprContext,
     e: CoercibleScalarExpr,
-    coerce_to: CoerceTo,
+    coerce_to: &ScalarType,
 ) -> Result<ScalarExpr, anyhow::Error> {
-    use CoerceTo::*;
     use CoercibleScalarExpr::*;
 
-    Ok(match (e, coerce_to) {
-        (Coerced(e), _) => e,
+    Ok(match e {
+        Coerced(e) => e,
 
-        (LiteralNull, Plain(typ)) => ScalarExpr::literal_null(typ),
-        (LiteralNull, JsonbAny) => ScalarExpr::literal(Datum::JsonNull, ScalarType::Jsonb),
+        LiteralNull => ScalarExpr::literal_null(coerce_to.clone()),
 
-        (LiteralString(s), Plain(typ)) => {
+        LiteralString(s) => {
             let lit = ScalarExpr::literal(Datum::String(&s), ScalarType::String);
-            plan_cast("string literal", ecx, lit, CastTo::Explicit(typ))?
-        }
-        (LiteralString(s), JsonbAny) => ScalarExpr::literal(Datum::String(&s), ScalarType::Jsonb),
-
-        (LiteralArray(exprs), coerce_to) => {
-            // NOTE(benesch): this logic needs to be double-checked to ensure it
-            // matches what PostgreSQL does. It also duplicates the logic for
-            // coercing lists. Multidimensional array coercion in particular is
-            // really sketchy.
-            //
-            // This is not an immediate concern, since constructing arrays
-            // literals is presently experimental. Arrays exist primarily to
-            // facilitate compatibility with various pg_catalog views that
-            // contain arrays; `ARRAY` literals are meant mainly for integration
-            // tests at the moment.
-            let coerce_elem_to = match &coerce_to {
-                Plain(ScalarType::Array(typ)) => Plain((**typ).clone()),
-                Plain(_) => {
-                    let typ = exprs.iter().find_map(|e| ecx.scalar_type(e));
-                    CoerceTo::Plain(typ.unwrap_or(ScalarType::String))
-                }
-                JsonbAny => bail!("cannot coerce array literal to jsonb type"),
-            };
-            let mut out = vec![];
-            for e in exprs {
-                out.push(plan_coerce(ecx, e, coerce_elem_to.clone())?);
-            }
-            let typ = if !out.is_empty() {
-                ecx.scalar_type(&out[0])
-            } else if let Plain(ScalarType::Array(ty)) = coerce_to {
-                *ty
-            } else {
-                bail!("unable to infer type for empty array")
-            };
-            for (i, e) in out.iter().enumerate() {
-                let t = ecx.scalar_type(e);
-                if t != typ {
-                    bail!(
-                        "Cannot create array with mixed types. \
-                        Element 1 has type {} but element {} has type {}",
-                        typ,
-                        i + 1,
-                        t,
-                    )
-                }
-            }
-            ScalarExpr::CallVariadic {
-                func: VariadicFunc::ArrayCreate { elem_type: typ },
-                exprs: out,
-            }
+            plan_cast("string literal", ecx, CastContext::Explicit, lit, coerce_to)?
         }
 
-        (LiteralList(exprs), coerce_to) => {
-            let coerce_elem_to = match &coerce_to {
-                Plain(ScalarType::List(typ)) => Plain((**typ).clone()),
-                Plain(_) => {
-                    let typ = exprs.iter().find_map(|e| ecx.scalar_type(e));
-                    CoerceTo::Plain(typ.unwrap_or(ScalarType::String))
-                }
-                JsonbAny => bail!("cannot coerce list literal to jsonb type"),
-            };
-            let mut out = vec![];
-            for e in exprs {
-                out.push(plan_coerce(ecx, e, coerce_elem_to.clone())?);
-            }
-            let typ = if !out.is_empty() {
-                ecx.scalar_type(&out[0])
-            } else if let Plain(ScalarType::List(ty)) = coerce_to {
-                *ty
-            } else {
-                bail!("unable to infer type for empty list")
-            };
-            for (i, e) in out.iter().enumerate() {
-                let t = ecx.scalar_type(e);
-                if t != typ {
-                    bail!(
-                        "Cannot create list with mixed types. \
-                        Element 1 has type {} but element {} has type {}",
-                        typ,
-                        i + 1,
-                        t,
-                    )
-                }
-            }
-            ScalarExpr::CallVariadic {
-                func: VariadicFunc::ListCreate { elem_type: typ },
-                exprs: out,
-            }
-        }
-
-        (LiteralRecord(exprs), coerce_to) => {
+        LiteralRecord(exprs) => {
             let arity = exprs.len();
             let coercions = match coerce_to {
-                Plain(ScalarType::Record { fields, .. }) if fields.len() == arity => fields
-                    .into_iter()
-                    .map(|(_name, ty)| CoerceTo::Plain(ty))
-                    .collect(),
-                _ => vec![Plain(ScalarType::String); exprs.len()],
+                ScalarType::Record { fields, .. } if fields.len() == arity => {
+                    fields.iter().map(|(_name, ty)| ty).cloned().collect()
+                }
+                _ => vec![ScalarType::String; exprs.len()],
             };
             let mut out = vec![];
             for (e, coerce_to) in exprs.into_iter().zip(coercions) {
-                out.push(plan_coerce(ecx, e, coerce_to)?);
+                out.push(plan_coerce(ecx, e, &coerce_to)?);
             }
             ScalarExpr::CallVariadic {
                 func: VariadicFunc::RecordCreate {
@@ -639,16 +492,84 @@ pub fn plan_coerce<'a>(
             }
         }
 
-        (Parameter(n), coerce_to) => {
-            let typ = match coerce_to {
-                CoerceTo::Plain(typ) => typ,
-                CoerceTo::JsonbAny => ScalarType::Jsonb,
-            };
-            let prev = ecx.param_types().borrow_mut().insert(n, typ);
+        Parameter(n) => {
+            let prev = ecx.param_types().borrow_mut().insert(n, coerce_to.clone());
             assert!(prev.is_none());
             ScalarExpr::Parameter(n)
         }
     })
+}
+
+/// Plans a cast between from a [`ScalarType::List`]s to another.
+pub fn plan_cast_to_list(
+    ecx: &ExprContext,
+    ccx: CastContext,
+    expr: ScalarExpr,
+    from: &ScalarType,
+    to: &ScalarType,
+) -> Result<ScalarExpr, anyhow::Error> {
+    assert!(matches!(to, ScalarType::List(..)));
+
+    if from == to {
+        return Ok(expr);
+    }
+
+    let from_element_typ = match from {
+        ScalarType::List(f) => *f.clone(),
+        ScalarType::String => ScalarType::String,
+        _ => bail!("invalid cast from {} to list", from),
+    };
+
+    let to_element_typ = to.unwrap_list_element_type();
+
+    // Reconstruct an expression context where the expression is evaluated on
+    // the "first column" of some imaginary row.
+    let mut scx = ecx.qcx.scx.clone();
+    scx.param_types = Rc::new(RefCell::new(BTreeMap::new()));
+    let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
+    let relation_type = RelationType {
+        column_types: vec![ColumnType {
+            nullable: true,
+            scalar_type: from_element_typ,
+        }],
+        keys: vec![vec![0]],
+    };
+    let ecx = ExprContext {
+        qcx: &qcx,
+        name: "plan_cast_to_list",
+        scope: &Scope::empty(None),
+        relation_type: &relation_type,
+        allow_aggregates: false,
+        allow_subqueries: true,
+    };
+
+    let col_expr = ScalarExpr::Column(ColumnRef {
+        level: 0,
+        column: 0,
+    });
+
+    // Determine the `ScalarExpr` required to cast our column to the target
+    // element type. We'll need to call this on each element of the original
+    // list to perform the cast.
+    let cast_expr = plan_cast("plan_cast_to_list", &ecx, ccx, col_expr, to_element_typ)?;
+
+    let return_ty = to.clone();
+    let cast_expr = Box::new(cast_expr.lower_uncorrelated().expect(
+        "lower_uncorrelated should not fail given that there is no correlation \
+        in the input col_expr",
+    ));
+
+    Ok(expr.call_unary(match from {
+        ScalarType::List(..) => UnaryFunc::CastList1ToList2 {
+            return_ty,
+            cast_expr,
+        },
+        ScalarType::String => UnaryFunc::CastStringToList {
+            return_ty,
+            cast_expr,
+        },
+        _ => unreachable!("already prevented match on incompatible types in plan_cast_to_list"),
+    }))
 }
 
 /// Plans a cast between [`ScalarType`]s, specifying which types of casts are
@@ -659,28 +580,42 @@ pub fn plan_coerce<'a>(
 /// If a cast between the `ScalarExpr`'s base type and the specified type is:
 /// - Not possible, e.g. `Bytes` to `Decimal`
 /// - Not permitted, e.g. implicitly casting from `Float64` to `Float32`.
-pub fn plan_cast<'a>(
-    caller_name: &str,
+/// - Not implemented yet
+pub fn plan_cast<'a, D>(
+    caller_name: D,
     ecx: &ExprContext<'a>,
+    ccx: CastContext,
     expr: ScalarExpr,
-    cast_to: CastTo,
-) -> Result<ScalarExpr, anyhow::Error> {
-    let from_scalar_type = ecx.scalar_type(&expr);
-
-    let cast_op = match get_cast(&from_scalar_type, &cast_to) {
-        Some(cast_op) => cast_op,
-        None => bail!(
+    cast_to: &ScalarType,
+) -> Result<ScalarExpr, anyhow::Error>
+where
+    D: fmt::Display,
+{
+    let from_typ = ecx.scalar_type(&expr);
+    let cast_bail = || {
+        bail!(
             "{} does not support {}casting from {} to {}",
             caller_name,
-            if let CastTo::Implicit(_) = cast_to {
+            if ccx == CastContext::Implicit {
                 "implicitly "
             } else {
                 ""
             },
-            from_scalar_type,
-            cast_to
-        ),
+            from_typ,
+            &cast_to,
+        )
     };
 
-    cast_op.gen_expr(ecx, expr, cast_to)
+    if let ScalarType::List(..) = cast_to {
+        match plan_cast_to_list(ecx, ccx, expr, &from_typ, &cast_to) {
+            Ok(e) => Ok(e),
+            Err(_) => cast_bail(),
+        }
+    } else {
+        let cast_op = match get_cast(ccx, &from_typ, cast_to) {
+            Some(cast_op) => cast_op,
+            None => return cast_bail(),
+        };
+        (cast_op.0)(ecx, expr, cast_to)
+    }
 }

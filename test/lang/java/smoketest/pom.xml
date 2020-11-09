@@ -18,7 +18,7 @@ the Business Source License, use of this software will be governed
   <version>1.0-SNAPSHOT</version>
 
   <name>test-pgjdbc</name>
-  <url>https://materialize.io/</url>
+  <url>https://materialize.com/</url>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

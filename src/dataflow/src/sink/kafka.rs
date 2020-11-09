@@ -199,7 +199,7 @@ impl SinkConsistencyInfo {
 pub fn kafka<G>(
     stream: &Stream<G, (Row, Timestamp, Diff)>,
     id: GlobalId,
-    connector: KafkaSinkConnector,
+    mut connector: KafkaSinkConnector,
     desc: RelationDesc,
 ) -> ShutdownButton<ThreadedProducer<SinkProducerContext>>
 where
@@ -265,7 +265,7 @@ where
         None
     };
 
-    let encoder = Encoder::new(desc, consistency.is_some());
+    let encoder = Encoder::new(desc, consistency.is_some(), connector.key_indices.take());
     let name = format!("kafka-{}", id);
     sink_reschedule(
         &stream,
@@ -400,46 +400,58 @@ where
                 // loop has explicitly been designed so that each iteration sends
                 // at most one record to Kafka
                 for _ in 0..connector.fuel {
-                    let (encoded, count) = if let Some((encoded, count)) = encoded_buffer.take() {
-                        // We still need to send more copies of this record.
-                        (encoded, count)
-                    } else if let Some((row, time, diff)) = queue.pop_front() {
-                        // Convert a previously queued (Row, Diff) to a Avro diff
-                        // envelope record
-                        if diff == 0 {
-                            // Explicitly refuse to send no-op records
-                            continue;
-                        };
+                    let ((encoded_key, encoded_val), count) =
+                        if let Some((encoded, count)) = encoded_buffer.take() {
+                            // We still need to send more copies of this record.
+                            (encoded, count)
+                        } else if let Some((row, time, diff)) = queue.pop_front() {
+                            // Convert a previously queued (Row, Diff) to a Avro diff
+                            // envelope record
+                            if diff == 0 {
+                                // Explicitly refuse to send no-op records
+                                continue;
+                            };
 
-                        let time = match consistency {
-                            Some(_) => Some(time.to_string()),
-                            None => None,
-                        };
+                            let time = match consistency {
+                                Some(_) => Some(time.to_string()),
+                                None => None,
+                            };
 
-                        let diff_pair = if diff < 0 {
-                            DiffPair {
-                                before: Some(&row),
-                                after: None,
-                            }
+                            let diff_pair = if diff < 0 {
+                                DiffPair {
+                                    before: Some(&row),
+                                    after: None,
+                                }
+                            } else {
+                                DiffPair {
+                                    before: None,
+                                    after: Some(&row),
+                                }
+                            };
+
+                            let bufs = encoder.encode_unchecked(
+                                connector.key_schema_id,
+                                connector.value_schema_id,
+                                diff_pair,
+                                time,
+                            );
+                            // For diffs other than +/- 1, we send repeated copies of the
+                            // Avro record [diff] times. Since the format and envelope
+                            // capture the "polarity" of the update, we need to remember
+                            // how many times to send the data.
+                            (bufs, diff.abs())
                         } else {
-                            DiffPair {
-                                before: None,
-                                after: Some(&row),
-                            }
+                            // Nothing left for us to do
+                            break;
                         };
 
-                        let buf = encoder.encode_unchecked(connector.schema_id, diff_pair, time);
-                        // For diffs other than +/- 1, we send repeated copies of the
-                        // Avro record [diff] times. Since the format and envelope
-                        // capture the "polarity" of the update, we need to remember
-                        // how many times to send the data.
-                        (buf, diff.abs())
+                    let record =
+                        BaseRecord::<Vec<u8>, _>::to(&connector.topic).payload(&encoded_val);
+                    let record = if encoded_key.is_some() {
+                        record.key(encoded_key.as_ref().unwrap())
                     } else {
-                        // Nothing left for us to do
-                        break;
+                        record
                     };
-
-                    let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&encoded);
                     if let Err((e, _)) = producer.send(record) {
                         sink_metrics.message_send_errors_counter.inc();
                         error!("unable to produce in {}: {}", name, e);
@@ -451,7 +463,7 @@ where
                             // https://github.com/edenhill/librdkafka/blob/master/examples/producer.c#L188-L208
                             // only retries on QueueFull so we will keep that
                             // convention here.
-                            encoded_buffer = Some((encoded, count));
+                            encoded_buffer = Some(((encoded_key, encoded_val), count));
                             activator.activate_after(Duration::from_secs(60));
                             return true;
                         } else {
@@ -466,7 +478,7 @@ where
                     // Cache the Avro encoded data if we need to send again and
                     // remember how many more times we need to send it
                     if count > 1 {
-                        encoded_buffer = Some((encoded, count - 1));
+                        encoded_buffer = Some(((encoded_key, encoded_val), count - 1));
                     }
                 }
 

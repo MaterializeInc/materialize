@@ -29,7 +29,7 @@ CREATE TABLE uk_cities (
 ----
 CREATE TABLE uk_cities (name character varying(100) NOT NULL, lat double precision NULL, lng double precision, constrained int NULL CONSTRAINT pkey PRIMARY KEY NOT NULL UNIQUE CHECK (constrained > 0), ref int REFERENCES othertable (a, b))
 =>
-CreateTable(CreateTableStatement { name: ObjectName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Varchar(Some(100)), collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Double, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Double, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Int, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(BinaryOp { left: Identifier([Ident("constrained")]), op: Gt, right: Value(Number("0")) }) }] }, ColumnDef { name: Ident("ref"), data_type: Int, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: ObjectName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], with_options: [], if_not_exists: false })
+CreateTable(CreateTableStatement { name: ObjectName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Varchar(Some(100)), collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Double, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Double, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Int, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(Op { op: ">", expr1: Identifier([Ident("constrained")]), expr2: Some(Value(Number("0"))) }) }] }, ColumnDef { name: Ident("ref"), data_type: Int, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: ObjectName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE TABLE t (a int NOT NULL GARBAGE)
@@ -38,14 +38,14 @@ error:
 Parse error:
 CREATE TABLE t (a int NOT NULL GARBAGE)
                                ^^^^^^^
-Expected column option, found: GARBAGE
+Expected column option, found identifier
 
 parse-statement
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
 ----
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
 =>
-CreateTable(CreateTableStatement { name: ObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Int, collation: None, options: [] }], constraints: [], with_options: [SqlOption { name: Ident("foo"), value: String("bar") }, SqlOption { name: Ident("a"), value: Number("123") }], if_not_exists: false })
+CreateTable(CreateTableStatement { name: ObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Int, collation: None, options: [] }], constraints: [], with_options: [Value { name: Ident("foo"), value: String("bar") }, Value { name: Ident("a"), value: Number("123") }], if_not_exists: false })
 
 parse-statement
 CREATE TABLE foo (bar int,)
@@ -82,7 +82,7 @@ error:
 Parse error:
 CREATE TABLE tab (foo int,
                           ^
-Expected column name or constraint definition, found: EOF
+Expected column name or constraint definition, found EOF
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT address_pkey PRIMARY KEY (address_id))
@@ -110,7 +110,7 @@ CREATE TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 ----
 CREATE TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 =>
-CreateTable(CreateTableStatement { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: BinaryOp { left: Function(Function { name: ObjectName([Ident("rtrim")]), args: Args([Function(Function { name: ObjectName([Ident("ltrim")]), args: Args([Identifier([Ident("ref_code")])]), filter: None, over: None, distinct: false })]), filter: None, over: None, distinct: false }), op: NotEq, right: Value(String("")) } }], with_options: [], if_not_exists: false })
+CreateTable(CreateTableStatement { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: "<>", expr1: Function(Function { name: ObjectName([Ident("rtrim")]), args: Args([Function(Function { name: ObjectName([Ident("ltrim")]), args: Args([Identifier([Ident("ref_code")])]), filter: None, over: None, distinct: false })]), filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE TABLE foo (id int, PRIMARY KEY (foo, bar))
@@ -138,7 +138,7 @@ CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS NULL))
 ----
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS NULL))
 =>
-CreateTable(CreateTableStatement { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Check { name: None, expr: BinaryOp { left: BinaryOp { left: Identifier([Ident("end_date")]), op: Gt, right: Identifier([Ident("start_date")]) }, op: Or, right: IsNull { expr: Identifier([Ident("end_date")]), negated: false } } }], with_options: [], if_not_exists: false })
+CreateTable(CreateTableStatement { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: ">", expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsNull { expr: Identifier([Ident("end_date")]), negated: false } } }], with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DATABASE foo
@@ -161,7 +161,7 @@ error:
 Parse error:
 CREATE DATABASE IF EXISTS foo
                    ^^^^^^
-Expected NOT, found: EXISTS
+Expected NOT, found EXISTS
 
 parse-statement
 CREATE DATABASE foo.bar
@@ -170,7 +170,7 @@ error:
 Parse error:
 CREATE DATABASE foo.bar
                    ^
-Expected end of statement, found: .
+Expected end of statement, found dot
 
 parse-statement
 CREATE SCHEMA foo.bar
@@ -193,42 +193,42 @@ error:
 Parse error:
 CREATE SCHEMA IF EXISTS foo
                  ^^^^^^
-Expected NOT, found: EXISTS
+Expected NOT, found EXISTS
 
 parse-statement
 CREATE VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false })
+CreateView(CreateViewStatement { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false })
 
 parse-statement
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 ----
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { name: ObjectName([Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: true, materialized: false })
+CreateView(CreateViewStatement { name: ObjectName([Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: true, materialized: false })
 
 parse-statement
 CREATE TEMP VIEW myview AS SELECT foo FROM bar
 ----
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { name: ObjectName([Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: true, materialized: false })
+CreateView(CreateViewStatement { name: ObjectName([Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: true, materialized: false })
 
 parse-statement
 CREATE OR REPLACE VIEW v AS SELECT 1
 ----
 CREATE OR REPLACE VIEW v AS SELECT 1
 =>
-CreateView(CreateViewStatement { name: ObjectName([Ident("v")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Replace, temporary: false, materialized: false })
+CreateView(CreateViewStatement { name: ObjectName([Ident("v")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Replace, temporary: false, materialized: false })
 
 parse-statement
 CREATE VIEW IF NOT EXISTS v AS SELECT 1
 ----
 CREATE VIEW IF NOT EXISTS v AS SELECT 1
 =>
-CreateView(CreateViewStatement { name: ObjectName([Ident("v")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Skip, temporary: false, materialized: false })
+CreateView(CreateViewStatement { name: ObjectName([Ident("v")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Skip, temporary: false, materialized: false })
 
 parse-statement
 CREATE OR REPLACE VIEW IF NOT EXISTS v AS SELECT 1
@@ -237,35 +237,35 @@ error:
 Parse error:
 CREATE OR REPLACE VIEW IF NOT EXISTS v AS SELECT 1
                           ^^^
-Expected AS, found: NOT
+Expected AS, found NOT
 
 parse-statement
 CREATE VIEW v WITH (foo = 'bar', a = 123) AS SELECT 1
 ----
 CREATE VIEW v WITH (foo = 'bar', a = 123) AS SELECT 1
 =>
-CreateView(CreateViewStatement { name: ObjectName([Ident("v")]), columns: [], with_options: [SqlOption { name: Ident("foo"), value: String("bar") }, SqlOption { name: Ident("a"), value: Number("123") }], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false })
+CreateView(CreateViewStatement { name: ObjectName([Ident("v")]), columns: [], with_options: [Value { name: Ident("foo"), value: String("bar") }, Value { name: Ident("a"), value: Number("123") }], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false })
 
 parse-statement
 CREATE VIEW v (has, cols) AS SELECT 1, 2
 ----
 CREATE VIEW v (has, cols) AS SELECT 1, 2
 =>
-CreateView(CreateViewStatement { name: ObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false })
+CreateView(CreateViewStatement { name: ObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false })
 
 parse-statement
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: true })
+CreateView(CreateViewStatement { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: true })
 
 parse-statement
 CREATE MATERIALIZED VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 ----
 CREATE MATERIALIZED VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Skip, temporary: false, materialized: true })
+CreateView(CreateViewStatement { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Skip, temporary: false, materialized: true })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING SCHEMA 'baz'
@@ -281,7 +281,7 @@ FORMAT BYTES
 ----
 CREATE SOURCE foo FROM KAFKA BROKER 'bar' TOPIC 'baz' WITH (consistency = 'lug', ssl_certificate_file = '/Path/to/file') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: Kafka { broker: "bar", topic: "baz" }, with_options: [SqlOption { name: Ident("consistency"), value: String("lug") }, SqlOption { name: Ident("ssl_certificate_file"), value: String("/Path/to/file") }], format: Some(Bytes), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: Kafka { broker: "bar", topic: "baz", key: None }, with_options: [Value { name: Ident("consistency"), value: String("lug") }, Value { name: Ident("ssl_certificate_file"), value: String("/Path/to/file") }], format: Some(Bytes), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF MESSAGE
@@ -296,28 +296,28 @@ CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' WITH (tail = true) FORMAT REGEX 
 ----
 CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' WITH (tail = true) FORMAT REGEX '(asdf)|(jkl)'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [SqlOption { name: Ident("tail"), value: Boolean(true) }], format: Some(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Some(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false })
 
 parse-statement
 CREATE SOURCE IF NOT EXISTS foo (one, two) FROM FILE 'bar' WITH (tail = true) FORMAT REGEX '(asdf)|(jkl)'
 ----
 CREATE SOURCE IF NOT EXISTS foo (one, two) FROM FILE 'bar' WITH (tail = true) FORMAT REGEX '(asdf)|(jkl)'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [Ident("one"), Ident("two")], connector: File { path: "bar" }, with_options: [SqlOption { name: Ident("tail"), value: Boolean(true) }], format: Some(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [Ident("one"), Ident("two")], connector: File { path: "bar" }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Some(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH HEADER
 ----
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH HEADER
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [SqlOption { name: Ident("tail"), value: Boolean(false) }], format: Some(Csv { header_row: true, n_cols: None, delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Some(Csv { header_row: true, n_cols: None, delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH 3 COLUMNS
 ----
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH 3 COLUMNS
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [SqlOption { name: Ident("tail"), value: Boolean(false) }], format: Some(Csv { header_row: false, n_cols: Some(3), delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Some(Csv { header_row: false, n_cols: Some(3), delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo (one, two) FROM FILE 'bar' FORMAT CSV WITH HEADER
@@ -331,7 +331,7 @@ CREATE SOURCE foo FROM FILE 'bar' WITH (tail = true) FORMAT CSV WITH 3 COLUMNS D
 ----
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = true) FORMAT CSV WITH 3 COLUMNS DELIMITED BY '|'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [SqlOption { name: Ident("tail"), value: Boolean(true) }], format: Some(Csv { header_row: false, n_cols: Some(3), delimiter: '|' }), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Some(Csv { header_row: false, n_cols: Some(3), delimiter: '|' }), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
@@ -340,7 +340,7 @@ error:
 Parse error:
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
                     ^^
-Expected VIEW or SOURCE after CREATE MATERIALIZED, found: OR
+Expected VIEW or SOURCE after CREATE MATERIALIZED, found OR
 
 parse-statement
 CREATE SOURCE foo FROM AVRO OCF '/tmp/bar'
@@ -375,7 +375,7 @@ CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'h
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [SqlOption { name: Ident("a"), value: String("b") }] })), envelope: Debezium, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: Debezium, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
@@ -389,21 +389,21 @@ CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USIN
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: Upsert(None), if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: Upsert(None), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot" }, with_options: [], format: Some(Avro(Schema(Inline("string")))), envelope: Upsert(Some(Avro(Schema(Inline("long"))))), if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(Schema(Inline("string")))), envelope: Upsert(Some(Avro(Schema(Inline("long"))))), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot" }, with_options: [], format: Some(Avro(Schema(File("path")))), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(Schema(File("path")))), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' FORMAT BYTES
@@ -419,7 +419,7 @@ error:
 Parse error:
 CREATE SOURCE IF EXISTS foo FROM FILE 'bar' USING SCHEMA ''
                  ^^^^^^
-Expected NOT, found: EXISTS
+Expected NOT, found EXISTS
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
@@ -440,7 +440,23 @@ CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic" }, with_options: [SqlOption { name: Ident("replication_factor"), value: Number("7") }], format: Some(Bytes), with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: None }, with_options: [Value { name: Ident("replication_factor"), value: Number("7") }], format: Some(Bytes), with_snapshot: true, as_of: None, if_not_exists: false })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES
+----
+CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES WITH SNAPSHOT
+=>
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some([Ident("a"), Ident("b")]) }, with_options: [], format: Some(Bytes), with_snapshot: true, as_of: None, if_not_exists: false })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
+----
+error:
+Parse error:
+CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
+                                                                   ^^^^^^
+Expected a list of columns in parentheses, found FORMAT
 
 parse-statement
 CREATE SINK foo FROM bar INTO AVRO OCF 'baz'
@@ -489,7 +505,7 @@ CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGI
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [SqlOption { name: Ident("a"), value: String("b") }] })), with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
@@ -498,7 +514,7 @@ error:
 Parse error:
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
                ^^^^^^
-Expected NOT, found: EXISTS
+Expected NOT, found EXISTS
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
@@ -512,14 +528,14 @@ CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop W
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), on_name: ObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: ObjectName([Ident("ascii")]), args: Args([Identifier([Ident("x")])]), filter: None, over: None, distinct: false }), IsNull { expr: Identifier([Ident("a")]), negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("boop")]), alias: None }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("boop"), Ident("z")]), op: Eq, right: Identifier([Ident("z")]) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })), Identifier([Ident("delta")])]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), on_name: ObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: ObjectName([Ident("ascii")]), args: Args([Identifier([Ident("x")])]), filter: None, over: None, distinct: false }), IsNull { expr: Identifier([Ident("a")]), negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("boop")]), alias: None }, joins: [] }], selection: Some(Op { op: "=", expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })), Identifier([Ident("delta")])]), if_not_exists: false })
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))
 ----
 CREATE INDEX ind ON tab ((col + 1))
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), on_name: ObjectName([Ident("tab")]), key_parts: Some([Nested(BinaryOp { left: Identifier([Ident("col")]), op: Plus, right: Value(Number("1")) })]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), on_name: ObjectName([Ident("tab")]), key_parts: Some([Nested(Op { op: "+", expr1: Identifier([Ident("col")]), expr2: Some(Value(Number("1"))) })]), if_not_exists: false })
 
 parse-statement
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
@@ -549,7 +565,7 @@ error:
 Parse error:
 CREATE DEFAULT INDEX ON tab (a, b)
                             ^
-Expected end of statement, found: (
+Expected end of statement, found left parenthesis
 
 parse-statement
 CREATE INDEX ON tab;
@@ -558,7 +574,7 @@ error:
 Parse error:
 CREATE INDEX ON tab;
                    ^
-Expected (, found: ;
+Expected left parenthesis, found semicolon
 
 parse-statement
 CREATE INDEX ON tab (a, b)
@@ -574,7 +590,7 @@ error:
 Parse error:
 CREATE INDEX IF NOT EXISTS ON tab (a, b)
                            ^^
-Expected index name, found: ON
+Expected index name, found ON
 
 parse-statement
 CREATE INDEX myschema.ind ON foo(b)
@@ -583,7 +599,7 @@ error:
 Parse error:
 CREATE INDEX myschema.ind ON foo(b)
                      ^
-Expected ON, found: .
+Expected ON, found dot
 
 parse-statement
 CREATE INDEX IF EXISTS myschema.ind ON foo(b)
@@ -592,7 +608,7 @@ error:
 Parse error:
 CREATE INDEX IF EXISTS myschema.ind ON foo(b)
                 ^^^^^^
-Expected NOT, found: EXISTS
+Expected NOT, found EXISTS
 
 parse-statement
 DROP DATABASE mydb
@@ -615,7 +631,7 @@ error:
 Parse error:
 DROP DATABASE mydb.nope
                   ^
-Expected end of statement, found: .
+Expected end of statement, found dot
 
 parse-statement
 DROP SCHEMA mydb.myschema
@@ -645,7 +661,7 @@ error:
 Parse error:
 DROP TABLE
           ^
-Expected identifier, found: EOF
+Expected identifier, found EOF
 
 parse-statement
 DROP TABLE IF EXISTS foo, bar CASCADE RESTRICT
@@ -722,7 +738,7 @@ CREATE TABLE public.customer (
 ----
 CREATE TABLE public.customer (customer_id int DEFAULT nextval(public.customer_customer_id_seq), store_id smallint NOT NULL, first_name character varying(45) NOT NULL, last_name character varying(45) NOT NULL, email character varying(50), address_id smallint NOT NULL, activebool boolean DEFAULT true NOT NULL, create_date date DEFAULT now()::text NOT NULL, last_update timestamp DEFAULT now() NOT NULL, last_update_tz timestamp with time zone, active int NOT NULL) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
 =>
-CreateTable(CreateTableStatement { name: ObjectName([Ident("public"), Ident("customer")]), columns: [ColumnDef { name: Ident("customer_id"), data_type: Int, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: ObjectName([Ident("nextval")]), args: Args([Identifier([Ident("public"), Ident("customer_customer_id_seq")])]), filter: None, over: None, distinct: false })) }] }, ColumnDef { name: Ident("store_id"), data_type: SmallInt, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("first_name"), data_type: Varchar(Some(45)), collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_name"), data_type: Varchar(Some(45)), collation: Some(ObjectName([Ident("es_ES")])), options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("email"), data_type: Varchar(Some(50)), collation: None, options: [] }, ColumnDef { name: Ident("address_id"), data_type: SmallInt, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("activebool"), data_type: Boolean, collation: None, options: [ColumnOptionDef { name: None, option: Default(Value(Boolean(true))) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("create_date"), data_type: Date, collation: None, options: [ColumnOptionDef { name: None, option: Default(Cast { expr: Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false }), data_type: Text }) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update"), data_type: Timestamp, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update_tz"), data_type: TimestampTz, collation: None, options: [] }, ColumnDef { name: Ident("active"), data_type: Int, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }], constraints: [], with_options: [SqlOption { name: Ident("fillfactor"), value: Number("20") }, SqlOption { name: Ident("user_catalog_table"), value: Boolean(true) }, SqlOption { name: Ident("autovacuum_vacuum_threshold"), value: Number("100") }], if_not_exists: false })
+CreateTable(CreateTableStatement { name: ObjectName([Ident("public"), Ident("customer")]), columns: [ColumnDef { name: Ident("customer_id"), data_type: Int, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: ObjectName([Ident("nextval")]), args: Args([Identifier([Ident("public"), Ident("customer_customer_id_seq")])]), filter: None, over: None, distinct: false })) }] }, ColumnDef { name: Ident("store_id"), data_type: SmallInt, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("first_name"), data_type: Varchar(Some(45)), collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_name"), data_type: Varchar(Some(45)), collation: Some(ObjectName([Ident("es_ES")])), options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("email"), data_type: Varchar(Some(50)), collation: None, options: [] }, ColumnDef { name: Ident("address_id"), data_type: SmallInt, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("activebool"), data_type: Boolean, collation: None, options: [ColumnOptionDef { name: None, option: Default(Value(Boolean(true))) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("create_date"), data_type: Date, collation: None, options: [ColumnOptionDef { name: None, option: Default(Cast { expr: Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false }), data_type: Text }) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update"), data_type: Timestamp, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update_tz"), data_type: TimestampTz, collation: None, options: [] }, ColumnDef { name: Ident("active"), data_type: Int, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }], constraints: [], with_options: [Value { name: Ident("fillfactor"), value: Number("20") }, Value { name: Ident("user_catalog_table"), value: Boolean(true) }, Value { name: Ident("autovacuum_vacuum_threshold"), value: Number("100") }], if_not_exists: false })
 
 parse-statement roundtrip
 CREATE TABLE public.customer (
@@ -761,7 +777,7 @@ ALTER INDEX name SET (property = true)
 ----
 ALTER INDEX name SET (property = true)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: ObjectName([Ident("name")]), if_exists: false, options: Set([SqlOption { name: Ident("property"), value: Boolean(true) }]) })
+AlterIndexOptions(AlterIndexOptionsStatement { index_name: ObjectName([Ident("name")]), if_exists: false, options: Set([Value { name: Ident("property"), value: Boolean(true) }]) })
 
 parse-statement
 ALTER INDEX name RESET (property)
@@ -775,7 +791,7 @@ ALTER INDEX IF EXISTS name SET (property = true)
 ----
 ALTER INDEX IF EXISTS name SET (property = true)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: ObjectName([Ident("name")]), if_exists: true, options: Set([SqlOption { name: Ident("property"), value: Boolean(true) }]) })
+AlterIndexOptions(AlterIndexOptionsStatement { index_name: ObjectName([Ident("name")]), if_exists: true, options: Set([Value { name: Ident("property"), value: Boolean(true) }]) })
 
 parse-statement
 ALTER INDEX name SET ()
@@ -784,7 +800,7 @@ error:
 Parse error:
 ALTER INDEX name SET ()
                       ^
-Expected identifier, found: )
+Expected identifier, found right parenthesis
 
 parse-statement
 ALTER INDEX name RESET ()
@@ -793,7 +809,7 @@ error:
 Parse error:
 ALTER INDEX name RESET ()
                         ^
-Expected identifier, found: )
+Expected identifier, found right parenthesis
 
 parse-statement
 ALTER INDEX name SET (property)
@@ -802,7 +818,7 @@ error:
 Parse error:
 ALTER INDEX name SET (property)
                               ^
-Expected =, found: )
+Expected equals sign, found right parenthesis
 
 parse-statement
 ALTER INDEX name RESET (property = true)
@@ -811,7 +827,7 @@ error:
 Parse error:
 ALTER INDEX name RESET (property = true)
                                  ^
-Expected ), found: =
+Expected right parenthesis, found equals sign
 
 parse-statement
 ALTER SOURCE name SET (property = true)
@@ -820,7 +836,7 @@ error:
 Parse error:
 ALTER SOURCE name SET (property = true)
                   ^^^
-Expected RENAME, found: SET
+Expected RENAME, found SET
 
 parse-statement
 ALTER VIEW name SET (property = true)
@@ -829,7 +845,7 @@ error:
 Parse error:
 ALTER VIEW name SET (property = true)
                 ^^^
-Expected RENAME, found: SET
+Expected RENAME, found SET
 
 parse-statement
 ALTER SINK name SET (property = true)
@@ -838,7 +854,7 @@ error:
 Parse error:
 ALTER SINK name SET (property = true)
                 ^^^
-Expected RENAME, found: SET
+Expected RENAME, found SET
 
 parse-statement
 ALTER INDEX name RENAME TO name2

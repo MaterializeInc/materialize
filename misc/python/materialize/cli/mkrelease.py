@@ -60,16 +60,12 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
     the_tag = f"v{version}"
     confirm_version_is_next(version)
 
-    if git.is_dirty():
-        raise errors.MzConfigurationError(
-            "working directory is not clean, stash or commit your changes"
-        )
-        sys.exit(1)
-
     if checkout is not None:
         git.checkout(checkout)
     if create_branch is not None:
         git.create_branch(create_branch)
+
+    confirm_on_latest_rc()
 
     change_line(BIN_CARGO_TOML, "version", f'version = "{version}"')
     change_line(
@@ -139,24 +135,47 @@ def confirm_version_is_next(version: str) -> None:
     latest_tag = tags[0]
     this_tag = semver.VersionInfo.parse(version)
     if this_tag.minor == latest_tag.minor:
-        if this_tag.patch != latest_tag.patch + 1:
-            # The only time this is okay is if it's an rc bump
-            if (
-                this_tag.patch == latest_tag.patch
-                and this_tag.prerelease is not None
-                and latest_tag.prerelease is not None
-            ):
-                pass
-            elif this_tag.prerelease is None and latest_tag.prerelease is not None:
-                say("Congratulations on the successful release!")
-            else:
-                say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
-                sys.exit(1)
+        if (
+            this_tag.patch == latest_tag.patch
+            and this_tag.prerelease is not None
+            and latest_tag.prerelease is not None
+        ):
+            # rc bump
+            pass
+        elif (
+            this_tag.patch == latest_tag.patch + 1
+            and this_tag.prerelease is not None
+            and latest_tag.prerelease is None
+        ):
+            # first rc
+            pass
+        elif (
+            this_tag.patch == latest_tag.patch
+            and this_tag.prerelease is None
+            and latest_tag.prerelease is not None
+        ):
+            say("Congratulations on the successful release!")
+        else:
+            say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
+            sys.exit(1)
     elif this_tag.minor == latest_tag.minor + 1 and this_tag.patch == 0:
         click.confirm("Are you sure you want to bump the minor version?", abort=True)
     else:
         click.confirm(
             f"The bump {latest_tag} -> {this_tag} is suspicious, are you sure?",
+            abort=True,
+        )
+
+
+def confirm_on_latest_rc() -> None:
+    tags = git.get_version_tags()
+    latest_tag = tags[0]
+    if not git.is_ancestor(f"v{latest_tag}", "HEAD"):
+        ancestor_tag = git.describe()
+        click.confirm(
+            f"You are about to create a release based on: {ancestor_tag}\n"
+            f"Which is not the latest prerelease:         v{latest_tag}\n"
+            "Are you sure?",
             abort=True,
         )
 

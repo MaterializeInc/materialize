@@ -12,7 +12,8 @@ use std::pin::Pin;
 
 use derivative::Derivative;
 
-use dataflow_types::{PeekResponse, Update};
+use dataflow_types::PeekResponse;
+use repr::Row;
 use sql::ast::{ObjectType, Statement};
 
 use crate::session::Session;
@@ -91,6 +92,11 @@ pub enum ExecuteResponse {
     AlteredIndexLogicalCompaction,
     /// The active transaction was committed.
     CommittedTransaction,
+    CopyTo {
+        format: sql::plan::CopyFormat,
+        #[derivative(Debug = "ignore")]
+        resp: Box<ExecuteResponse>,
+    },
     /// The requested database was created.
     CreatedDatabase {
         existed: bool,
@@ -119,6 +125,8 @@ pub enum ExecuteResponse {
     CreatedView {
         existed: bool,
     },
+    /// The requested type was created.
+    CreatedType,
     /// The specified number of rows were deleted from the requested table.
     Deleted(usize),
     /// The requested database was dropped.
@@ -133,8 +141,10 @@ pub enum ExecuteResponse {
     DroppedView,
     /// The requested index was dropped.
     DroppedIndex,
-    /// The requested sink wqs dropped.
+    /// The requested sink was dropped.
     DroppedSink,
+    /// The requested type was dropped.
+    DroppedType,
     /// The provided query was empty.
     EmptyQuery,
     /// The specified number of rows were inserted into the requested table.
@@ -150,7 +160,7 @@ pub enum ExecuteResponse {
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
     Tailing {
-        rx: comm::mpsc::Receiver<Vec<Update>>,
+        rx: comm::mpsc::Receiver<Vec<Row>>,
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),

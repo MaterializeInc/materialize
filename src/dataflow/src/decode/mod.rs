@@ -35,7 +35,8 @@ use repr::{Diff, Row, RowPacker, Timestamp};
 
 use self::csv::csv;
 use self::regex::regex as regex_fn;
-use crate::{operator::StreamExt, source::SourceOutput};
+use crate::operator::StreamExt;
+use crate::source::{SourceData, SourceOutput};
 
 mod avro;
 mod csv;
@@ -71,6 +72,7 @@ where
             SourceOutput {
                 value,
                 position: index,
+                upstream_time_millis,
                 key: _,
             },
             r,
@@ -86,7 +88,7 @@ where
                 }
                 Envelope::Debezium(_) => {
                     if let Some(dbz_state) = dbz_state.as_mut() {
-                        dbz_state.extract(value, top_node, index)
+                        dbz_state.extract(value, top_node, index, upstream_time_millis)
                     } else {
                         Err(anyhow!(
                             "No debezium schema information -- could not decode row"
@@ -126,6 +128,7 @@ pub trait DecoderState {
         key: Row,
         bytes: &[u8],
         aux_num: Option<i64>,
+        upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     );
@@ -134,6 +137,7 @@ pub trait DecoderState {
         &mut self,
         bytes: &[u8],
         aux_num: Option<i64>,
+        upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     );
@@ -182,6 +186,7 @@ where
         key: Row,
         bytes: &[u8],
         line_no: Option<i64>,
+        _upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     ) {
@@ -197,6 +202,7 @@ where
         &mut self,
         bytes: &[u8],
         line_no: Option<i64>,
+        _upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     ) {
@@ -215,7 +221,7 @@ where
 /// can be used for different combinations of key-value decoders
 /// as opposed to dynamic dispatching
 fn decode_upsert_inner<G, K, V>(
-    stream: &Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>,
+    stream: &Stream<G, ((Vec<u8>, SourceData), Timestamp)>,
     mut key_decoder_state: K,
     mut value_decoder_state: V,
     op_name: &str,
@@ -226,26 +232,27 @@ where
     V: DecoderState + 'static,
 {
     stream.unary(
-        Exchange::new(|x: &((Vec<u8>, (_, _)), _)| (x.0).hashed()),
+        Exchange::new(|x: &((Vec<u8>, _), _)| (x.0).hashed()),
         &op_name,
         move |_, _| {
             move |input, output| {
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
-                    for ((key, (payload, aux_num)), time) in data.iter() {
+                    for ((key, data), time) in data.iter() {
                         if key.is_empty() {
                             error!("{}", "Encountered empty key");
                             continue;
                         }
                         match key_decoder_state.decode_key(key) {
                             Ok(key) => {
-                                if payload.is_empty() {
+                                if data.value.is_empty() {
                                     session.give((key, None, *cap.time()));
                                 } else {
                                     value_decoder_state.give_key_value(
                                         key,
-                                        payload,
-                                        *aux_num,
+                                        &data.value,
+                                        data.position,
+                                        data.upstream_time_millis,
                                         &mut session,
                                         *time,
                                     );
@@ -264,8 +271,8 @@ where
     )
 }
 
-pub fn decode_upsert<G>(
-    stream: &Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>,
+pub(crate) fn decode_upsert<G>(
+    stream: &Stream<G, ((Vec<u8>, SourceData), Timestamp)>,
     value_encoding: DataEncoding,
     key_encoding: DataEncoding,
     debug_name: &str,
@@ -292,6 +299,7 @@ where
                 format!("{}-values", debug_name),
                 worker_index,
                 None,
+                None,
             )
             .expect(avro_err),
             &op_name,
@@ -307,6 +315,7 @@ where
                 format!("{}-values", debug_name),
                 worker_index,
                 None,
+                None,
             )
             .expect(avro_err),
             &op_name,
@@ -321,6 +330,7 @@ where
                 format!("{}-keys", debug_name),
                 worker_index,
                 None,
+                None,
             )
             .expect(avro_err),
             avro::AvroDecoderState::new(
@@ -330,6 +340,7 @@ where
                 false,
                 format!("{}-values", debug_name),
                 worker_index,
+                None,
                 None,
             )
             .expect(avro_err),
@@ -382,12 +393,14 @@ where
                     key: _,
                     value: payload,
                     position: aux_num,
+                    upstream_time_millis,
                 } in data.iter()
                 {
                     if !payload.is_empty() {
                         value_decoder_state.give_value(
                             payload,
                             *aux_num,
+                            *upstream_time_millis,
                             &mut session,
                             *cap.time(),
                         );
@@ -480,6 +493,10 @@ where
 {
     let op_name = format!("{}Decode", encoding.op_name());
     let worker_index = stream.scope().index();
+    let key_indices = encoding
+        .desc(envelope)
+        .ok()
+        .and_then(|desc| desc.typ().keys.get(0).cloned());
     match (encoding, envelope) {
         (_, Envelope::Upsert(_)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
@@ -501,6 +518,7 @@ where
                 Envelope::Debezium(ds) => *ds,
                 _ => unreachable!(),
             };
+
             (
                 decode_values_inner(
                     stream,
@@ -512,6 +530,7 @@ where
                         debug_name.to_string(),
                         worker_index,
                         Some(dedup_strat),
+                        key_indices,
                     )
                     .expect("Failed to create Avro decoder"),
                     &op_name,
@@ -531,6 +550,7 @@ where
                     debug_name.to_string(),
                     worker_index,
                     None,
+                    key_indices,
                 )
                 .expect("Failed to create Avro decoder"),
                 &op_name,

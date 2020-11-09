@@ -14,6 +14,6 @@
 set -euo pipefail
 
 git clean -ffdX ci/www/public
-hugo --gc --baseURL https://ci.materialize.io/docs --source doc/user --destination ../../ci/www/public/docs
+hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --destination ../../ci/www/public/docs
 echo "<!doctype html>" > ci/www/public/index.html
 htmltest -s ci/www/public -c doc/user/.htmltest.yml

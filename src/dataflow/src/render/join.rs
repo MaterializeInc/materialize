@@ -144,7 +144,10 @@ where
                     .filter(|c| column_demand.contains(c))
                     .collect::<Vec<_>>();
 
-                let next_vals = input_mapper.map_columns_to_local(&next_source_vals);
+                let next_vals = next_source_vals
+                    .iter()
+                    .map(|c| input_mapper.map_column_to_local(*c).0)
+                    .collect::<Vec<_>>();
 
                 // When joining the first input, check to see if there is a
                 // convenient ready-made arrangement

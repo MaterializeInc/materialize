@@ -151,7 +151,8 @@ impl Action for VerifyAction {
             let row = state
                 .pgclient
                 .query_one(
-                    "SELECT path FROM mz_catalog_names NATURAL JOIN mz_avro_ocf_sinks \
+                    "SELECT path FROM mz_catalog_names
+                     JOIN mz_avro_ocf_sinks ON global_id = sink_id
                      WHERE name = $1",
                     &[&self.sink],
                 )
@@ -173,9 +174,10 @@ impl Action for VerifyAction {
             let reader = Reader::new(file).map_err(|e| format!("creating avro reader: {}", e))?;
             let schema = reader.writer_schema().clone();
             let actual = reader
+                .map(|res| res.map(|val| (None, val)))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| format!("reading avro values from file: {}", e))?;
-            avro::validate_sink(&schema, &self.expected, &actual)
+            avro::validate_sink(None, &schema, &self.expected, &actual)
         })
     }
 }

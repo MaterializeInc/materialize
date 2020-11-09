@@ -17,7 +17,7 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
 
 > CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
-  WITH (persistence=true) FORMAT BYTES
+  WITH (cache=true) FORMAT BYTES
 
 > SELECT offset, value FROM internal_read_persisted_data('data') ORDER BY OFFSET
  offset  value

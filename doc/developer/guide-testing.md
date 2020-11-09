@@ -307,7 +307,7 @@ and materialized binaries if you have changed them locally. From the
 `test/testdrive` directory:
 
 ```
-./mzcompose down
+./mzcompose down -v
 BUILD_MODE=debug AWS_REGION= ./mzcompose run testdrive
 ```
 

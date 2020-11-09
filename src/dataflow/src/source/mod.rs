@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
@@ -38,6 +38,7 @@ use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
 
 use super::source::util::source;
+use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
@@ -87,6 +88,8 @@ pub struct SourceConfig<'a, G> {
     pub encoding: DataEncoding,
     /// Channel to send persistence information to persister thread
     pub persistence_tx: Option<PersistenceSender>,
+    /// Timely worker logger for source events
+    pub logger: Option<Logger>,
 }
 
 #[derive(Clone, Serialize, Debug, Deserialize)]
@@ -102,6 +105,24 @@ where
     pub value: V,
     /// The position in the source, if such a concept exists (e.g., Kafka offset, file line number)
     pub position: Option<i64>,
+    /// The time the record was created in the upstream systsem, as milliseconds since the epoch
+    pub upstream_time_millis: Option<i64>,
+}
+
+/// The data that we send from sources to the decode process
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub(crate) struct SourceData {
+    /// The actual value
+    pub(crate) value: Vec<u8>,
+    /// The source's reported position for this record
+    ///
+    /// e.g. kafka offset or file location
+    pub(crate) position: Option<i64>,
+
+    /// The time that the upstream source believes that the message was created
+    ///
+    /// Currently only applies to Kafka
+    pub(crate) upstream_time_millis: Option<i64>,
 }
 
 impl<K, V> SourceOutput<K, V>
@@ -110,11 +131,17 @@ where
     V: Data,
 {
     /// Build a new SourceOutput
-    pub fn new(key: K, value: V, position: Option<i64>) -> SourceOutput<K, V> {
+    pub fn new(
+        key: K,
+        value: V,
+        position: Option<i64>,
+        upstream_time_millis: Option<i64>,
+    ) -> SourceOutput<K, V> {
         SourceOutput {
             key,
             value,
             position,
+            upstream_time_millis,
         }
     }
 }
@@ -216,6 +243,7 @@ pub(crate) trait SourceConstructor<Out> {
         active: bool,
         worker_id: usize,
         worker_count: usize,
+        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -258,7 +286,7 @@ impl MaybeLength for Value {
 /// [`create_source`] function.
 pub(crate) trait SourceInfo<Out> {
     /// Activates timestamping for a given source. The actions
-    /// take are a function of the source type and the consistency
+    /// taken are a function of the source type and the consistency
     fn activate_source_timestamping(
         id: &SourceInstanceId,
         consistency: &Consistency,
@@ -346,10 +374,26 @@ pub struct SourceMessage<Out> {
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
     pub offset: MzOffset,
+    /// The time that an external system first observed the message
+    ///
+    /// Milliseconds since the unix epoch
+    pub upstream_time_millis: Option<i64>,
     /// Optional key
     pub key: Option<Vec<u8>>,
     /// Optional payload
     pub payload: Option<Out>,
+}
+
+impl<Out> fmt::Debug for SourceMessage<Out> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SourceMessage")
+            .field("partition", &self.partition)
+            .field("offset", &self.offset)
+            .field("upstream_time_millis", &self.upstream_time_millis)
+            .field("key[present]", &self.key.is_some())
+            .field("payload[present]", &self.payload.is_some())
+            .finish()
+    }
 }
 
 /// Consistency information. Each partition contains information about
@@ -680,7 +724,7 @@ impl SourceMetrics {
     }
 }
 
-/// Partition-specific Prometheus metrics
+/// Partition-specific metrics, recorded to both Prometheus and a system table
 pub struct PartitionMetrics {
     /// Highest offset that has been received by the source and timestamped
     offset_ingested: DeleteOnDropGauge<'static, AtomicI64>,
@@ -690,11 +734,34 @@ pub struct PartitionMetrics {
     closed_ts: DeleteOnDropGauge<'static, AtomicU64>,
     /// Total number of messages that have been received by the source and timestamped
     messages_ingested: DeleteOnDropCounter<'static, AtomicI64>,
+    logger: Option<Logger>,
+    source_name: String,
+    source_id: String,
+    partition_id: String,
+    last_offset: i64,
 }
 
 impl PartitionMetrics {
+    /// Record the latest offset ingested high-water mark
+    pub fn record_offset(&mut self, offset: i64) {
+        if let Some(logger) = self.logger.as_mut() {
+            logger.log(MaterializedEvent::SourceInfo {
+                source_name: self.source_name.clone(),
+                source_id: self.source_id.clone(),
+                partition_id: self.partition_id.clone(),
+                offset: offset - self.last_offset,
+            });
+        }
+        self.last_offset = offset;
+    }
+
     /// Initialises partition metrics for a given (source_id, partition_id)
-    pub fn new(source_name: &str, source_id: &str, partition_id: &str) -> PartitionMetrics {
+    pub fn new(
+        source_name: &str,
+        source_id: &str,
+        partition_id: &str,
+        logger: Option<Logger>,
+    ) -> PartitionMetrics {
         lazy_static! {
             static ref OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
                 "mz_partition_offset_ingested",
@@ -727,23 +794,42 @@ impl PartitionMetrics {
             offset_ingested: DeleteOnDropGauge::new_with_error_handler(
                 OFFSET_INGESTED.with_label_values(labels),
                 &OFFSET_INGESTED,
-                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
             offset_received: DeleteOnDropGauge::new_with_error_handler(
                 OFFSET_RECEIVED.with_label_values(labels),
                 &OFFSET_RECEIVED,
-                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
             closed_ts: DeleteOnDropGauge::new_with_error_handler(
                 CLOSED_TS.with_label_values(labels),
                 &CLOSED_TS,
-                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
             messages_ingested: DeleteOnDropCounter::new_with_error_handler(
                 MESSAGES_INGESTED.with_label_values(labels),
                 &MESSAGES_INGESTED,
-                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
+            logger,
+            source_name: source_name.to_string(),
+            source_id: source_id.to_string(),
+            partition_id: partition_id.to_string(),
+            last_offset: 0,
+        }
+    }
+}
+
+impl Drop for PartitionMetrics {
+    fn drop(&mut self) {
+        // retract our partition from logging
+        if let Some(logger) = self.logger.as_mut() {
+            logger.log(MaterializedEvent::SourceInfo {
+                source_name: self.source_name.clone(),
+                source_id: self.source_id.clone(),
+                partition_id: self.partition_id.clone(),
+                offset: -self.last_offset,
+            });
         }
     }
 }
@@ -778,6 +864,7 @@ where
         active,
         encoding,
         mut persistence_tx,
+        logger,
         ..
     } = config;
 
@@ -811,6 +898,7 @@ where
             active,
             worker_id,
             worker_count,
+            logger,
             scope.sync_activator_for(&info.address[..]),
             source_connector.clone(),
             &mut consistency_info,
@@ -849,9 +937,12 @@ where
                     let ts = consistency_info.find_matching_rt_timestamp();
                     let ts_cap = cap.delayed(&ts);
                     for m in msgs {
-                        output
-                            .session(&ts_cap)
-                            .give(Ok(SourceOutput::new(m.0, m.1, Some(m.3))));
+                        output.session(&ts_cap).give(Ok(SourceOutput::new(
+                            m.0,
+                            m.1,
+                            Some(m.3),
+                            None, // upstream timestamps are normalized before they are persisted
+                        )));
                     }
 
                     // Yield to give downstream operators time to handle this data.
@@ -866,8 +957,10 @@ where
             // Bound execution of operator to prevent a single operator from hogging
             // the CPU if there are many messages to process
             let timer = Instant::now();
-            // Accumulate updates to BYTES_READ_COUNTER for Promethes metrics collection
+            // Accumulate updates to BYTES_READ_COUNTER for Prometheus metrics collection
             let mut bytes_read = 0;
+            // Accumulate updates to offsets for system table metrics collection
+            let mut mets = HashMap::new();
 
             // Record operator has been scheduled
             consistency_info
@@ -882,6 +975,12 @@ where
                         let offset = message.offset;
                         let msg_predecessor = predecessor;
                         predecessor = Some(offset);
+
+                        if let Some(off) = mets.get_mut(&partition) {
+                            *off = offset;
+                        } else {
+                            mets.insert(partition.clone(), offset);
+                        }
 
                         // Update ingestion metrics. Guaranteed to exist as the appropriate
                         // entry gets created in SourceConstructor or when a new partition
@@ -941,6 +1040,7 @@ where
                                     key,
                                     out,
                                     Some(offset.offset),
+                                    message.upstream_time_millis,
                                 )));
 
                                 // Update ingestion metrics
@@ -994,6 +1094,14 @@ where
                         return SourceStatus::Done;
                     }
                 }
+            }
+
+            for (partition, offset) in mets {
+                let partition_metrics = consistency_info
+                    .partition_metrics
+                    .get_mut(&partition)
+                    .unwrap();
+                partition_metrics.record_offset(offset.offset);
             }
 
             // Downgrade capability (if possible) before exiting

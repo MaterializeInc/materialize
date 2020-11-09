@@ -7,15 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
+use std::iter;
 use std::str;
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
 use itertools::Itertools;
+use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
@@ -113,18 +116,18 @@ fn abs_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().abs())
 }
 
-fn cast_bool_to_string_explicit<'a>(a: Datum<'a>) -> Datum<'a> {
-    // N.B. this function differs from `cast_bool_to_string_implicit` because
-    // the SQL specification requires `true` and `false` to be spelled out
-    // in explicit casts, while PostgreSQL prefers its more concise `t` and `f`
-    // representation in implicit casts.
+fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
     match a.unwrap_bool() {
         true => Datum::from("true"),
         false => Datum::from("false"),
     }
 }
 
-fn cast_bool_to_string_implicit<'a>(a: Datum<'a>) -> Datum<'a> {
+fn cast_bool_to_string_nonstandard<'a>(a: Datum<'a>) -> Datum<'a> {
+    // N.B. this function differs from `cast_bool_to_string_implicit` because
+    // the SQL specification requires `true` and `false` to be spelled out in
+    // explicit casts, while PostgreSQL prefers its more concise `t` and `f`
+    // representation in some contexts, for historical reasons.
     Datum::String(strconv::format_bool_static(a.unwrap_bool()))
 }
 
@@ -347,6 +350,28 @@ fn cast_string_to_date<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .err_into()
 }
 
+fn cast_string_to_list<'a>(
+    a: Datum<'a>,
+    list_typ: &ScalarType,
+    cast_expr: &'a ScalarExpr,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let parsed_datums = strconv::parse_list(
+        a.unwrap_str(),
+        matches!(list_typ.unwrap_list_element_type(), ScalarType::List(..)),
+        || Datum::Null,
+        |elem_text| {
+            let elem_text = match elem_text {
+                Cow::Owned(s) => temp_storage.push_string(s),
+                Cow::Borrowed(s) => s,
+            };
+            cast_expr.eval(&[Datum::String(elem_text)], temp_storage)
+        },
+    )?;
+
+    Ok(temp_storage.make_datum(|packer| packer.push_list(parsed_datums)))
+}
+
 fn cast_string_to_time<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     strconv::parse_time(a.unwrap_str())
         .map(Datum::Time)
@@ -479,7 +504,7 @@ fn cast_bytes_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
 fn cast_string_to_jsonb<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     match strconv::parse_jsonb(a.unwrap_str()) {
         Err(_) => Datum::Null,
-        Ok(jsonb) => temp_storage.push_row(jsonb.into_row()).unpack_first(),
+        Ok(jsonb) => temp_storage.push_unary_row(jsonb.into_row()),
     }
 }
 
@@ -539,6 +564,24 @@ fn cast_uuid_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
     let mut buf = String::new();
     strconv::format_uuid(&mut buf, a.unwrap_uuid());
     Datum::String(temp_storage.push_string(buf))
+}
+
+/// Casts between two list types by casting each element of `a` ("list1") using
+/// `cast_expr` and collecting the results into a new list ("list2").
+fn cast_list1_to_list2<'a>(
+    a: Datum,
+    cast_expr: &'a ScalarExpr,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut cast_datums = Vec::new();
+    for el in a.unwrap_list().iter() {
+        // `cast_expr` is evaluated as an expression that casts the
+        // first column in `datums` (i.e. `datums[0]`) from the list elements'
+        // current type to a target type.
+        cast_datums.push(cast_expr.eval(&[el], temp_storage)?);
+    }
+
+    Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
 }
 
 fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1217,34 +1260,6 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     }
 }
 
-fn match_like_pattern<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let haystack = a.unwrap_str();
-    let needle = like_pattern::build_regex(b.unwrap_str())?;
-    Ok(Datum::from(needle.is_match(haystack)))
-}
-
-fn match_cached_regex<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
-    let haystack = a.unwrap_str();
-    Datum::from(needle.is_match(haystack))
-}
-
-fn match_regex<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    case_insensitive: bool,
-) -> Result<Datum<'a>, EvalError> {
-    let haystack = a.unwrap_str();
-    let needle = build_regex(b, case_insensitive)?;
-    Ok(Datum::from(needle.is_match(haystack)))
-}
-
-pub fn build_regex(d: Datum, case_insensitive: bool) -> Result<regex::Regex, EvalError> {
-    regex::RegexBuilder::new(d.unwrap_str())
-        .case_insensitive(case_insensitive)
-        .build()
-        .map_err(|e| EvalError::InvalidRegex(e.to_string()))
-}
-
 fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
     match a.unwrap_str().chars().next() {
         None => Datum::Int32(0),
@@ -1762,8 +1777,8 @@ pub enum BinaryFunc {
     Lte,
     Gt,
     Gte,
-    MatchLikePattern,
-    MatchRegex { case_insensitive: bool },
+    IsLikePatternMatch,
+    IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
     DatePartInterval,
@@ -1790,6 +1805,11 @@ pub enum BinaryFunc {
     ListLengthMax { max_dim: usize },
     ArrayContains,
     ArrayIndex,
+    ArrayLower,
+    ArrayUpper,
+    ListListConcat,
+    ListElementConcat,
+    ElementListConcat,
 }
 
 impl BinaryFunc {
@@ -1860,8 +1880,10 @@ impl BinaryFunc {
             BinaryFunc::Lte => Ok(eager!(lte)),
             BinaryFunc::Gt => Ok(eager!(gt)),
             BinaryFunc::Gte => Ok(eager!(gte)),
-            BinaryFunc::MatchLikePattern => eager!(match_like_pattern),
-            BinaryFunc::MatchRegex { case_insensitive } => eager!(match_regex, *case_insensitive),
+            BinaryFunc::IsLikePatternMatch => eager!(is_like_pattern_match_dynamic),
+            BinaryFunc::IsRegexpMatch { case_insensitive } => {
+                eager!(is_regexp_match_dynamic, *case_insensitive)
+            }
             BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
             BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
             BinaryFunc::DatePartInterval => {
@@ -1903,6 +1925,11 @@ impl BinaryFunc {
             BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
             BinaryFunc::ArrayIndex => Ok(eager!(array_index)),
+            BinaryFunc::ArrayLower => Ok(eager!(array_lower)),
+            BinaryFunc::ArrayUpper => Ok(eager!(array_upper)),
+            BinaryFunc::ListListConcat => Ok(eager!(list_list_concat, temp_storage)),
+            BinaryFunc::ListElementConcat => Ok(eager!(list_element_concat, temp_storage)),
+            BinaryFunc::ElementListConcat => Ok(eager!(element_list_concat, temp_storage)),
         }
     }
 
@@ -1927,7 +1954,7 @@ impl BinaryFunc {
                 ScalarType::Bool.nullable(in_nullable)
             }
 
-            MatchLikePattern | MatchRegex { .. } => {
+            IsLikePatternMatch | IsRegexpMatch { .. } => {
                 // The output can be null if the pattern is invalid.
                 ScalarType::Bool.nullable(true)
             }
@@ -2043,13 +2070,22 @@ impl BinaryFunc {
                 .clone()
                 .nullable(true),
 
-            ListLengthMax { .. } => ScalarType::Int64.nullable(true),
+            ListLengthMax { .. } | ArrayLower | ArrayUpper => ScalarType::Int64.nullable(true),
+            ListListConcat | ListElementConcat => input1_type.scalar_type.nullable(true),
+            ElementListConcat => input2_type.scalar_type.nullable(true),
         }
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        !matches!(self, BinaryFunc::And | BinaryFunc::Or)
+        !matches!(
+            self,
+            BinaryFunc::And
+                | BinaryFunc::Or
+                | BinaryFunc::ListListConcat
+                | BinaryFunc::ListElementConcat
+                | BinaryFunc::ElementListConcat
+        )
     }
 
     /// Whether the function might return NULL even if none of its inputs are
@@ -2171,10 +2207,15 @@ impl BinaryFunc {
             | JsonbDeleteString
             | TextConcat
             | ListIndex
-            | MatchRegex { .. }
+            | IsRegexpMatch { .. }
             | ArrayContains
-            | ArrayIndex => true,
-            MatchLikePattern
+            | ArrayIndex
+            | ArrayLower
+            | ArrayUpper
+            | ListListConcat
+            | ListElementConcat
+            | ElementListConcat => true,
+            IsLikePatternMatch
             | ToCharTimestamp
             | ToCharTimestampTz
             | DatePartInterval
@@ -2246,11 +2287,11 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Lte => f.write_str("<="),
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
-            BinaryFunc::MatchLikePattern => f.write_str("like"),
-            BinaryFunc::MatchRegex {
+            BinaryFunc::IsLikePatternMatch => f.write_str("like"),
+            BinaryFunc::IsRegexpMatch {
                 case_insensitive: false,
             } => f.write_str("~"),
-            BinaryFunc::MatchRegex {
+            BinaryFunc::IsRegexpMatch {
                 case_insensitive: true,
             } => f.write_str("~*"),
             BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
@@ -2280,6 +2321,11 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
             BinaryFunc::ArrayIndex => f.write_str("array_index"),
+            BinaryFunc::ArrayLower => f.write_str("array_lower"),
+            BinaryFunc::ArrayUpper => f.write_str("array_upper"),
+            BinaryFunc::ListListConcat => f.write_str("||"),
+            BinaryFunc::ListElementConcat => f.write_str("||"),
+            BinaryFunc::ElementListConcat => f.write_str("||"),
         }
     }
 }
@@ -2306,8 +2352,8 @@ pub enum UnaryFunc {
     AbsFloat32,
     AbsFloat64,
     AbsDecimal,
-    CastBoolToStringExplicit,
-    CastBoolToStringImplicit,
+    CastBoolToString,
+    CastBoolToStringNonstandard,
     CastBoolToInt32,
     CastInt32ToBool,
     CastInt32ToFloat32,
@@ -2341,6 +2387,13 @@ pub enum UnaryFunc {
     CastStringToFloat32,
     CastStringToFloat64,
     CastStringToDate,
+    CastStringToList {
+        // Target list's type
+        return_ty: ScalarType,
+        // The expression to cast the discovered list elements to the list's
+        // elements' type
+        cast_expr: Box<ScalarExpr>,
+    },
     CastStringToTime,
     CastStringToTimestamp,
     CastStringToTimestampTz,
@@ -2367,8 +2420,21 @@ pub enum UnaryFunc {
     CastJsonbToFloat64,
     CastJsonbToBool,
     CastUuidToString,
-    CastRecordToString { ty: ScalarType },
-    CastArrayToString { ty: ScalarType },
+    CastRecordToString {
+        ty: ScalarType,
+    },
+    CastArrayToString {
+        ty: ScalarType,
+    },
+    CastListToString {
+        ty: ScalarType,
+    },
+    CastList1ToList2 {
+        // List2's type
+        return_ty: ScalarType,
+        // The expression to cast List1's elements to List2's elements' type
+        cast_expr: Box<ScalarExpr>,
+    },
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -2381,7 +2447,8 @@ pub enum UnaryFunc {
     ByteLengthBytes,
     ByteLengthString,
     CharLength,
-    MatchRegex(Regex),
+    IsRegexpMatch(Regex),
+    RegexpMatch(Regex),
     DatePartInterval(DateTimeUnits),
     DatePartTimestamp(DateTimeUnits),
     DatePartTimestampTz(DateTimeUnits),
@@ -2428,8 +2495,8 @@ impl UnaryFunc {
             UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
             UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
             UnaryFunc::AbsDecimal => Ok(abs_decimal(a)),
-            UnaryFunc::CastBoolToStringExplicit => Ok(cast_bool_to_string_explicit(a)),
-            UnaryFunc::CastBoolToStringImplicit => Ok(cast_bool_to_string_implicit(a)),
+            UnaryFunc::CastBoolToString => Ok(cast_bool_to_string(a)),
+            UnaryFunc::CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
             UnaryFunc::CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
             UnaryFunc::CastInt32ToBool => Ok(cast_int32_to_bool(a)),
             UnaryFunc::CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
@@ -2463,6 +2530,10 @@ impl UnaryFunc {
             UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
             UnaryFunc::CastStringToDecimal(scale) => cast_string_to_decimal(a, *scale),
             UnaryFunc::CastStringToDate => cast_string_to_date(a),
+            UnaryFunc::CastStringToList {
+                cast_expr,
+                return_ty,
+            } => cast_string_to_list(a, return_ty, &*cast_expr, temp_storage),
             UnaryFunc::CastStringToTime => cast_string_to_time(a),
             UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
             UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
@@ -2491,8 +2562,13 @@ impl UnaryFunc {
             UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
             UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
             UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
-            UnaryFunc::CastRecordToString { ty } | UnaryFunc::CastArrayToString { ty } => {
+            UnaryFunc::CastRecordToString { ty }
+            | UnaryFunc::CastArrayToString { ty }
+            | UnaryFunc::CastListToString { ty } => {
                 Ok(cast_collection_to_string(a, ty, temp_storage))
+            }
+            UnaryFunc::CastList1ToList2 { cast_expr, .. } => {
+                cast_list1_to_list2(a, &*cast_expr, temp_storage)
             }
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
@@ -2509,7 +2585,8 @@ impl UnaryFunc {
             UnaryFunc::ByteLengthString => byte_length(a.unwrap_str()),
             UnaryFunc::ByteLengthBytes => byte_length(a.unwrap_bytes()),
             UnaryFunc::CharLength => char_length(a),
-            UnaryFunc::MatchRegex(regex) => Ok(match_cached_regex(a, &regex)),
+            UnaryFunc::IsRegexpMatch(regex) => Ok(is_regexp_match_static(a, &regex)),
+            UnaryFunc::RegexpMatch(regex) => regexp_match_static(a, temp_storage, &regex),
             UnaryFunc::DatePartInterval(units) => {
                 date_part_interval_inner(*units, a.unwrap_interval())
             }
@@ -2548,7 +2625,7 @@ impl UnaryFunc {
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(in_nullable),
 
-            MatchRegex(_) => ScalarType::Bool.nullable(in_nullable),
+            IsRegexpMatch(_) => ScalarType::Bool.nullable(in_nullable),
 
             CastStringToBool => ScalarType::Bool.nullable(true),
             CastStringToBytes => ScalarType::Bytes.nullable(true),
@@ -2568,8 +2645,8 @@ impl UnaryFunc {
 
             CastBoolToInt32 => ScalarType::Int32.nullable(in_nullable),
 
-            CastBoolToStringExplicit
-            | CastBoolToStringImplicit
+            CastBoolToString
+            | CastBoolToStringNonstandard
             | CastInt32ToString
             | CastInt64ToString
             | CastFloat32ToString
@@ -2583,6 +2660,7 @@ impl UnaryFunc {
             | CastBytesToString
             | CastRecordToString { .. }
             | CastArrayToString { .. }
+            | CastListToString { .. }
             | TrimWhitespace
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace => ScalarType::String.nullable(in_nullable),
@@ -2635,6 +2713,10 @@ impl UnaryFunc {
 
             CastUuidToString => ScalarType::String.nullable(true),
 
+            CastList1ToList2 { return_ty, .. } | CastStringToList { return_ty, .. } => {
+                (return_ty.clone()).nullable(false)
+            }
+
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),
             CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) | SqrtDec(scale) => {
@@ -2671,6 +2753,8 @@ impl UnaryFunc {
             },
 
             ListLength => ScalarType::Int64.nullable(true),
+
+            RegexpMatch(_) => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
         }
     }
 
@@ -2692,7 +2776,8 @@ impl UnaryFunc {
                 | UnaryFunc::NegFloat32
                 | UnaryFunc::NegFloat64
                 | UnaryFunc::NegDecimal
-                | UnaryFunc::CastBoolToStringExplicit
+                | UnaryFunc::CastBoolToString
+                | UnaryFunc::CastBoolToStringNonstandard
                 | UnaryFunc::CastInt32ToInt64
                 | UnaryFunc::CastInt32ToString
                 | UnaryFunc::CastInt64ToString
@@ -2725,8 +2810,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsDecimal => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
-            UnaryFunc::CastBoolToStringExplicit => f.write_str("booltostrex"),
-            UnaryFunc::CastBoolToStringImplicit => f.write_str("booltostrim"),
+            UnaryFunc::CastBoolToString => f.write_str("booltostr"),
+            UnaryFunc::CastBoolToStringNonstandard => f.write_str("booltostrns"),
             UnaryFunc::CastBoolToInt32 => f.write_str("booltoi32"),
             UnaryFunc::CastInt32ToBool => f.write_str("i32tobool"),
             UnaryFunc::CastInt32ToFloat32 => f.write_str("i32tof32"),
@@ -2761,6 +2846,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
             UnaryFunc::CastStringToDecimal(_) => f.write_str("strtodec"),
             UnaryFunc::CastStringToDate => f.write_str("strtodate"),
+            UnaryFunc::CastStringToList { .. } => f.write_str("strtolist"),
             UnaryFunc::CastStringToTime => f.write_str("strtotime"),
             UnaryFunc::CastStringToTimestamp => f.write_str("strtots"),
             UnaryFunc::CastStringToTimestampTz => f.write_str("strtotstz"),
@@ -2788,6 +2874,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastUuidToString => f.write_str("uuidtostr"),
             UnaryFunc::CastRecordToString { .. } => f.write_str("recordtostr"),
             UnaryFunc::CastArrayToString { .. } => f.write_str("arraytostr"),
+            UnaryFunc::CastListToString { .. } => f.write_str("listtostr"),
+            UnaryFunc::CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
@@ -2803,7 +2891,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::BitLengthString => f.write_str("bit_length"),
             UnaryFunc::ByteLengthBytes => f.write_str("byte_length"),
             UnaryFunc::ByteLengthString => f.write_str("byte_length"),
-            UnaryFunc::MatchRegex(regex) => write!(f, "\"{}\" ~", regex.as_str()),
+            UnaryFunc::IsRegexpMatch(regex) => write!(f, "\"{}\" ~", regex.as_str()),
+            UnaryFunc::RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             UnaryFunc::DatePartInterval(units) => write!(f, "date_part_{}_iv", units),
             UnaryFunc::DatePartTimestamp(units) => write!(f, "date_part_{}_ts", units),
             UnaryFunc::DatePartTimestampTz(units) => write!(f, "date_part_{}_tstz", units),
@@ -2952,6 +3041,99 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::String(
         string.split(delimiter).nth(index).unwrap_or(""),
     ))
+}
+
+fn is_like_pattern_match_dynamic<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let haystack = a.unwrap_str();
+    let needle = like_pattern::build_regex(b.unwrap_str())?;
+    Ok(Datum::from(needle.is_match(haystack)))
+}
+
+fn is_regexp_match_static<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
+    let haystack = a.unwrap_str();
+    Datum::from(needle.is_match(haystack))
+}
+
+fn is_regexp_match_dynamic<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    case_insensitive: bool,
+) -> Result<Datum<'a>, EvalError> {
+    let haystack = a.unwrap_str();
+    let needle = build_regex(b.unwrap_str(), if case_insensitive { "i" } else { "" })?;
+    Ok(Datum::from(needle.is_match(haystack)))
+}
+
+fn regexp_match_dynamic<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let haystack = datums[0];
+    let needle = datums[1].unwrap_str();
+    let flags = match datums.get(2) {
+        Some(d) => d.unwrap_str(),
+        None => "",
+    };
+    let needle = build_regex(needle, flags)?;
+    regexp_match_static(haystack, temp_storage, &needle)
+}
+
+fn regexp_match_static<'a>(
+    haystack: Datum<'a>,
+    temp_storage: &'a RowArena,
+    needle: &regex::Regex,
+) -> Result<Datum<'a>, EvalError> {
+    let mut packer = RowPacker::new();
+    if needle.captures_len() > 1 {
+        // The regex contains capture groups, so return an array containing the
+        // matched text in each capture group, unless the entire match fails.
+        // Individual capture groups may also be null if that group did not
+        // participate in the match.
+        match needle.captures(haystack.unwrap_str()) {
+            None => packer.push(Datum::Null),
+            Some(captures) => packer.push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: captures.len() - 1,
+                }],
+                // Skip the 0th capture group, which is the whole match.
+                captures.iter().skip(1).map(|mtch| match mtch {
+                    None => Datum::Null,
+                    Some(mtch) => Datum::String(mtch.as_str()),
+                }),
+            )?,
+        }
+    } else {
+        // The regex contains no capture groups, so return a one-element array
+        // containing the match, or null if there is no match.
+        match needle.find(haystack.unwrap_str()) {
+            None => packer.push(Datum::Null),
+            Some(mtch) => packer.push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: 1,
+                }],
+                iter::once(Datum::String(mtch.as_str())),
+            )?,
+        };
+    };
+    Ok(temp_storage.push_unary_row(packer.finish()))
+}
+
+pub fn build_regex(needle: &str, flags: &str) -> Result<regex::Regex, EvalError> {
+    let mut regex = RegexBuilder::new(needle);
+    for f in flags.chars() {
+        match f {
+            'i' => {
+                regex.case_insensitive(true);
+            }
+            'c' => {
+                regex.case_insensitive(false);
+            }
+            _ => return Err(EvalError::InvalidRegexFlag(f)),
+        }
+    }
+    Ok(regex.build()?)
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
@@ -3304,6 +3486,28 @@ fn array_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         .unwrap_or(Datum::Null)
 }
 
+fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Datum::Null;
+    }
+    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
+        Some(_) => Datum::Int64(1),
+        None => Datum::Null,
+    }
+}
+
+fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Datum::Null;
+    }
+    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
+        Some(dim) => Datum::Int64(dim.length as i64),
+        None => Datum::Null,
+    }
+}
+
 fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Datum<'a>, EvalError> {
     fn max_len_on_dim<'a>(d: Datum<'a>, on_dim: i64) -> Option<i64> {
         match d {
@@ -3342,6 +3546,45 @@ fn array_contains<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(array.elements().iter().any(|e| e == a))
 }
 
+fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    if a.is_null() {
+        return b;
+    } else if b.is_null() {
+        return a;
+    }
+
+    let a = a.unwrap_list().iter();
+    let b = b.unwrap_list().iter();
+
+    temp_storage.make_datum(|packer| packer.push_list(a.chain(b)))
+}
+
+fn list_element_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| {
+        packer.push_list_with(|packer| {
+            if !a.is_null() {
+                for elem in a.unwrap_list().iter() {
+                    packer.push(elem);
+                }
+            }
+            packer.push(b);
+        })
+    })
+}
+
+fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| {
+        packer.push_list_with(|packer| {
+            packer.push(a);
+            if !b.is_null() {
+                for elem in b.unwrap_list().iter() {
+                    packer.push(elem);
+                }
+            }
+        })
+    })
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
@@ -3368,6 +3611,7 @@ pub enum VariadicFunc {
     },
     ListSlice,
     SplitPart,
+    RegexpMatch,
 }
 
 impl VariadicFunc {
@@ -3393,7 +3637,7 @@ impl VariadicFunc {
             VariadicFunc::Coalesce => coalesce(datums, temp_storage, exprs),
             VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
             VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
-            VariadicFunc::PadLeading => Ok(eager!(pad_leading, temp_storage)?),
+            VariadicFunc::PadLeading => eager!(pad_leading, temp_storage),
             VariadicFunc::Substr => Ok(eager!(substr)),
             VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
@@ -3409,7 +3653,8 @@ impl VariadicFunc {
                 Ok(eager!(list_create, temp_storage))
             }
             VariadicFunc::ListSlice => Ok(eager!(list_slice, temp_storage)),
-            VariadicFunc::SplitPart => Ok(eager!(split_part)?),
+            VariadicFunc::SplitPart => eager!(split_part),
+            VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
         }
     }
 
@@ -3461,6 +3706,7 @@ impl VariadicFunc {
             }
             .nullable(true),
             SplitPart => ScalarType::String.nullable(true),
+            RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
         }
     }
 
@@ -3494,6 +3740,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
             VariadicFunc::ListSlice => f.write_str("list_slice"),
             VariadicFunc::SplitPart => f.write_str("split_string"),
+            VariadicFunc::RegexpMatch => f.write_str("regexp_match"),
         }
     }
 }

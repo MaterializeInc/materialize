@@ -28,6 +28,7 @@ pub struct Config {
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
     experimental_mode: bool,
+    threads: usize,
 }
 
 impl Default for Config {
@@ -37,6 +38,7 @@ impl Default for Config {
             logging_granularity: Some(Duration::from_millis(10)),
             tls: None,
             experimental_mode: false,
+            threads: 1,
         }
     }
 }
@@ -68,16 +70,26 @@ impl Config {
         self.experimental_mode = true;
         self
     }
+
+    pub fn threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
+        self
+    }
 }
 
 pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
     let mut runtime = Runtime::new()?;
     let inner = runtime.block_on(materialized::serve(materialized::Config {
-        logging_granularity: config.logging_granularity,
+        logging: config
+            .logging_granularity
+            .map(|granularity| coord::LoggingConfig {
+                granularity,
+                log_logging: false,
+            }),
         timestamp_frequency: Duration::from_millis(10),
         persistence: None,
         logical_compaction_window: None,
-        threads: 1,
+        threads: config.threads,
         process: 0,
         addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
         data_directory: config.data_directory,

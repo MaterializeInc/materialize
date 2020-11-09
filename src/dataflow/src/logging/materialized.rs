@@ -27,9 +27,7 @@ use repr::{Datum, Timestamp};
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
 
 /// A logged materialized event.
-#[derive(
-    Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum MaterializedEvent {
     /// Dataflow command, true for create and false for drop.
     Dataflow(GlobalId, bool),
@@ -42,6 +40,17 @@ pub enum MaterializedEvent {
     },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
+    /// Tracks the source name, id, partition id, and received/ingested offsets
+    SourceInfo {
+        /// Name of the source
+        source_name: String,
+        /// Source identifier
+        source_id: String,
+        /// Partition identifier
+        partition_id: String,
+        /// Highest offset we've seen
+        offset: i64,
+    },
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
 }
@@ -79,7 +88,6 @@ pub fn construct<A: Allocate>(
         use timely::dataflow::operators::capture::Replay;
         use timely::dataflow::operators::Map;
 
-        // TODO: Rewrite as one operator with multiple outputs.
         let logs = Some(linked).replay_core(
             scope,
             Some(Duration::from_nanos(config.granularity_ns as u64)),
@@ -94,6 +102,7 @@ pub fn construct<A: Allocate>(
         let (mut dataflow_out, dataflow) = demux.new_output();
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
+        let (mut source_info_out, source_info) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
@@ -104,6 +113,7 @@ pub fn construct<A: Allocate>(
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
                 let mut peek = peek_out.activate();
+                let mut source_info = source_info_out.activate();
                 let mut frontier = frontier_out.activate();
 
                 input.for_each(|time, data| {
@@ -112,6 +122,7 @@ pub fn construct<A: Allocate>(
                     let mut dataflow_session = dataflow.session(&time);
                     let mut dependency_session = dependency.session(&time);
                     let mut peek_session = peek.session(&time);
+                    let mut source_info_session = source_info.session(&time);
                     let mut frontier_session = frontier.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
@@ -165,6 +176,18 @@ pub fn construct<A: Allocate>(
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
                                 peek_session.give((peek, worker, is_install, time_ns))
+                            }
+                            MaterializedEvent::SourceInfo {
+                                source_name,
+                                source_id,
+                                partition_id,
+                                offset,
+                            } => {
+                                source_info_session.give((
+                                    (source_name, source_id, partition_id),
+                                    time_ms,
+                                    offset,
+                                ));
                             }
                             MaterializedEvent::Frontier(name, logical, delta) => {
                                 frontier_session.give((
@@ -238,6 +261,21 @@ pub fn construct<A: Allocate>(
                     ])
                 }
             });
+
+        use differential_dataflow::operators::Count;
+        let source_info_current = source_info.as_collection().count().map({
+            let mut row_packer = repr::RowPacker::new();
+            move |((name, id, pid), offset)| {
+                {
+                    row_packer.pack(&[
+                        Datum::String(&name),
+                        Datum::String(&id),
+                        Datum::String(&pid),
+                        Datum::Int64(offset),
+                    ])
+                }
+            }
+        });
 
         let frontier_current = frontier.as_collection();
 
@@ -325,6 +363,10 @@ pub fn construct<A: Allocate>(
             (
                 LogVariant::Materialized(MaterializedLog::PeekDuration),
                 peek_duration,
+            ),
+            (
+                LogVariant::Materialized(MaterializedLog::SourceInfo),
+                source_info_current,
             ),
         ];
 

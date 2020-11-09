@@ -400,35 +400,35 @@ In a future iteration, we'll make this demo more interactive.
 
 ### Preparing the environment
 
-1. Start the Docker daemon for your machine, and [follow our Docker integration
-   guide](/third-party/docker).
+1. [Set up Docker and Docker compose](/third-party/docker), if you haven't
+   already.
 
-1. Clone the Materialize repo:
+1. Clone the Materialize repository:
 
     ```shell
-    git clone git@github.com:MaterializeInc/materialize.git
+    git clone https://github.com/MaterializeInc/materialize.git
     ```
 
-1. Move to the `demo/billing` dir:
+1. Move to the `demo/billing` directory:
 
     ```shell
     cd <path to materialize>/demo/billing
     ```
 
-    You can also find the demo's code on
+    You can also view the demo's code on
     [GitHub](https://github.com/MaterializeInc/materialize/tree/main/demo/billing).
 
-1. Deploy and start all of the components we've listed above.
-
-    Note that pulling down all of the Docker images necessary for the demo takes
-    some time (upwards of 3 minutes, even on very fast connections).
+1. Download and start all of the components we've listed above by running:
 
     ```shell
-    # Deploy the web server, load generator, and Materialize
     ./mzcompose up
     ```
 
-    This will start up all of our infrastructure and generate ~1000 events.
+   Note that downloading the Docker images necessary for the demo can take quite
+   a bit of time (upwards of 3 minutes, even on very fast connections).
+
+   If the command succeeds, it will have started all of the necessary
+   infrastructure will be started and will have generated ~1000 events.
 
 ### Understanding sources & views
 

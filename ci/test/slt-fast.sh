@@ -83,6 +83,7 @@ tests=(
     # test/sqllogictest/cockroach/decimal.slt
     test/sqllogictest/cockroach/delete.slt
     test/sqllogictest/cockroach/discard.slt
+    test/sqllogictest/cockroach/distinct_on.slt
     test/sqllogictest/cockroach/drop_database.slt
     test/sqllogictest/cockroach/drop_table.slt
     test/sqllogictest/cockroach/drop_user.slt
@@ -156,6 +157,7 @@ tests=(
     test/sqllogictest/cockroach/with.slt
     # test/sqllogictest/cockroach/zero.slt
     test/sqllogictest/postgres/join-lateral.slt
+    test/sqllogictest/postgres/regex.slt
     test/sqllogictest/postgres/subselect.slt
 )
 

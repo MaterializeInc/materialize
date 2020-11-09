@@ -19,8 +19,11 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
+use differential_dataflow::trace::BatchReader;
+use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -175,9 +178,16 @@ where
     /// required by `self.collection(expr)` when converting data from an
     /// arrangement; if less data are required, the `logic` argument is able
     /// to use a reference and produce the minimal amount of data instead.
-    pub fn flat_map_ref<I, L>(
+    ///
+    /// The method also takes a `key_selector` argument which allows the
+    /// caller to indicate that certain scalar expressions may have literal
+    /// values (at least, for all yielded results). This can enable the
+    /// use of keys in arrangements, and in particular drive the choice of
+    /// which arrangement to use toward one whose keys must be literals.
+    pub fn flat_map_ref<I, L, K>(
         &self,
         relation_expr: &P,
+        mut key_selector: K,
         mut logic: L,
     ) -> Option<(
         Collection<S, I::Item, Diff>,
@@ -187,25 +197,105 @@ where
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&V) -> I + 'static,
+        K: FnMut(&[ScalarExpr]) -> Option<V>,
     {
         if let Some((oks, err)) = self.collections.get(relation_expr) {
             Some((oks.flat_map(move |v| logic(&v)), err.clone()))
         } else if let Some(local) = self.local.get(relation_expr) {
-            let (oks, errs) = local.values().next().expect("Empty arrangement");
-            Some((
-                oks.flat_map_ref(move |_k, v| logic(v)),
-                errs.as_collection(|k, _v| k.clone()),
-            ))
+            // Determine a key that is constrained to a literal value.
+            let mut constrained_keys = local
+                .keys()
+                .filter_map(|key| key_selector(key).map(|row| (key.clone(), row)))
+                .collect::<Vec<_>>();
+            // Sort keys by length as a proxy for selectivity.
+            // TODO(#4580): improve this heuristic when possible.
+            constrained_keys.sort_by_key(|(key, _row)| key.len());
+            // If we found such a key, use a more advanced implementation.
+            if let Some((key, row)) = constrained_keys.pop() {
+                let (oks, errs) = &local[&key];
+                let result = Self::flat_map_ref_inner(oks, row, logic);
+                Some((result, errs.as_collection(|k, _v| k.clone())))
+            } else {
+                let (oks, errs) = local.values().next().expect("Empty arrangement");
+                Some((
+                    oks.flat_map_ref(move |_k, v| logic(v)),
+                    errs.as_collection(|k, _v| k.clone()),
+                ))
+            }
         } else if let Some(trace) = self.trace.get(relation_expr) {
-            let (_id, oks, errs) = trace.values().next().expect("Empty arrangement");
-            Some((
-                // oks.as_collection(|_k, v| v.clone()),
-                oks.flat_map_ref(move |_k, v| logic(v)),
-                errs.as_collection(|k, _v| k.clone()),
-            ))
+            // Determine a key that is constrained to a literal value.
+            let mut constrained_keys = trace
+                .keys()
+                .filter_map(|key| key_selector(key).map(|row| (key.clone(), row)))
+                .collect::<Vec<_>>();
+            // Sort keys by length as a proxy for selectivity.
+            // TODO(#4580): improve this heuristic when possible.
+            constrained_keys.sort_by_key(|(key, _row)| key.len());
+            // If we found such a key, use a more advanced implementation.
+            if let Some((key, row)) = constrained_keys.pop() {
+                let (_id, oks, errs) = &trace[&key];
+                let result = Self::flat_map_ref_inner(oks, row, logic);
+                Some((result, errs.as_collection(|k, _v| k.clone())))
+            } else {
+                let (_id, oks, errs) = trace.values().next().expect("Empty arrangement");
+                Some((
+                    oks.flat_map_ref(move |_k, v| logic(v)),
+                    errs.as_collection(|k, _v| k.clone()),
+                ))
+            }
         } else {
             None
         }
+    }
+
+    /// Factored out common logic for using literal keys in general traces.
+    ///
+    /// This logic is sufficiently interesting that we want to write it only
+    /// once, and thereby avoid any skew in the two uses of the logic.
+    fn flat_map_ref_inner<Tr, I, L>(
+        trace: &Arranged<S, Tr>,
+        row: V,
+        mut logic: L,
+    ) -> Collection<S, I::Item, Diff>
+    where
+        Tr: TraceReader<Key = V, Val = V, Time = S::Timestamp, R = repr::Diff> + Clone + 'static,
+        Tr::Batch: BatchReader<V, Tr::Val, S::Timestamp, repr::Diff> + 'static,
+        Tr::Cursor: Cursor<V, Tr::Val, S::Timestamp, repr::Diff> + 'static,
+        I: IntoIterator,
+        I::Item: Data,
+        L: FnMut(&V) -> I + 'static,
+    {
+        use differential_dataflow::AsCollection;
+        use timely::dataflow::operators::Operator;
+        trace
+            .stream
+            .unary(Pipeline, "AsCollection", move |_, _| {
+                move |input, output| {
+                    input.for_each(|time, data| {
+                        let mut session = output.session(&time);
+                        for wrapper in data.iter() {
+                            let batch = &wrapper;
+                            let mut cursor = batch.cursor();
+                            cursor.seek_key(batch, &row);
+                            if cursor.get_key(batch) == Some(&row) {
+                                while let Some(val) = cursor.get_val(batch) {
+                                    for datum in logic(val) {
+                                        cursor.map_times(batch, |time, diff| {
+                                            session.give((
+                                                datum.clone(),
+                                                time.clone(),
+                                                diff.clone(),
+                                            ));
+                                        });
+                                    }
+                                    cursor.step_val(batch);
+                                }
+                            }
+                        }
+                    });
+                }
+            })
+            .as_collection()
     }
 
     /// Convenience method for accessing `arrangement` when all keys are plain columns

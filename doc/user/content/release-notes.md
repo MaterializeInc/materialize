@@ -41,46 +41,109 @@ Strive for some variety of verbs. "Support new feature" gets boring as a release
 note.
 
 Use relative links (/path/to/doc), not absolute links
-(https://materialize.io/docs/path/to/doc).
+(https://materialize.com/docs/path/to/doc).
 
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.5.2 %}}
+
+- Support the [`pg_typeof` function](/sql/functions#postgresql-compatibility-func).
+- [`COPY TO`](/sql/copy-to) now supports `FORMAT binary`.
+- [`TAIL`](/sql/tail) is now guaranteed to produce output ordered by timestamp.
+
+{{% version-header v0.5.1 %}}
+
+- Send the rows returned by the [`TAIL`](/sql/tail) statement to the client
+  normally (i.e., as if the rows were returned by a [`SELECT`](/sql/select)
+  statement) rather than via the PostgreSQL [`COPY` protocol][pg-copy]. The new
+  format additionally moves the timestamp and diff information to dedicated
+  `timestamp` and `diff` columns at the beginning of each row.
+  **Backwards-incompatible change.**
+
+  To replicate the old behavior of sending `TAIL` results via the `COPY`
+  protocol, explicitly wrap the `TAIL` statement in a [`COPY TO`](/sql/copy-to)
+  statement:
+
+  ```
+  COPY (TAIL some_materialized_view) TO STDOUT
+  ```
+
+- Add the [`COPY TO`](/sql/copy-to) statement, which sends the results of
+  the statement it wraps via the special PostgreSQL [`COPY` protocol][pg-copy].
+
+- When creating a Kafka sink, permit specifying the columns to include in the
+  key of each record via the new `KEY` connector option in [`CREATE
+  SINK`](/sql/create-sink/#kafka-connector).
+
+- Default to using a worker thread count equal to half of the machine's
+  physical cores if the [`--workers`](/cli/#worker-threads) command-line
+  option is not specified.
+
+- Add the [`regexp_match`](/sql/functions#string-func) function to search a
+  string for a match against a regular expression.
+
+- Support [`SELECT DISTINCT ON (...)`](/sql/select/#syntax) to deduplicate the
+  output of a query based on only the specified columns in each row.
+  Prior to this release, the [`SELECT`](/sql/select) documentation incorrectly
+  claimed support for this feature.
+
+- Reduce memory usage in:
+  - Queries involving `min` and `max` aggregations {{% gh 4523 %}}.
+  - Indexes containing `text` or `bytea` data, especially when each
+    individual string or byte array is short {{% gh 4646 %}}.
+
 {{% version-header v0.5.0 %}}
 
-- Support [`CREATE TABLE`](/sql/create-table), [`DROP TABLE`](/sql/drop-table),
-  [`INSERT`](/sql/insert) and [`SHOW CREATE TABLE`](/sql/show-create-table).
+- Support tables via the new [`CREATE TABLE`](/sql/create-table), [`DROP
+  TABLE`](/sql/drop-table), [`INSERT`](/sql/insert) and [`SHOW CREATE
+  TABLE`](/sql/show-create-table) statements. Tables are conceptually similar to
+  a [source](/sql/create-source), but the data in a table is managed by
+  Materialize, rather than by Kafka or a filesystem.
+
+  Note that table data is currently ephemeral: data inserted into a table does
+  not persist across restarts. We expect to add support for persistent table
+  data in a future release.
 
 - Generate a persistent, unique identifier associated with each cluster. This
   can be retrieved using the new [`mz_cluster_id`](/sql/functions#uuid-func) SQL
   function.
 
-- Permit qualifying function names in SQL queries with the name of the schema
-  and optionally the database to which the function belongs, as in
-  `pg_catalog.abs(-1)` {{% gh 4293 %}}.
+- Automatically check for new versions of Materialize on server startup. If a
+  new version is available, a warning will be logged encouraging you to upgrade.
 
-  While presently all built-in functions belong to the system `mz_catalog` or
-  `pg_catalog` schemas, this support improves compatibility with various
-  PostgreSQL tools that generate SQL queries with qualified function references.
+  This version check involves reporting the cluster ID and current version to a
+  server operated by Materialize Inc. To disable telemetry of this sort, use the
+  new [`--disable-telemetry` command-line option](/cli/).
 
-- Add support for the following psql meta commands: `\l`, `\d`, `\dv`, `\dt`, `\di`.
+- Add a web-based, interactive [memory usage visualization](/ops/monitoring#memory-usage-visualization) to aid in understanding and diagnosing
+  unexpected memory consumption.
 
-- Add support for the [`oid`](/sql/types/oid) type to represent PostgreSQL object IDs.
+- Add the [`lpad`](/sql/functions/#string-func) function, which extends a
+  string to a given length by prepending characters.
 
-- Add support for [array types](/sql/types/array) for compatibility with
-  PostgreSQL.
+- Improve PostgreSQL compatibility:
 
-- Add the [`lpad`](/sql/functions/#string-func) function, which prepends
-  characters to fill a string to a given length.
+  - Permit qualifying function names in SQL queries with the name of the schema
+    and optionally the database to which the function belongs, as in
+    `pg_catalog.abs(-1)` {{% gh 4293 %}}.
 
-- Add `ENVELOPE MATERIALIZE`, which implements the [new CDC protocol](https://materialize.io/change-data-capture-part-1/).
+    Presently all built-in functions belong to the system `mz_catalog` or
+    `pg_catalog` schemas.
+
+  - Add an [`oid` type](/sql/types/oid) to represent PostgreSQL object IDs.
+
+  - Add basic support for [array types](/sql/types/array), including the new
+    [`array_to_string` function](/sql/functions#array-func).
+
+  - Add the  `current_schemas`, `obj_description`, `pg_table_is_visible`, and
+    `pg_encoding_to_char` [compatibility functions](/sql/functions#postgresql-compatibility-func).
+
+  Together these changes enable the `\l`, `\d`, `\dv`, `\dt`, `\di` commands
+  in the [psql terminal](/connect/cli).
 
 - Correct a query optimization that could misplan queries that referenced the
   same relation multiple times with varying filters {{% gh 4361 %}}.
-
-- Report the current version to a central server operated by
-  materialize.io. If a new version is available a warning will be
-  logged. This can be disabled with the `--disable-telemetry` option.
 
 - Rename the output columns for `SHOW` statements to match the PostgreSQL
   convention of using all lowercase characters with words separated by
@@ -90,7 +153,7 @@ Wrap your release notes at the 80 character mark.
   `seq_in_index` rather than `Seq_in_index`. This makes it possible to refer
   to the column without quoting when supplying a `WHERE` clause.
 
-  The renaminings are described in more detail in the documentation for each
+  The renamings are described in more detail in the documentation for each
   `SHOW` command that changed:
 
     - [`SHOW COLUMNS`](/sql/show-columns)
@@ -101,6 +164,19 @@ Wrap your release notes at the 80 character mark.
     - [`SHOW SOURCES`](/sql/show-sources)
     - [`SHOW TABLES`](/sql/show-tables)
     - [`SHOW VIEWS`](/sql/show-views)
+
+- Expose metadata about the running Materialize instance in the new
+  [system catalog](/sql/system-catalog), which contains various sources, tables,
+  and views that can be queried via SQL.
+
+- Rename the `global_id` column of the
+  [`mz_avro_ocf_sinks`](/sql/system-catalog#mz_avro_ocf_sinks) and
+  [`mz_kafka_sinks`](/sql/system-catalog#mz_kafka_sinks) tables
+  to `sink_id`, for better consistency with the other system catalog tables.
+
+- Support [Kafka sources](/sql/create-source/avro-kafka) on topics
+  that use [Zstandard compression](https://facebook.github.io/zstd/)
+  {{% gh 4342 %}}.
 
 {{% version-header v0.4.3 %}}
 
@@ -267,7 +343,7 @@ Wrap your release notes at the 80 character mark.
 - Change the default [`TAIL` snapshot behavior](/sql/tail/#with-snapshot-or-without-snapshot)
   from `WITHOUT SNAPSHOT` to `WITH SNAPSHOT`. **Backwards-incompatible change.**
 
-- Actively shut down [Kafka sinks](https://materialize.io/docs/sql/create-sink/#kafka-sinks)
+- Actively shut down [Kafka sinks](https://materialize.com/docs/sql/create-sink/#kafka-sinks)
   that encounter an unrecoverable error, rather than attempting to produce data
   until the sink is dropped {{% gh 3419 %}}.
 
@@ -341,7 +417,7 @@ Wrap your release notes at the 80 character mark.
   created if you had used [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view).
 
 - Permit control over the timestamp selection logic on a per-Kafka-source basis
-  via three new [`WITH` options](https://materialize.io/docs/sql/create-source/avro-kafka/#with-options):
+  via three new [`WITH` options](https://materialize.com/docs/sql/create-source/avro-kafka/#with-options):
     - `timestamp_frequency_ms`
     - `max_timestamp_batch_size`
     - `topic_metadata_refresh_interval_ms`
@@ -618,6 +694,7 @@ Wrap your release notes at the 80 character mark.
 * [What is Materialize?](/overview/what-is-materialize/)
 * [Architecture overview](/overview/architecture/)
 
+[`bytea`]: /sql/types/bytea
 [`CREATE MATERIALIZED VIEW`]: /sql/create-materialized-view
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE VIEW`]: /sql/create-view
@@ -628,4 +705,5 @@ Wrap your release notes at the 80 character mark.
 [`text`]: /sql/types/text
 [`timestamp`]: /sql/types/timestamp
 [`timestamptz`]: /sql/types/timestamptz
+[pg-copy]: https://www.postgresql.org/docs/current/sql-copy.html
 [PgJDBC]: https://jdbc.postgresql.org

@@ -21,9 +21,7 @@
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{
-    BinaryOperator, DataType, Ident, ObjectName, OrderByExpr, Query, UnaryOperator, Value,
-};
+use crate::ast::{DataType, Ident, ObjectName, OrderByExpr, Query, Value};
 
 /// An SQL expression of any type.
 ///
@@ -47,6 +45,12 @@ pub enum Expr {
     WildcardAccess(Box<Expr>),
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),
+    /// Boolean negation
+    Not { expr: Box<Expr> },
+    /// Boolean and
+    And { left: Box<Expr>, right: Box<Expr> },
+    /// Boolean or
+    Or { left: Box<Expr>, right: Box<Expr> },
     /// `IS NULL` expression
     IsNull { expr: Box<Expr>, negated: bool },
     /// `[ NOT ] IN (val1, val2, ...)`
@@ -68,14 +72,12 @@ pub enum Expr {
         low: Box<Expr>,
         high: Box<Expr>,
     },
-    /// Binary operation e.g. `1 + 1` or `foo > bar`
-    BinaryOp {
-        left: Box<Expr>,
-        op: BinaryOperator,
-        right: Box<Expr>,
+    /// Unary or binary operator
+    Op {
+        op: String,
+        expr1: Box<Expr>,
+        expr2: Option<Box<Expr>>,
     },
-    /// Unary operation e.g. `NOT foo`
-    UnaryOp { op: UnaryOperator, expr: Box<Expr> },
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr>,
@@ -119,19 +121,19 @@ pub enum Expr {
     /// `<expr> <op> ANY/SOME (<query>)`
     AnySubquery {
         left: Box<Expr>,
-        op: BinaryOperator,
+        op: String,
         right: Box<Query>,
     },
     /// `<expr> <op> ANY (<query>)`
     AnyExpr {
         left: Box<Expr>,
-        op: BinaryOperator,
+        op: String,
         right: Box<Expr>,
     },
     /// `<expr> <op> ALL (<query>)`
     All {
         left: Box<Expr>,
-        op: BinaryOperator,
+        op: String,
         right: Box<Query>,
     },
     /// `ARRAY[<expr>*]`
@@ -168,6 +170,20 @@ impl AstDisplay for Expr {
                 f.write_str(".*");
             }
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
+            Expr::Not { expr } => {
+                f.write_str("NOT ");
+                f.write_node(expr);
+            }
+            Expr::And { left, right } => {
+                f.write_node(left);
+                f.write_str(" AND ");
+                f.write_node(right);
+            }
+            Expr::Or { left, right } => {
+                f.write_node(left);
+                f.write_str(" OR ");
+                f.write_node(right);
+            }
             Expr::IsNull { expr, negated } => {
                 f.write_node(&expr);
                 f.write_str(" IS");
@@ -219,17 +235,18 @@ impl AstDisplay for Expr {
                 f.write_str(" AND ");
                 f.write_node(&high);
             }
-            Expr::BinaryOp { left, op, right } => {
-                f.write_node(&left);
-                f.write_str(" ");
-                f.write_str(op);
-                f.write_str(" ");
-                f.write_node(&right);
-            }
-            Expr::UnaryOp { op, expr } => {
-                f.write_str(op);
-                f.write_str(" ");
-                f.write_node(&expr);
+            Expr::Op { op, expr1, expr2 } => {
+                if let Some(expr2) = expr2 {
+                    f.write_node(&expr1);
+                    f.write_str(" ");
+                    f.write_str(op);
+                    f.write_str(" ");
+                    f.write_node(&expr2);
+                } else {
+                    f.write_str(op);
+                    f.write_str(" ");
+                    f.write_node(&expr1);
+                }
             }
             Expr::Cast { expr, data_type } => {
                 // We are potentially rewriting an expression like
@@ -400,62 +417,67 @@ impl Expr {
     }
 
     pub fn negate(self) -> Expr {
-        Expr::UnaryOp {
+        Expr::Not {
             expr: Box::new(self),
-            op: UnaryOperator::Not,
-        }
-    }
-
-    pub fn binop(self, op: BinaryOperator, right: Expr) -> Expr {
-        Expr::BinaryOp {
-            left: Box::new(self),
-            op,
-            right: Box::new(right),
         }
     }
 
     pub fn and(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::And, right)
+        Expr::And {
+            left: Box::new(self),
+            right: Box::new(right),
+        }
     }
 
     pub fn or(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::Or, right)
+        Expr::Or {
+            left: Box::new(self),
+            right: Box::new(right),
+        }
+    }
+
+    pub fn binop(self, op: &str, right: Expr) -> Expr {
+        Expr::Op {
+            op: op.to_string(),
+            expr1: Box::new(self),
+            expr2: Some(Box::new(right)),
+        }
     }
 
     pub fn lt(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::Lt, right)
+        self.binop("<", right)
     }
 
     pub fn lt_eq(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::LtEq, right)
+        self.binop("<=", right)
     }
 
     pub fn gt(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::Gt, right)
+        self.binop(">", right)
     }
 
     pub fn gt_eq(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::GtEq, right)
+        self.binop(">=", right)
     }
 
     pub fn equals(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::Eq, right)
+        self.binop("=", right)
     }
 
     pub fn minus(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::Minus, right)
+        self.binop("-", right)
     }
 
     pub fn multiply(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::Multiply, right)
+        self.binop("*", right)
     }
 
     pub fn modulo(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::Modulus, right)
+        self.binop("%", right)
     }
 
     pub fn divide(self, right: Expr) -> Expr {
-        self.binop(BinaryOperator::Divide, right)
+        self.binop("/", right)
     }
 
     pub fn call(name: Vec<&str>, args: Vec<Expr>) -> Expr {

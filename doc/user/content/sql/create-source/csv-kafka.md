@@ -32,12 +32,12 @@ This creates a source that...
 - Has 3 columns (`col_foo`, `col_bar`, `col_baz`). Materialize will not ingest
   any row without 3 columns.
 
-### Persisting records to local disk
+### Caching records to local disk
 
 ```sql
 CREATE SOURCE csv_kafka (col_foo, col_bar, col_baz)
 FROM KAFKA BROKER 'localhost:9092' TOPIC 'csv'
-WITH (persistence = true)
+WITH (cache = true)
 FORMAT CSV WITH 3 COLUMNS;
 ```
 
@@ -46,7 +46,7 @@ This creates a source that...
 - Is append-only.
 - Has 3 columns (`col_foo`, `col_bar`, `col_baz`). Materialize will not ingest
   any row without 3 columns.
-- Persists messages from the `csv` topic to local disk.
+- Caches messages from the `csv` topic to local disk.
 
 ## Related pages
 

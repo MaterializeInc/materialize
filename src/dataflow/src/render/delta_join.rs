@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 #![allow(clippy::op_ref)]
-
 use differential_dataflow::lattice::Lattice;
 use dogsdogsdogs::altneu::AltNeu;
+use std::collections::HashSet;
 use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
@@ -47,6 +47,13 @@ where
                 self.ensure_rendered(input, scope, worker_index);
             }
 
+            // Collects error streams for the ambient scope.
+            let mut scope_errs = Vec::new();
+
+            // Deduplicate the error streams of multiply used arrangements.
+            let mut local_err_dedup = HashSet::new();
+            let mut trace_err_dedup = HashSet::new();
+
             // We'll need a new scope, to hold `AltNeu` wrappers, and we'll want
             // to import all traces as alt and neu variants (unless we do a more
             // careful analysis).
@@ -60,8 +67,8 @@ where
                         let mut delta_queries = Vec::new();
 
                         let input_mapper = JoinInputMapper::new(inputs);
-
-                        let mut err_streams = Vec::with_capacity(inputs.len());
+                        // Collects error streams for the inner scope. Concats before leaving.
+                        let mut inner_errs = Vec::with_capacity(inputs.len());
                         for relation in 0..inputs.len() {
 
                             // We maintain a private copy of `equivalences`, which we will digest
@@ -76,12 +83,16 @@ where
                             // from `inputs[relation]` and reflects all strictly prior updates and
                             // concurrent updates from relations prior to `relation`.
                             let delta_query = inner.clone().region(|region| {
+
+                                // Collects error streams for the region scope. Concats before leaving.
+                                let mut region_errs = Vec::with_capacity(inputs.len());
+
                                 // Ensure this input is rendered, and extract its update stream.
                                 let (update_stream, errs) = self
                                     .collection(&inputs[relation])
                                     .expect("Failed to render update stream");
                                 let update_stream = update_stream.enter(inner).enter(region);
-                                err_streams.push(errs);
+                                scope_errs.push(errs);
 
                                 // We track the sources of each column in our update stream.
                                 let mut source_columns = input_mapper.global_columns(relation)
@@ -95,7 +106,7 @@ where
                                     &mut equivalences,
                                 );
                                 if let Some(errs) = errs {
-                                    err_streams.push(errs.leave().leave());
+                                    region_errs.push(errs);
                                 }
 
                                 // We track the input relations as they are
@@ -153,7 +164,9 @@ where
                                             )
                                         }) {
                                         ArrangementFlavor::Local(oks, errs) => {
-                                            err_streams.push(errs.as_collection(|k, _v| k.clone()));
+                                            if local_err_dedup.insert((&inputs[*other], &next_key[..])) {
+                                                scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                            }
                                             if other > &relation {
                                                 let oks = oks
                                                     .enter_at(
@@ -175,7 +188,9 @@ where
                                             }
                                         }
                                         ArrangementFlavor::Trace(_gid, oks, errs) => {
-                                            err_streams.push(errs.as_collection(|k, _v| k.clone()));
+                                            if trace_err_dedup.insert((&inputs[*other], &next_key[..])) {
+                                                scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                            }
                                             if other > &relation {
                                                 let oks = oks
                                                     .enter_at(
@@ -198,7 +213,7 @@ where
                                         }
                                     };
                                     update_stream = oks;
-                                    err_streams.push(errs.leave().leave());
+                                    region_errs.push(errs);
 
                                     // Update our map of the sources of each column in the update stream.
                                     source_columns
@@ -212,7 +227,7 @@ where
                                     );
                                     update_stream = oks;
                                     if let Some(errs) = errs {
-                                        err_streams.push(errs.leave().leave());
+                                        region_errs.push(errs);
                                     }
 
                                     bound_inputs.push(*other);
@@ -230,17 +245,20 @@ where
                                         row_packer.pack(permutation.iter().map(|c| datums[*c]))
                                 }});
 
+                                inner_errs.push(differential_dataflow::collection::concatenate(region, region_errs).leave());
                                 update_stream.leave()
                             });
 
                             delta_queries.push(delta_query);
                         }
 
+                        scope_errs.push(differential_dataflow::collection::concatenate(inner, inner_errs).leave());
+
                         // Concatenate the results of each delta query as the accumulated results.
                         (
                             differential_dataflow::collection::concatenate(inner, delta_queries)
                                 .leave(),
-                            differential_dataflow::collection::concatenate(scope, err_streams),
+                            differential_dataflow::collection::concatenate(scope, scope_errs),
                         )
                     });
             results

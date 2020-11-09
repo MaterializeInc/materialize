@@ -158,12 +158,12 @@ This creates a source that...
   `broker.tld:9092`.
 - Is append-only.
 
-### Persisting records to local disk
+### Caching records to local disk
 
 ```sql
-CREATE MATERIALIZED SOURCE persisted_source
+CREATE MATERIALIZED SOURCE cached_source
 FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'data' WITH (
-    persistence = true
+    cache = true
 )
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry.tld'
 ```
@@ -174,7 +174,7 @@ This creates a source that...
 - Decodes data received from the `data` topic published by Kafka running on
   `tld:9092`.
 - Decodes using an Avro schema.
-- Persists messages from the `data` topic to local disk.
+- Caches messages from the `data` topic to local disk.
 
 ## Related pages
 

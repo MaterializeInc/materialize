@@ -133,9 +133,9 @@ v2
 
 # DROP DATABASE should not support RESTRICT or CASCADE.
 ! DROP DATABASE d RESTRICT
-Expected end of statement, found: RESTRICT
+Expected end of statement, found RESTRICT
 ! DROP DATABASE d RESTRICT
-Expected end of statement, found: RESTRICT
+Expected end of statement, found RESTRICT
 
 # DROP DATABASE should succeed even when there are objects in the database.
 > DROP DATABASE d
@@ -241,6 +241,7 @@ mz_peek_durations
 mz_scheduling_elapsed
 mz_scheduling_histogram
 mz_scheduling_parks
+mz_source_info
 mz_worker_materialization_frontiers
 
 > SHOW FULL SOURCES FROM mz_catalog
@@ -258,6 +259,7 @@ mz_peek_durations                    system true
 mz_scheduling_elapsed                system true
 mz_scheduling_histogram              system true
 mz_scheduling_parks                  system true
+mz_source_info                       system true
 mz_worker_materialization_frontiers  system true
 
 > SHOW TABLES FROM mz_catalog
@@ -274,6 +276,8 @@ mz_tables
 mz_sources
 mz_sinks
 mz_views
+mz_builtin_types
+mz_map_types
 
 > SHOW FULL TABLES FROM mz_catalog
 name                  type
@@ -291,17 +295,19 @@ mz_tables             system
 mz_sinks              system
 mz_sources            system
 mz_views              system
+mz_builtin_types      system
+mz_map_types          system
 
 ! SHOW EXTENDED TABLES
 SHOW EXTENDED TABLES not yet supported
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-13
+15
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-26
+29
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

@@ -319,6 +319,15 @@ impl RelationDesc {
             .map(|i| (i, &self.typ.column_types[i]))
     }
 
+    /// Gets the name of the `i`th column.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i` is not a valid column index.
+    pub fn get_name(&self, i: usize) -> Option<&ColumnName> {
+        self.names[i].as_ref()
+    }
+
     /// Gets the name of the `i`th column if that column name is unambiguous.
     ///
     /// If at least one other column has the same name as the `i`th column,

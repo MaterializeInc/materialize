@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::max;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
@@ -16,10 +17,11 @@ use std::{cell::RefCell, iter, rc::Rc};
 
 use anyhow::{anyhow, bail};
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
-use chrono::Timelike;
+use chrono::format::{DelayedFormat, StrftimeItems};
+use chrono::{NaiveDateTime, Timelike};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
@@ -1139,6 +1141,56 @@ pub enum DebeziumDeduplicationStrategy {
     Ordered,
     /// We need to store some piece of state for every message
     Full,
+    FullInRange {
+        pad_start: Option<NaiveDateTime>,
+        start: NaiveDateTime,
+        end: NaiveDateTime,
+    },
+}
+
+impl DebeziumDeduplicationStrategy {
+    /// Create a deduplication strategy with start and end times
+    ///
+    /// Returns an error if either datetime does not parse, or if there is no time in between them
+    pub fn full_in_range(
+        start: &str,
+        end: &str,
+        pad_start: Option<&str>,
+    ) -> anyhow::Result<DebeziumDeduplicationStrategy> {
+        let fallback_parse = |s: &str| {
+            for format in &["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+                if let Ok(dt) = NaiveDateTime::parse_from_str(s, format) {
+                    return Ok(dt);
+                }
+            }
+            if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                return Ok(d.and_hms(0, 0, 0));
+            }
+
+            bail!(
+                "UTC DateTime specifier '{}' should match 'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS' or \
+                   'YYYY-MM-DD HH:MM:SS.FF",
+                s
+            )
+        };
+
+        let start = fallback_parse(start)?;
+        let end = fallback_parse(end)?;
+        let pad_start = pad_start.map(fallback_parse).transpose()?;
+
+        if start >= end {
+            bail!(
+                "Debezium deduplication start {} is not before end {}",
+                start,
+                end
+            );
+        }
+        Ok(DebeziumDeduplicationStrategy::FullInRange {
+            start,
+            end,
+            pad_start,
+        })
+    }
 }
 
 /// Track whether or not we should skip a specific debezium message
@@ -1146,26 +1198,120 @@ pub enum DebeziumDeduplicationStrategy {
 struct DebeziumDeduplicationState {
     /// Last recorded (pos, row, offset) for each MySQL binlog file.
     /// (Or "", in the Postgres case)
-    /// Messages that are not ahead of the last recorded pos/row will be skipped.
+    ///
+    /// [`DebeziumDeduplicationstrategy`] determines whether messages that are not ahead
+    /// of the last recorded pos/row will be skipped.
     binlog_offsets: HashMap<String, (usize, usize, Option<i64>)>,
     /// Whether or not to track every message we've ever seen
-    full: TrackFull,
+    full: Option<TrackFull>,
 }
 
-/// If we need to deal debezium possibly going back after it hasn't seen things
+/// If we need to deal with debezium possibly going back after it hasn't seen things.
+/// During normal (non-snapshot) operation, we deduplicate based on binlog position: (pos, row), for MySQL.
+/// During the initial snapshot, (pos, row) values are all the same, but primary keys
+/// are unique and thus we can get deduplicate based on those.
 #[derive(Debug)]
-enum TrackFull {
-    No,
-    /// Track all offsets that have ever been seen
-    /// binlog filename to offset
-    SeenOffsets(HashMap<String, HashSet<(usize, usize)>>),
+struct TrackFull {
+    /// binlog filename to (offset to (timestamp that this binlog entry was first seen))
+    seen_offsets: HashMap<String, HashMap<(usize, usize), i64>>,
+    seen_snapshot_keys: HashMap<String, HashSet<Row>>,
+    /// The highest-ever seen timestamp, used in logging to let us know how far backwards time might go
+    max_seen_time: i64,
+    key_indices: Option<Vec<usize>>,
+    /// Optimization to avoid re-allocating the row packer over and over when extracting the key..
+    key_buf: RowPacker,
+    range: Option<TrackRange>,
+}
+
+/// When to start and end full-range tracking
+///
+/// All values are milliseconds since the unix epoch and are meant to be compared to the
+/// `upstream_time_millis` argument to [`DebeziumDeduplicationState::should_use_record`].
+///
+/// We throw away all tracking data after we see the first record past `end`.
+#[derive(Debug)]
+struct TrackRange {
+    /// Start pre-filling the seen data before we start trusting it
+    ///
+    /// At some point we need to start trusting the [`TrackFull::seen_offsets`] map more
+    /// than we trust the Debezium high water mark. In order to do that, the
+    /// `seen_offsets` map must have some data, otherwise all records would show up as
+    /// new immediately at the phase transition.
+    ///
+    /// For example, consider the following series of records, presented vertically in
+    /// the order that they were received:
+    ///
+    /// ```text
+    /// ts  val
+    /// -------
+    /// 1   a
+    /// 2   b
+    /// 1   a
+    /// ```
+    ///
+    /// If we start tracking at ts 2 and immediately start trusting the hashmap more than
+    /// the Debezium high water mark then ts 1 will be falsely double-inserted. So we
+    /// need to start building a buffer before we can start trusting it.
+    ///
+    /// `pad_start` is the upstream_time_millis at we we start building the buffer, and
+    /// [`TrackRange::start`] is the point at which we start trusting the buffer.
+    /// Currently `pad_start` defaults to 1 hour (wall clock time) before `start`,
+    /// as a value that seems overwhelmingly likely to cause the buffer to always have
+    /// enough data that it doesn't give incorrect answers.
+    pad_start: i64,
+    start: i64,
+    end: i64,
+}
+
+impl TrackFull {
+    fn from_keys(mut key_indices: Option<Vec<usize>>) -> Self {
+        if let Some(key_indices) = key_indices.as_mut() {
+            key_indices.sort_unstable();
+        }
+        Self {
+            seen_offsets: Default::default(),
+            seen_snapshot_keys: Default::default(),
+            max_seen_time: 0,
+            key_indices,
+            key_buf: Default::default(),
+            range: None,
+        }
+    }
+
+    fn from_keys_in_range(
+        key_indices: Option<Vec<usize>>,
+        start: NaiveDateTime,
+        end: NaiveDateTime,
+        pad_start: Option<NaiveDateTime>,
+    ) -> Self {
+        let mut tracker = Self::from_keys(key_indices);
+        let pad_start = pad_start
+            .unwrap_or_else(|| (start - chrono::Duration::hours(1)))
+            .timestamp_millis();
+        tracker.range = Some(TrackRange {
+            pad_start,
+            start: start.timestamp_millis(),
+            end: end.timestamp_millis(),
+        });
+        tracker
+    }
 }
 
 impl DebeziumDeduplicationState {
-    fn new(strat: DebeziumDeduplicationStrategy) -> Self {
+    fn new(strat: DebeziumDeduplicationStrategy, key_indices: Option<Vec<usize>>) -> Self {
         let full = match strat {
-            DebeziumDeduplicationStrategy::Ordered => TrackFull::No,
-            DebeziumDeduplicationStrategy::Full => TrackFull::SeenOffsets(Default::default()),
+            DebeziumDeduplicationStrategy::Ordered => None,
+            DebeziumDeduplicationStrategy::Full => Some(TrackFull::from_keys(key_indices)),
+            DebeziumDeduplicationStrategy::FullInRange {
+                start,
+                end,
+                pad_start,
+            } => Some(TrackFull::from_keys_in_range(
+                key_indices,
+                start,
+                end,
+                pad_start,
+            )),
         };
         DebeziumDeduplicationState {
             binlog_offsets: Default::default(),
@@ -1174,97 +1320,267 @@ impl DebeziumDeduplicationState {
     }
 
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     fn should_use_record(
         &mut self,
         file: &str,
         row: RowCoordinates,
         coord: Option<i64>,
+        upstream_time_millis: Option<i64>,
         debug_name: &str,
         worker_idx: usize,
+        is_snapshot: bool,
+        update: &DiffPair<Row>,
     ) -> bool {
         let (pos, row) = match row {
             RowCoordinates::MySql { pos, row } => (pos, row),
             RowCoordinates::Postgres { lsn } => (lsn, 0),
         };
-        struct SkipInfo<'a> {
-            old_max_pos: &'a usize,
-            old_max_row: &'a usize,
-            old_offset: &'a Option<i64>,
-        }
-        let should_skip = match self.binlog_offsets.get_mut(file) {
-            Some((old_max_pos, old_max_row, old_offset)) => {
-                if (*old_max_pos, *old_max_row) >= (pos, row) {
-                    Some(SkipInfo {
-                        old_max_pos,
-                        old_max_row,
-                        old_offset,
-                    })
-                } else {
-                    // update the debezium high water mark
-                    *old_max_pos = pos;
-                    *old_max_row = row;
-                    *old_offset = coord;
+
+        // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
+        // duplicates, since it is always the same.
+        let should_skip = if is_snapshot {
+            None
+        } else {
+            match self.binlog_offsets.get_mut(file) {
+                Some((old_max_pos, old_max_row, old_offset)) => {
+                    if (*old_max_pos, *old_max_row) >= (pos, row) {
+                        Some(SkipInfo {
+                            old_max_pos,
+                            old_max_row,
+                            old_offset,
+                        })
+                    } else {
+                        // update the debezium high water mark
+                        *old_max_pos = pos;
+                        *old_max_row = row;
+                        *old_offset = coord;
+                        None
+                    }
+                }
+                None => {
+                    // The extra lookup is fine - this is the cold path.
+                    self.binlog_offsets
+                        .insert(file.to_owned(), (pos, row, coord));
                     None
                 }
             }
-            None => {
-                // The extra lookup is fine - this is the cold path.
-                self.binlog_offsets
-                    .insert(file.to_owned(), (pos, row, coord));
-                None
+        };
+
+        let mut delete_full = false;
+        let should_use = match &mut self.full {
+            // Always none if in snapshot, see comment above where `should_skip` is bound.
+            None => should_skip.is_none(),
+            Some(TrackFull {
+                seen_offsets,
+                seen_snapshot_keys,
+                max_seen_time,
+                key_indices,
+                key_buf,
+                range,
+            }) => {
+                if is_snapshot {
+                    let key_indices = match key_indices.as_ref() {
+                        None => {
+                            // No keys, so we can't do anything sensible for snapshots.
+                            // Return "all OK" and hope their data isn't corrupted.
+                            return true;
+                        }
+                        Some(ki) => ki,
+                    };
+                    let mut row_iter = match update.after.as_ref() {
+                        None => {
+                            error!(
+                                "Snapshot row at pos {:?}, message_time={} source={} was not an insert.",
+                                coord, fmt_timestamp(upstream_time_millis), debug_name);
+                            return false;
+                        }
+                        Some(r) => r.iter(),
+                    };
+                    let key = {
+                        let mut cumsum = 0;
+                        for k in key_indices.iter() {
+                            let adjusted_idx = *k - cumsum;
+                            cumsum += adjusted_idx + 1;
+                            key_buf.push(row_iter.nth(adjusted_idx).unwrap());
+                        }
+                        key_buf.finish_and_reuse()
+                    };
+
+                    if let Some(seen_keys) = seen_snapshot_keys.get_mut(file) {
+                        // Your reaction on reading this code might be:
+                        // "Ugh, we are cloning the key row just to support logging a warning!"
+                        // But don't worry -- since `Row`s use a 16-byte smallvec, the clone
+                        // won't involve an extra allocation unless the key overflows that.
+                        //
+                        // Anyway, TODO: avoid this via `get_or_insert` once rust-lang/rust#60896 is resolved.
+                        let is_new = seen_keys.insert(key.clone());
+                        if !is_new {
+                            warn!(
+                                "Snapshot row with key={:?} source={} seen multiple times (most recent message_time={})",
+                                key, debug_name, fmt_timestamp(upstream_time_millis)
+                            );
+                        }
+                        is_new
+                    } else {
+                        let mut hs = HashSet::new();
+                        hs.insert(key);
+                        seen_snapshot_keys.insert(file.to_owned(), hs);
+                        true
+                    }
+                } else {
+                    *max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
+                    if let Some(seen_offsets) = seen_offsets.get_mut(file) {
+                        // first check if we are in a special case of range-bounded track full
+                        if let Some(range) = range {
+                            if let Some(upstream_time_millis) = upstream_time_millis {
+                                if upstream_time_millis < range.pad_start {
+                                    return should_skip.is_none();
+                                }
+                                if upstream_time_millis < range.start {
+                                    seen_offsets.insert((pos, row), upstream_time_millis);
+                                    return should_skip.is_none();
+                                }
+                                if upstream_time_millis > range.end {
+                                    // don't abort early, but we will clean up after this validation
+                                    delete_full = true;
+                                }
+                            }
+                        }
+
+                        // Now we know that we are in either trackfull or a range-bounded trackfull
+                        let seen = seen_offsets.entry((pos, row));
+                        let is_new = matches!(seen, std::collections::hash_map::Entry::Vacant(_));
+                        let original_time =
+                            seen.or_insert_with(|| upstream_time_millis.unwrap_or(0));
+
+                        log_duplication_info(
+                            file,
+                            pos,
+                            row,
+                            coord,
+                            upstream_time_millis,
+                            debug_name,
+                            worker_idx,
+                            is_new,
+                            &should_skip,
+                            original_time,
+                            max_seen_time,
+                        );
+
+                        is_new
+                    } else {
+                        let mut hs = HashMap::new();
+                        hs.insert((pos, row), upstream_time_millis.unwrap_or(0));
+                        seen_offsets.insert(file.to_owned(), hs);
+                        true
+                    }
+                }
             }
         };
 
-        match &mut self.full {
-            TrackFull::No => should_skip.is_none(),
-            TrackFull::SeenOffsets(seen_offsets) => {
-                if let Some(seen_offsets) = seen_offsets.get_mut(file) {
-                    let is_new = seen_offsets.insert((pos, row));
+        if delete_full {
+            info!(
+                "Deleting debezium deduplication tracking data source={} message_time={}",
+                debug_name,
+                fmt_timestamp(upstream_time_millis)
+            );
+            self.full = None;
+        }
+        should_use
+    }
+}
 
-                    match (is_new, should_skip) {
-                        // new item that correctly is past the highest item we've ever seen
-                        (true, None) => {}
-                        // new item that violates Debezium "guarantee" that the no new
-                        // records will ever be sent with a position below the highest
-                        // position ever seen
-                        (true, Some(skipinfo)) => {
-                            // TODO: This would be nicer if it included the wall-clock kafka event time
-                            warn!(
-                                "Source: {}:{} created a new record behind the highest point in binlog_file={} \
-                                 new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{}",
-                                debug_name, worker_idx, file, pos, row, coord.unwrap_or(-1),
-                                skipinfo.old_max_pos, skipinfo.old_max_row
-                            );
-                        }
-                        // Duplicate item below the highest seen item
-                        (false, Some(skipinfo)) => {
-                            debug!(
-                                "Source: {}:{} already ingested binlog coordinates {}:{}:{} (old binlog: {}:{} kafka offset: {})",
-                                debug_name, worker_idx, file, pos, row, skipinfo.old_max_pos,
-                                skipinfo.old_max_row, skipinfo.old_offset.unwrap_or(-1)
-                            );
-                        }
-                        // already exists, but is past the debezium high water mark.
-                        //
-                        // This should be impossible because we set the high-water mark
-                        // every time we insert something
-                        (false, None) => {
-                            error!("We surprisingly are seeing a duplicate record that \
-                                    is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={}",
-                                   file, pos, row, coord.unwrap_or(-1));
-                        }
-                    }
+/// Helper to track information for logging on deduplication
+struct SkipInfo<'a> {
+    old_max_pos: &'a usize,
+    old_max_row: &'a usize,
+    old_offset: &'a Option<i64>,
+}
 
-                    is_new
-                } else {
-                    let mut hs = HashSet::new();
-                    hs.insert((pos, row));
-                    seen_offsets.insert(file.to_owned(), hs);
-                    true
-                }
-            }
+#[allow(clippy::too_many_arguments)]
+fn log_duplication_info(
+    file: &str,
+    pos: usize,
+    row: usize,
+    coord: Option<i64>,
+    upstream_time_millis: Option<i64>,
+    debug_name: &str,
+    worker_idx: usize,
+    is_new: bool,
+    should_skip: &Option<SkipInfo>,
+    original_time: &mut i64,
+    max_seen_time: &mut i64,
+) {
+    match (is_new, should_skip) {
+        // new item that correctly is past the highest item we've ever seen
+        (true, None) => {}
+        // new item that violates Debezium "guarantee" that the no new
+        // records will ever be sent with a position below the highest
+        // position ever seen
+        (true, Some(skipinfo)) => {
+            warn!(
+                "Created a new record behind the highest point in source={}:{} binlog_file={} \
+                 new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{} \
+                 message_time={} message_first_seen={} max_seen_time={}",
+                debug_name,
+                worker_idx,
+                file,
+                pos,
+                row,
+                coord.unwrap_or(-1),
+                skipinfo.old_max_pos,
+                skipinfo.old_max_row,
+                fmt_timestamp(upstream_time_millis),
+                fmt_timestamp(*original_time),
+                fmt_timestamp(*max_seen_time),
+            );
+        }
+        // Duplicate item below the highest seen item
+        (false, Some(skipinfo)) => {
+            debug!(
+                "already ingested source={}:{} binlog_coordinates={}:{}:{} old_binlog={}:{} \
+                 kafka_offset={} message_time={} message_first_seen={} max_seen_time={}",
+                debug_name,
+                worker_idx,
+                file,
+                pos,
+                row,
+                skipinfo.old_max_pos,
+                skipinfo.old_max_row,
+                skipinfo.old_offset.unwrap_or(-1),
+                fmt_timestamp(upstream_time_millis),
+                fmt_timestamp(*original_time),
+                fmt_timestamp(*max_seen_time),
+            );
+        }
+        // already exists, but is past the debezium high water mark.
+        //
+        // This should be impossible because we set the high-water mark
+        // every time we insert something
+        (false, None) => {
+            error!(
+                "We surprisingly are seeing a duplicate record that \
+                    is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={} \
+                    message_time={} message_first_seen={} max_seen_time={}",
+                file,
+                pos,
+                row,
+                coord.unwrap_or(-1),
+                fmt_timestamp(upstream_time_millis),
+                fmt_timestamp(*original_time),
+                fmt_timestamp(*max_seen_time),
+            );
         }
     }
+}
+
+fn fmt_timestamp(ts: impl Into<Option<i64>>) -> DelayedFormat<StrftimeItems<'static>> {
+    let (seconds, nanos) = ts
+        .into()
+        .map(|ts| (ts / 1000, (ts % 1000) * 1_000_000))
+        .unwrap_or((0, 0));
+    NaiveDateTime::from_timestamp(seconds, nanos as u32).format("%Y-%m-%dT%H:%S:%S%.f")
 }
 
 /// Additional context needed for decoding
@@ -1335,7 +1651,7 @@ impl DebeziumDecodeState {
         Some(Self {
             before_idx,
             after_idx,
-            dedup: DebeziumDeduplicationState::new(dedup_strat),
+            dedup: DebeziumDeduplicationState::new(dedup_strat, None),
             binlog_schema_indices,
             debug_name,
             worker_idx,
@@ -1347,6 +1663,7 @@ impl DebeziumDecodeState {
         v: Value,
         n: SchemaNode,
         coord: Option<i64>,
+        upstream_time_millis: Option<i64>,
     ) -> anyhow::Result<DiffPair<Row>> {
         fn is_snapshot(v: Value) -> anyhow::Result<Option<bool>> {
             let answer = match v {
@@ -1407,8 +1724,14 @@ impl DebeziumDecodeState {
                             &file_val,
                             RowCoordinates::MySql { pos, row },
                             coord,
+                            upstream_time_millis,
                             &self.debug_name,
                             self.worker_idx,
+                            false,
+                            &DiffPair {
+                                before: None,
+                                after: None,
+                            },
                         ) {
                             return Ok(DiffPair {
                                 before: None,
@@ -1538,12 +1861,14 @@ impl Decoder {
         debug_name: String,
         worker_index: usize,
         debezium_dedup: Option<DebeziumDeduplicationStrategy>,
+        key_indices: Option<Vec<usize>>,
     ) -> anyhow::Result<Decoder> {
         assert!(
             (envelope == EnvelopeType::Debezium && debezium_dedup.is_some())
                 || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none())
         );
-        let debezium_dedup = debezium_dedup.map(DebeziumDeduplicationState::new);
+        let debezium_dedup =
+            debezium_dedup.map(|strat| DebeziumDeduplicationState::new(strat, key_indices));
         let csr_avro = ConfluentAvroResolver::new(reader_schema, schema_registry)?;
 
         Ok(Decoder {
@@ -1563,6 +1888,7 @@ impl Decoder {
         &mut self,
         bytes: &[u8],
         coord: Option<i64>,
+        upstream_time_millis: Option<i64>,
     ) -> anyhow::Result<DiffPair<Row>> {
         let (mut bytes, resolved_schema) = self.csr_avro.resolve(bytes).await?;
         let result = if self.envelope == EnvelopeType::Debezium {
@@ -1586,14 +1912,16 @@ impl Decoder {
                     RowCoordinates::MySql { .. } => std::str::from_utf8(&self.buf2)?,
                     RowCoordinates::Postgres { .. } => "",
                 };
-                source.snapshot
-                    || dedup.should_use_record(
-                        file,
-                        source.row,
-                        coord,
-                        &self.debug_name,
-                        self.worker_index,
-                    )
+                dedup.should_use_record(
+                    file,
+                    source.row,
+                    coord,
+                    upstream_time_millis,
+                    &self.debug_name,
+                    self.worker_index,
+                    source.snapshot,
+                    &diff,
+                )
             } else {
                 true
             };
@@ -1634,7 +1962,7 @@ impl Decoder {
     }
 }
 
-/// Builds an Avro schema that corresponds to `desc`.
+/// Builds a Debezium-encoded Avro schema that corresponds to `desc`.
 ///
 /// Requires that all column names in `desc` are present. The returned schema
 /// has some special properties to ease encoding:
@@ -1643,71 +1971,13 @@ impl Decoder {
 ///     variant is always the null variant, and the second and last variant
 ///     is the non-null variant.
 fn build_schema(columns: &[(ColumnName, ColumnType)], include_transaction: bool) -> Schema {
-    let mut fields = Vec::new();
-    for (name, typ) in columns.iter() {
-        let mut field_type = match &typ.scalar_type {
-            ScalarType::Bool => json!("boolean"),
-            ScalarType::Int32 | ScalarType::Oid => json!("int"),
-            ScalarType::Int64 => json!("long"),
-            ScalarType::Float32 => json!("float"),
-            ScalarType::Float64 => json!("double"),
-            ScalarType::Decimal(p, s) => json!({
-                "type": "bytes",
-                "logicalType": "decimal",
-                "precision": p,
-                "scale": s,
-            }),
-            ScalarType::Date => json!({
-                "type": "int",
-                "logicalType": "date",
-            }),
-            ScalarType::Time => json!({
-                "type": "long",
-                "logicalType": "time-micros",
-            }),
-            ScalarType::Timestamp | ScalarType::TimestampTz => json!({
-                "type": "long",
-                "connect.name": "io.debezium.time.MicroTimestamp",
-                "logicalType": "timestamp-micros"
-            }),
-            ScalarType::Interval => json!({
-                "type": "fixed",
-                "size": 12,
-                "logicalType": "duration"
-            }),
-            ScalarType::Bytes => json!("bytes"),
-            ScalarType::String => json!("string"),
-            ScalarType::Jsonb => json!({
-                "type": "string",
-                "connect.name": "io.debezium.data.Json",
-            }),
-            ScalarType::Uuid => json!({
-                "type": "string",
-                "logicalType": "uuid",
-            }),
-            ScalarType::Array(_t) => unimplemented!("array types"),
-            ScalarType::List(_t) => unimplemented!("list types"),
-            ScalarType::Record { .. } => unimplemented!("record types"),
-        };
-        if typ.nullable {
-            field_type = json!(["null", field_type]);
-        }
-        fields.push(json!({
-            "name": name,
-            "type": field_type,
-        }));
-    }
-
+    let row_schema = build_row_schema_json(columns, "row");
     let mut schema_fields = Vec::new();
     schema_fields.push(json!({
         "name": "before",
         "type": [
             "null",
-            {
-                "name": "row",
-                "type": "record",
-                "fields": fields,
-             }
+            row_schema
         ]
     }));
 
@@ -1802,6 +2072,7 @@ pub struct Encoder {
     columns: Vec<(ColumnName, ColumnType)>,
     writer_schema: Schema,
     include_transaction: bool,
+    key_schema_and_indices: Option<(Schema, Vec<usize>)>,
 }
 
 impl fmt::Debug for Encoder {
@@ -1813,18 +2084,45 @@ impl fmt::Debug for Encoder {
 }
 
 impl Encoder {
-    pub fn new(desc: RelationDesc, include_transaction: bool) -> Self {
+    fn key_indices(&self) -> Option<&[usize]> {
+        self.key_schema_and_indices
+            .as_ref()
+            .map(|(_, indices)| indices.as_slice())
+    }
+    pub fn new(
+        desc: RelationDesc,
+        include_transaction: bool,
+        key_indices: Option<Vec<usize>>,
+    ) -> Self {
         let columns = column_names_and_types(desc);
         let writer_schema = build_schema(&columns, include_transaction);
+        let key_schema_and_indices = key_indices.map(|key_indices| {
+            let key_columns = key_indices
+                .iter()
+                .map(|&key_idx| columns[key_idx].clone())
+                .collect::<Vec<_>>();
+            let row_schema = build_row_schema_json(&key_columns, "row");
+            (
+                Schema::parse(&row_schema).expect("valid schema constructed"),
+                key_indices,
+            )
+        });
         Encoder {
             columns,
             writer_schema,
             include_transaction,
+            key_schema_and_indices,
         }
     }
 
     pub fn writer_schema(&self) -> &Schema {
         &self.writer_schema
+    }
+
+    pub fn key_writer_schema(&self) -> Option<&Schema> {
+        self.key_schema_and_indices
+            .as_ref()
+            .map(|(schema, _)| schema)
     }
 
     fn validate_transaction_id(&self, transaction_id: &Option<String>) {
@@ -1840,79 +2138,95 @@ impl Encoder {
 
     pub fn encode_unchecked(
         &self,
-        schema_id: i32,
+        key_schema_id: Option<i32>,
+        value_schema_id: i32,
         diff_pair: DiffPair<&Row>,
         transaction_id: Option<String>,
-    ) -> Vec<u8> {
+    ) -> (Option<Vec<u8>>, Vec<u8>) {
         self.validate_transaction_id(&transaction_id);
-        let mut buf = Vec::new();
-        encode_avro_header(&mut buf, schema_id);
-        let avro = self.diff_pair_to_avro(diff_pair, transaction_id);
-        debug_assert!(avro.validate(self.writer_schema.top_node()));
-        mz_avro::encode_unchecked(&avro, &self.writer_schema, &mut buf);
-        buf
-    }
-
-    /// Encodes a repr::Row to a Avro-compliant Vec<u8>.
-    pub fn encode(
-        &self,
-        schema_id: i32,
-        diff_pair: DiffPair<&Row>,
-        transaction_id: Option<String>,
-    ) -> Vec<u8> {
-        self.validate_transaction_id(&transaction_id);
-        let mut buf = Vec::new();
-        encode_avro_header(&mut buf, schema_id);
-        buf.write_i32::<NetworkEndian>(schema_id)
-            .expect("writing to vec cannot fail");
-        mz_avro::write_avro_datum(
-            &self.writer_schema,
-            self.diff_pair_to_avro(diff_pair, transaction_id),
-            &mut buf,
-        )
-        .expect("schema constructed to match val");
-        buf
+        let mut key_buf = vec![];
+        let mut buf = vec![];
+        encode_avro_header(&mut buf, value_schema_id);
+        let (avro_key, avro_value) = self.diff_pair_to_avro(diff_pair, transaction_id);
+        debug_assert!(avro_value.validate(self.writer_schema.top_node()));
+        mz_avro::encode_unchecked(&avro_value, &self.writer_schema, &mut buf);
+        let key_buf = avro_key.map(|avro_key| {
+            encode_avro_header(&mut key_buf, key_schema_id.unwrap());
+            let key_schema = self.key_writer_schema().unwrap();
+            debug_assert!(
+                avro_key.validate(key_schema.top_node()),
+                "{:#?}\n{}",
+                avro_key,
+                key_schema.canonical_form()
+            );
+            mz_avro::encode_unchecked(&avro_key, key_schema, &mut key_buf);
+            key_buf
+        });
+        (key_buf, buf)
     }
 
     pub fn diff_pair_to_avro(
         &self,
         diff_pair: DiffPair<&Row>,
         transaction_id: Option<String>,
-    ) -> Value {
-        let before = match diff_pair.before {
-            None => Value::Union {
-                index: 0,
-                inner: Box::new(Value::Null),
-                n_variants: 2,
-                null_variant: Some(0),
-            },
-            Some(row) => {
-                let row = self.row_to_avro(row.iter());
+    ) -> (Option<Value>, Value) {
+        let (before_key, before) = match diff_pair.before {
+            None => (
+                None,
                 Value::Union {
-                    index: 1,
-                    inner: Box::new(row),
+                    index: 0,
+                    inner: Box::new(Value::Null),
                     n_variants: 2,
                     null_variant: Some(0),
-                }
+                },
+            ),
+            Some(row) => {
+                let (key, row) = self.row_to_avro(row.iter());
+                (
+                    key,
+                    Value::Union {
+                        index: 1,
+                        inner: Box::new(row),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                )
             }
         };
-        let after = match diff_pair.after {
-            None => Value::Union {
-                index: 0,
-                inner: Box::new(Value::Null),
-                n_variants: 2,
-                null_variant: Some(0),
-            },
-            Some(row) => {
-                let row = self.row_to_avro(row.iter());
+        let (after_key, after) = match diff_pair.after {
+            None => (
+                None,
                 Value::Union {
-                    index: 1,
-                    inner: Box::new(row),
+                    index: 0,
+                    inner: Box::new(Value::Null),
                     n_variants: 2,
                     null_variant: Some(0),
-                }
+                },
+            ),
+            Some(row) => {
+                let (key, row) = self.row_to_avro(row.iter());
+                (
+                    key,
+                    Value::Union {
+                        index: 1,
+                        inner: Box::new(row),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                )
             }
         };
+
+        // TODO [btv]: Decoding the key twice and then validating that they match is probably wasteful.
+        // But it doesn't matter for now since (1) in sinks we always have before or after populated, but not both,
+        // and (2) avro encoding for sinks is un-optimized anyway.
+        //
+        // Look into it if/when sink encoding becomes a bottleneck.
+        if let (Some(before_key), Some(after_key)) = (before_key.as_ref(), after_key.as_ref()) {
+            assert_eq!(before_key, after_key, "Mismatched keys in sink!");
+        }
+
+        let key = before_key.or(after_key);
 
         let transaction = if let Some(transaction_id) = transaction_id {
             let id = Value::String(transaction_id);
@@ -1929,14 +2243,14 @@ impl Encoder {
             fields.push(("transaction".into(), transaction));
         }
 
-        Value::Record(fields)
+        (key, Value::Record(fields))
     }
 
-    pub fn row_to_avro<'a, I>(&self, row: I) -> Value
+    pub fn row_to_avro<'a, I>(&self, row: I) -> (Option<Value>, Value)
     where
         I: IntoIterator<Item = Datum<'a>>,
     {
-        encode_datums_as_avro(row, &self.columns)
+        encode_datums_as_avro(row, &self.columns, self.key_indices())
     }
 }
 
@@ -1970,12 +2284,16 @@ pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType
     columns
 }
 
-/// Encodes a sequence of `Datum` as Avro, using supplied column names and types.
-pub fn encode_datums_as_avro<'a, I>(datums: I, names_types: &[(ColumnName, ColumnType)]) -> Value
+/// Encodes a sequence of `Datum` as Avro (key and value), using supplied column names and types.
+pub fn encode_datums_as_avro<'a, I>(
+    datums: I,
+    names_types: &[(ColumnName, ColumnType)],
+    key_indices: Option<&[usize]>,
+) -> (Option<Value>, Value)
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let fields = names_types
+    let value_fields: Vec<(String, Value)> = names_types
         .iter()
         .zip_eq(datums)
         .map(|((name, typ), datum)| {
@@ -1984,7 +2302,15 @@ where
             (name, TypedDatum::new(datum, typ.clone()).avro())
         })
         .collect();
-    Value::Record(fields)
+    let k = key_indices.map(|key_indices| {
+        let key_fields = key_indices
+            .iter()
+            .map(|&idx| value_fields[idx].clone())
+            .collect();
+        Value::Record(key_fields)
+    });
+    let v = Value::Record(value_fields);
+    (k, v)
 }
 
 /// Bundled information sufficient to encode as Avro.
@@ -2121,13 +2447,78 @@ impl SchemaCache {
     }
 }
 
+/// Builds the JSON for the row schema, which can be independently useful.
+fn build_row_schema_json(
+    columns: &[(ColumnName, ColumnType)],
+    name: &str,
+) -> serde_json::value::Value {
+    let mut fields = Vec::new();
+    for (name, typ) in columns.iter() {
+        let mut field_type = match &typ.scalar_type {
+            ScalarType::Bool => json!("boolean"),
+            ScalarType::Int32 | ScalarType::Oid => json!("int"),
+            ScalarType::Int64 => json!("long"),
+            ScalarType::Float32 => json!("float"),
+            ScalarType::Float64 => json!("double"),
+            ScalarType::Decimal(p, s) => json!({
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": p,
+                "scale": s,
+            }),
+            ScalarType::Date => json!({
+                "type": "int",
+                "logicalType": "date",
+            }),
+            ScalarType::Time => json!({
+                "type": "long",
+                "logicalType": "time-micros",
+            }),
+            ScalarType::Timestamp | ScalarType::TimestampTz => json!({
+                "type": "long",
+                "logicalType": "timestamp-micros"
+            }),
+            ScalarType::Interval => json!({
+                "type": "fixed",
+                "size": 12,
+                "logicalType": "duration"
+            }),
+            ScalarType::Bytes => json!("bytes"),
+            ScalarType::String => json!("string"),
+            ScalarType::Jsonb => json!({
+                "type": "string",
+            }),
+            ScalarType::Uuid => json!({
+                "type": "string",
+                "logicalType": "uuid",
+            }),
+            ScalarType::Array(_t) => unimplemented!("array types"),
+            ScalarType::List(_t) => unimplemented!("list types"),
+            ScalarType::Record { .. } => unimplemented!("record types"),
+        };
+        if typ.nullable {
+            field_type = json!(["null", field_type]);
+        }
+        fields.push(json!({
+            "name": name,
+            "type": field_type,
+        }));
+    }
+    json!({
+        "type": "record",
+        "fields": fields,
+        "name": name
+    })
+}
+
 /// Logic for the Avro representation of the CDCv2 protocol.
 pub mod cdc_v2 {
 
     use mz_avro::schema::{FullName, SchemaNode};
-    use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
+    use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, RowPacker, Timestamp};
     use serde_json::json;
 
+    use super::build_row_schema_json;
     use super::RowWrapper;
 
     use anyhow::anyhow;
@@ -2176,7 +2567,7 @@ pub mod cdc_v2 {
         pub fn encode_updates(&self, updates: &[(Row, i64, i64)]) -> Value {
             let mut enc_updates = Vec::new();
             for (data, time, diff) in updates {
-                let enc_data = super::encode_datums_as_avro(data, &self.columns);
+                let enc_data = super::encode_datums_as_avro(data, &self.columns, None).1;
                 let enc_time = Value::Long(time.clone());
                 let enc_diff = Value::Long(diff.clone());
                 let mut enc_update = Vec::new();
@@ -2306,70 +2697,6 @@ pub mod cdc_v2 {
     #[derive(Debug)]
     pub struct Decoder;
 
-    /// Builds the JSON for the row schema, which can be independently useful.
-    pub fn build_row_schema_json(
-        columns: &[(ColumnName, ColumnType)],
-        name: &str,
-    ) -> serde_json::value::Value {
-        let mut fields = Vec::new();
-        for (name, typ) in columns.iter() {
-            let mut field_type = match &typ.scalar_type {
-                ScalarType::Bool => json!("boolean"),
-                ScalarType::Int32 | ScalarType::Oid => json!("int"),
-                ScalarType::Int64 => json!("long"),
-                ScalarType::Float32 => json!("float"),
-                ScalarType::Float64 => json!("double"),
-                ScalarType::Decimal(p, s) => json!({
-                    "type": "bytes",
-                    "logicalType": "decimal",
-                    "precision": p,
-                    "scale": s,
-                }),
-                ScalarType::Date => json!({
-                    "type": "int",
-                    "logicalType": "date",
-                }),
-                ScalarType::Time => json!({
-                    "type": "long",
-                    "logicalType": "time-micros",
-                }),
-                ScalarType::Timestamp | ScalarType::TimestampTz => json!({
-                    "type": "long",
-                    "logicalType": "timestamp-micros"
-                }),
-                ScalarType::Interval => json!({
-                    "type": "fixed",
-                    "size": 12,
-                    "logicalType": "duration"
-                }),
-                ScalarType::Bytes => json!("bytes"),
-                ScalarType::String => json!("string"),
-                ScalarType::Jsonb => json!({
-                    "type": "string",
-                }),
-                ScalarType::Uuid => json!({
-                    "type": "string",
-                    "logicalType": "uuid",
-                }),
-                ScalarType::Array(_t) => unimplemented!("array types"),
-                ScalarType::List(_t) => unimplemented!("list types"),
-                ScalarType::Record { .. } => unimplemented!("record types"),
-            };
-            if typ.nullable {
-                field_type = json!(["null", field_type]);
-            }
-            fields.push(json!({
-                "name": name,
-                "type": field_type,
-            }));
-        }
-        json!({
-            "type": "record",
-            "fields": fields,
-            "name": name
-        })
-    }
-
     /// Construct the schema for the CDC V2 protocol.
     pub fn build_schema(row_schema: serde_json::Value) -> Schema {
         let updates_schema = json!({
@@ -2445,6 +2772,7 @@ pub mod cdc_v2 {
         use super::*;
         use mz_avro::AvroDeserializer;
         use mz_avro::GeneralDeserializer;
+        use repr::ScalarType;
 
         #[test]
         fn test_roundtrip() {
@@ -2592,7 +2920,8 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
-            let avro_value = Encoder::new(desc, false).row_to_avro(std::iter::once(datum));
+            let (_, avro_value) =
+                Encoder::new(desc, false, None).row_to_avro(std::iter::once(datum));
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
                 avro_value

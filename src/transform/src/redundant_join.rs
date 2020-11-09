@@ -24,7 +24,7 @@
 
 use std::collections::HashMap;
 
-use expr::Id;
+use expr::{Id, JoinInputMapper};
 
 use crate::{RelationExpr, ScalarExpr, TransformArgs};
 
@@ -106,18 +106,8 @@ impl RedundantJoin {
                     .collect::<Vec<_>>();
 
                 // Determine useful information about the structure of the inputs.
-                let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                let input_arities = input_types
-                    .iter()
-                    .map(|i| i.column_types.len())
-                    .collect::<Vec<_>>();
-
-                let mut offset = 0;
-                let mut prior_arities = Vec::new();
-                for input in 0..inputs.len() {
-                    prior_arities.push(offset);
-                    offset += input_arities[input];
-                }
+                let mut input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+                let old_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
                 // If we find an input that can be removed, we should do so!
                 // We only do this once per invocation to keep our sanity, but we could
@@ -130,8 +120,7 @@ impl RedundantJoin {
                         find_redundancy(
                             i,
                             &input_types[i].keys,
-                            &input_arities[..],
-                            &prior_arities[..],
+                            &old_input_mapper,
                             equivalences,
                             &input_prov[..],
                         )
@@ -139,15 +128,21 @@ impl RedundantJoin {
                     })
                     .next()
                 {
+                    inputs.remove(input);
+                    input_types.remove(input);
+
+                    let new_input_mapper = JoinInputMapper::new_from_input_types(&input_types);
                     // From `binding`, we produce the projection we will apply to the join
                     // once `input` is removed. This is valuable also to rewrite expressions
                     // in the join constraints.
-                    let mut columns = 0;
                     let mut projection = Vec::new();
-                    for i in 0..input_arities.len() {
+                    for i in 0..old_input_mapper.total_inputs() {
                         if i != input {
-                            projection.extend(columns..columns + input_arities[i]);
-                            columns += input_arities[i];
+                            projection.extend(new_input_mapper.global_columns(if i < input {
+                                i
+                            } else {
+                                i - 1
+                            }));
                         } else {
                             // When we reach the removed relation, we should introduce
                             // references to the columns that are meant to replace these.
@@ -160,7 +155,7 @@ impl RedundantJoin {
                     // have been to columns *after* `input`, and our original take on where they
                     // would be is no longer correct. References before `input` should stay as they
                     // are, and references afterwards will likely be decreased.
-                    for c in prior_arities[input]..prior_arities[input] + input_arities[input] {
+                    for c in old_input_mapper.global_columns(input) {
                         projection[c] = projection[projection[c]];
                     }
 
@@ -175,8 +170,6 @@ impl RedundantJoin {
                         equivalence.dedup();
                     }
                     equivalences.retain(|es| es.len() > 1);
-
-                    inputs.remove(input);
 
                     // Unset demand and implementation, as irrevocably hosed by this transformation.
                     *demand = None;
@@ -195,7 +188,7 @@ impl RedundantJoin {
                         for mut prov in input_prov {
                             prov.exact = false;
                             for (_src, inp) in prov.binding.iter_mut() {
-                                *inp += prior_arities[input];
+                                *inp = old_input_mapper.map_column_to_global(*inp, input);
                             }
                             results.push(prov);
                         }
@@ -392,16 +385,15 @@ impl ProvInfo {
 fn find_redundancy(
     input: usize,
     keys: &[Vec<usize>],
-    input_arities: &[usize],
-    prior_arities: &[usize],
+    input_mapper: &JoinInputMapper,
     equivalences: &[Vec<ScalarExpr>],
     input_prov: &[Vec<ProvInfo>],
 ) -> Option<Vec<usize>> {
     for provenance in input_prov[input].iter() {
         // We can only elide if the input contains all records, and binds all columns.
-        if provenance.exact && provenance.binding.len() == input_arities[input] {
+        if provenance.exact && provenance.binding.len() == input_mapper.input_arity(input) {
             // examine all *other* inputs that have not been removed...
-            for other in (0..input_arities.len()).filter(|other| other != &input) {
+            for other in (0..input_mapper.total_inputs()).filter(|other| other != &input) {
                 for other_prov in input_prov[other].iter().filter(|p| p.id == provenance.id) {
                     // We need to find each column of `input` bound in `other` with this provenance.
                     let mut bindings = HashMap::new();
@@ -418,21 +410,25 @@ fn find_redundancy(
                         cols.iter().all(|input_col| {
                             let other_col = bindings[&input_col];
                             equivalences.iter().any(|e| {
-                                e.contains(&ScalarExpr::Column(prior_arities[input] + input_col))
-                                    && e.contains(&ScalarExpr::Column(
-                                        prior_arities[other] + other_col,
-                                    ))
+                                e.contains(
+                                    &input_mapper
+                                        .map_expr_to_global(ScalarExpr::Column(*input_col), input),
+                                ) && e.contains(
+                                    &input_mapper
+                                        .map_expr_to_global(ScalarExpr::Column(other_col), other),
+                                )
                             })
                         })
                     };
 
                     // If all columns of `input` are bound, and any key columns of `input` are equated,
                     // the binding can be returned as mapping replacements for each input column.
-                    if bindings.len() == input_arities[input]
+                    if bindings.len() == input_mapper.input_arity(input)
                         && keys.iter().any(|key| all_columns_equated(key))
                     {
-                        let binding = (0..input_arities[input])
-                            .map(|c| prior_arities[other] + bindings[&c])
+                        let binding = input_mapper
+                            .local_columns(input)
+                            .map(|c| input_mapper.map_column_to_global(bindings[&c], other))
                             .collect::<Vec<_>>();
                         return Some(binding);
                     }

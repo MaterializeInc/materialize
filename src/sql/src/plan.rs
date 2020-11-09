@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SourceConnector};
 use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
+use statement::describe_statement;
 
 use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use crate::catalog::Catalog;
@@ -55,7 +56,7 @@ pub use self::expr::RelationExpr;
 pub use error::PlanError;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
 pub use query::scalar_type_from_sql;
-pub use statement::StatementContext;
+pub use statement::{StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
@@ -101,6 +102,10 @@ pub enum Plan {
         index: Index,
         if_not_exists: bool,
     },
+    CreateType {
+        name: FullName,
+        typ: Type,
+    },
     DropDatabase {
         name: String,
     },
@@ -126,12 +131,13 @@ pub enum Plan {
         source: ::expr::RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
-        materialize: bool,
+        copy_to: Option<CopyFormat>,
     },
     Tail {
         id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
+        copy_to: Option<CopyFormat>,
     },
     SendRows(Vec<Row>),
     ExplainPlan {
@@ -194,6 +200,13 @@ pub struct Index {
     pub keys: Vec<::expr::ScalarExpr>,
 }
 
+#[derive(Clone, Debug)]
+pub struct Type {
+    pub create_sql: String,
+    pub key_id: GlobalId,
+    pub value_id: GlobalId,
+}
+
 /// Specifies when a `Peek` should occur.
 #[derive(Debug, PartialEq)]
 pub enum PeekWhen {
@@ -209,6 +222,13 @@ pub enum MutationKind {
     Insert,
     Update,
     Delete,
+}
+
+#[derive(Debug)]
+pub enum CopyFormat {
+    Text,
+    Csv,
+    Binary,
 }
 
 #[derive(Debug, PartialEq)]
@@ -281,8 +301,8 @@ pub fn describe(
     catalog: &dyn Catalog,
     stmt: Statement,
     param_types: &[Option<pgrepr::Type>],
-) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), anyhow::Error> {
-    let (desc, types) = statement::describe_statement(catalog, stmt, param_types)?;
-    let types = types.into_iter().map(|t| pgrepr::Type::from(&t)).collect();
+) -> Result<(StatementDesc, Vec<pgrepr::Type>), anyhow::Error> {
+    let desc = describe_statement(catalog, stmt, param_types)?;
+    let types = desc.param_types.iter().map(pgrepr::Type::from).collect();
     Ok((desc, types))
 }

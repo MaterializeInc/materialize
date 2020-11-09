@@ -39,6 +39,7 @@ pub enum Statement {
     CreateView(CreateViewStatement),
     CreateTable(CreateTableStatement),
     CreateIndex(CreateIndexStatement),
+    CreateMapType(CreateMapTypeStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndexOptions(AlterIndexOptionsStatement),
     DropDatabase(DropDatabaseStatement),
@@ -77,6 +78,7 @@ impl AstDisplay for Statement {
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
+            Statement::CreateMapType(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndexOptions(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
@@ -147,41 +149,109 @@ impl AstDisplay for InsertStatement {
 }
 impl_display!(InsertStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CopyRelation {
+    Table {
+        name: ObjectName,
+        columns: Vec<Ident>,
+    },
+    Select(SelectStatement),
+    Tail(TailStatement),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CopyDirection {
+    To,
+    From,
+}
+
+impl AstDisplay for CopyDirection {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str(match self {
+            CopyDirection::To => "TO",
+            CopyDirection::From => "FROM",
+        })
+    }
+}
+impl_display!(CopyDirection);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CopyTarget {
+    Stdin,
+    Stdout,
+}
+
+impl AstDisplay for CopyTarget {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str(match self {
+            CopyTarget::Stdin => "STDIN",
+            CopyTarget::Stdout => "STDOUT",
+        })
+    }
+}
+impl_display!(CopyTarget);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CopyOption {
+    Format(String),
+}
+
+impl AstDisplay for CopyOption {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            CopyOption::Format(s) => {
+                f.write_str("FORMAT ");
+                f.write_str(s);
+            }
+        }
+    }
+}
+
 /// `COPY`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CopyStatement {
-    /// TABLE
-    pub table_name: ObjectName,
-    /// COLUMNS
-    pub columns: Vec<Ident>,
-    /// VALUES a vector of values to be copied
-    pub values: Vec<Option<String>>,
+    /// RELATION
+    pub relation: CopyRelation,
+    /// DIRECTION
+    pub direction: CopyDirection,
+    // TARGET
+    pub target: CopyTarget,
+    // OPTIONS
+    pub options: Vec<CopyOption>,
 }
 
 impl AstDisplay for CopyStatement {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("COPY ");
-        f.write_node(&self.table_name);
-        if !self.columns.is_empty() {
-            f.write_str("(");
-            f.write_node(&display::comma_separated(&self.columns));
-            f.write_str(")");
-        }
-        f.write_str(" FROM stdin; ");
-        if !self.values.is_empty() {
-            f.write_str("\n");
-            let mut delim = "";
-            for v in &self.values {
-                f.write_str(delim);
-                delim = "\t";
-                if let Some(v) = v {
-                    f.write_str(v);
-                } else {
-                    f.write_str("\\N");
+        match &self.relation {
+            CopyRelation::Table { name, columns } => {
+                f.write_node(&name);
+                if !columns.is_empty() {
+                    f.write_str("(");
+                    f.write_node(&display::comma_separated(&columns));
+                    f.write_str(")");
                 }
             }
+            CopyRelation::Select(query) => {
+                f.write_str("(");
+                f.write_node(query);
+                f.write_str(")");
+            }
+            CopyRelation::Tail(query) => {
+                f.write_str("(");
+                f.write_node(query);
+                f.write_str(")");
+            }
+        };
+        f.write_str(" ");
+        f.write_node(&self.direction);
+        f.write_str(" ");
+        f.write_node(&self.target);
+        if !self.options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
         }
-        f.write_str("\n\\.");
     }
 }
 impl_display!(CopyStatement);
@@ -493,6 +563,30 @@ impl AstDisplay for CreateIndexStatement {
 }
 impl_display!(CreateIndexStatement);
 
+/// `CREATE TYPE .. AS MAP`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateMapTypeStatement {
+    /// Name of the created type.
+    pub name: ObjectName,
+    /// Provides the name and type for the key
+    /// and value.
+    pub with_options: Vec<SqlOption>,
+}
+
+impl AstDisplay for CreateMapTypeStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE TYPE ");
+        f.write_node(&self.name);
+        f.write_str(" ");
+        f.write_str("AS MAP ( ");
+        if !self.with_options.is_empty() {
+            f.write_node(&display::comma_separated(&self.with_options));
+        }
+        f.write_str(" )");
+    }
+}
+impl_display!(CreateMapTypeStatement);
+
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterObjectRenameStatement {
@@ -697,6 +791,7 @@ impl AstDisplay for ShowObjectsStatement {
             ObjectType::View => "VIEWS",
             ObjectType::Source => "SOURCES",
             ObjectType::Sink => "SINKS",
+            ObjectType::Type => "TYPES",
             ObjectType::Index => unreachable!(),
         });
         if let Some(from) = &self.from {
@@ -972,6 +1067,7 @@ pub enum ObjectType {
     Source,
     Sink,
     Index,
+    Type,
 }
 
 impl AstDisplay for ObjectType {
@@ -983,6 +1079,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
             ObjectType::Index => "INDEX",
+            ObjectType::Type => "TYPE",
         })
     }
 }
@@ -1013,16 +1110,40 @@ impl AstDisplay for ShowStatementFilter {
 impl_display!(ShowStatementFilter);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SqlOption {
-    pub name: Ident,
-    pub value: Value,
+pub enum SqlOption {
+    Value {
+        name: Ident,
+        value: Value,
+    },
+    ObjectName {
+        name: Ident,
+        object_name: ObjectName,
+    },
+}
+
+impl SqlOption {
+    pub fn name(&self) -> &Ident {
+        match self {
+            SqlOption::Value { name, .. } => name,
+            SqlOption::ObjectName { name, .. } => name,
+        }
+    }
 }
 
 impl AstDisplay for SqlOption {
     fn fmt(&self, f: &mut AstFormatter) {
-        f.write_node(&self.name);
-        f.write_str(" = ");
-        f.write_node(&self.value);
+        match self {
+            SqlOption::Value { name, value } => {
+                f.write_node(name);
+                f.write_str(" = ");
+                f.write_node(value);
+            }
+            SqlOption::ObjectName { name, object_name } => {
+                f.write_node(name);
+                f.write_str(" = ");
+                f.write_node(object_name);
+            }
+        }
     }
 }
 impl_display!(SqlOption);

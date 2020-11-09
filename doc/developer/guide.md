@@ -25,6 +25,30 @@ better availability and durability story.
 
 ## Installing
 
+### C components
+
+Materialize depends on several components that are written in C, so you'll need
+a working C compiler. You'll also need to install the [CMake] build system.
+
+On macOS, if you install [Homebrew], you'll be guided through the process of
+installing Apple's developer tools, which includes a C compiler. Then it's a
+cinch to install CMake:
+
+```
+brew install cmake
+```
+
+On Debian-based Linux variants, it's even easier:
+
+```shell
+sudo apt update
+sudo apt install build-essential cmake
+```
+
+On other platforms, you'll have to figure out how to get these tools yourself.
+
+[CMake]: https://cmake.org
+
 ### Rust
 
 Install Rust via [rustup]:
@@ -36,6 +60,10 @@ curl https://sh.rustup.rs -sSf | sh
 Rustup will automatically select the correct toolchain version specified in
 [materialize/rust-toolchain](/rust-toolchain).
 
+We recommend that you do _not_ install Rust via your system's package manager.
+We closely track the most recent version of Rust. The version of Rust in your
+package manager is likely too old to build Materialize.
+
 [rustup]: https://www.rust-lang.org/tools/install
 
 ### Confluent Platform
@@ -45,11 +73,26 @@ several non-free Confluent tools, like the [Confluent Schema Registry] and
 [Control Center]. For local development, the [Confluent CLI] allows easy
 management of these services
 
-On macOS, the easiest installation method is to use [Homebrew]:
+#### macOS
+
+You will need JDK 8 or 11. The easiest way to install this is via homebrew:
 
 ```shell
-brew install confluent-platform
+brew cask install homebrew/cask-versions/adoptopenjdk8
 ```
+
+Homebrew no longer contains confluent packages, so you'll need to follow the
+[manual instructions][confluent-install].
+
+At the time of this writing, that means:
+
+```shell
+curl -O http://packages.confluent.io/archive/6.0/confluent-6.0.0.tar.gz
+tar -xf confluent-6.0.0.tar.gz
+CONFLUENT_HOME=./confluent-6.0.0 ./confluent-6.0.0/bin/confluent local services start
+```
+
+#### Linux
 
 On Debian-based Linux variants, it's a tad more involved:
 
@@ -62,8 +105,7 @@ sudo apt install openjdk-8-jre-headless confluent-community-2.12
 
 On other Linux variants, you'll need to make your own way through [Confluent's
 installation instructions][confluent-install]. Note that, at the time of
-writing, Java 8 is a strict requirement. Later versions of Java are not
-supported.
+writing, only Java 8 and 11 are supported.
 
 On Linux, you might want to consider using [nix]. It is a purely functional
 package manager, which is appealing because bits and pieces of state usually
@@ -75,7 +117,7 @@ nix-shell
 ```
 
 This will start a new shell with all the necessary dependencies available and
-pinned to the correct version. Reach out to @jamii for more information.
+pinned to the correct version.
 
 [Homebrew]: https://brew.sh
 [confluent-install]: https://docs.confluent.io/current/installation/installing_cp/index.html
@@ -167,9 +209,9 @@ See the [symbiosis crate documentation](https://mtrlz.dev/api/symbiosis) for
 more details.
 
 **Note:** As of August 2020, we're laying the groundwork to phase out symbiosis
-mode with [tables](https://materialize.io/docs/sql/create-table). But we're
+mode with [tables](https://materialize.com/docs/sql/create-table). But we're
 stuck with symbiosis mode until tables support `UPDATE` and `DELETE`—at the time
-of writing they only support [`INSERT`](https://materialize.io/docs/sql/insert).
+of writing they only support [`INSERT`](https://materialize.com/docs/sql/insert).
 
 ## Web UI
 

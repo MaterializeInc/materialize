@@ -135,13 +135,13 @@ def warn_docker_resource_limits() -> None:
         warn(
             f"Docker only has {actual} memory, "
             f"less than {desired} can cause demos to fail in unexpected ways.\n"
-            "    See https://materialize.io/docs/third-party/docker/\n"
+            "    See https://materialize.com/docs/third-party/docker/\n"
         )
     if limits.ncpus < docker.RECOMMENDED_MIN_CPUS:
         warn(
             f"Docker only has access to {limits.ncpus}, "
             f"fewer than {docker.RECOMMENDED_MIN_CPUS} can cause demos to fail in unexpected ways.\n"
-            "    See https://materialize.io/docs/third-party/docker/\n"
+            "    See https://materialize.com/docs/third-party/docker/\n"
         )
 
 

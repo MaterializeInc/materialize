@@ -25,11 +25,15 @@ use expr::{PartitionId, SourceInstanceId};
 use mz_avro::types::Value;
 use mz_avro::{AvroRead, Schema, Skip};
 
-use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+};
+use crate::{
+    logging::materialized::Logger,
+    server::{
+        TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
+        TimestampMetadataUpdates,
+    },
 };
 
 /// Contains all information necessary to ingest data from file sources (either
@@ -48,6 +52,8 @@ pub struct FileSourceInfo<Out> {
     /// Current File Offset. This corresponds to the offset of last processed message
     /// (initially 0 if no records have been processed)
     current_file_offset: FileOffset,
+    /// Timely worker logger for source events
+    logger: Option<Logger>,
 }
 
 #[derive(Copy, Clone)]
@@ -72,6 +78,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
         active: bool,
         _: usize,
         _: usize,
+        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -106,7 +113,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
 
         consistency_info.partition_metrics.insert(
             PartitionId::File,
-            PartitionMetrics::new(&name, &source_id.to_string(), ""),
+            PartitionMetrics::new(&name, &source_id.to_string(), "", logger.clone()),
         );
         consistency_info.update_partition_metadata(PartitionId::File);
 
@@ -117,6 +124,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
             receiver_stream: receiver,
             buffer: None,
             current_file_offset: FileOffset { offset: 0 },
+            logger,
         })
     }
 }
@@ -128,6 +136,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         active: bool,
         _: usize,
         _: usize,
+        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -153,7 +162,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         };
         consistency_info.partition_metrics.insert(
             PartitionId::File,
-            PartitionMetrics::new(&name, &source_id.to_string(), ""),
+            PartitionMetrics::new(&name, &source_id.to_string(), "", logger.clone()),
         );
         consistency_info.update_partition_metadata(PartitionId::File);
 
@@ -164,6 +173,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
             receiver_stream: receiver,
             buffer: None,
             current_file_offset: FileOffset { offset: 0 },
+            logger,
         })
     }
 }
@@ -230,7 +240,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         if consistency_info.partition_metrics.len() == 0 {
             consistency_info.partition_metrics.insert(
                 pid,
-                PartitionMetrics::new(&self.name, &self.id.to_string(), ""),
+                PartitionMetrics::new(&self.name, &self.id.to_string(), "", self.logger.clone()),
             );
         }
     }
@@ -260,6 +270,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
                     let message = SourceMessage {
                         partition: PartitionId::File,
                         offset: self.current_file_offset.into(),
+                        upstream_time_millis: None,
                         key: None,
                         payload: Some(record),
                     };
@@ -338,12 +349,20 @@ pub fn read_file_task<Ctor, I, Out, Err>(
                 let mut w = match notify::RecommendedWatcher::new_raw(notice_tx) {
                     Ok(w) => w,
                     Err(err) => {
-                        error!("file source: failed to create notify watcher: {}", err);
+                        error!(
+                            "file source: failed to create notify watcher: {:#} (path: {})",
+                            err,
+                            path.display()
+                        );
                         return;
                     }
                 };
                 if let Err(err) = w.watch(&path, RecursiveMode::NonRecursive) {
-                    error!("file source: failed to add watch: {}", err);
+                    error!(
+                        "file source: failed to add watch for file: {:#} (path: {})",
+                        err,
+                        path.display()
+                    );
                     return;
                 }
                 (notice_rx, w)

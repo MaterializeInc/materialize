@@ -12,7 +12,7 @@
 use anyhow::bail;
 
 use ore::collections::CollectionExt;
-use repr::{Datum, RelationDesc, Row, ScalarType};
+use repr::{Datum, Row};
 use sql_parser::ast::{
     ObjectName, ObjectType, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
@@ -22,7 +22,7 @@ use sql_parser::ast::{
 
 use crate::catalog::CatalogItemType;
 use crate::parse;
-use crate::plan::statement::StatementContext;
+use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{Params, Plan};
 
 pub fn handle_show_create_view(
@@ -130,6 +130,7 @@ pub fn show_objects<'a>(
         ObjectType::Source => show_sources(scx, full, materialized, from, filter),
         ObjectType::View => show_views(scx, full, materialized, from, filter),
         ObjectType::Sink => show_sinks(scx, full, from, filter),
+        ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }
@@ -329,6 +330,55 @@ fn show_sinks<'a>(
     Ok(ShowSelect::new(scx, query, filter))
 }
 
+fn show_types<'a>(
+    scx: &'a StatementContext<'a>,
+    extended: bool,
+    full: bool,
+    from: Option<ObjectName>,
+    filter: Option<ShowStatementFilter>,
+) -> Result<ShowSelect<'a>, anyhow::Error> {
+    let schema_spec = if let Some(from) = from {
+        scx.resolve_schema(from)?.1
+    } else {
+        scx.resolve_default_schema()?
+    };
+
+    let query = if !full & !extended {
+        format!(
+            "SELECT name FROM mz_catalog.mz_map_types WHERE schema_id = {}",
+            schema_spec.id,
+        )
+    } else if full & !extended {
+        format!(
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
+            FROM mz_catalog.mz_map_types
+            WHERE schema_id = {}",
+            schema_spec.id,
+        )
+    } else if !full & extended {
+        format!(
+            "SELECT name
+            FROM mz_catalog.mz_map_types
+            WHERE schema_id = {}
+            UNION
+            SELECT name AS type
+            FROM mz_catalog.mz_builtin_types",
+            schema_spec.id,
+        )
+    } else {
+        format!(
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
+            FROM mz_catalog.mz_map_types
+            WHERE schema_id = {}
+            UNION
+            SELECT name, 'system'
+            FROM mz_catalog.mz_builtin_types",
+            schema_spec.id,
+        )
+    };
+    Ok(ShowSelect::new(scx, query, filter))
+}
+
 pub fn show_indexes<'a>(
     scx: &'a StatementContext<'a>,
     ShowIndexesStatement {
@@ -441,12 +491,12 @@ impl<'a> ShowSelect<'a> {
     }
 
     /// Computes the shape of this `ShowSelect`.
-    pub fn describe(self) -> Result<(Option<RelationDesc>, Vec<ScalarType>), anyhow::Error> {
+    pub fn describe(self) -> Result<StatementDesc, anyhow::Error> {
         super::describe_statement(self.scx.catalog, Statement::Select(self.stmt), &[])
     }
 
     /// Converts this `ShowSelect` into a [`Plan`].
     pub fn handle(self) -> Result<Plan, anyhow::Error> {
-        super::handle_select(self.scx, self.stmt, &Params::empty())
+        super::handle_select(self.scx, self.stmt, &Params::empty(), None)
     }
 }

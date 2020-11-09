@@ -145,8 +145,12 @@
   - signature: 'octet_length(b: bytea) -> int'
     description: Number of bytes in `b`
 
-  - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
-    description: Values of the capture groups of `regex` as matched in `haystack`
+  - signature: 'regexp_match(haystack: str, needle: str [, flags: str]]) -> str[]'
+    description: >-
+      Matches the regular expression `needle` against haystack, returning a
+      string array that contains the value of each capture group specified in
+      `needle`, in order. If `flags` is set to the string `i` matches
+      case-insensitively.
 
   - signature: 'replace(s: str, f: str, r: str) -> str'
     description: "`s` with all instances of `f` replaced with `r`"
@@ -314,5 +318,32 @@
 - type: Table
   description: Table functions evaluate to a set of rows, rather than a single expression.
   functions:
-  - signature: 'generate_series (start: int, stop: int) -> Col<int>'
+  - signature: 'generate_series(start: int, stop: int) -> Col<int>'
     description: Generate all integer values between `start` and `stop`, inclusive.
+  - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
+    description: Values of the capture groups of `regex` as matched in `haystack`
+
+- type: Array
+  functions:
+  - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
+    description: >-
+      Concatenates the elements of `array` together separated by `sep`.
+      Null elements are omitted unless `ifnull` is non-null, in which case
+      null elements are replaced with the value of `ifnull`.
+
+- type: PostgreSQL compatibility
+  description: Functions whose primary purpose is to facilitate compatibility with PostgreSQL tools
+  functions:
+  - signature: 'current_schemas(include_implicit: bool) -> text[]'
+    description: >-
+      Returns the names of the schemas on the search path.
+      The `include_implicit` parameter controls whether implicit schemas like
+      `mz_catalog` and `pg_catalog` are included in the output.
+  - signature: 'obj_description(oid: oid, catalog: text) -> text'
+    description: PostgreSQL compatibility shim. Currently always returns `NULL`.
+  - signature: 'pg_table_is_visible(relation: oid) -> boolean'
+    description: Reports whether the relation with the specified OID is visible in the search path.
+  - signature: 'pg_typeof(expr: any) -> text'
+    description: Returns the type of its input argument as a string.
+  - signature: 'pg_encoding_to_char(encoding_id: integer) -> text'
+    description: PostgreSQL compatibility shim. Not intended for direct use.

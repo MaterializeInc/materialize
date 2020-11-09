@@ -150,17 +150,17 @@ enable it quite easily with the following steps.
      cat '/swapfile none swap sw 0 0' >> /etc/fstab
      ```
 
-## Persistence
+## Source Caching
 
 {{< experimental v0.4.2 />}}
 
 To avoid re-reading data from Kafka on restart, Materialize lets you create
-persistent sources, which persist input messages from Kafka topics to files
-on the Materialize instance's local hard drive. The current version of persistence
+cached sources, which cache input messages from Kafka topics to files
+on the Materialize instance's local hard drive. The current version of source caching
 is not intended to speed up Materialize's restart time, as there are other factors
 beyond Kafka broker read performance that contribute to high restart times.
 
-We recommend enabling persistence if you are using Kafka sources, need to relieve
+We recommend enabling source caching if you are using Kafka sources, need to relieve
 load on upstream Kafka brokers, and are comfortable using
 [experimental][exp] features.
 
@@ -168,25 +168,25 @@ load on upstream Kafka brokers, and are comfortable using
 
 {{< warning >}}
 
-Materialize currently does not delete persisted records when the source is dropped.
-Additionally, Materialize does not currently compact persisted data. If you enable
-persistence on sources from compacted Kafka topics, Materialize will store and re-read
-all records that have been persisted, even if some of them were compacted by the upstream
+Materialize currently does not delete cached records when the source is dropped.
+Additionally, Materialize does not currently compact cached data. If you enable
+caching on sources from compacted Kafka topics, Materialize will store and re-read
+all records that have been cached, even if some of them were compacted by the upstream
 source.
 
 {{< /warning >}}
 
 ### Details
 
-Any Kafka source can be declared as persistent source, irrespective of its
+Any Kafka source can be declared as a cached source, irrespective of its
 format ([Avro][avro], [text/bytes][text], [csv][csv], [Protobuf][proto] and
 [JSON][json]).
 
-Materialize stores one copy of all input data for each persistent Kafka source.
+Materialize stores one copy of all input data for each cached Kafka source.
 Materialize stores these files in:
 
 ```
-{data-directory}/persistence/{source-id}
+{data-directory}/cache/{source-id}
 ```
 
 Within this directory, Materialize writes to files named
@@ -199,17 +199,17 @@ Here, each file stores data for ranges of offsets per `partition-id`. Each file
 stores all the data from `start-offset` (inclusive) to `end-offset` (exclusive).
 Materialize buffers input records in memory and flushes them every 10 minutes or
 immediately if the number of buffered records per source exceeds the
-[`--persistence-max-pending-records`][persistence-flag] parameter. Setting this flag to a
+[`--cache-max-pending-records`][cache-flag] parameter. Setting this flag to a
 higher value helps Materialize achieve higher ingest and disk write throughput,
-however this also increases the average latency before records are persisted.
+however this also increases the average latency before records are cached.
 
 On restart, Materialize reads back all of the records that had been previously
-persisted in offset order, and then continues reading from the upstream source
-for data after the last persisted record in each partition.
+cached in offset order, and then continues reading from the upstream source
+for data after the last cached record in each partition.
 
-[avro]: /sql/create-source/avro-kafka/#persisted-kafka-sources
-[text]: /sql/create-source/text-kafka/#persisted-kafka-sources
-[proto]: /sql/create-source/protobuf-kafka/#persisted-kafka-sources
-[csv]: /sql/create-source/csv-kafka/#persisted-kafka-sources
-[json]: /sql/create-source/json-kafka/#persisted-kafka-sources
-[persistence-flag]: /cli/#persistence
+[avro]: /sql/create-source/avro-kafka/#cached-kafka-sources
+[text]: /sql/create-source/text-kafka/#cached-kafka-sources
+[proto]: /sql/create-source/protobuf-kafka/#cached-kafka-sources
+[csv]: /sql/create-source/csv-kafka/#cached-kafka-sources
+[json]: /sql/create-source/json-kafka/#cached-kafka-sources
+[cache-flag]: /cli/#source-cache

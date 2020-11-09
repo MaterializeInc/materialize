@@ -17,7 +17,6 @@
 //!
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
-use std::env;
 use std::env::VarError;
 use std::ffi::CStr;
 use std::fs::{self, File};
@@ -30,11 +29,17 @@ use std::process;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use std::{cmp, env};
 
 use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
+use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{info, trace, warn};
+use log::{info, warn};
+use sysinfo::{ProcessorExt, SystemExt};
+
+mod sys;
+mod tracing;
 
 fn main() {
     if let Err(err) = run() {
@@ -73,13 +78,13 @@ fn run() -> Result<(), anyhow::Error> {
     opts.optopt(
         "p",
         "process",
-        "identity of this process (default 0)",
+        "identity of this node when coordinating with other nodes (default 0)",
         "INDEX",
     );
     opts.optopt(
         "n",
         "processes",
-        "total number of processes (default 1)",
+        "total number of coordinating nodes (default 1)",
         "N",
     );
     opts.optopt(
@@ -96,6 +101,7 @@ fn run() -> Result<(), anyhow::Error> {
         "dataflow logging granularity (default 1s)",
         "DURATION/\"off\"",
     );
+    opts.optflag("", "debug-timely-logging", "(internal use only)");
     opts.optopt(
         "",
         "logical-compaction-window",
@@ -110,8 +116,8 @@ fn run() -> Result<(), anyhow::Error> {
     );
     opts.optopt(
         "",
-        "persistence-max-pending-records",
-        "maximum number of records that have to be present before materialize will persist them immediately. (default 1000000)",
+        "cache-max-pending-records",
+        "maximum number of records that have to be present before materialize will cache them immediately. (default 1000000)",
         "N",
     );
 
@@ -170,7 +176,9 @@ fn run() -> Result<(), anyhow::Error> {
             materialized::BUILD_SHA
         );
         if popts.opt_count("v") > 1 {
-            print_build_info();
+            for bi in build_info() {
+                println!("{}", bi);
+            }
         }
         return Ok(());
     }
@@ -203,14 +211,14 @@ fn run() -> Result<(), anyhow::Error> {
                     Err(VarError::NotUnicode(_)) => {
                         bail!("non-unicode character found in MZ_THREADS")
                     }
-                    Err(VarError::NotPresent) => 0,
+                    Err(VarError::NotPresent) => cmp::max(1, num_cpus::get_physical() / 2),
                 },
             },
         },
     };
     if threads == 0 {
         bail!(
-            "'--workers' must be specified and greater than 0\n\
+            "'--workers' must be greater than 0\n\
             hint: As a starting point, set the number of threads to half of the number of\n\
             cores on your system. Then, further adjust based on your performance needs.\n\
             hint: You may also set the environment variable MZ_WORKERS to the desired number\n\
@@ -236,6 +244,7 @@ fn run() -> Result<(), anyhow::Error> {
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
     };
+    let log_logging = popts.opt_present("debug-timely-logging");
     let logical_compaction_window = match popts.opt_str("logical-compaction-window").as_deref() {
         None => Some(Duration::from_secs(60)),
         Some("off") => None,
@@ -246,7 +255,7 @@ fn run() -> Result<(), anyhow::Error> {
         Some(d) => parse_duration::parse(&d)?,
     };
     let persistence_max_pending_records =
-        popts.opt_get_default("persistence-max-pending-records", 1000000)?;
+        popts.opt_get_default("cache-max-pending-records", 1000000)?;
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
@@ -267,14 +276,14 @@ fn run() -> Result<(), anyhow::Error> {
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
     let symbiosis_url = popts.opt_str("symbiosis");
     fs::create_dir_all(&data_directory)
-        .with_context(|| anyhow!("creating data directory {}", data_directory.display()))?;
+        .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
 
     // Configure source persistence.
     let persistence = if experimental_mode {
-        let persistence_directory = data_directory.join("persistence/");
+        let persistence_directory = data_directory.join("cache/");
         fs::create_dir_all(&persistence_directory).with_context(|| {
-            anyhow!(
-                "creating persistence directory: {}",
+            format!(
+                "creating source caching directory: {}",
                 persistence_directory.display()
             )
         })?;
@@ -286,6 +295,11 @@ fn run() -> Result<(), anyhow::Error> {
     } else {
         None
     };
+
+    let logging = logging_granularity.map(|granularity| coord::LoggingConfig {
+        granularity,
+        log_logging,
+    });
 
     // If --disable-telemetry is present, disable telemetry. Otherwise, if a
     // MZ_TELEMETRY_URL environment variable is set, use that as the telemetry
@@ -302,7 +316,7 @@ fn run() -> Result<(), anyhow::Error> {
             }
             Err(VarError::NotPresent) => match cfg!(debug_assertions) {
                 true => None,
-                false => Some("https://telemetry.materialize.com/".to_string()),
+                false => Some("https://telemetry.materialize.com".to_string()),
             },
         },
     };
@@ -313,6 +327,8 @@ fn run() -> Result<(), anyhow::Error> {
         use tracing_subscriber::fmt;
         use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::util::SubscriberInitExt;
+
+        use crate::tracing::FilterLayer;
 
         let env_filter = EnvFilter::try_from_env("MZ_LOG")
             .or_else(|_| EnvFilter::try_new("info")) // default log level
@@ -337,49 +353,72 @@ fn run() -> Result<(), anyhow::Error> {
                         Some(path) => PathBuf::from(path),
                         None => data_directory.join("materialized.log"),
                     };
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent).with_context(|| {
+                            format!("creating log file directory: {}", parent.display())
+                        })?;
+                    }
                     let file = fs::OpenOptions::new()
                         .append(true)
                         .create(true)
-                        .open(path)?;
+                        .open(&path)
+                        .with_context(|| format!("creating log file: {}", path.display()))?;
                     fmt::layer()
                         .with_ansi(false)
                         .with_writer(move || file.try_clone().expect("failed to clone log file"))
                 })
-                .with(LevelFilter::WARN)
-                .with(fmt::layer().with_writer(io::stderr))
+                .with(FilterLayer::new(
+                    fmt::layer().with_writer(io::stderr),
+                    LevelFilter::WARN,
+                ))
                 .init();
         }
     }
 
-    // TODO - make this only check for "MZ_" if #1223 is fixed
-    let env_message: String = std::env::vars()
-        .filter(|(name, _value)| {
-            name.starts_with("MZ_")
-                || name.starts_with("DIFFERENTIAL_")
-                || name == "DEFAULT_PROGRESS_MODE"
-        })
-        .map(|(name, value)| format!("\n{}={}", name, value))
-        .collect();
-
-    // Print version/args/env info as the very first thing in the logs, so that
-    // we know what build people are on if they send us bug reports.
+    // Print system information as the very first thing in the logs. The goal is
+    // to increase the probability that we can reproduce a reported bug if all
+    // we get is the log file.
+    let mut system = sysinfo::System::new();
+    system.refresh_system();
     info!(
-        "materialized version: {}
-invoked as: {}
-environment:{}",
-        materialized::version(),
-        args.join(" "),
-        env_message
+        "booting server
+materialized {mz_version}
+{dep_versions}
+invoked as: {invocation}
+os: {os}
+cpus: {ncpus_logical} logical, {ncpus_physical} physical
+cpu0: {cpu0}
+memory: {memory_total}KB total, {memory_used}KB used
+swap: {swap_total}KB total, {swap_used}KB used",
+        mz_version = materialized::version(),
+        dep_versions = build_info().join("\n"),
+        invocation = {
+            use shell_words::quote as escape;
+            // TODO - make this only check for "MZ_" if #1223 is fixed.
+            env::vars()
+                .filter(|(name, _value)| {
+                    name.starts_with("MZ_")
+                        || name.starts_with("DIFFERENTIAL_")
+                        || name == "DEFAULT_PROGRESS_MODE"
+                })
+                .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
+                .chain(args.into_iter().map(|arg| escape(&arg).into_owned()))
+                .join(" ")
+        },
+        os = os_info::get(),
+        ncpus_logical = num_cpus::get(),
+        ncpus_physical = num_cpus::get_physical(),
+        cpu0 = {
+            let cpu0 = &system.get_processors()[0];
+            format!("{} {}MHz", cpu0.get_brand(), cpu0.get_frequency())
+        },
+        memory_total = system.get_total_memory(),
+        memory_used = system.get_used_memory(),
+        swap_total = system.get_total_swap(),
+        swap_used = system.get_used_swap(),
     );
 
-    adjust_rlimits();
-
-    // Inform the user about what they are using, and how to contact us.
-    beta_splash();
-
-    if experimental_mode {
-        experimental_mode_splash();
-    }
+    sys::adjust_rlimits();
 
     // Start Tokio runtime.
     let mut runtime = tokio::runtime::Builder::new()
@@ -393,11 +432,11 @@ environment:{}",
         .enable_all()
         .build()?;
 
-    let _server = runtime.block_on(materialized::serve(materialized::Config {
+    let server = runtime.block_on(materialized::serve(materialized::Config {
         threads,
         process,
         addresses,
-        logging_granularity,
+        logging,
         logical_compaction_window,
         timestamp_frequency,
         persistence,
@@ -408,6 +447,50 @@ environment:{}",
         experimental_mode,
         telemetry_url,
     }))?;
+
+    eprintln!(
+        "=======================================================================
+Thank you for trying Materialize!
+
+We are interested in any and all feedback you have, which may be able
+to improve both our software and your queries! Please reach out at:
+
+    Web: https://materialize.com
+    GitHub issues: https://github.com/MaterializeInc/materialize/issues
+    Email: support@materialize.io
+    Twitter: @MaterializeInc
+=======================================================================
+"
+    );
+
+    if experimental_mode {
+        eprintln!(
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                                WARNING!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Starting Materialize in experimental mode means:
+
+- This node's catalog of views and sources are unstable.
+
+If you use any version of Materialize besides this one, you might
+not be able to start the Materialize node. To fix this, you'll have
+to remove all of Materialize's data (e.g. rm -rf mzdata) and start
+the node anew.
+
+- You must always start this node in experimental mode; it can no
+longer be started in non-experimental/regular mode.
+
+For more details, see https://materialize.com/docs/cli#experimental-mode
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+"
+        );
+    }
+
+    println!(
+        "materialized {} listening on {}...",
+        materialized::version(),
+        server.local_addr(),
+    );
 
     // Block forever.
     loop {
@@ -461,135 +544,19 @@ fn handle_panic(panic_info: &PanicInfo) {
 We rely on bug reports to diagnose and fix these errors. Please
 copy and paste the above details and file a report at:
 
-    https://materialize.io/s/bug
+    https://materialize.com/s/bug
 
 To protect your privacy, we do not collect crash reports automatically."#,
     );
     process::exit(1);
 }
 
-/// Print to the screen information about how to contact us.
-fn beta_splash() {
-    eprintln!(
-        "=======================================================================
-Thank you for trying Materialize!
-
-We are interested in any and all feedback you have, which may be able
-to improve both our software and your queries! Please reach out at:
-
-    Web: https://materialize.io
-    GitHub issues: https://github.com/MaterializeInc/materialize/issues
-    Email: support@materialize.io
-    Twitter: @MaterializeInc
-=======================================================================
-"
-    );
-}
-
-/// Print a warning about the dangers of using experimental mode.
-fn experimental_mode_splash() {
-    eprintln!(
-        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                               WARNING!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-Starting Materialize in experimental mode means:
-
-- This node's catalog of views and sources are unstable.
-
-If you use any version of Materialize besides this one, you might
-not be able to start the Materialize node. To fix this, you'll have
-to remove all of Materialize's data (e.g. rm -rf mzdata) and start
-the node anew.
-
-- You must always start this node in experimental mode; it can no
-longer be started in non-experimental/regular mode.
-
-For more details, see https://materialize.io/docs/cli#experimental-mode
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-"
-    );
-}
-
-fn print_build_info() {
+fn build_info() -> Vec<String> {
     let openssl_version =
         unsafe { CStr::from_ptr(openssl_sys::OpenSSL_version(openssl_sys::OPENSSL_VERSION)) };
     let rdkafka_version = unsafe { CStr::from_ptr(rdkafka_sys::bindings::rd_kafka_version_str()) };
-    println!("{}", openssl_version.to_string_lossy());
-    println!("librdkafka v{}", rdkafka_version.to_string_lossy());
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
-fn adjust_rlimits() {
-    trace!("rlimit crate does not support this OS; not adjusting nofile limit");
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
-/// Attempts to increase the soft nofile rlimit to the maximum possible value.
-fn adjust_rlimits() {
-    // getrlimit/setrlimit can have surprisingly different behavior across
-    // platforms, even with the rlimit wrapper crate that we use. This function
-    // is chattier than normal at the trace log level in an attempt to ease
-    // debugging of such differences.
-
-    let (soft, hard) = match rlimit::Resource::NOFILE.get() {
-        Ok(limits) => limits,
-        Err(e) => {
-            trace!("unable to read initial nofile rlimit: {}", e);
-            return;
-        }
-    };
-    trace!("initial nofile rlimit: ({}, {})", soft, hard);
-
-    #[cfg(target_os = "macos")]
-    let hard = {
-        use std::cmp;
-        use sysctl::Sysctl;
-
-        // On macOS, getrlimit by default reports that the hard limit is
-        // unlimited, but there is usually a stricter hard limit discoverable
-        // via sysctl. Failing to discover this secret stricter hard limit will
-        // cause the call to setrlimit below to fail.
-        let res = sysctl::Ctl::new("kern.maxfilesperproc")
-            .and_then(|ctl| ctl.value())
-            .map_err(|e| e.to_string())
-            .and_then(|v| match v {
-                sysctl::CtlValue::Int(v) => Ok(v as u64),
-                o => Err(format!("unexpected sysctl value type: {:?}", o)),
-            });
-        match res {
-            Ok(v) => {
-                trace!("sysctl kern.maxfilesperproc hard limit: {}", v);
-                cmp::min(v, hard)
-            }
-            Err(e) => {
-                trace!("error while reading sysctl: {}", e);
-                hard
-            }
-        }
-    };
-
-    trace!("attempting to adjust nofile rlimit to ({0}, {0})", hard);
-    if let Err(e) = rlimit::Resource::NOFILE.set(hard, hard) {
-        trace!("error adjusting nofile rlimit: {}", e);
-        return;
-    }
-
-    // Check whether getrlimit reflects the limit we installed with setrlimit.
-    // Some platforms will silently ignore invalid values in setrlimit.
-    let (soft, hard) = match rlimit::Resource::NOFILE.get() {
-        Ok(limits) => limits,
-        Err(e) => {
-            trace!("unable to read adjusted nofile rlimit: {}", e);
-            return;
-        }
-    };
-    trace!("adjusted nofile rlimit: ({}, {})", soft, hard);
-
-    const RECOMMENDED_SOFT_LIMIT: u64 = 1024;
-    if soft < RECOMMENDED_SOFT_LIMIT {
-        warn!(
-            "soft nofile rlimit ({}) is dangerously low; at least {} is recommended",
-            soft, RECOMMENDED_SOFT_LIMIT
-        )
-    }
+    vec![
+        openssl_version.to_string_lossy().into_owned(),
+        format!("librdkafka v{}", rdkafka_version.to_string_lossy()),
+    ]
 }

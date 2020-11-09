@@ -127,9 +127,11 @@ impl fmt::Display for Outcome<'_> {
         use Outcome::*;
         const INDENT: &str = "\n        ";
         match self {
-            Unsupported { error, location } => write!(f, "Unsupported:{}:\n{}", location, error),
-            ParseFailure { error, location } => write!(f, "ParseFailure:{}:\n{}", location, error),
-            PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{}", location, error),
+            Unsupported { error, location } => write!(f, "Unsupported:{}:\n{:#}", location, error),
+            ParseFailure { error, location } => {
+                write!(f, "ParseFailure:{}:\n{:#}", location, error)
+            }
+            PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{:#}", location, error),
             UnexpectedPlanSuccess {
                 expected_error,
                 location,
@@ -387,7 +389,7 @@ impl State {
             num_timely_workers: NUM_TIMELY_WORKERS,
             symbiosis_url: Some("postgres://"),
             data_directory: None,
-            logging_granularity: None,
+            logging: None,
             timestamp: TimestampConfig {
                 frequency: Duration::from_millis(10),
             },
@@ -495,7 +497,7 @@ impl State {
             }
             Err(error) => {
                 if let Some(expected_error) = expected_error {
-                    if Regex::new(expected_error)?.is_match(&error.to_string()) {
+                    if Regex::new(expected_error)?.is_match(&format!("{:#}", error)) {
                         return Ok(Outcome::Success);
                     }
                 }
@@ -577,7 +579,7 @@ impl State {
                         }
                     }
                     Err(expected_error) => {
-                        if Regex::new(expected_error)?.is_match(&error.to_string()) {
+                        if Regex::new(expected_error)?.is_match(&format!("{:#}", error)) {
                             Ok(Outcome::Success)
                         } else {
                             Ok(Outcome::PlanFailure { error, location })
@@ -745,7 +747,7 @@ impl State {
             .session()
             .get_prepared_statement(&statement_name)
             .expect("unnamed prepared statement missing");
-        let desc = stmt.desc().cloned();
+        let desc = stmt.desc().relation_desc.clone();
         let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
         self.coord_client.session().set_portal(
             portal_name.clone(),
@@ -898,10 +900,10 @@ pub async fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyh
                     }
                 }
             }
-        }
-
-        if let Outcome::Bail { .. } = outcome {
-            break;
+        } else if let Outcome::Success = outcome {
+            // Ok.
+        } else {
+            bail!("unexpected: {}", outcome);
         }
     }
 

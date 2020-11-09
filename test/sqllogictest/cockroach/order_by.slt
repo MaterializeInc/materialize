@@ -17,9 +17,6 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-# not supported yet
-halt
-
 mode cockroach
 
 statement ok
@@ -96,7 +93,7 @@ SELECT a AS foo, b FROM t ORDER BY foo DESC
 1 9
 
 # Check that ambiguous references to renders are properly reported.
-query error ORDER BY "foo" is ambiguous
+query error column name "foo" is ambiguous
 SELECT a AS foo, b AS foo FROM t ORDER BY foo
 
 # Check that no ambiguity is reported if the ORDER BY name refers
@@ -179,6 +176,7 @@ query I
 3
 2
 
+skipif postgresql # TODO(benesch): similar to below; we consider this a subquery and lose the ORDER BY
 query I
 (((SELECT a FROM t ORDER BY a DESC LIMIT 4)))
 ----
@@ -187,41 +185,21 @@ query I
 3
 2
 
+skipif postgresql # TODO(benesch): we should match PostgreSQL here
 query error pgcode 42601 multiple ORDER BY clauses not allowed
 ((SELECT a FROM t ORDER BY a)) ORDER BY a
 
-query error expected c to be of type int, found type bool
+query error CASE does not have uniform type: Int32 vs Bool
 SELECT CASE a WHEN 1 THEN b ELSE c END as val FROM t ORDER BY val
 
-query error pgcode 42P10 ORDER BY position 0 is not in select list
+query error pgcode 42P10 column reference 0 in ORDER BY clause is out of range \(1 - 3\)
 SELECT * FROM t ORDER BY 0
-
-query error pgcode 42601 non-integer constant in ORDER BY: true
-SELECT * FROM t ORDER BY true
-
-query error pgcode 42601 non-integer constant in ORDER BY: 'a'
-SELECT * FROM t ORDER BY 'a'
-
-query error pgcode 42601 non-integer constant in ORDER BY: 2\.5
-SELECT * FROM t ORDER BY 2.5
 
 query error column "foo" does not exist
 SELECT * FROM t ORDER BY foo
 
-query error no data source matches prefix: a
+query error column "a.b" does not exist
 SELECT a FROM t ORDER BY a.b
-
-query error can't order by column type int\[\]
-SELECT generate_series FROM generate_series(1, 100) ORDER BY ARRAY[generate_series]
-
-query error can't order by column type int\[\]
-SELECT ARRAY[generate_series] FROM generate_series(1, 100) ORDER BY ARRAY[generate_series]
-
-query error can't order by column type int\[\]
-SELECT ARRAY[generate_series] FROM generate_series(1, 100) ORDER BY 1
-
-query error can't order by column type int\[\]
-SELECT ARRAY[generate_series] AS a FROM generate_series(1, 100) ORDER BY a
 
 query IT
 SELECT generate_series, ARRAY[generate_series] FROM generate_series(1, 1) ORDER BY 1
@@ -244,16 +222,13 @@ CREATE TABLE abc (
   b INT,
   c INT,
   d VARCHAR,
-  PRIMARY KEY (a, b, c),
-  UNIQUE INDEX bc (b, c),
-  INDEX ba (b, a),
-  FAMILY (a, b, c),
-  FAMILY (d)
+  PRIMARY KEY (a, b, c)
 )
 
 statement ok
 INSERT INTO abc VALUES (1, 2, 3, 'one'), (4, 5, 6, 'Two')
 
+skipif postgresql # TODO(benesch): support lower.
 query T
 SELECT d FROM abc ORDER BY lower(d)
 ----
@@ -277,7 +252,7 @@ SELECT a FROM abc ORDER BY a DESC OFFSET 1
 1
 
 statement ok
-CREATE TABLE bar (id INT PRIMARY KEY, baz STRING, UNIQUE INDEX i_bar (baz))
+CREATE TABLE bar (id INT PRIMARY KEY, baz STRING)
 
 statement ok
 INSERT INTO bar VALUES (0, NULL), (1, NULL)
@@ -298,7 +273,6 @@ CREATE TABLE abcd (
   b INT,
   c INT,
   d INT,
-  INDEX abc (a, b, c)
 )
 
 statement ok
@@ -331,6 +305,8 @@ CREATE TABLE nan (id INT PRIMARY KEY, x REAL)
 statement ok
 INSERT INTO nan VALUES (1, 'NaN'), (2, -1), (3, 1), (4, 'NaN')
 
+# TODO(benesch): NaN sorts backwards in Materialize, it seems.
+skipif postgresql
 query R
 SELECT x FROM nan ORDER BY x
 ----
@@ -354,7 +330,6 @@ CREATE TABLE store (
     id INT PRIMARY KEY,
     baz STRING,
     extra INT,
-    UNIQUE INDEX i_store (baz) STORING (extra)
 )
 
 statement ok
@@ -373,8 +348,14 @@ SELECT * FROM store ORDER BY baz, extra
 # ------------------------------------------------------------------------------
 subtest order_by_index
 
+# NOTE(benesch): this is Cockroach-specific syntax we're unlikely to support.
+halt
+
 statement ok
-CREATE TABLE kv(k INT PRIMARY KEY, v INT); CREATE INDEX foo ON kv(v DESC)
+CREATE TABLE kv(k INT PRIMARY KEY, v INT)
+
+statement ok
+CREATE INDEX foo ON kv(v DESC)
 
 # Check the extended syntax cannot be used in case of renames.
 statement error no data source matches prefix: test.public.kv

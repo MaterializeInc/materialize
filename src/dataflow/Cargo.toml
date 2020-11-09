@@ -32,13 +32,13 @@ prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", de
 prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prometheus.git" }
 rand = "0.7.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
-regex = "1.4.0"
+regex = "1.4.1"
 repr = { path = "../repr" }
 rusoto_core = "0.45.0"
 rusoto_credential = "0.45.0"
 rusoto_kinesis = "0.45.0"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0.58"
+serde_json = "1.0.59"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = { version = "0.2", features = ["blocking", "fs", "rt-threaded"] }
 tokio-util = { version = "0.3", features = ["codec"] }

@@ -122,7 +122,12 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, InputEr
                 pos,
             });
         }
-        args.insert(pieces[0].to_owned(), pieces[1].to_owned());
+        if let Some(original) = args.insert(pieces[0].to_owned(), pieces[1].to_owned()) {
+            return Err(InputError {
+                msg: format!("argument '{}' specified twice", original),
+                pos,
+            });
+        };
     }
     Ok(BuiltinCommand {
         name,
@@ -257,9 +262,13 @@ fn slurp_all(line_reader: &mut LineReader) -> Vec<String> {
 }
 
 fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
-    if let Some((_, line)) = line_reader.peek() {
+    while let Some((_, line)) = line_reader.peek() {
         match line.chars().next() {
-            Some('$') | Some('>') | Some('!') | Some('#') => return None,
+            Some('#') => {
+                // Comment line. Skip.
+                let _ = line_reader.next();
+            }
+            Some('$') | Some('>') | Some('!') => return None,
             Some('\\') => {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);

@@ -10,7 +10,7 @@ from your database in a lightweight de-coupled fashion, which would
 traditionally require database triggers or something more involved.
 
 [ocf]: https://avro.apache.org/docs/1.8.1/spec.html#Object+Container+Files
-[mz-avro-ocf]: https://materialize.io/docs/sql/create-source/avro-file/
+[mz-avro-ocf]: https://materialize.com/docs/sql/create-source/avro-file/
 
 ## Usage
 

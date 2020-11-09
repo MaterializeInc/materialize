@@ -24,6 +24,7 @@ pub struct AvroDecoderState {
 }
 
 impl AvroDecoderState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reader_schema: &str,
         schema_registry_config: Option<ccsr::ClientConfig>,
@@ -32,6 +33,7 @@ impl AvroDecoderState {
         debug_name: String,
         worker_index: usize,
         dedup_strat: Option<DebeziumDeduplicationStrategy>,
+        key_indices: Option<Vec<usize>>,
     ) -> Result<Self, anyhow::Error> {
         Ok(AvroDecoderState {
             decoder: Decoder::new(
@@ -41,6 +43,7 @@ impl AvroDecoderState {
                 debug_name,
                 worker_index,
                 dedup_strat,
+                key_indices,
             )?,
             events_success: 0,
             events_error: 0,
@@ -51,7 +54,7 @@ impl AvroDecoderState {
 
 impl DecoderState for AvroDecoderState {
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
-        match block_on(self.decoder.decode(bytes, None)) {
+        match block_on(self.decoder.decode(bytes, None, None)) {
             Ok(diff_pair) => {
                 if let Some(after) = diff_pair.after {
                     self.events_success += 1;
@@ -74,10 +77,11 @@ impl DecoderState for AvroDecoderState {
         key: Row,
         bytes: &[u8],
         coord: Option<i64>,
+        upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     ) {
-        match block_on(self.decoder.decode(bytes, coord)) {
+        match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
             Ok(diff_pair) => {
                 self.events_success += 1;
                 session.give((key, diff_pair.after, time));
@@ -94,10 +98,11 @@ impl DecoderState for AvroDecoderState {
         &mut self,
         bytes: &[u8],
         coord: Option<i64>,
+        upstream_time_millis: Option<i64>,
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     ) {
-        match block_on(self.decoder.decode(bytes, coord)) {
+        match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
             Ok(diff_pair) => {
                 self.events_success += 1;
                 if diff_pair.before.is_some() {

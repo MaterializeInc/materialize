@@ -12,6 +12,13 @@ Materialize, along with any other infrastructure the demo needs.
 For the best experience using Docker, we recommend following the guidelines
 outlined here.
 
+### Installation
+
+Follow the official instructions to install Docker and Docker Compose:
+
+* [Install Docker](https://docs.docker.com/get-docker/)
+* [Install Docker Compose](https://docs.docker.com/compose/install/)
+
 ### Increase Docker Resources
 
 Because many of our Docker-based demos leverage a large number of pieces of

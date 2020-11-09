@@ -96,11 +96,13 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
         let transform = crate::predicate_pushdown::PredicatePushdown;
         if let Some(list) = predicates.get(&Id::Global(build_desc.id)).clone() {
-            *build_desc.relation_expr.as_mut() = build_desc
-                .relation_expr
-                .as_mut()
-                .take_dangerous()
-                .filter(list.iter().cloned());
+            if !list.is_empty() {
+                *build_desc.relation_expr.as_mut() = build_desc
+                    .relation_expr
+                    .as_mut()
+                    .take_dangerous()
+                    .filter(list.iter().cloned());
+            }
         }
         transform.dataflow_transform(build_desc.relation_expr.as_mut(), &mut predicates);
     }

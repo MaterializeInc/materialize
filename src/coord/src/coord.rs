@@ -36,7 +36,7 @@ use uuid::Uuid;
 
 use dataflow::source::persistence::PersistenceSender;
 use dataflow::{PersistenceMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
-use dataflow_types::logging::LoggingConfig;
+use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, SinkConnector,
     SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
@@ -55,19 +55,20 @@ use sql::ast::{
 };
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
+use sql::plan::StatementDesc;
 use sql::plan::{
-    AlterIndexLogicalCompactionWindow, LogicalCompactionWindow, MutationKind, Params, PeekWhen,
-    Plan, PlanContext,
+    AlterIndexLogicalCompactionWindow, CopyFormat, LogicalCompactionWindow, MutationKind, Params,
+    PeekWhen, Plan, PlanContext,
 };
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES, MZ_INDEX_COLUMNS,
-    MZ_KAFKA_SINKS, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS,
-    MZ_VIEW_KEYS,
+    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_BUILTIN_TYPES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
+    MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_MAP_TYPES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES,
+    MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState};
+use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type};
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
@@ -102,6 +103,12 @@ pub enum Message {
     Shutdown,
 }
 
+#[derive(Clone, Debug)]
+pub struct LoggingConfig {
+    pub granularity: Duration,
+    pub log_logging: bool,
+}
+
 pub struct Config<'a, C>
 where
     C: comm::Connection,
@@ -110,7 +117,7 @@ where
     pub cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
     pub num_timely_workers: usize,
     pub symbiosis_url: Option<&'a str>,
-    pub logging_granularity: Option<Duration>,
+    pub logging: Option<LoggingConfig>,
     pub data_directory: Option<&'a Path>,
     pub timestamp: TimestampConfig,
     pub persistence: Option<PersistenceConfig>,
@@ -206,23 +213,24 @@ where
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
-    async fn bootstrap(&mut self) -> Result<(), anyhow::Error> {
-        let catalog_entries: Vec<_> = self
-            .catalog
+    async fn bootstrap(&mut self, events: Vec<catalog::Event>) -> Result<(), anyhow::Error> {
+        let items: Vec<_> = events
             .iter()
-            .map(|entry| {
-                (
-                    entry.id(),
-                    entry.oid(),
-                    entry.name().clone(),
-                    entry.item().clone(),
-                )
+            .filter_map(|event| match event {
+                catalog::Event::CreatedItem {
+                    id,
+                    oid,
+                    name,
+                    item,
+                    ..
+                } => Some((id, oid, name, item)),
+                _ => None,
             })
             .collect();
 
         // Sources and indexes may be depended upon by other catalog items,
         // insert them first.
-        for (id, _, _, item) in &catalog_entries {
+        for &(id, _, _, item) in &items {
             match item {
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
@@ -253,7 +261,7 @@ where
             }
         }
 
-        for (id, oid, name, item) in &catalog_entries {
+        for &(id, oid, name, item) in &items {
             match item {
                 CatalogItem::Table(_) | CatalogItem::View(_) => (),
                 CatalogItem::Sink(sink) => {
@@ -277,134 +285,7 @@ where
             }
         }
 
-        let mut tables_to_report = HashMap::new();
-        let mut sources_to_report = HashMap::new();
-        let mut views_to_report = HashMap::new();
-        let mut sinks_to_report = HashMap::new();
-        for (id, oid, name, item) in catalog_entries {
-            if let Ok(desc) = item.desc(&name) {
-                self.report_column_updates(desc, id, 1).await?;
-            }
-            match item {
-                CatalogItem::Index(index) => {
-                    self.report_index_update(id, oid, &index, &name.item, 1)
-                        .await
-                }
-                CatalogItem::Table(_) => {
-                    tables_to_report.insert(id, oid);
-                }
-                CatalogItem::Source(_) => {
-                    sources_to_report.insert(id, oid);
-                }
-                CatalogItem::View(_) => {
-                    views_to_report.insert(id, oid);
-                }
-                CatalogItem::Sink(_) => {
-                    sinks_to_report.insert(id, oid);
-                }
-            }
-        }
-
-        // Insert initial named objects into system tables.
-        let dbs: Vec<(
-            String,
-            i64,
-            u32,
-            Vec<(String, i64, u32, Vec<(String, GlobalId)>)>,
-        )> = self
-            .catalog
-            .databases()
-            .map(|(name, database)| {
-                (
-                    name.to_string(),
-                    database.id,
-                    database.oid,
-                    database
-                        .schemas
-                        .iter()
-                        .map(|(schema_name, schema)| {
-                            (
-                                schema_name.to_string(),
-                                schema.id,
-                                schema.oid,
-                                schema
-                                    .items
-                                    .iter()
-                                    .map(|(name, id)| (name.clone(), *id))
-                                    .collect(),
-                            )
-                        })
-                        .collect(),
-                )
-            })
-            .collect();
-        for (database_name, database_id, database_oid, schemas) in dbs {
-            self.report_database_update(database_id, database_oid, &database_name, 1)
-                .await;
-
-            for (schema_name, schema_id, schema_oid, items) in schemas {
-                self.report_schema_update(
-                    schema_id,
-                    schema_oid,
-                    Some(database_id),
-                    &schema_name,
-                    1,
-                )
-                .await;
-
-                for (item_name, item_id) in items {
-                    if let Some(oid) = tables_to_report.remove(&item_id) {
-                        self.report_table_update(item_id, oid, schema_id, &item_name, 1)
-                            .await;
-                    } else if let Some(oid) = sources_to_report.remove(&item_id) {
-                        self.report_source_update(item_id, oid, schema_id, &item_name, 1)
-                            .await;
-                    } else if let Some(oid) = views_to_report.remove(&item_id) {
-                        self.report_view_update(item_id, oid, schema_id, &item_name, 1)
-                            .await;
-                    } else if let Some(oid) = sinks_to_report.remove(&item_id) {
-                        self.report_sink_update(item_id, oid, schema_id, &item_name, 1)
-                            .await;
-                    }
-                }
-            }
-        }
-        let ambient_schemas: Vec<(String, i64, u32, Vec<(String, GlobalId)>)> = self
-            .catalog
-            .ambient_schemas()
-            .map(|(schema_name, schema)| {
-                (
-                    schema_name.to_string(),
-                    schema.id,
-                    schema.oid,
-                    schema
-                        .items
-                        .iter()
-                        .map(|(name, id)| (name.clone(), *id))
-                        .collect(),
-                )
-            })
-            .collect();
-        for (schema_name, schema_id, schema_oid, items) in ambient_schemas {
-            self.report_schema_update(schema_id, schema_oid, None, &schema_name, 1)
-                .await;
-
-            for (item_name, item_id) in items {
-                if let Some(oid) = tables_to_report.remove(&item_id) {
-                    self.report_table_update(item_id, oid, schema_id, &item_name, 1)
-                        .await;
-                } else if let Some(oid) = sources_to_report.remove(&item_id) {
-                    self.report_source_update(item_id, oid, schema_id, &item_name, 1)
-                        .await;
-                } else if let Some(oid) = views_to_report.remove(&item_id) {
-                    self.report_view_update(item_id, oid, schema_id, &item_name, 1)
-                        .await;
-                } else if let Some(oid) = sinks_to_report.remove(&item_id) {
-                    self.report_sink_update(item_id, oid, schema_id, &item_name, 1)
-                        .await;
-                }
-            }
-        }
+        self.process_catalog_events(events).await?;
 
         // Announce primary and foreign key relationships.
         if self.logging_granularity.is_some() {
@@ -588,15 +469,20 @@ where
                                 source,
                                 when,
                                 finishing,
-                                materialize,
+                                copy_to,
                             } => {
-                                self.sequence_peek(conn_id, source, when, finishing, materialize)
+                                self.sequence_peek(conn_id, source, when, finishing, copy_to)
                                     .await?
                             }
 
+                            Plan::SendRows(rows) => send_immediate_rows(rows),
+
                             _ => bail!("unsupported plan"),
                         };
-                        Ok(NoSessionExecuteResponse { desc, response })
+                        Ok(NoSessionExecuteResponse {
+                            desc: desc.relation_desc,
+                            response,
+                        })
                     }
                     .await;
                     let _ = tx.send(res);
@@ -642,9 +528,9 @@ where
                         tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
                     }
                     Err(e) => {
-                        self.catalog
-                            .transact(vec![catalog::Op::DropItem(id)])
-                            .expect("corrupt catalog");
+                        self.catalog_transact(vec![catalog::Op::DropItem(id)])
+                            .await
+                            .expect("deleting placeholder sink cannot fail");
                         tx.send(Err(e), session);
                     }
                 },
@@ -890,12 +776,14 @@ where
                 // only handles commands that do not return rows, so the
                 // `RelationDesc` is always `None`.
                 Err(err) => match self.symbiosis {
-                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
+                    Some(ref postgres) if postgres.can_handle(&stmt) => {
+                        (StatementDesc::new(None), vec![])
+                    }
                     _ => return Err(err),
                 },
             }
         } else {
-            (None, vec![])
+            (StatementDesc::new(None), vec![])
         };
         session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
         Ok(())
@@ -965,8 +853,8 @@ where
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        self.catalog
-            .transact(ops)
+        self.catalog_transact(ops)
+            .await
             .expect("replacing a sink cannot fail");
 
         self.ship_dataflow(self.build_sink_dataflow(name.to_string(), id, sink.from, connector))
@@ -1257,6 +1145,55 @@ where
         .await
     }
 
+    async fn report_builtin_type_update(
+        &mut self,
+        id: GlobalId,
+        oid: u32,
+        name: &str,
+        diff: isize,
+    ) {
+        self.update_catalog_view(
+            MZ_BUILTIN_TYPES.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String(&id.to_string()),
+                    Datum::Int32(oid as i32),
+                    Datum::String(name),
+                ]),
+                diff,
+            )),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn report_map_type_update(
+        &mut self,
+        id: GlobalId,
+        name: &str,
+        oid: u32,
+        schema_id: i64,
+        key_id: GlobalId,
+        value_id: GlobalId,
+        diff: isize,
+    ) {
+        self.update_catalog_view(
+            MZ_MAP_TYPES.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String(&id.to_string()),
+                    Datum::Int32(oid as i32),
+                    Datum::Int64(schema_id),
+                    Datum::String(name),
+                    Datum::String(&key_id.to_string()),
+                    Datum::String(&value_id.to_string()),
+                ]),
+                diff,
+            )),
+        )
+        .await
+    }
+
     async fn sequence_plan(
         &mut self,
         internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
@@ -1356,6 +1293,10 @@ where
                 session,
             ),
 
+            Plan::CreateType { name, typ } => {
+                tx.send(self.sequence_create_type(pcx, name, typ).await, session)
+            }
+
             Plan::DropDatabase { name } => {
                 tx.send(self.sequence_drop_database(name).await, session)
             }
@@ -1406,9 +1347,9 @@ where
                 source,
                 when,
                 finishing,
-                materialize,
+                copy_to,
             } => tx.send(
-                self.sequence_peek(session.conn_id(), source, when, finishing, materialize)
+                self.sequence_peek(session.conn_id(), source, when, finishing, copy_to)
                     .await,
                 session,
             ),
@@ -1417,8 +1358,9 @@ where
                 id,
                 ts,
                 with_snapshot,
+                copy_to,
             } => tx.send(
-                self.sequence_tail(session.conn_id(), id, with_snapshot, ts)
+                self.sequence_tail(session.conn_id(), id, with_snapshot, ts, copy_to)
                     .await,
                 session,
             ),
@@ -1798,6 +1740,32 @@ where
         }
     }
 
+    async fn sequence_create_type(
+        &mut self,
+        pcx: PlanContext,
+        name: FullName,
+        typ: sql::plan::Type,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
+        let typ = catalog::Type::Map {
+            create_sql: typ.create_sql,
+            plan_cx: pcx,
+            key_id: typ.key_id,
+            value_id: typ.value_id,
+        };
+        let id = self.catalog.allocate_id()?;
+        let oid = self.catalog.allocate_oid()?;
+        let op = catalog::Op::CreateItem {
+            id,
+            oid,
+            name,
+            item: CatalogItem::Type(typ),
+        };
+        match self.catalog_transact(vec![op]).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedType),
+            Err(err) => Err(err),
+        }
+    }
+
     async fn sequence_drop_database(
         &mut self,
         name: String,
@@ -1841,6 +1809,7 @@ where
             ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
+            ObjectType::Type => ExecuteResponse::DroppedType,
         })
     }
 
@@ -1869,7 +1838,7 @@ where
         session: &Session,
         name: String,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        let variable = session.get(&name)?;
+        let variable = session.vars().get(&name)?;
         let row = Row::pack(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
@@ -1880,7 +1849,7 @@ where
         name: String,
         value: String,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        session.set(&name, &value)?;
+        session.vars_mut().set(&name, &value)?;
         Ok(ExecuteResponse::SetVariable { name })
     }
 
@@ -1890,7 +1859,7 @@ where
         mut source: RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
-        materialize: bool,
+        copy_to: Option<CopyFormat>,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let timestamp = self.determine_timestamp(&source, when)?;
 
@@ -1906,10 +1875,10 @@ where
         // constant expression that originally contains a global get? Is
         // there anything not containing a global get that cannot be
         // optimized to a constant expression?
-        let mut source = self.optimizer.optimize(source, self.catalog.indexes())?;
+        let source = self.optimizer.optimize(source, self.catalog.indexes())?;
 
         // If this optimizes to a constant expression, we can immediately return the result.
-        if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
+        let resp = if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
             let mut results = Vec::new();
             for &(ref row, count) in rows {
                 assert!(
@@ -1922,7 +1891,7 @@ where
                 }
             }
             finishing.finish(&mut results);
-            Ok(send_immediate_rows(results))
+            send_immediate_rows(results)
         } else {
             // Peeks describe a source of data and a timestamp at which to view its contents.
             //
@@ -1935,25 +1904,47 @@ where
             // need to block on the arrival of further input data.
             let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
-            let (project, filter) = Self::plan_peek(source.as_mut());
+            // Extract any surrounding linear operators to determine if we can simply read
+            // out the contents from an existing arrangement.
+            let (mut map_filter_project, inner) =
+                expr::MapFilterProject::extract_from_expression(source.as_ref());
 
-            let (fast_path, index_id) = if let RelationExpr::Get {
+            // We can use a fast path approach if our query corresponds to a read out of
+            // an existing materialization. This is the case if the expression is now a
+            // `RelationExpr::Get` and its target is something we have materialized.
+            // Otherwise, we will need to build a new dataflow.
+            let mut fast_path: Option<(_, Option<Row>)> = None;
+            if let RelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
-            } = source.as_ref()
+            } = inner
             {
-                if let Some(index_id) = self.catalog.default_index_for(*id) {
-                    (true, index_id)
-                } else if materialize {
-                    (false, self.allocate_transient_id()?)
-                } else {
-                    bail!(
-                        "{} is not materialized",
-                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap()
-                    )
+                // Here we should check for an index whose keys are constrained to literal
+                // values by predicate constraints in `map_filter_project`. If we find such
+                // an index, we can use it with the literal to perform look-ups at workers,
+                // and in principle avoid even contacting all but one worker (future work).
+                if let Some(indexes) = self.catalog.indexes().get(id) {
+                    // Determine for each index identifier, an optional row literal as key.
+                    // We want to extract the "best" option, where we prefer indexes with
+                    // literals and long keys, then indexes at all, then exit correctly.
+                    fast_path = indexes
+                        .iter()
+                        .map(|(id, exprs)| {
+                            let literal_row = map_filter_project.literal_constraints(exprs);
+                            // Prefer non-trivial literal rows foremost, then long expressions,
+                            // then we don't really care at that point.
+                            (literal_row.is_some(), exprs.len(), literal_row, *id)
+                        })
+                        .max()
+                        .map(|(_some, _len, literal, id)| (id, literal));
                 }
+            }
+
+            // Unpack what we have learned with default values if we found nothing.
+            let (fast_path, index_id, literal_row) = if let Some((id, row)) = fast_path {
+                (true, id, row)
             } else {
-                (false, self.allocate_transient_id()?)
+                (false, self.allocate_transient_id()?, None)
             };
 
             if !fast_path {
@@ -1961,6 +1952,7 @@ where
                 // a new transient dataflow that will be dropped after the
                 // peek completes.
                 let typ = source.as_ref().typ();
+                map_filter_project = expr::MapFilterProject::new(typ.arity());
                 let key: Vec<_> = (0..typ.arity()).map(ScalarExpr::Column).collect();
                 let view_id = self.allocate_transient_id()?;
                 let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
@@ -1975,12 +1967,12 @@ where
                 &mut self.broadcast_tx,
                 SequencedCommand::Peek {
                     id: index_id,
+                    key: literal_row,
                     conn_id,
                     tx: rows_tx,
                     timestamp,
                     finishing: finishing.clone(),
-                    project,
-                    filter,
+                    map_filter_project,
                 },
             )
             .await;
@@ -2012,7 +2004,15 @@ where
                 })
                 .err_into();
 
-            Ok(ExecuteResponse::SendingRows(Box::pin(rows_rx)))
+            ExecuteResponse::SendingRows(Box::pin(rows_rx))
+        };
+
+        match copy_to {
+            None => Ok(resp),
+            Some(format) => Ok(ExecuteResponse::CopyTo {
+                format,
+                resp: Box::new(resp),
+            }),
         }
     }
 
@@ -2022,6 +2022,7 @@ where
         source_id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
+        copy_to: Option<CopyFormat>,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
@@ -2047,39 +2048,15 @@ where
             }),
         ))
         .await;
-        Ok(ExecuteResponse::Tailing { rx })
-    }
 
-    /// Extracts an optional projection around an optional filter.
-    ///
-    /// This extraction is done to allow workers to process a larger class of queries
-    /// without building explicit dataflows, avoiding latency, allocation and general
-    /// load on the system. The worker performs the filter and projection in place.
-    fn plan_peek(expr: &mut RelationExpr) -> (Option<Vec<usize>>, Vec<expr::ScalarExpr>) {
-        let mut outputs_plan = None;
-        if let RelationExpr::Project { input, outputs } = expr {
-            outputs_plan = Some(outputs.clone());
-            *expr = input.take_dangerous();
-        }
-        let mut predicates_plan = Vec::new();
-        if let RelationExpr::Filter { input, predicates } = expr {
-            predicates_plan.extend(predicates.iter().cloned());
-            *expr = input.take_dangerous();
-        }
+        let resp = ExecuteResponse::Tailing { rx };
 
-        // We only apply this transformation if the result is a `Get`.
-        // It is harmful to apply it otherwise, as we materialize more data than
-        // we would have if we applied the filter and projection beforehand.
-        if let RelationExpr::Get { .. } = expr {
-            (outputs_plan, predicates_plan)
-        } else {
-            if !predicates_plan.is_empty() {
-                *expr = expr.take_dangerous().filter(predicates_plan);
-            }
-            if let Some(outputs) = outputs_plan {
-                *expr = expr.take_dangerous().project(outputs);
-            }
-            (None, Vec::new())
+        match copy_to {
+            None => Ok(resp),
+            Some(format) => Ok(ExecuteResponse::CopyTo {
+                format,
+                resp: Box::new(resp),
+            }),
         }
     }
 
@@ -2400,26 +2377,33 @@ where
     }
 
     async fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), anyhow::Error> {
+        let events = self.catalog.transact(ops)?;
+        self.process_catalog_events(events).await
+    }
+
+    async fn process_catalog_events(
+        &mut self,
+        events: Vec<catalog::Event>,
+    ) -> Result<(), anyhow::Error> {
         let mut sources_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
 
-        let statuses = self.catalog.transact(ops)?;
-        for status in &statuses {
-            match status {
-                catalog::OpStatus::CreatedDatabase { id, oid, name } => {
+        for event in &events {
+            match event {
+                catalog::Event::CreatedDatabase { id, oid, name } => {
                     self.report_database_update(*id, *oid, name, 1).await;
                 }
-                catalog::OpStatus::CreatedSchema {
+                catalog::Event::CreatedSchema {
                     database_id,
                     schema_id,
                     schema_name,
                     oid,
                 } => {
-                    self.report_schema_update(*schema_id, *oid, Some(*database_id), schema_name, 1)
+                    self.report_schema_update(*schema_id, *oid, *database_id, schema_name, 1)
                         .await;
                 }
-                catalog::OpStatus::CreatedItem {
+                catalog::Event::CreatedItem {
                     schema_id,
                     id,
                     oid,
@@ -2446,13 +2430,31 @@ where
                             self.report_view_update(*id, *oid, *schema_id, &name.item, 1)
                                 .await;
                         }
-                        CatalogItem::Sink(_) => {
-                            self.report_sink_update(*id, *oid, *schema_id, &name.item, 1)
+                        CatalogItem::Sink(sink) => {
+                            if let catalog::Sink {
+                                connector: SinkConnectorState::Ready(_),
+                                ..
+                            } = sink
+                            {
+                                self.report_sink_update(*id, *oid, *schema_id, &name.item, 1)
+                                    .await;
+                            }
+                        }
+                        CatalogItem::Type(Type::Map {
+                            key_id, value_id, ..
+                        }) => {
+                            self.report_map_type_update(
+                                *id, &name.item, *oid, *schema_id, *key_id, *value_id, 1,
+                            )
+                            .await;
+                        }
+                        CatalogItem::Type(Type::Builtin { .. }) => {
+                            self.report_builtin_type_update(*id, *oid, &name.item, 1)
                                 .await;
                         }
                     }
                 }
-                catalog::OpStatus::UpdatedItem {
+                catalog::Event::UpdatedItem {
                     schema_id,
                     id,
                     oid,
@@ -2474,11 +2476,17 @@ where
                             self.report_view_update(*id, *oid, *schema_id, &to_name.item, 1)
                                 .await;
                         }
-                        CatalogItem::Sink(_) => {
-                            self.report_sink_update(*id, *oid, *schema_id, &from_name.item, -1)
-                                .await;
-                            self.report_sink_update(*id, *oid, *schema_id, &to_name.item, 1)
-                                .await;
+                        CatalogItem::Sink(sink) => {
+                            if let catalog::Sink {
+                                connector: SinkConnectorState::Ready(_),
+                                ..
+                            } = sink
+                            {
+                                self.report_sink_update(*id, *oid, *schema_id, &from_name.item, -1)
+                                    .await;
+                                self.report_sink_update(*id, *oid, *schema_id, &to_name.item, 1)
+                                    .await;
+                            }
                         }
                         CatalogItem::Table(_) => {
                             self.report_table_update(*id, *oid, *schema_id, &from_name.item, -1)
@@ -2492,12 +2500,39 @@ where
                             self.report_index_update(*id, *oid, &index, &to_name.item, 1)
                                 .await;
                         }
+                        CatalogItem::Type(Type::Map {
+                            key_id, value_id, ..
+                        }) => {
+                            self.report_map_type_update(
+                                *id,
+                                &from_name.item,
+                                *oid,
+                                *schema_id,
+                                *key_id,
+                                *value_id,
+                                -1,
+                            )
+                            .await;
+                            self.report_map_type_update(
+                                *id,
+                                &to_name.item,
+                                *oid,
+                                *schema_id,
+                                *key_id,
+                                *value_id,
+                                1,
+                            )
+                            .await;
+                        }
+                        CatalogItem::Type(Type::Builtin { .. }) => {
+                            unreachable!("builtin types cannot be updated")
+                        }
                     }
                 }
-                catalog::OpStatus::DroppedDatabase { id, oid, name } => {
+                catalog::Event::DroppedDatabase { id, oid, name } => {
                     self.report_database_update(*id, *oid, name, -1).await;
                 }
-                catalog::OpStatus::DroppedSchema {
+                catalog::Event::DroppedSchema {
                     database_id,
                     schema_id,
                     schema_name,
@@ -2512,7 +2547,7 @@ where
                     )
                     .await;
                 }
-                catalog::OpStatus::DroppedIndex { entry, nullable } => match entry.item() {
+                catalog::Event::DroppedIndex { entry, nullable } => match entry.item() {
                     CatalogItem::Index(index) => {
                         indexes_to_drop.push(entry.id());
                         self.report_index_update_inner(
@@ -2527,7 +2562,7 @@ where
                     }
                     _ => unreachable!("DroppedIndex for non-index item"),
                 },
-                catalog::OpStatus::DroppedItem { schema_id, entry } => {
+                catalog::Event::DroppedItem { schema_id, entry } => {
                     match entry.item() {
                         CatalogItem::Table(_) => {
                             sources_to_drop.push(entry.id());
@@ -2606,6 +2641,23 @@ where
                         }) => {
                             // If the sink connector state is pending, the sink
                             // dataflow was never created, so nothing to drop.
+                        }
+                        CatalogItem::Type(Type::Map {
+                            key_id, value_id, ..
+                        }) => {
+                            self.report_map_type_update(
+                                entry.id(),
+                                &entry.name().item,
+                                entry.oid(),
+                                *schema_id,
+                                *key_id,
+                                *value_id,
+                                -1,
+                            )
+                            .await;
+                        }
+                        CatalogItem::Type(Type::Builtin { .. }) => {
+                            unreachable!("builtin types cannot be dropped")
                         }
                         CatalogItem::Index(_) => {
                             unreachable!("dropped indexes should be handled by DroppedIndex");
@@ -2954,7 +3006,7 @@ pub async fn serve<C>(
         cmd_rx,
         num_timely_workers,
         symbiosis_url,
-        logging_granularity,
+        logging,
         data_directory,
         timestamp: timestamp_config,
         persistence: persistence_config,
@@ -2977,15 +3029,16 @@ where
     )
     .await;
 
-    if let Some(granularity) = logging_granularity {
+    if let Some(config) = &logging {
         broadcast(
             &mut broadcast_tx,
-            SequencedCommand::EnableLogging(LoggingConfig {
-                granularity_ns: granularity.as_nanos(),
+            SequencedCommand::EnableLogging(DataflowLoggingConfig {
+                granularity_ns: config.granularity.as_nanos(),
                 active_logs: BUILTINS
                     .logs()
                     .map(|src| (src.variant.clone(), src.index_id))
                     .collect(),
+                log_logging: config.log_logging,
             }),
         )
         .await;
@@ -3021,10 +3074,10 @@ where
         };
 
         let catalog_path = data_directory.map(|d| d.join("catalog"));
-        let catalog = Catalog::open(catalog::Config {
+        let (catalog, initial_catalog_events) = Catalog::open(catalog::Config {
             path: catalog_path.as_deref(),
             experimental_mode: Some(experimental_mode),
-            enable_logging: logging_granularity.is_some(),
+            enable_logging: logging.is_some(),
             persistence_directory: persistence_config.map(|pc| pc.path),
         })?;
         let cluster_id = catalog.cluster_id();
@@ -3039,7 +3092,7 @@ where
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
-            logging_granularity: logging_granularity.and_then(|c| c.as_millis().try_into().ok()),
+            logging_granularity: logging.and_then(|c| c.granularity.as_millis().try_into().ok()),
             timestamp_config,
             logical_compaction_window_ms: logical_compaction_window
                 .map(duration_to_timestamp_millis),
@@ -3050,7 +3103,7 @@ where
             need_advance: true,
             transient_id_counter: 1,
         };
-        coord.bootstrap().await?;
+        coord.bootstrap(initial_catalog_events).await?;
         Ok((coord, cluster_id))
     };
     let (coord, cluster_id) = match coord.await {

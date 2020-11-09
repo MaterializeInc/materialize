@@ -56,6 +56,8 @@ attrelid     false     oid
 attname      false     text
 attnum       false     int8
 attnotnull   false     bool
+attisdropped false     bool
+atttypid     true      oid
 
 ! SELECT current_schemas()
 Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;

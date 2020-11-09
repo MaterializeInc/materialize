@@ -35,7 +35,8 @@ use ore::iter::IteratorExt;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement,
+    ColumnOption, Connector, CopyDirection, CopyOption, CopyRelation, CopyStatement, CopyTarget,
+    CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement, CreateSchemaStatement,
     CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
     DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
     Format, Ident, IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query,
@@ -50,18 +51,51 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
-    query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, Index, LogicalCompactionWindow,
-    Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, View,
+    query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, CopyFormat, Index,
+    LogicalCompactionWindow, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
 mod show;
 
+#[derive(Debug)]
+pub struct StatementDesc {
+    pub relation_desc: Option<RelationDesc>,
+    pub param_types: Vec<ScalarType>,
+    pub send: bool,
+}
+
+impl StatementDesc {
+    pub fn new(relation_desc: Option<RelationDesc>) -> Self {
+        StatementDesc {
+            relation_desc,
+            param_types: vec![],
+            send: true,
+        }
+    }
+    fn with_params(mut self, param_types: Vec<ScalarType>) -> Self {
+        self.param_types = param_types;
+        self
+    }
+    fn no_send(mut self) -> Self {
+        self.send = false;
+        self
+    }
+    /// If send is false, returns None. Otherwise returns relation_desc.
+    pub fn relation_desc(&self) -> Option<RelationDesc> {
+        if !self.send {
+            None
+        } else {
+            self.relation_desc.clone()
+        }
+    }
+}
+
 pub fn describe_statement(
     catalog: &dyn Catalog,
     stmt: Statement,
     param_types_in: &[Option<pgrepr::Type>],
-) -> Result<(Option<RelationDesc>, Vec<ScalarType>), anyhow::Error> {
+) -> Result<StatementDesc, anyhow::Error> {
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
         if let Some(ty) = ty {
@@ -81,6 +115,7 @@ pub fn describe_statement(
         | Statement::CreateTable(_)
         | Statement::CreateSink(_)
         | Statement::CreateView(_)
+        | Statement::CreateMapType(_)
         | Statement::DropDatabase(_)
         | Statement::DropObjects(_)
         | Statement::SetVariable(_)
@@ -88,79 +123,62 @@ pub fn describe_statement(
         | Statement::Rollback(_)
         | Statement::Commit(_)
         | Statement::AlterObjectRename(_)
-        | Statement::AlterIndexOptions(_) => (None, vec![]),
+        | Statement::AlterIndexOptions(_) => StatementDesc::new(None),
 
         Statement::Explain(ExplainStatement {
             stage, explainee, ..
-        }) => (
-            Some(RelationDesc::empty().with_column(
-                match stage {
-                    ExplainStage::RawPlan => "Raw Plan",
-                    ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
-                    ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
-                },
-                ScalarType::String.nullable(false),
-            )),
-            match explainee {
-                Explainee::Query(q) => {
-                    describe_statement(
-                        catalog,
-                        Statement::Select(SelectStatement {
-                            query: q,
-                            as_of: None,
-                        }),
-                        param_types_in,
-                    )?
-                    .1
-                }
-                _ => vec![],
+        }) => StatementDesc::new(Some(RelationDesc::empty().with_column(
+            match stage {
+                ExplainStage::RawPlan => "Raw Plan",
+                ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
+                ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
             },
-        ),
+            ScalarType::String.nullable(false),
+        )))
+        .with_params(match explainee {
+            Explainee::Query(q) => {
+                describe_statement(
+                    catalog,
+                    Statement::Select(SelectStatement {
+                        query: q,
+                        as_of: None,
+                    }),
+                    param_types_in,
+                )?
+                .param_types
+            }
+            _ => vec![],
+        }),
 
-        Statement::ShowCreateView(_) => (
-            Some(
-                RelationDesc::empty()
-                    .with_column("View", ScalarType::String.nullable(false))
-                    .with_column("Create View", ScalarType::String.nullable(false)),
-            ),
-            vec![],
-        ),
+        Statement::ShowCreateView(_) => StatementDesc::new(Some(
+            RelationDesc::empty()
+                .with_column("View", ScalarType::String.nullable(false))
+                .with_column("Create View", ScalarType::String.nullable(false)),
+        )),
 
-        Statement::ShowCreateSource(_) => (
-            Some(
-                RelationDesc::empty()
-                    .with_column("Source", ScalarType::String.nullable(false))
-                    .with_column("Create Source", ScalarType::String.nullable(false)),
-            ),
-            vec![],
-        ),
+        Statement::ShowCreateSource(_) => StatementDesc::new(Some(
+            RelationDesc::empty()
+                .with_column("Source", ScalarType::String.nullable(false))
+                .with_column("Create Source", ScalarType::String.nullable(false)),
+        )),
 
-        Statement::ShowCreateTable(_) => (
-            Some(
-                RelationDesc::empty()
-                    .with_column("Table", ScalarType::String.nullable(false))
-                    .with_column("Create Table", ScalarType::String.nullable(false)),
-            ),
-            vec![],
-        ),
+        Statement::ShowCreateTable(_) => StatementDesc::new(Some(
+            RelationDesc::empty()
+                .with_column("Table", ScalarType::String.nullable(false))
+                .with_column("Create Table", ScalarType::String.nullable(false)),
+        )),
 
-        Statement::ShowCreateSink(_) => (
-            Some(
-                RelationDesc::empty()
-                    .with_column("Sink", ScalarType::String.nullable(false))
-                    .with_column("Create Sink", ScalarType::String.nullable(false)),
-            ),
-            vec![],
-        ),
+        Statement::ShowCreateSink(_) => StatementDesc::new(Some(
+            RelationDesc::empty()
+                .with_column("Sink", ScalarType::String.nullable(false))
+                .with_column("Create Sink", ScalarType::String.nullable(false)),
+        )),
 
-        Statement::ShowCreateIndex(_) => (
-            Some(
-                RelationDesc::empty()
-                    .with_column("Index", ScalarType::String.nullable(false))
-                    .with_column("Create Index", ScalarType::String.nullable(false)),
-            ),
-            vec![],
-        ),
+        Statement::ShowCreateIndex(_) => StatementDesc::new(Some(
+            RelationDesc::empty()
+                .with_column("Index", ScalarType::String.nullable(false))
+                .with_column("Create Index", ScalarType::String.nullable(false)),
+        )),
 
         Statement::ShowColumns(stmt) => show::show_columns(&scx, stmt)?.describe()?,
         Statement::ShowIndexes(stmt) => show::show_indexes(&scx, stmt)?.describe()?,
@@ -168,32 +186,41 @@ pub fn describe_statement(
         Statement::ShowObjects(stmt) => show::show_objects(&scx, stmt)?.describe()?,
 
         Statement::ShowVariable(ShowVariableStatement { variable, .. }) => {
-            if variable.as_str() == unicase::Ascii::new("ALL") {
-                (
-                    Some(
-                        RelationDesc::empty()
-                            .with_column("name", ScalarType::String.nullable(false))
-                            .with_column("setting", ScalarType::String.nullable(false))
-                            .with_column("description", ScalarType::String.nullable(false)),
-                    ),
-                    vec![],
-                )
+            StatementDesc::new(Some(if variable.as_str() == unicase::Ascii::new("ALL") {
+                RelationDesc::empty()
+                    .with_column("name", ScalarType::String.nullable(false))
+                    .with_column("setting", ScalarType::String.nullable(false))
+                    .with_column("description", ScalarType::String.nullable(false))
             } else {
-                (
-                    Some(
-                        RelationDesc::empty()
-                            .with_column(variable.as_str(), ScalarType::String.nullable(false)),
-                    ),
-                    vec![],
-                )
-            }
+                RelationDesc::empty()
+                    .with_column(variable.as_str(), ScalarType::String.nullable(false))
+            }))
         }
 
         Statement::Tail(TailStatement { name, .. }) => {
             let name = scx.resolve_item(name)?;
             let sql_object = scx.catalog.get_item(&name);
-            (Some(sql_object.desc()?.clone()), vec![])
+            const MAX_U64_DIGITS: u8 = 20;
+            let desc = RelationDesc::empty()
+                .with_column(
+                    "timestamp",
+                    ScalarType::Decimal(MAX_U64_DIGITS, 0).nullable(false),
+                )
+                .with_column("diff", ScalarType::Int64.nullable(true))
+                .concat(sql_object.desc()?.clone());
+            StatementDesc::new(Some(desc))
         }
+
+        Statement::Copy(CopyStatement { relation, .. }) => match relation {
+            CopyRelation::Table { .. } => bail!("unsupported COPY relation {:?}", relation),
+            CopyRelation::Select(stmt) => {
+                describe_statement(catalog, Statement::Select(stmt), param_types_in)?
+            }
+            CopyRelation::Tail(stmt) => {
+                describe_statement(catalog, Statement::Tail(stmt), param_types_in)?
+            }
+        }
+        .no_send(),
 
         // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
         // plans the whole query to determine its shape and parameter types,
@@ -203,7 +230,7 @@ pub fn describe_statement(
         Statement::Select(SelectStatement { query, .. }) => {
             let (_relation_expr, desc, _finishing) =
                 query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
-            (Some(desc), scx.finalize_param_types()?)
+            StatementDesc::new(Some(desc)).with_params(scx.finalize_param_types()?)
         }
         Statement::Insert(InsertStatement {
             table_name,
@@ -212,12 +239,11 @@ pub fn describe_statement(
             ..
         }) => {
             query::plan_insert_query(&scx, table_name, columns, source)?;
-            (None, scx.finalize_param_types()?)
+            StatementDesc::new(None).with_params(scx.finalize_param_types()?)
         }
 
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
-        Statement::Copy(_) => bail!("COPY statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
     })
 }
@@ -247,6 +273,7 @@ pub fn handle_statement(
         Statement::CreateSource(stmt) => handle_create_source(scx, stmt),
         Statement::CreateTable(stmt) => handle_create_table(scx, stmt),
         Statement::CreateView(stmt) => handle_create_view(scx, stmt, params),
+        Statement::CreateMapType(stmt) => handle_create_map_type(scx, stmt),
         Statement::DropDatabase(stmt) => handle_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => handle_drop_objects(scx, stmt),
         Statement::AlterObjectRename(stmt) => handle_alter_object_rename(scx, stmt),
@@ -266,8 +293,9 @@ pub fn handle_statement(
         Statement::ShowVariable(stmt) => handle_show_variable(scx, stmt),
 
         Statement::Explain(stmt) => handle_explain(scx, stmt, params),
-        Statement::Select(stmt) => handle_select(scx, stmt, params),
-        Statement::Tail(stmt) => handle_tail(scx, stmt),
+        Statement::Select(stmt) => handle_select(scx, stmt, params, None),
+        Statement::Tail(stmt) => handle_tail(scx, stmt, None),
+        Statement::Copy(stmt) => handle_copy(scx, stmt),
 
         Statement::Insert(stmt) => handle_insert(scx, stmt, params),
 
@@ -277,7 +305,6 @@ pub fn handle_statement(
 
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
-        Statement::Copy(_) => bail!("COPY statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
     }
 }
@@ -321,6 +348,7 @@ fn handle_tail(
         as_of,
         with_snapshot,
     }: TailStatement,
+    copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
     let from = scx.resolve_item(name)?;
     let entry = scx.catalog.get_item(&from);
@@ -332,13 +360,48 @@ fn handle_tail(
                 id: entry.id(),
                 ts,
                 with_snapshot,
+                copy_to,
             })
         }
-        CatalogItemType::Index | CatalogItemType::Sink => bail!(
+        CatalogItemType::Index | CatalogItemType::Sink | CatalogItemType::Type => bail!(
             "'{}' cannot be tailed because it is a {}",
             from,
             entry.item_type(),
         ),
+    }
+}
+
+fn handle_copy(
+    scx: &StatementContext,
+    CopyStatement {
+        relation,
+        direction,
+        target,
+        options,
+    }: CopyStatement,
+) -> Result<Plan, anyhow::Error> {
+    let mut format = CopyFormat::Text;
+    for opt in options {
+        match opt {
+            CopyOption::Format(fmt) => {
+                format = match fmt.to_lowercase().as_str() {
+                    "text" => CopyFormat::Text,
+                    "csv" => CopyFormat::Csv,
+                    "binary" => CopyFormat::Binary,
+                    _ => bail!("unknown FORMAT: {}", fmt),
+                };
+            }
+        }
+    }
+    match (&direction, &target) {
+        (CopyDirection::To, CopyTarget::Stdout) => match relation {
+            CopyRelation::Table { .. } => bail!("table with COPY TO unsupported"),
+            CopyRelation::Select(stmt) => {
+                Ok(handle_select(scx, stmt, &Params::empty(), Some(format))?)
+            }
+            CopyRelation::Tail(stmt) => Ok(handle_tail(scx, stmt, Some(format))?),
+        },
+        _ => bail!("COPY {} {} not supported", direction, target),
     }
 }
 
@@ -456,6 +519,7 @@ fn kafka_sink_builder(
     topic_prefix: String,
     desc: RelationDesc,
     topic_suffix: String,
+    key_indices: Option<Vec<usize>>,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let (schema_registry_url, ccsr_with_options) = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
@@ -480,8 +544,11 @@ fn kafka_sink_builder(
         Some(_) => bail!("consistency must be a boolean"),
     };
 
-    let encoder = Encoder::new(desc, include_consistency);
+    let encoder = Encoder::new(desc, include_consistency, key_indices.clone());
     let value_schema = encoder.writer_schema().canonical_form();
+    let key_schema = encoder
+        .key_writer_schema()
+        .map(|key_schema| key_schema.canonical_form());
 
     // Use the user supplied value for replication factor, or default to 1
     let replication_factor = match with_options.remove("replication_factor") {
@@ -518,6 +585,8 @@ fn kafka_sink_builder(
         consistency_value_schema,
         config_options,
         ccsr_config,
+        key_indices,
+        key_schema,
     }))
 }
 
@@ -576,14 +645,46 @@ fn handle_create_sink(
     let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
-        Connector::Kafka { broker, topic } => kafka_sink_builder(
-            format,
-            with_options,
-            broker,
-            topic,
-            from.desc()?.clone(),
-            suffix,
-        )?,
+        Connector::Kafka { broker, topic, key } => {
+            let desc = from.desc()?;
+            let key_indices = if let Some(key) = key {
+                let key = key
+                    .into_iter()
+                    .map(normalize::column_name)
+                    .collect::<Vec<_>>();
+                let mut uniq = HashSet::new();
+                for col in key.iter() {
+                    if !uniq.insert(col) {
+                        bail!("Repeated column name in sink key: {}", col);
+                    }
+                }
+                let indices = key
+                    .into_iter()
+                    .map(|col| -> anyhow::Result<usize> {
+                        let name_idx = desc
+                            .get_by_name(&col)
+                            .map(|(idx, _type)| idx)
+                            .ok_or_else(|| anyhow!("No such column: {}", col))?;
+                        if desc.get_unambiguous_name(name_idx).is_none() {
+                            bail!("Ambiguous column: {}", col);
+                        }
+                        Ok(name_idx)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Some(indices)
+            } else {
+                None
+            };
+            kafka_sink_builder(
+                format,
+                with_options,
+                broker,
+                topic,
+                desc.clone(),
+                suffix,
+                key_indices,
+            )?
+        }
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
         Connector::AvroOcf { path } => avro_ocf_sink_builder(format, with_options, path, suffix)?,
     };
@@ -802,6 +903,67 @@ fn handle_create_view(
     })
 }
 
+fn handle_create_map_type(
+    scx: &StatementContext,
+    stmt: CreateMapTypeStatement,
+) -> Result<Plan, anyhow::Error> {
+    let create_sql = normalize::create_statement(scx, Statement::CreateMapType(stmt.clone()))?;
+    let CreateMapTypeStatement { name, with_options } = stmt;
+
+    let mut with_options = normalize::option_objects(&with_options);
+    let key_name = match with_options.remove("key_type") {
+        Some(SqlOption::Value {
+            value: Value::String(val),
+            ..
+        }) => ObjectName(vec![Ident::new(val)]),
+        Some(SqlOption::ObjectName { object_name, .. }) => object_name,
+        Some(_) => bail!("key_type must be a string or identifier"),
+        None => bail!("key_type parameter required"),
+    };
+    let key = scx
+        .catalog
+        .resolve_item(&normalize::object_name(key_name)?)?;
+    if key.item.to_uppercase().as_str() != "TEXT" {
+        bail!("key_type must be text")
+    }
+    let key_id = scx.catalog.get_item(&key).id();
+
+    let value_name = match with_options.remove("value_type") {
+        Some(SqlOption::Value {
+            value: Value::String(val),
+            ..
+        }) => ObjectName(vec![Ident::new(val)]),
+        Some(SqlOption::ObjectName { object_name, .. }) => object_name,
+        Some(_) => bail!("value_type must be a string or identifier"),
+        None => bail!("value_type parameter required"),
+    };
+    let value = scx
+        .catalog
+        .resolve_item(&normalize::object_name(value_name)?)?;
+    let value_id = scx.catalog.get_item(&value).id();
+
+    if !with_options.is_empty() {
+        bail!(
+            "unexpected parameters for CREATE TYPE: {}",
+            with_options.keys().join(",")
+        )
+    }
+
+    let name = scx.allocate_name(normalize::object_name(name)?);
+    if scx.catalog.type_exists(&name) {
+        bail!("type \"{}\" already exists", name.to_string());
+    }
+
+    Ok(Plan::CreateType {
+        name,
+        typ: Type {
+            create_sql,
+            key_id,
+            value_id,
+        },
+    })
+}
+
 fn extract_timestamp_frequency_option(
     with_options: &mut HashMap<String, Value>,
 ) -> Result<Duration, anyhow::Error> {
@@ -976,14 +1138,14 @@ fn handle_create_source(
                 bail!("`start_offset` is not yet implemented for BYO consistency sources.")
             }
 
-            let enable_persistence = match with_options.remove("persistence") {
+            let enable_persistence = match with_options.remove("cache") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
-                Some(_) => bail!("persistence must be a bool!"),
+                Some(_) => bail!("cache must be a bool!"),
             };
 
             if enable_persistence && consistency != Consistency::RealTime {
-                unsupported!("BYO source persistence")
+                unsupported!("BYO source caching")
             }
 
             let mut start_offsets = HashMap::new();
@@ -1143,12 +1305,42 @@ fn handle_create_source(
         sql_parser::ast::Envelope::Debezium => {
             let dedup_strat = match with_options.remove("deduplication") {
                 None => DebeziumDeduplicationStrategy::Ordered,
-                Some(Value::String(s)) => match s.as_str() {
-                    "full" => DebeziumDeduplicationStrategy::Full,
-                    "ordered" => DebeziumDeduplicationStrategy::Ordered,
-                    _ => bail!("deduplication must be either 'full' or 'ordered'."),
-                },
-                _ => bail!("deduplication must be either 'full' or 'ordered'."),
+                Some(Value::String(s)) => {
+                    match s.as_str() {
+                        "full" => DebeziumDeduplicationStrategy::Full,
+                        "ordered" => DebeziumDeduplicationStrategy::Ordered,
+                        "full_in_range" => {
+                            match (
+                                with_options.remove("deduplication_start"),
+                                with_options.remove("deduplication_end"),
+                            ) {
+                                (Some(Value::String(start)), Some(Value::String(end))) => {
+                                    let deduplication_pad_start = match with_options.remove("deduplication_pad_start") {
+                                        Some(Value::String(start)) => Some(start),
+                                        Some(v) => bail!("Expected string for deduplication_pad_start, got: {:?}", v),
+                                        None => None
+                                    };
+                                    DebeziumDeduplicationStrategy::full_in_range(
+                                        &start,
+                                        &end,
+                                        deduplication_pad_start.as_deref(),
+                                    )
+                                    .map_err(|e| {
+                                        anyhow!("Unable to create deduplication strategy: {}", e)
+                                    })?
+                                }
+                                (_, _) => bail!(
+                                    "deduplication full_in_range requires both \
+                                 'deduplication_start' and 'deduplication_end' parameters"
+                                ),
+                            }
+                        }
+                        _ => bail!(
+                            "deduplication must be one of 'ordered' 'full', or 'full_in_range'."
+                        ),
+                    }
+                }
+                _ => bail!("deduplication must be one of 'ordered', 'full' or 'full_in_range'."),
             };
             dataflow_types::Envelope::Debezium(dedup_strat)
         }
@@ -1382,7 +1574,8 @@ fn handle_drop_objects(
         | ObjectType::Table
         | ObjectType::View
         | ObjectType::Index
-        | ObjectType::Sink => handle_drop_items(scx, object_type, if_exists, names, cascade),
+        | ObjectType::Sink
+        | ObjectType::Type => handle_drop_items(scx, object_type, if_exists, names, cascade),
     }
 }
 
@@ -1481,7 +1674,8 @@ fn handle_drop_item(
                 CatalogItemType::Table
                 | CatalogItemType::Source
                 | CatalogItemType::View
-                | CatalogItemType::Sink => {
+                | CatalogItemType::Sink
+                | CatalogItemType::Type => {
                     bail!(
                         "cannot drop {}: still depended upon by catalog item '{}'",
                         catalog_entry.name(),
@@ -1515,6 +1709,7 @@ fn handle_select(
     scx: &StatementContext,
     SelectStatement { query, as_of }: SelectStatement,
     params: &Params,
+    copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
     let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
@@ -1526,7 +1721,7 @@ fn handle_select(
         source: relation_expr,
         when,
         finishing,
-        materialize: true,
+        copy_to,
     })
 }
 
@@ -1616,7 +1811,8 @@ impl PartialEq<ObjectType> for CatalogItemType {
             | (CatalogItemType::Table, ObjectType::Table)
             | (CatalogItemType::Sink, ObjectType::Sink)
             | (CatalogItemType::View, ObjectType::View)
-            | (CatalogItemType::Index, ObjectType::Index) => true,
+            | (CatalogItemType::Index, ObjectType::Index)
+            | (CatalogItemType::Type, ObjectType::Type) => true,
             (_, _) => false,
         }
     }
@@ -1708,7 +1904,7 @@ impl<'a> StatementContext<'a> {
         if !self.experimental_mode() {
             bail!(
                 "{} requires experimental mode; see \
-                https://materialize.io/docs/cli/#experimental-mode",
+                https://materialize.com/docs/cli/#experimental-mode",
                 feature_name
             )
         }

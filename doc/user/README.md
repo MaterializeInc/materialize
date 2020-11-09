@@ -1,7 +1,7 @@
 # User docs
 
 This is the root directory of the Materialize user documentation, which are
-rendered by [Hugo] locally and published by CI to <https://materialize.io/docs>.
+rendered by [Hugo] locally and published by CI to <https://materialize.com/docs>.
 
 ## Viewing the docs locally
 

@@ -134,7 +134,13 @@ pub struct RowArena {
 
 #[derive(Debug)]
 struct RowArenaInner {
-    owned_bytes: Vec<Box<[u8]>>,
+    // Semantically, `owned_bytes` is better represented by a `Vec<Box<[u8]>>`,
+    // as once the arena takes ownership of a byte vector the vector is never
+    // modified. But `RowArena::push_bytes` takes ownership of a `Vec<u8>`, so
+    // storing that `Vec<u8>` directly avoids an allocation. The cost is
+    // additional memory use, as the vector may have spare capacity, but row
+    // arenas are short lived so this is the better tradeoff.
+    owned_bytes: Vec<Vec<u8>>,
     owned_rows: Vec<Row>,
 }
 
@@ -187,8 +193,14 @@ enum Tag {
     Timestamp,
     TimestampTz,
     Interval,
-    Bytes,
-    String,
+    BytesTiny,
+    BytesShort,
+    BytesLong,
+    BytesHuge,
+    StringTiny,
+    StringShort,
+    StringLong,
+    StringHuge,
     Uuid,
     Array,
     List,
@@ -234,17 +246,31 @@ unsafe fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8
     bytes
 }
 
-/// Read a string starting at byte `offset`.
+/// Read a data whose length is encoded in the row before its contents.
 ///
 /// Updates `offset` to point to the first byte after the end of the read region.
 ///
 /// # Safety
 ///
-/// This function is safe if a `str` was previously written at this offset by `push_untagged_string`.
-/// Otherwise it could return invalid values, which is Undefined Behavior.
-unsafe fn read_untagged_string<'a>(data: &'a [u8], offset: &mut usize) -> &'a str {
-    let bytes = read_untagged_bytes(data, offset);
-    std::str::from_utf8_unchecked(bytes)
+/// This function is safe if the datum's length and contents were previously written by `push_lengthed_bytes`,
+/// and it was only written with a `String` tag if it was indeed UTF-8.
+unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) -> Datum<'a> {
+    let len = match tag {
+        Tag::BytesTiny | Tag::StringTiny => read_copy::<u8>(data, offset) as usize,
+        Tag::BytesShort | Tag::StringShort => read_copy::<u16>(data, offset) as usize,
+        Tag::BytesLong | Tag::StringLong => read_copy::<u32>(data, offset) as usize,
+        Tag::BytesHuge | Tag::StringHuge => read_copy::<usize>(data, offset),
+        _ => unreachable!(),
+    };
+    let bytes = &data[*offset..(*offset + len)];
+    *offset += len;
+    match tag {
+        Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => Datum::Bytes(bytes),
+        Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
+            Datum::String(std::str::from_utf8_unchecked(bytes))
+        }
+        _ => unreachable!(),
+    }
 }
 
 /// Read a datum starting at byte `offset`.
@@ -302,13 +328,16 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let s = read_copy::<Significand>(data, offset);
             Datum::Decimal(s)
         }
-        Tag::Bytes => {
-            let bytes = read_untagged_bytes(data, offset);
-            Datum::Bytes(bytes)
-        }
-        Tag::String => {
-            let string = read_untagged_string(data, offset);
-            Datum::String(string)
+        Tag::BytesTiny
+        | Tag::BytesShort
+        | Tag::BytesLong
+        | Tag::BytesHuge
+        | Tag::StringTiny
+        | Tag::StringShort
+        | Tag::StringLong
+        | Tag::StringHuge => {
+            let datum = read_lengthed_datum(data, offset, tag);
+            datum
         }
         Tag::Uuid => {
             let mut b: uuid::Bytes = [0; 16];
@@ -359,8 +388,23 @@ fn push_untagged_bytes(data: &mut Vec<u8>, bytes: &[u8]) {
     data.extend_from_slice(bytes);
 }
 
-fn push_untagged_string(data: &mut Vec<u8>, string: &str) {
-    push_untagged_bytes(data, string.as_bytes())
+fn push_lengthed_bytes(data: &mut Vec<u8>, bytes: &[u8], tag: Tag) {
+    match tag {
+        Tag::BytesTiny | Tag::StringTiny => {
+            push_copy!(data, bytes.len() as u8, u8);
+        }
+        Tag::BytesShort | Tag::StringShort => {
+            push_copy!(data, bytes.len() as u16, u16);
+        }
+        Tag::BytesLong | Tag::StringLong => {
+            push_copy!(data, bytes.len() as u32, u32);
+        }
+        Tag::BytesHuge | Tag::StringHuge => {
+            push_copy!(data, bytes.len() as usize, usize);
+        }
+        _ => unreachable!(),
+    }
+    data.extend_from_slice(bytes);
 }
 
 fn push_datum(data: &mut Vec<u8>, datum: Datum) {
@@ -410,12 +454,24 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
             push_copy!(data, s, Significand);
         }
         Datum::Bytes(bytes) => {
-            data.push(Tag::Bytes as u8);
-            push_untagged_bytes(data, bytes);
+            let tag = match bytes.len() {
+                0..=255 => Tag::BytesTiny,
+                256..=65535 => Tag::BytesShort,
+                65536..=4294967295 => Tag::BytesLong,
+                _ => Tag::BytesHuge,
+            };
+            data.push(tag as u8);
+            push_lengthed_bytes(data, bytes, tag);
         }
         Datum::String(string) => {
-            data.push(Tag::String as u8);
-            push_untagged_string(data, string);
+            let tag = match string.len() {
+                0..=255 => Tag::StringTiny,
+                256..=65535 => Tag::StringShort,
+                65536..=4294967295 => Tag::StringLong,
+                _ => Tag::StringHuge,
+            };
+            data.push(tag as u8);
+            push_lengthed_bytes(data, string.as_bytes(), tag);
         }
         Datum::Uuid(u) => {
             data.push(Tag::Uuid as u8);
@@ -659,11 +715,14 @@ impl<'a> Iterator for DatumDictIter<'a> {
             Some(unsafe {
                 let key_tag = read_copy::<Tag>(self.data, &mut self.offset);
                 assert!(
-                    key_tag == Tag::String,
+                    key_tag == Tag::StringTiny
+                        || key_tag == Tag::StringShort
+                        || key_tag == Tag::StringLong
+                        || key_tag == Tag::StringHuge,
                     "Dict keys must be strings, got {:?}",
                     key_tag
                 );
-                let key = read_untagged_string(self.data, &mut self.offset);
+                let key = read_lengthed_datum(self.data, &mut self.offset, key_tag).unwrap_str();
                 let val = read_datum(self.data, &mut self.offset);
 
                 // if in debug mode, sanity check keys
@@ -1002,39 +1061,58 @@ impl RowArena {
         }
     }
 
-    /// Take ownership of `bytes` for the lifetime of the arena
+    /// Take ownership of `bytes` for the lifetime of the arena.
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn push_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
         let mut inner = self.inner.borrow_mut();
-        inner.owned_bytes.push(bytes.into_boxed_slice());
+        inner.owned_bytes.push(bytes);
         let owned_bytes = &inner.owned_bytes[inner.owned_bytes.len() - 1];
         unsafe {
-            // this is safe because we only ever append to self.owned_bytes
+            // This is safe because:
+            //   * We only ever append to self.owned_bytes, so the byte vector
+            //     will live as long as the arena.
+            //   * We return a reference to the byte vector's contents, so it's
+            //     okay if self.owned_bytes reallocates and moves the byte
+            //     vector.
+            //   * We don't allow access to the byte vector itself, so it will
+            //     never reallocate.
             transmute::<&[u8], &'a [u8]>(owned_bytes)
         }
     }
 
-    /// Take ownership of `string` for the lifetime of the arena
-    pub fn push_string(&self, string: String) -> &str {
+    /// Take ownership of `string` for the lifetime of the arena.
+    pub fn push_string<'a>(&'a self, string: String) -> &'a str {
         let owned_bytes = self.push_bytes(string.into_bytes());
         unsafe {
-            // this is safe because we know it was a String just before
+            // This is safe because we know it was a `String` just before.
             std::str::from_utf8_unchecked(owned_bytes)
         }
     }
 
-    /// Take ownership of `row` for the lifetime of the arena
-    pub fn push_row<'a>(&'a self, row: Row) -> &'a Row {
+    /// Take ownership of `row` for the lifetime of the arena, returning a
+    /// reference to the first datum in the row.
+    ///
+    /// If we had an owned datum type, this method would be much clearer, and
+    /// would be called `push_owned_datum`.
+    pub fn push_unary_row<'a>(&'a self, row: Row) -> Datum<'a> {
         let mut inner = self.inner.borrow_mut();
         inner.owned_rows.push(row);
-        let owned_row = &inner.owned_rows[inner.owned_rows.len() - 1];
+        let datum = inner.owned_rows[inner.owned_rows.len() - 1].unpack_first();
         unsafe {
-            // this is safe because we only ever append to self.owned_rows
-            transmute::<&Row, &'a Row>(owned_row)
+            // This is safe because:
+            //   * We only ever append to self.owned_rows, so the row will live
+            //     as long as the arena.
+            //   * We return a reference to the heap allocation inside the row,
+            //     so it's okay if self.owned_rows reallocates and moves the
+            //     row.
+            //   * We don't allow access to the row itself, so row.data will
+            //     never reallocate.
+            transmute::<Datum<'_>, Datum<'a>>(datum)
         }
     }
 
-    /// Convenience function to make a new `Row` containing a single datum, and take ownership of it for the lifetime of the arena
+    /// Convenience function to make a new `Row` containing a single datum, and
+    /// take ownership of it for the lifetime of the arena
     ///
     /// ```
     /// # use repr::{RowArena, Datum};
@@ -1050,7 +1128,7 @@ impl RowArena {
     {
         let mut packer = RowPacker::new();
         f(&mut packer);
-        self.push_row(packer.finish()).unpack_first()
+        self.push_unary_row(packer.finish())
     }
 
     /// Like [`Row::make_datum`], but the provided closure can return an error.
@@ -1060,7 +1138,7 @@ impl RowArena {
     {
         let mut packer = RowPacker::new();
         f(&mut packer)?;
-        Ok(self.push_row(packer.finish()).unpack_first())
+        Ok(self.push_unary_row(packer.finish()))
     }
 }
 
@@ -1101,15 +1179,19 @@ mod tests {
         assert_eq!(arena.push_bytes(vec![]), empty);
         assert_eq!(arena.push_bytes(vec![0, 2, 1, 255]), &[0, 2, 1, 255]);
 
-        let row = Row::pack(&[
-            Datum::Null,
-            Datum::Int32(-42),
-            Datum::Interval(Interval {
-                months: 312,
-                ..Default::default()
-            }),
-        ]);
-        assert_eq!(arena.push_row(row.clone()).unpack(), row.unpack());
+        let mut packer = RowPacker::new();
+        packer.push_dict_with(|packer| {
+            packer.push(Datum::String("a"));
+            packer.push_list_with(|packer| {
+                packer.push(Datum::String("one"));
+                packer.push(Datum::String("two"));
+                packer.push(Datum::String("three"));
+            });
+            packer.push(Datum::String("b"));
+            packer.push(Datum::String("c"));
+        });
+        let row = packer.finish();
+        assert_eq!(arena.push_unary_row(row.clone()), row.unpack_first());
     }
 
     #[test]
@@ -1119,7 +1201,7 @@ mod tests {
 
             // When run under miri this catchs undefined bytes written to data
             // eg by calling push_copy! on a type which contains undefined padding values
-            dbg!(row.data());
+            println!("{:?}", row.data());
 
             let datums2 = row.iter().collect::<Vec<_>>();
             let datums3 = row.unpack();

@@ -479,10 +479,10 @@ SELECT '1'::JSONB
 ----
 1.0
 
-# query T
-# SELECT pg_typeof('1'::JSONB)
-# ----
-# jsonb
+query T
+SELECT pg_typeof('1'::JSONB)
+----
+jsonb
 
 query T
 SELECT '{'::JSONB
@@ -494,10 +494,10 @@ SELECT '{"a":1}'::JSONB->'a'
 ----
 1.0
 
-# query T
-# SELECT pg_typeof('{"a":1}'::JSONB->'a')
-# ----
-# jsonb
+query T
+SELECT pg_typeof('{"a":1}'::JSONB->'a')
+----
+jsonb
 
 query T
 SELECT '{"a":1,"b":2}'::JSONB->'b'
@@ -544,10 +544,10 @@ SELECT '{"a":null}'::JSONB->>'a'
 ----
 NULL
 
-# query T
-# SELECT pg_typeof('{"a":1}'::JSONB->>'a')
-# ----
-# string
+query T
+SELECT pg_typeof('{"a":1}'::JSONB->>'a')
+----
+text
 
 query T
 SELECT '{"a":1,"b":2}'::JSONB->>'b'

@@ -106,7 +106,7 @@ use std::rc::Weak;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::arrangement::Arrange;
+use differential_dataflow::operators::arrange::arrangement::{Arrange, ArrangeByKey};
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::operators::consolidate::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
@@ -130,7 +130,6 @@ use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
 use repr::{Datum, RelationType, Row, RowArena, Timestamp};
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::decode::{decode_avro_values, decode_values};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
@@ -140,6 +139,10 @@ use crate::server::{
 use crate::sink;
 use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
 use crate::source::{SourceConfig, SourceToken};
+use crate::{
+    arrangement::manager::{TraceBundle, TraceManager},
+    logging::materialized::Logger,
+};
 
 mod arrange_by;
 mod context;
@@ -177,6 +180,7 @@ pub fn build_dataflow<A: Allocate>(
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
+    let materialized_logging = timely_worker.log_register().get("materialized");
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
@@ -197,7 +201,13 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (src_id, src) in dataflow.source_imports.clone() {
-                context.import_source(render_state, region, src_id, src);
+                context.import_source(
+                    render_state,
+                    region,
+                    materialized_logging.clone(),
+                    src_id,
+                    src,
+                );
             }
 
             // Import declared indexes into the rendering context.
@@ -233,6 +243,7 @@ where
         &mut self,
         render_state: &mut RenderState,
         scope: &mut Child<'g, G, G::Timestamp>,
+        materialized_logging: Option<Logger>,
         src_id: GlobalId,
         mut src: SourceDesc,
     ) {
@@ -317,6 +328,7 @@ where
                     timestamp_frequency: ts_frequency,
                     worker_id: scope.index(),
                     worker_count: scope.peers(),
+                    logger: materialized_logging,
                     encoding: encoding.clone(),
                     persistence_tx,
                 };
@@ -702,7 +714,15 @@ where
                 Some(button)
             }
             SinkConnector::Tail(c) => {
-                sink::tail(&collection.inner, sink_id, c);
+                // Map by sink_id is not needed for correctness, but will spread the work
+                // around when there are multiple TAILs running, and additionally will move a
+                // single TAIL's work to a single worker.
+                // Arranging will cause updates to be presented in time order.
+                let stream = collection
+                    .map(move |row| (sink_id, row))
+                    .arrange_by_key()
+                    .stream;
+                sink::tail(stream, sink_id, c);
                 None
             }
             SinkConnector::AvroOcf(c) => {
@@ -730,31 +750,6 @@ impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn extract_map_filter_project(
-        &mut self,
-        relation_expr: &RelationExpr,
-    ) -> Option<(MapFilterProject, RelationExpr)> {
-        match relation_expr {
-            RelationExpr::Map { input, scalars } => {
-                let (mfp, input) = self.extract_map_filter_project(input)?;
-                Some((mfp.map(scalars.iter().cloned()), input))
-            }
-            RelationExpr::Filter { input, predicates } => {
-                let (mfp, input) = self.extract_map_filter_project(input)?;
-                Some((mfp.filter(predicates.iter().cloned()), input))
-            }
-            RelationExpr::Project { input, outputs } => {
-                let (mfp, input) = self.extract_map_filter_project(input)?;
-                Some((mfp.project(outputs.iter().cloned()), input))
-            }
-            RelationExpr::Get { .. } => Some((
-                MapFilterProject::new(relation_expr.arity()),
-                relation_expr.clone(),
-            )),
-            _ => None,
-        }
-    }
-
     /// Attempt to extract a chain of map/filter/project operators on top of a Get. Returns true if
     /// it was successful and false otherwise. We still fall back to individual implementations for
     /// the various operators so that ones like Filter, that special-case being on top of a join,
@@ -765,13 +760,16 @@ where
         scope: &mut G,
         worker_index: usize,
     ) -> bool {
-        if let Some((mfp, input)) = self.extract_map_filter_project(relation_expr) {
+        // Extract a MapFilterProject and residual from `relation_expr`.
+        let (mfp, input) = MapFilterProject::extract_from_expression(relation_expr);
+        if let RelationExpr::Get { .. } = input {
+            let mfp2 = mfp.clone();
             self.ensure_rendered(&input, scope, worker_index);
             let (ok_collection, mut err_collection) = self
-                .flat_map_ref(&input, {
+                .flat_map_ref(&input, move |exprs| mfp2.literal_constraints(exprs), {
                     let mut row_packer = repr::RowPacker::new();
-                    let temp_storage = RowArena::new();
                     move |row| {
+                        let temp_storage = RowArena::new();
                         mfp.evaluate(&mut row.unpack(), &temp_storage, &mut row_packer)
                             .map_err(|e| e.into())
                             .transpose()
