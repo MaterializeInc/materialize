@@ -36,7 +36,7 @@ pub fn construct<A: Allocate>(
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     // A dataflow for multiple log-derived arrangements.
-    let traces = worker.dataflow(move |scope| {
+    let traces = worker.dataflow_named("Dataflow: timely logging", move |scope| {
         use differential_dataflow::collection::AsCollection;
         use timely::dataflow::operators::capture::Replay;
         use timely::dataflow::operators::Map;
