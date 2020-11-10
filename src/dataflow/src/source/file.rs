@@ -113,7 +113,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
 
         consistency_info.partition_metrics.insert(
             PartitionId::File,
-            PartitionMetrics::new(&name, &source_id.to_string(), "", logger.clone()),
+            PartitionMetrics::new(&name, source_id, "", logger.clone()),
         );
         consistency_info.update_partition_metadata(PartitionId::File);
 
@@ -162,7 +162,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         };
         consistency_info.partition_metrics.insert(
             PartitionId::File,
-            PartitionMetrics::new(&name, &source_id.to_string(), "", logger.clone()),
+            PartitionMetrics::new(&name, source_id, "", logger.clone()),
         );
         consistency_info.update_partition_metadata(PartitionId::File);
 
@@ -240,7 +240,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         if consistency_info.partition_metrics.len() == 0 {
             consistency_info.partition_metrics.insert(
                 pid,
-                PartitionMetrics::new(&self.name, &self.id.to_string(), "", self.logger.clone()),
+                PartitionMetrics::new(&self.name, self.id, "", self.logger.clone()),
             );
         }
     }

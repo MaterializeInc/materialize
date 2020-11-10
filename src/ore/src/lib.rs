@@ -15,7 +15,9 @@
 
 #![deny(missing_docs, missing_debug_implementations)]
 
+pub mod ascii;
 pub mod cast;
+pub mod codegen;
 pub mod collections;
 pub mod env;
 pub mod fmt;

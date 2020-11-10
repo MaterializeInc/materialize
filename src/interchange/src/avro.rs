@@ -2487,6 +2487,7 @@ fn build_row_schema_json(
             ScalarType::String => json!("string"),
             ScalarType::Jsonb => json!({
                 "type": "string",
+                "connect.name": "io.debezium.data.Json",
             }),
             ScalarType::Uuid => json!({
                 "type": "string",

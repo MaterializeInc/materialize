@@ -195,6 +195,13 @@ impl PgTest {
                         )?,
                     ),
                     Message::CopyDone => ("CopyDone", "".to_string()),
+                    Message::ParameterDescription(body) => (
+                        "ParameterDescription",
+                        serde_json::to_string(&ParameterDescription {
+                            parameters: body.parameters().collect().unwrap(),
+                        })?,
+                    ),
+                    Message::NoData => ("NoData", "".to_string()),
                     _ => ("UNKNOWN", format!("'{}'", ch)),
                 };
                 let mut s = typ.to_string();
@@ -260,6 +267,11 @@ pub struct DataRow {
 pub struct CopyOut {
     pub format: String,
     pub column_formats: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct ParameterDescription {
+    parameters: Vec<u32>,
 }
 
 #[derive(Serialize)]
@@ -339,6 +351,9 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                             {
                                 panic!("bind error");
                             }
+                        }
+                        "Describe" => {
+                            frontend::describe(b'S', "", buf).unwrap();
                         }
                         "Execute" => {
                             let v: Execute = serde_json::from_str(args).unwrap();

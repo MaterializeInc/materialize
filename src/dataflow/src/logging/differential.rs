@@ -29,7 +29,7 @@ pub fn construct<A: Allocate>(
 ) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
-    let traces = worker.dataflow(move |scope| {
+    let traces = worker.dataflow_named("Dataflow: differential logging", move |scope| {
         use differential_dataflow::collection::AsCollection;
         use timely::dataflow::operators::capture::Replay;
         use timely::dataflow::operators::Map;

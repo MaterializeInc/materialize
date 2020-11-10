@@ -188,21 +188,12 @@ impl Session {
 pub struct PreparedStatement {
     sql: Option<Statement>,
     desc: StatementDesc,
-    param_types: Vec<pgrepr::Type>,
 }
 
 impl PreparedStatement {
     /// Constructs a new prepared statement.
-    pub fn new(
-        sql: Option<Statement>,
-        desc: StatementDesc,
-        param_types: Vec<pgrepr::Type>,
-    ) -> PreparedStatement {
-        PreparedStatement {
-            sql,
-            desc,
-            param_types,
-        }
+    pub fn new(sql: Option<Statement>, desc: StatementDesc) -> PreparedStatement {
+        PreparedStatement { sql, desc }
     }
 
     /// Returns the raw SQL string associated with this prepared statement,
@@ -211,25 +202,9 @@ impl PreparedStatement {
         self.sql.as_ref()
     }
 
-    /// Returns the type of the rows that will be returned by this prepared
-    /// statement, if this prepared statement will return rows at all.
+    /// Returns the description of the prepared statement.
     pub fn desc(&self) -> &StatementDesc {
         &self.desc
-    }
-
-    /// Returns the types of any parameters in this prepared statement.
-    pub fn param_types(&self) -> &[pgrepr::Type] {
-        &self.param_types
-    }
-
-    /// Reports the number of columns in the statement's result set, or zero if
-    /// the statement does not return rows.
-    pub fn result_width(&self) -> usize {
-        self.desc
-            .relation_desc
-            .as_ref()
-            .map(|desc| desc.typ().column_types.len())
-            .unwrap_or(0)
     }
 }
 

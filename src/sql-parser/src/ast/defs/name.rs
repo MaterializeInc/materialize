@@ -19,7 +19,7 @@
 // limitations under the License.
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::keywords;
+use crate::keywords::Keyword;
 
 /// An identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -34,15 +34,6 @@ impl Ident {
         Ident(value.into())
     }
 
-    /// Creates a new identifier with the normalized form of the given value. This should only be
-    /// used on identifiers read from SQL that were not quoted.
-    pub fn new_normalized<S>(value: S) -> Self
-    where
-        S: Into<String>,
-    {
-        Ident(value.into().to_lowercase())
-    }
-
     /// An identifier can be printed in bare mode if
     ///  * it matches the regex [a-z_][a-z0-9_]* and
     ///  * it is not a "reserved keyword."
@@ -53,15 +44,19 @@ impl Ident {
             .map(|ch| (ch >= 'a' && ch <= 'z') || (ch == '_'))
             .unwrap_or(false)
             && chars.all(|ch| (ch >= 'a' && ch <= 'z') || (ch == '_') || (ch >= '0' && ch <= '9'))
-            && !keywords::is_reserved_keyword(&self.0)
+            && !self.as_keyword().map(Keyword::is_reserved).unwrap_or(false)
     }
 
-    pub fn value(&self) -> String {
-        self.0.to_string()
-    }
-
-    pub fn as_str<'a>(&'a self) -> &'a str {
+    pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn as_keyword(&self) -> Option<Keyword> {
+        self.0.parse().ok()
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
     }
 }
 

@@ -15,7 +15,8 @@ menu:
 Field | Use
 ------|-----
 _query_ | The [`SELECT`](/sql/select) or [`TAIL`](/sql/tail) query to send
-_option_ |
+
+Supported `option` values:
 
 Name | Value
 -----|-------

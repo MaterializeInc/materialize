@@ -381,11 +381,13 @@ where
             }),
         );
 
-        let errs = self.timely_worker.dataflow::<Timestamp, _, _>(|scope| {
-            Collection::<_, DataflowError, isize>::empty(scope)
-                .arrange()
-                .trace
-        });
+        let errs = self
+            .timely_worker
+            .dataflow_named("Dataflow: logging", |scope| {
+                Collection::<_, DataflowError, isize>::empty(scope)
+                    .arrange()
+                    .trace
+            });
 
         let logger = self
             .timely_worker

@@ -548,7 +548,9 @@ impl ScalarExpr {
             // Nullary functions must be transformed away before evaluation.
             // Their purpose is as a placeholder for data that is not known at
             // plan time but can be inlined before runtime.
-            ScalarExpr::CallNullary(_) => panic!("eval called on nullary function"),
+            ScalarExpr::CallNullary(_) => Err(EvalError::Internal(
+                "cannot evaluate nullary function".into(),
+            )),
             ScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
                 func.eval(datums, temp_storage, expr1, expr2)
@@ -557,7 +559,10 @@ impl ScalarExpr {
             ScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {
                 Datum::True => then.eval(datums, temp_storage),
                 Datum::False | Datum::Null => els.eval(datums, temp_storage),
-                d => panic!("IF condition ev aluated to non-boolean datum {:?}", d),
+                d => Err(EvalError::Internal(format!(
+                    "if condition evaluated to non-boolean datum: {:?}",
+                    d
+                ))),
             },
         }
     }
@@ -588,6 +593,7 @@ pub enum EvalError {
     UnsupportedDateTimeUnits(DateTimeUnits),
     UnterminatedLikeEscapeSequence,
     Parse(ParseError),
+    Internal(String),
 }
 
 impl fmt::Display for EvalError {
@@ -625,6 +631,7 @@ impl fmt::Display for EvalError {
                 f.write_str("unterminated escape sequence in LIKE")
             }
             EvalError::Parse(e) => e.fmt(f),
+            EvalError::Internal(s) => write!(f, "internal error: {}", s),
         }
     }
 }

@@ -14,15 +14,15 @@ menu:
 
 Field | Use
 ------|-----
-_schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_schema&lowbar;name_ | The schema to show views from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 **MATERIALIZED** | Only return materialized views, i.e. those with [indexes](../create-index). Without specifying this option, this command returns all views, including non-materialized views.
 **FULL** | Return details about your views.
 
 ## Details
 
-### Output format for `SHOW FULL VIEW`
+### Output format for `SHOW FULL VIEWS`
 
-`SHOW FULL VIEW`'s output is a table, with this structure:
+`SHOW FULL VIEWS`'s output is a table, with this structure:
 
 ```nofmt
  name  | type | materialized
@@ -33,7 +33,7 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 Field | Meaning
 ------|--------
 **name** | The name of the view
-**type** | Whether the view was created by the user or the system
+**type** | Whether the view was created by the `user` or the `system`
 **materialized** | Does the view have an in-memory index? For more details, see [`CREATE INDEX`](../create-index)
 
 {{< version-changed v0.5.0 >}}
@@ -76,11 +76,6 @@ SHOW FULL VIEWS
 -------------------------+------+--------------
  my_nonmaterialized_view | user | f
  my_materialized_view    | user | t
-```
-
-```sql
-CREATE VIEW my_nonmaterialized_view AS
-    SELECT col2, col3 FROM my_materialized_view;
 ```
 
 ## Related pages

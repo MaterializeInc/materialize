@@ -2408,6 +2408,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
+ "phf_shared",
  "smallvec",
  "tokio",
  "tracing-subscriber",
@@ -2634,12 +2635,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "phf_codegen"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbffee61585b0411840d3ece935cce9cb6321f01c45477d30066498cd5e1a815"
+dependencies = [
+ "phf_generator",
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_generator"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17367f0cc86f2d25802b2c26ee58a7b23faeccf78a396094c13dced0d0182526"
+dependencies = [
+ "phf_shared",
+ "rand",
+]
+
+[[package]]
 name = "phf_shared"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c00cf8b9eafe68dde5e9eaa2cef8ee84a9336a47d566ec55ca16589633b65af7"
 dependencies = [
  "siphasher",
+ "unicase",
 ]
 
 [[package]]
@@ -3479,9 +3501,9 @@ checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 
 [[package]]
 name = "serde"
-version = "1.0.116"
+version = "1.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96fe57af81d28386a513cbc6858332abc6117cfdb5999647c6444b8f43a370a5"
+checksum = "b88fa983de7720629c9387e9f517353ed404164b1e482c970a90c1a4aaf7dc1a"
 dependencies = [
  "serde_derive",
 ]
@@ -3520,9 +3542,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.116"
+version = "1.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f630a6370fd8e457873b4bd2ffdae75408bc291ba72be773772a4c2a065d9ae8"
+checksum = "cbd1ae72adb44aab48f325a02444a5fc079349a8d804c1fc922aed3f7454c74e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3720,12 +3742,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "datadriven",
+ "itertools",
  "lazy_static",
  "log",
  "matches",
  "ore",
+ "phf",
+ "phf_codegen",
  "repr",
  "stacker",
+ "unicase",
  "walkabout",
 ]
 
@@ -4195,7 +4221,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#b8338e52626933a95716f65d63b96666d8199c77"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#a025087e1c2cb523115a6bd8e0b173271515def9"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4210,12 +4236,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#b8338e52626933a95716f65d63b96666d8199c77"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#a025087e1c2cb523115a6bd8e0b173271515def9"
 
 [[package]]
 name = "timely_communication"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#b8338e52626933a95716f65d63b96666d8199c77"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#a025087e1c2cb523115a6bd8e0b173271515def9"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4231,7 +4257,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#b8338e52626933a95716f65d63b96666d8199c77"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#a025087e1c2cb523115a6bd8e0b173271515def9"
 
 [[package]]
 name = "timely_sort"
