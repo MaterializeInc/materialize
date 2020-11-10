@@ -108,7 +108,7 @@ impl<'a> fmt::Display for ParserError {
             .rfind('\n')
             .map(|start| start + 1)
             .unwrap_or(0);
-        let safe_end = self.range.end.min(self.sql.len() - 1);
+        let safe_end = self.range.end.min(self.sql.len());
         let line_end = self.sql[safe_end..]
             .find('\n')
             .map(|end| safe_end + end)
