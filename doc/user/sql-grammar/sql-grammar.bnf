@@ -232,11 +232,11 @@ show_schemas ::=
 show_sinks ::=
    'SHOW' 'SINKS'
 show_sources ::=
-  'SHOW' 'SOURCES' ('FROM' schema_name)?
+  'SHOW' 'FULL'? 'MATERIALIZED'? 'SOURCES' ('FROM' schema_name)?
 show_tables ::=
   'SHOW' 'TABLES' ('FROM' schema_name)?
 show_views ::=
-  'SHOW' ('MATERIALIZED' | 'FULL')? 'VIEWS' ('FROM' schema_name)?
+  'SHOW' 'FULL'? 'MATERIALIZED'? 'VIEWS' ('FROM' schema_name)?
 table_ref ::=
   (
     table_name
