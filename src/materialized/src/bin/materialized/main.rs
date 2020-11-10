@@ -187,7 +187,7 @@ fn run() -> Result<(), anyhow::Error> {
     if cfg!(debug_assertions) && !popts.opt_present("dev") && !ore::env::is_var_truthy("MZ_DEV") {
         bail!(
             "refusing to run dev (unoptimized) binary without explicit opt-in\n\
-             hint: Pass the '--dev' option or set the MZ_DEV environment variable to opt in.\n\
+             hint: Pass the '--dev' option or set MZ_DEV=1 in your environment to opt in.\n\
              hint: Or perhaps you meant to use a release binary?"
         );
     }
