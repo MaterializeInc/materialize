@@ -311,6 +311,28 @@ a  b
 3  4
 1  2
 
+> SHOW SOURCES
+name
+--------
+data
+mat_data
+
+> SHOW MATERIALIZED SOURCES
+name
+----
+mat_data
+
+> SHOW FULL SOURCES
+name     type materialized
+-------------------------
+data     user false
+mat_data user true
+
+> SHOW FULL MATERIALIZED SOURCES
+name     type
+-------------
+mat_data user
+
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the
 # default index name is already taken.
