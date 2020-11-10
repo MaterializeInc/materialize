@@ -214,6 +214,8 @@ in the infrastructure repository. All of these tests can be run in parallel.
 ## Finish
 
 - [ ] Update the current status at the top of this issue.
+- [ ] Create a slack alert for the next person to start the release (according to [the release
+  schedule][schedule]) in the #release channel.
 - [ ] Close this issue.
 
 [`doc/user/config.toml`]: https://github.com/MaterializeInc/materialize/blob/main/doc/user/config.toml
@@ -223,3 +225,4 @@ in the infrastructure repository. All of these tests can be run in parallel.
 [release notes]: https://github.com/MaterializeInc/materialize/tree/main/doc/user/content/release-notes.md
 [releases]: https://github.com/MaterializeInc/materialize/releases
 [v0.1.2]: https://github.com/MaterializeInc/materialize/releases/tag/v0.1.2
+[schedule]: https://docs.google.com/spreadsheets/d/1kd0Tlkr-dKClFLMJuSxhXgcikiZUcKrEFwdc53CBHy0
