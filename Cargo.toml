@@ -17,6 +17,7 @@ members = [
     "src/kafka-util",
     "src/materialized",
     "src/metabase",
+    "src/mz-process-collector",
     "src/ore",
     "src/peeker",
     "src/pgrepr",
