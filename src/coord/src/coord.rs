@@ -1358,10 +1358,18 @@ where
                 id,
                 ts,
                 with_snapshot,
+                emit_timestamps,
                 copy_to,
             } => tx.send(
-                self.sequence_tail(session.conn_id(), id, with_snapshot, ts, copy_to)
-                    .await,
+                self.sequence_tail(
+                    session.conn_id(),
+                    id,
+                    with_snapshot,
+                    emit_timestamps,
+                    ts,
+                    copy_to,
+                )
+                .await,
                 session,
             ),
 
@@ -2017,6 +2025,7 @@ where
         conn_id: u32,
         source_id: GlobalId,
         with_snapshot: bool,
+        emit_timestamps: bool,
         ts: Option<Timestamp>,
         copy_to: Option<CopyFormat>,
     ) -> Result<ExecuteResponse, anyhow::Error> {
@@ -2041,6 +2050,7 @@ where
                 tx,
                 frontier,
                 strict: !with_snapshot,
+                emit_timestamps,
             }),
         ))
         .await;

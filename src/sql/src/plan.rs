@@ -136,6 +136,7 @@ pub enum Plan {
     Tail {
         id: GlobalId,
         with_snapshot: bool,
+        emit_timestamps: bool,
         ts: Option<Timestamp>,
         copy_to: Option<CopyFormat>,
     },
