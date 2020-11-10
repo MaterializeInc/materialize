@@ -199,3 +199,11 @@ $ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys
 {"b": 2, "a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
 {"b": 1, "a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
 {"b": 2, "a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+
+> CREATE VIEW json_data (a, b) AS VALUES ('{"a":1, "b":2}'::jsonb, 2)
+
+# Sinks with JSON columns should not crash - see https://github.com/MaterializeInc/materialize/issues/4722
+> CREATE SINK json_data_sink FROM json_data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-data-sink'
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
