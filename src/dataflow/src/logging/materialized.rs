@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use differential_dataflow::operators::count::CountTotal;
+use differential_dataflow::{difference::DiffPair, operators::count::CountTotal};
 use log::error;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
@@ -20,7 +20,7 @@ use timely::logging::WorkerIdentifier;
 
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
-use expr::GlobalId;
+use expr::{GlobalId, SourceInstanceId};
 use repr::{Datum, Timestamp};
 
 /// Type alias for logging of materialized events.
@@ -45,11 +45,13 @@ pub enum MaterializedEvent {
         /// Name of the source
         source_name: String,
         /// Source identifier
-        source_id: String,
+        source_id: SourceInstanceId,
         /// Partition identifier
         partition_id: String,
-        /// Highest offset we've seen
+        /// Difference between the previous offset and current highest offset we've seen
         offset: i64,
+        /// Difference between the previous timestamp and current highest timestamp we've seen
+        timestamp: i64,
     },
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
@@ -182,11 +184,12 @@ pub fn construct<A: Allocate>(
                                 source_id,
                                 partition_id,
                                 offset,
+                                timestamp,
                             } => {
                                 source_info_session.give((
                                     (source_name, source_id, partition_id),
                                     time_ms,
-                                    offset,
+                                    DiffPair::new(offset, timestamp),
                                 ));
                             }
                             MaterializedEvent::Frontier(name, logical, delta) => {
@@ -265,15 +268,17 @@ pub fn construct<A: Allocate>(
         use differential_dataflow::operators::Count;
         let source_info_current = source_info.as_collection().count().map({
             let mut row_packer = repr::RowPacker::new();
-            move |((name, id, pid), offset)| {
-                {
-                    row_packer.pack(&[
-                        Datum::String(&name),
-                        Datum::String(&id),
-                        Datum::String(&pid),
-                        Datum::Int64(offset),
-                    ])
-                }
+            move |((name, id, pid), pair)| {
+                let offset = pair.element1;
+                let timestamp = pair.element2;
+                row_packer.pack(&[
+                    Datum::String(&name),
+                    Datum::String(&id.source_id.to_string()),
+                    Datum::Int64(id.dataflow_id as i64),
+                    Datum::String(&pid),
+                    Datum::Int64(offset),
+                    Datum::Int64(timestamp),
+                ])
             }
         });
 

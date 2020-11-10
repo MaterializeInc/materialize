@@ -148,7 +148,7 @@ impl KinesisSourceInfo {
                 kinesis_id.clone(),
                 PartitionMetrics::new(
                     &self.name,
-                    &self.id.to_string(),
+                    self.id,
                     &kinesis_id.to_string(),
                     self.logger.clone(),
                 ),
@@ -377,12 +377,7 @@ async fn create_state(
         consistency_info.update_partition_metadata(kinesis_id.clone());
         consistency_info.partition_metrics.insert(
             kinesis_id.clone(),
-            PartitionMetrics::new(
-                name,
-                &id.to_string(),
-                &kinesis_id.to_string(),
-                logger.clone(),
-            ),
+            PartitionMetrics::new(name, id, &kinesis_id.to_string(), logger.clone()),
         );
     }
 
