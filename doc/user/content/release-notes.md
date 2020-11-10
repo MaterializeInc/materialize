@@ -54,6 +54,18 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.5.1 %}}
 
+- **Known issue.** [`COPY TO`](/sql/copy-to) panics if executed via the
+  ["simple query" protocol][pgwire-simple], which is notably used by the
+  `psql` command-line client {{% gh 4742 %}}.
+
+  A fix is available in the latest [unstable builds](/versions/#unstable-builds)
+  and will ship in v0.5.2.
+
+  Note that some PostgreSQL clients instead use the
+  ["extended query" protocol][pgwire-extended] to issue `COPY TO` statements,
+  or let you choose which protocol to use. If you are using one of these
+  clients, you can safely issue `COPY TO` statements in v0.5.1.
+
 - Send the rows returned by the [`TAIL`](/sql/tail) statement to the client
   normally (i.e., as if the rows were returned by a [`SELECT`](/sql/select)
   statement) rather than via the PostgreSQL [`COPY` protocol][pg-copy]. The new
@@ -706,4 +718,6 @@ Wrap your release notes at the 80 character mark.
 [`timestamp`]: /sql/types/timestamp
 [`timestamptz`]: /sql/types/timestamptz
 [pg-copy]: https://www.postgresql.org/docs/current/sql-copy.html
+[pgwire-simple]: https://www.postgresql.org/docs/current/protocol-flow.html#id-1.10.5.7.4
+[pgwire-extended]: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
 [PgJDBC]: https://jdbc.postgresql.org

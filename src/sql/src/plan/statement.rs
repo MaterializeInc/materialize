@@ -58,11 +58,16 @@ use crate::pure::Schema;
 
 mod show;
 
-#[derive(Debug)]
+/// Describes the output of a SQL statement.
+#[derive(Debug, Clone)]
 pub struct StatementDesc {
+    /// The shape of the rows produced by the statement, if the statement
+    /// produces rows.
     pub relation_desc: Option<RelationDesc>,
-    pub param_types: Vec<ScalarType>,
-    pub send: bool,
+    /// The determined types of the parameters in the statement, if any.
+    pub param_types: Vec<pgrepr::Type>,
+    /// Whether the statement is a `COPY` statement.
+    pub is_copy: bool,
 }
 
 impl StatementDesc {
@@ -70,24 +75,32 @@ impl StatementDesc {
         StatementDesc {
             relation_desc,
             param_types: vec![],
-            send: true,
+            is_copy: false,
         }
     }
+
+    /// Reports the number of columns in the statement's result set, or zero if
+    /// the statement does not return rows.
+    pub fn arity(&self) -> usize {
+        self.relation_desc
+            .as_ref()
+            .map(|desc| desc.typ().column_types.len())
+            .unwrap_or(0)
+    }
+
     fn with_params(mut self, param_types: Vec<ScalarType>) -> Self {
+        self.param_types = param_types.iter().map(pgrepr::Type::from).collect();
+        self
+    }
+
+    fn with_pgrepr_params(mut self, param_types: Vec<pgrepr::Type>) -> Self {
         self.param_types = param_types;
         self
     }
-    fn no_send(mut self) -> Self {
-        self.send = false;
+
+    fn with_is_copy(mut self) -> Self {
+        self.is_copy = true;
         self
-    }
-    /// If send is false, returns None. Otherwise returns relation_desc.
-    pub fn relation_desc(&self) -> Option<RelationDesc> {
-        if !self.send {
-            None
-        } else {
-            self.relation_desc.clone()
-        }
     }
 }
 
@@ -135,7 +148,7 @@ pub fn describe_statement(
             },
             ScalarType::String.nullable(false),
         )))
-        .with_params(match explainee {
+        .with_pgrepr_params(match explainee {
             Explainee::Query(q) => {
                 describe_statement(
                     catalog,
@@ -220,7 +233,7 @@ pub fn describe_statement(
                 describe_statement(catalog, Statement::Tail(stmt), param_types_in)?
             }
         }
-        .no_send(),
+        .with_is_copy(),
 
         // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
         // plans the whole query to determine its shape and parameter types,

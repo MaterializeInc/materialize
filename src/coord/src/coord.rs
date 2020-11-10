@@ -457,7 +457,7 @@ where
                     let res = async {
                         let stmt = sql::pure::purify(stmt).await?;
                         let catalog = self.catalog.for_system_session();
-                        let (desc, _) = sql::plan::describe(&catalog, stmt.clone(), &[])?;
+                        let desc = sql::plan::describe(&catalog, stmt.clone(), &[])?;
                         let pcx = PlanContext::default();
                         let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
                         // At time of writing this comment, Peeks use the connection id only for
@@ -764,28 +764,26 @@ where
         stmt: Option<Statement>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
-        let (desc, param_types) = if let Some(stmt) = stmt.clone() {
+        let desc = if let Some(stmt) = stmt.clone() {
             match sql::plan::describe(
                 &self.catalog.for_session(session),
                 stmt.clone(),
                 &param_types,
             ) {
-                Ok((desc, param_types)) => (desc, param_types),
+                Ok(desc) => desc,
                 // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres
                 // only handles commands that do not return rows, so the
-                // `RelationDesc` is always `None`.
+                // `StatementDesc` is constructed accordingly.
                 Err(err) => match self.symbiosis {
-                    Some(ref postgres) if postgres.can_handle(&stmt) => {
-                        (StatementDesc::new(None), vec![])
-                    }
+                    Some(ref postgres) if postgres.can_handle(&stmt) => StatementDesc::new(None),
                     _ => return Err(err),
                 },
             }
         } else {
-            (StatementDesc::new(None), vec![])
+            StatementDesc::new(None)
         };
-        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
+        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
         Ok(())
     }
 
