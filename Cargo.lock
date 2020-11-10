@@ -2408,6 +2408,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
+ "phf_shared",
  "smallvec",
  "tokio",
  "tracing-subscriber",
@@ -2634,12 +2635,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "phf_codegen"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbffee61585b0411840d3ece935cce9cb6321f01c45477d30066498cd5e1a815"
+dependencies = [
+ "phf_generator",
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_generator"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17367f0cc86f2d25802b2c26ee58a7b23faeccf78a396094c13dced0d0182526"
+dependencies = [
+ "phf_shared",
+ "rand",
+]
+
+[[package]]
 name = "phf_shared"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c00cf8b9eafe68dde5e9eaa2cef8ee84a9336a47d566ec55ca16589633b65af7"
 dependencies = [
  "siphasher",
+ "unicase",
 ]
 
 [[package]]
@@ -3720,12 +3742,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "datadriven",
+ "itertools",
  "lazy_static",
  "log",
  "matches",
  "ore",
+ "phf",
+ "phf_codegen",
  "repr",
  "stacker",
+ "unicase",
  "walkabout",
 ]
 

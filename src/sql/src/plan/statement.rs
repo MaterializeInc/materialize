@@ -325,7 +325,7 @@ fn handle_set_variable(
         value: match value {
             SetVariableValue::Literal(Value::String(s)) => s,
             SetVariableValue::Literal(lit) => lit.to_string(),
-            SetVariableValue::Ident(ident) => ident.value(),
+            SetVariableValue::Ident(ident) => ident.into_string(),
         },
     })
 }
