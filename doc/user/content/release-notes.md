@@ -53,6 +53,7 @@ Wrap your release notes at the 80 character mark.
 - [`TAIL`](/sql/tail) is now guaranteed to produce output ordered by timestamp.
 - Syntax for [`TAIL`](/sql/tail) has changed. `WITH SNAPSHOT` is now
   `WITH (SNAPSHOT)`. `WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
+- [`TAIL`](/sql/tail) now supports timestamp progress.
 
 {{% version-header v0.5.1 %}}
 

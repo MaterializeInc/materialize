@@ -1357,9 +1357,19 @@ where
                 ts,
                 with_snapshot,
                 copy_to,
+                emit_progress,
+                object_columns,
             } => tx.send(
-                self.sequence_tail(session.conn_id(), id, with_snapshot, ts, copy_to)
-                    .await,
+                self.sequence_tail(
+                    session.conn_id(),
+                    id,
+                    with_snapshot,
+                    ts,
+                    copy_to,
+                    emit_progress,
+                    object_columns,
+                )
+                .await,
                 session,
             ),
 
@@ -2010,6 +2020,7 @@ where
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn sequence_tail(
         &mut self,
         conn_id: u32,
@@ -2017,6 +2028,8 @@ where
         with_snapshot: bool,
         ts: Option<Timestamp>,
         copy_to: Option<CopyFormat>,
+        emit_progress: bool,
+        object_columns: usize,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
@@ -2039,6 +2052,8 @@ where
                 tx,
                 frontier,
                 strict: !with_snapshot,
+                emit_progress,
+                object_columns,
             }),
         ))
         .await;

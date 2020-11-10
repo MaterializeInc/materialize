@@ -667,6 +667,8 @@ pub struct TailSinkConnector {
     pub tx: comm::mpsc::Sender<Vec<Row>>,
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
+    pub emit_progress: bool,
+    pub object_columns: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

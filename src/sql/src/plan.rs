@@ -137,6 +137,8 @@ pub enum Plan {
         with_snapshot: bool,
         ts: Option<Timestamp>,
         copy_to: Option<CopyFormat>,
+        emit_progress: bool,
+        object_columns: usize,
     },
     SendRows(Vec<Row>),
     ExplainPlan {
