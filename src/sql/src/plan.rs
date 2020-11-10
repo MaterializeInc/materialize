@@ -34,7 +34,6 @@ use serde::{Deserialize, Serialize};
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SourceConnector};
 use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
-use statement::describe_statement;
 
 use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use crate::catalog::Catalog;
@@ -292,17 +291,13 @@ pub fn plan(
     statement::handle_statement(pcx, catalog, stmt, params)
 }
 
-/// Determines the type of the rows that will be returned by `stmt` and the type
-/// of the parameters required by `stmt`. If the statement will not produce a
-/// result set (e.g., most `CREATE` or `DROP` statements), no `RelationDesc`
-/// will be returned. If the query uses no parameters, then the returned vector
-/// of types will be empty.
+/// Creates a description of the purified statement `stmt`.
+///
+/// See the documentation of [`StatementDesc`] for details.
 pub fn describe(
     catalog: &dyn Catalog,
     stmt: Statement,
     param_types: &[Option<pgrepr::Type>],
-) -> Result<(StatementDesc, Vec<pgrepr::Type>), anyhow::Error> {
-    let desc = describe_statement(catalog, stmt, param_types)?;
-    let types = desc.param_types.iter().map(pgrepr::Type::from).collect();
-    Ok((desc, types))
+) -> Result<StatementDesc, anyhow::Error> {
+    statement::describe_statement(catalog, stmt, param_types)
 }

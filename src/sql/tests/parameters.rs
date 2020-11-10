@@ -78,8 +78,8 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
     for (sql, types) in test_cases {
         println!("> {}", sql);
         let stmt = sql::parse::parse(sql.into())?.into_element();
-        let (_desc, param_types) = sql::plan::describe(&DummyCatalog, stmt, &[])?;
-        assert_eq!(param_types, types);
+        let desc = sql::plan::describe(&DummyCatalog, stmt, &[])?;
+        assert_eq!(desc.param_types, types);
     }
     Ok(())
 }
