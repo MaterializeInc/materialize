@@ -24,6 +24,12 @@ Field | Use
 _object&lowbar;name_ | The item you want to tail
 _timestamp&lowbar;expression_ | The logical time to tail from onwards (either a number of milliseconds since the Unix epoch, or a `TIMESTAMP` or `TIMESTAMPTZ`).
 
+Supported `option` values:
+
+Name | Type
+-----|-------
+`SNAPSHOT` | `bool`, see [SNAPSHOT](#snapshot)
+
 ## Details
 
 ### Output
@@ -48,16 +54,25 @@ string in a trailing [`text`](/sql/types/text) column.
 a [`COPY TO`](/sql/copy-to) statement.
 {{</ version-changed >}}
 
+{{< version-changed v0.5.2 >}}
+`TAIL` is now guaranteed to send timestamps in non-decreasing order.
+{{</ version-changed >}}
+
+{{< version-changed v0.5.2 >}}
+Syntax has changed. `WITH SNAPSHOT` is now `WITH (SNAPSHOT)`.
+`WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
+{{</ version-changed >}}
+
 ### AS OF
 
 `AS OF` is the specific point in time to start reporting all events for a given `TAIL`. If you don't
 use `AS OF`, Materialize will pick a timestamp itself.
 
-### WITH SNAPSHOT or WITHOUT SNAPSHOT
+### SNAPSHOT
 
 By default, each TAIL is created with a `SNAPSHOT` which contains the results of the query at its `AS OF` timestamp.
 Any further updates to these results are produced at the time when they occur. To only see results after the
-`AS OF` timestamp, specify `WITHOUT SNAPSHOT`.
+`AS OF` timestamp, specify `WITH (SNAPSHOT = false)`.
 
 ## Example
 

@@ -51,6 +51,8 @@ Wrap your release notes at the 80 character mark.
 - Support the [`pg_typeof` function](/sql/functions#postgresql-compatibility-func).
 - [`COPY TO`](/sql/copy-to) now supports `FORMAT binary`.
 - [`TAIL`](/sql/tail) is now guaranteed to produce output ordered by timestamp.
+- Syntax for [`TAIL`](/sql/tail) has changed. `WITH SNAPSHOT` is now
+  `WITH (SNAPSHOT)`. `WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
 
 {{% version-header v0.5.1 %}}
 
@@ -352,7 +354,7 @@ Wrap your release notes at the 80 character mark.
   for `CREATE SINK` to provide more control over what data the sink will
   produce.
 
-- Change the default [`TAIL` snapshot behavior](/sql/tail/#with-snapshot-or-without-snapshot)
+- Change the default [`TAIL` snapshot behavior](/sql/tail/#snapshot)
   from `WITHOUT SNAPSHOT` to `WITH SNAPSHOT`. **Backwards-incompatible change.**
 
 - Actively shut down [Kafka sinks](https://materialize.com/docs/sql/create-sink/#kafka-sinks)

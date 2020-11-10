@@ -160,12 +160,12 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     assert!(tail_reader.next().is_none());
     drop(tail_reader);
 
-    // Now tail WITHOUT SNAPSHOT AS OF each timestamp, verifying that when we do so we only see events
+    // Now tail WITH (SNAPSHOT = false) AS OF each timestamp, verifying that when we do so we only see events
     // that occur as of or later than that timestamp.
     for (ts, _) in &events {
         let cancel_token = client.cancel_token();
         let q = format!(
-            "COPY (TAIL dynamic_csv WITHOUT SNAPSHOT AS OF {}) TO STDOUT",
+            "COPY (TAIL dynamic_csv WITH (SNAPSHOT = false) AS OF {}) TO STDOUT",
             ts - 1
         );
         let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
@@ -228,7 +228,7 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     thread::sleep(Duration::from_millis(100));
 
     let mut tail_reader = client
-        .copy_out("COPY (TAIL foo WITHOUT SNAPSHOT) TO STDOUT")?
+        .copy_out("COPY (TAIL foo WITH (SNAPSHOT = false)) TO STDOUT")?
         .split(b'\n');
     let mut without_snapshot_count = 0;
     while let Some(_value) = tail_reader.next().transpose()? {
@@ -238,7 +238,7 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     drop(tail_reader);
 
     let mut tail_reader = client
-        .copy_out("COPY (TAIL foo WITH SNAPSHOT) TO STDOUT")?
+        .copy_out("COPY (TAIL foo WITH (SNAPSHOT)) TO STDOUT")?
         .split(b'\n');
     let mut with_snapshot_count = 0;
     while let Some(_value) = tail_reader.next().transpose()? {
