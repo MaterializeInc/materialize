@@ -20,9 +20,9 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 
 ## Details
 
-### Output format for `SHOW FULL VIEW`
+### Output format for `SHOW FULL VIEWS`
 
-`SHOW FULL VIEW`'s output is a table, with this structure:
+`SHOW FULL VIEWS`'s output is a table, with this structure:
 
 ```nofmt
  name  | type | materialized
@@ -76,11 +76,6 @@ SHOW FULL VIEWS
 -------------------------+------+--------------
  my_nonmaterialized_view | user | f
  my_materialized_view    | user | t
-```
-
-```sql
-CREATE VIEW my_nonmaterialized_view AS
-    SELECT col2, col3 FROM my_materialized_view;
 ```
 
 ## Related pages
