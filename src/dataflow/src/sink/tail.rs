@@ -34,6 +34,7 @@ pub fn tail<G>(
 {
     let mut tx = block_on(connector.tx.connect()).expect("tail transmitter failed");
     let mut packer = RowPacker::new();
+    let mut cols = 0;
     stream.sink(Pipeline, &format!("tail-{}", id), move |input| {
         input.for_each(|_, batches| {
             let mut results = vec![];
@@ -50,6 +51,9 @@ pub fn tail<G>(
                             };
                             if should_emit {
                                 packer.push(Datum::Decimal(Significand::new(i128::from(*time))));
+                                if connector.emit_timestamps {
+                                    packer.push(Datum::False);
+                                }
                                 packer.push(Datum::Int64(i64::cast_from(*diff)));
                                 packer.extend_by_row(row);
                                 // Add the unpacked timestamp so we can sort by them later.
@@ -66,6 +70,31 @@ pub fn tail<G>(
             // though it is slower because it will produce deterministic results since the
             // cursor will always produce rows in the same order.
             results.sort_by_key(|(time, _)| *time);
+
+            if connector.emit_timestamps && !batches.is_empty() {
+                // The user has request timestamp done messages. We've already sorted the
+                // results by timestamp so we can duplicate the last row's timestamp which is
+                // somewhat easier than using a batch.upper() antichain. This timestamp won't
+                // be reused any other batch because they are disjoint and strictly increasing.
+                let (time, _) = results.last().unwrap().clone();
+                packer.push(Datum::Decimal(Significand::new(i128::from(time))));
+                packer.push(Datum::True);
+                // Fill in all table columns with NULL. Determine the number of columns
+                // by iterating through a row and skipping the first two that we add by
+                // hand. Remember this value and only iterate once because the iteration
+                // involves decoding the row datum bytes which is slow.
+                if cols == 0 {
+                    let (_, row) = results.last().unwrap();
+                    // The skip(2) skips the timestamp and done columns, leaving diff + all columns
+                    // in thing being tailed.
+                    cols = row.iter().skip(2).count();
+                }
+                for _ in 0..cols {
+                    packer.push(Datum::Null);
+                }
+                results.push((time, packer.finish_and_reuse()));
+            }
+
             let results: Vec<Row> = results.into_iter().map(|(_, row)| row).collect();
 
             // TODO(benesch): this blocks the Timely thread until the send

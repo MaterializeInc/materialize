@@ -198,15 +198,19 @@ pub fn describe_statement(
             }))
         }
 
-        Statement::Tail(TailStatement { name, .. }) => {
+        Statement::Tail(TailStatement { name, options, .. }) => {
             let name = scx.resolve_item(name)?;
             let sql_object = scx.catalog.get_item(&name);
+            let options = TailOptions::new(options)?;
             const MAX_U64_DIGITS: u8 = 20;
-            let desc = RelationDesc::empty()
-                .with_column(
-                    "timestamp",
-                    ScalarType::Decimal(MAX_U64_DIGITS, 0).nullable(false),
-                )
+            let mut desc = RelationDesc::empty().with_column(
+                "timestamp",
+                ScalarType::Decimal(MAX_U64_DIGITS, 0).nullable(false),
+            );
+            if options.timestamps.unwrap_or(false) {
+                desc = desc.with_column("done", ScalarType::Bool.nullable(false));
+            }
+            let desc = desc
                 .with_column("diff", ScalarType::Int64.nullable(true))
                 .concat(sql_object.desc()?.clone());
             StatementDesc::new(Some(desc))
@@ -362,6 +366,7 @@ fn handle_tail(
                 id: entry.id(),
                 ts,
                 with_snapshot: options.snapshot.unwrap_or(true),
+                emit_timestamps: options.timestamps.unwrap_or(false),
                 copy_to,
             })
         }
@@ -1993,4 +1998,5 @@ with_options! { struct CopyOptions {
 
 with_options! { struct TailOptions {
     snapshot: bool,
+    timestamps: bool,
 } }
