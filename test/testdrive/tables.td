@@ -183,6 +183,12 @@ NULL value in column a violates not-null constraint
 
 > INSERT INTO v VALUES (now(), mz_logical_timestamp());
 
+! CREATE INDEX ON v (now())
+now cannot be used in static queries
+
+! CREATE INDEX ON v (mz_logical_timestamp())
+mz_logical_timestamp cannot be used in static queries
+
 > DROP TABLE IF EXISTS s;
 
 > DROP TABLE t;

@@ -894,23 +894,25 @@ impl RelationExpr {
         self.visit1_mut(|e| e.visit_mut_pre(f))
     }
 
-    /// Mutably visit all [`ScalarExpr`]s in the relation expression.
-    pub fn visit_scalars_mut<F>(&mut self, f: &mut F)
+    /// Fallible visitor for the [`ScalarExpr`]s in the relation expression.
+    /// Note that this does not recurse into the `ScalarExpr`s themselves.
+    pub fn try_visit_scalars_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&mut ScalarExpr),
+        F: FnMut(&mut ScalarExpr) -> Result<(), E>,
     {
         // Match written out explicitly to reduce the possibility of adding a
         // new field with a `ScalarExpr` within and forgetting to account for it
         // here.
-        self.visit_mut(&mut |e| match e {
+        self.try_visit_mut(&mut |e| match e {
             RelationExpr::Map { scalars, input: _ }
             | RelationExpr::Filter {
                 predicates: scalars,
                 input: _,
             } => {
                 for s in scalars {
-                    s.visit_mut(f);
+                    f(s)?;
                 }
+                Ok(())
             }
             RelationExpr::FlatMap {
                 exprs,
@@ -919,8 +921,9 @@ impl RelationExpr {
                 demand: _,
             } => {
                 for expr in exprs {
-                    f(expr);
+                    f(expr)?;
                 }
+                Ok(())
             }
             RelationExpr::Join {
                 equivalences: keys,
@@ -931,9 +934,10 @@ impl RelationExpr {
             | RelationExpr::ArrangeBy { input: _, keys } => {
                 for key in keys {
                     for s in key {
-                        s.visit_mut(f);
+                        f(s)?;
                     }
                 }
+                Ok(())
             }
             RelationExpr::Reduce {
                 group_key,
@@ -942,11 +946,12 @@ impl RelationExpr {
                 monotonic: _,
             } => {
                 for s in group_key {
-                    s.visit_mut(f);
+                    f(s)?;
                 }
                 for agg in aggregates {
-                    agg.expr.visit_mut(f);
+                    f(&mut agg.expr)?;
                 }
+                Ok(())
             }
             RelationExpr::Constant { rows: _, typ: _ }
             | RelationExpr::Get { id: _, typ: _ }
@@ -969,8 +974,20 @@ impl RelationExpr {
             }
             | RelationExpr::Negate { input: _ }
             | RelationExpr::Threshold { input: _ }
-            | RelationExpr::Union { base: _, inputs: _ } => (),
+            | RelationExpr::Union { base: _, inputs: _ } => Ok(()),
         })
+    }
+
+    /// Like `try_visit_scalars_mut`, but the closure must be infallible.
+    pub fn visit_scalars_mut<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut ScalarExpr),
+    {
+        self.try_visit_scalars_mut(&mut |s| {
+            f(s);
+            Ok::<_, ()>(())
+        })
+        .unwrap()
     }
 
     /// Pretty-print this RelationExpr to a string.
