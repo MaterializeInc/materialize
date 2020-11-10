@@ -147,79 +147,75 @@ pub fn plan_insert_query(
         bail!("cannot insert into system table '{}'", table.name());
     }
 
-    // Plan the source.
-    let (expr, typ) = match source {
-        InsertSource::Query(Query {
-            body: SetExpr::Values(mut values),
-            ctes,
-            order_by,
-            limit,
-            offset,
-            fetch,
-        }) if ctes.is_empty()
-            && order_by.is_empty()
-            && limit.is_none()
-            && offset.is_none()
-            && fetch.is_none() =>
-        {
-            transform_ast::transform_values(scx, &mut values)?;
-            let type_hints = desc.iter_types().map(|typ| &typ.scalar_type).collect();
+    // Validate target column order.
+    let ordering = if columns.is_empty() {
+        (0..desc.arity()).collect()
+    } else {
+        let column_to_index: HashMap<&ColumnName, usize> = desc
+            .iter_names()
+            .filter_map(|x| x)
+            .enumerate()
+            .map(|(idx, name)| (name, idx))
+            .collect();
 
-            if columns.is_empty() {
-                let (expr, _scope) = plan_values(&qcx, &values.0, Some(type_hints))?;
-                let typ = qcx.relation_type(&expr);
-                (expr, typ)
+        let mut ordering = Vec::with_capacity(columns.len());
+        for c in columns {
+            let c = normalize::column_name(c);
+            if let Some(idx) = column_to_index.get(&c) {
+                ordering.push(*idx);
             } else {
-                if columns.iter().has_duplicates() {
-                    bail!("INSERT statement specifies duplicate column");
-                }
-
-                if columns.len() < desc.arity() {
-                    unsupported!("INSERT statement with incomplete column set");
-                }
-
-                let column_to_index: HashMap<&ColumnName, usize> = desc
-                    .iter_names()
-                    .filter_map(|x| x)
-                    .enumerate()
-                    .map(|(idx, name)| (name, idx))
-                    .collect();
-
-                let mut ordering = Vec::with_capacity(columns.len());
-                for c in columns {
-                    let c = normalize::column_name(c);
-                    if let Some(idx) = column_to_index.get(&c) {
-                        ordering.push(*idx);
-                    } else {
-                        bail!(
-                            "INSERT statement specifies column {}, but it is not present in table",
-                            c.as_str(),
-                        );
-                    }
-                }
-
-                let type_hints_projected = ordering.iter().map(|idx| type_hints[*idx]).collect();
-                let (expr, _scope) = plan_values(&qcx, &values.0, Some(type_hints_projected))?;
-
-                if expr.arity() != desc.arity() {
-                    bail!(
-                        "INSERT statement specifies {} expressions, but table has {} columns",
-                        expr.arity(),
-                        desc.arity()
-                    );
-                }
-
-                let expr = expr.project(ordering);
-                let typ = qcx.relation_type(&expr);
-                (expr, typ)
+                bail!(
+                    "INSERT statement specifies column {}, but it is not present in table",
+                    c.as_str(),
+                );
             }
         }
-        InsertSource::Query(..) => unsupported!("complicated INSERT bodies"),
+        ordering
+    };
+    if ordering.iter().has_duplicates() {
+        bail!("INSERT statement specifies duplicate column");
+    }
+    if ordering.len() < desc.arity() {
+        unsupported!("INSERT statement with incomplete column set");
+    }
+
+    // Plan the source.
+    let expr = match source {
+        InsertSource::Query(mut query) => {
+            transform_ast::transform_query(scx, &mut query)?;
+
+            match query {
+                // Special-case simple VALUES clauses, as PostgreSQL does, so
+                // we can pass in a type hint for literal coercions.
+                // See: https://github.com/postgres/postgres/blob/ad77039fa/src/backend/parser/analyze.c#L504-L518
+                Query {
+                    body: SetExpr::Values(values),
+                    ctes,
+                    order_by,
+                    limit: None,
+                    offset: None,
+                    fetch: None,
+                } if ctes.is_empty() && order_by.is_empty() => {
+                    let col_types = &desc.typ().column_types;
+                    let type_hints = ordering
+                        .iter()
+                        .map(|idx| &col_types[*idx].scalar_type)
+                        .collect();
+                    let (expr, _scope) = plan_values(&qcx, &values.0, Some(type_hints))?;
+                    expr
+                }
+                _ => {
+                    let (expr, _scope) = plan_subquery(&qcx, &query)?;
+                    expr
+                }
+            }
+        }
         InsertSource::DefaultValues => unsupported!("INSERT ... DEFAULT VALUES"),
     };
 
     // Validate that the arity of the source query matches the arity of the
     // target table.
+    let typ = qcx.relation_type(&expr);
     if typ.arity() != desc.arity() {
         bail!(
             "INSERT statement specifies {} columns, but table has {} columns",
@@ -233,7 +229,7 @@ pub fn plan_insert_query(
     let expr = cast_relation(
         &qcx,
         CastContext::Assignment,
-        expr,
+        expr.project(ordering),
         desc.iter_types().map(|ty| &ty.scalar_type),
     )
     .map_err(|e| {
@@ -419,7 +415,7 @@ fn plan_query(
     };
     match &q.body {
         SetExpr::Select(s) => {
-            let plan = plan_view_select_intrusive(qcx, s, &q.order_by)?;
+            let plan = plan_view_select(qcx, s, &q.order_by)?;
             let finishing = RowSetFinishing {
                 order_by: plan.order_by,
                 project: plan.project,
@@ -466,7 +462,14 @@ fn plan_subquery(qcx: &QueryContext, q: &Query) -> Result<(RelationExpr, Scope),
 
 fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match q {
-        SetExpr::Select(select) => plan_view_select(qcx, select),
+        SetExpr::Select(select) => {
+            let order_by_exprs = &[];
+            let plan = plan_view_select(qcx, select, order_by_exprs)?;
+            // We didn't provide any `order_by_exprs`, so `plan_view_select`
+            // should not have planned any ordering.
+            assert!(plan.order_by.is_empty());
+            Ok((plan.expr.project(plan.project), plan.scope))
+        }
         SetExpr::SetOperation {
             op,
             all,
@@ -668,7 +671,7 @@ struct SelectPlan {
 ///
 /// This function handles queries of the latter class. For queries of the
 /// former class, see `plan_view_select`.
-fn plan_view_select_intrusive(
+fn plan_view_select(
     qcx: &QueryContext,
     s: &Select,
     order_by_exprs: &[OrderByExpr],
@@ -1131,18 +1134,6 @@ fn plan_order_by_or_distinct_expr(
         })),
         None => plan_expr(ecx, expr)?.type_as_any(ecx),
     }
-}
-
-fn plan_view_select(
-    qcx: &QueryContext,
-    s: &Select,
-) -> Result<(RelationExpr, Scope), anyhow::Error> {
-    let order_by_exprs = &[];
-    let plan = plan_view_select_intrusive(qcx, s, order_by_exprs)?;
-    // We didn't provide any `order_by_exprs`, so `plan_view_select_intrusive`
-    // should not have planned any ordering.
-    assert!(plan.order_by.is_empty());
-    Ok((plan.expr.project(plan.project), plan.scope))
 }
 
 fn plan_table_with_joins<'a>(

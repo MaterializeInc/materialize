@@ -19,7 +19,7 @@ use uuid::Uuid;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, ObjectName, Query, Select, SelectItem, TableAlias,
-    TableWithJoins, Value, Values,
+    TableWithJoins, Value,
 };
 
 use crate::normalize;
@@ -34,10 +34,6 @@ pub fn transform_query<'a>(
 
 pub fn transform_expr(scx: &StatementContext, expr: &mut Expr) -> Result<(), anyhow::Error> {
     run_transforms(scx, |t, expr| t.visit_expr_mut(expr), expr)
-}
-
-pub fn transform_values(scx: &StatementContext, expr: &mut Values) -> Result<(), anyhow::Error> {
-    run_transforms(scx, |t, expr| t.visit_values_mut(expr), expr)
 }
 
 fn run_transforms<F, A>(scx: &StatementContext, mut f: F, ast: &mut A) -> Result<(), anyhow::Error>
