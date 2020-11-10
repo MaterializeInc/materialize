@@ -116,20 +116,20 @@ a    b
 1    "a"
 > DROP INDEX t_custom_idx
 
-> INSERT INTO t VALUES (2, 'b'), (3, 'c');
+> INSERT INTO t VALUES (2, 'b'), (NULL, 'c');
 
 > SELECT * FROM t;
-a    b
----------
-1    "a"
-2    "b"
-3    "c"
+a      b
+----------
+1      "a"
+2      "b"
+<null> "c"
 
 ! INSERT INTO t DEFAULT VALUES;
 INSERT ... DEFAULT VALUES not yet supported
 
 ! INSERT INTO t SELECT * FROM t;
-complicated INSERT bodies not yet supported
+INSERT statements cannot reference other relations
 
 ! INSERT INTO t VALUES (1);
 INSERT statement specifies 1 columns, but table has 2 columns
@@ -140,13 +140,15 @@ NULL value in column b violates not-null constraint
 ! INSERT INTO t VALUES ('d', 4);
 invalid input syntax for int4: invalid digit found in string: "d"
 
-! INSERT INTO t WITH v AS (SELECT 1) VALUES (1)
-complicated INSERT bodies not yet supported
+# Test that the INSERT body can be a SELECT query.
+> INSERT INTO t SELECT 3, 'd'
 
-> INSERT INTO t VALUES (NULL, 'd');
-
-# Test that literal coercion occurs.
+# Test that literal coercion occurs in simple VALUES clauses....
 > INSERT INTO t VALUES ('4', 'e')
+
+# ...but not in complicated VALUES clauses, per PostgreSQL.
+! INSERT INTO t VALUES ('4', 'e') LIMIT 0
+column "a" is of type int4 but expression is of type text
 
 # Test that assignment casts occur when possible...
 > INSERT INTO t VALUES (5.0, 'f');
@@ -168,8 +170,8 @@ a       b
 ------------
 1       "a"
 2       "b"
-3       "c"
-<null>  "d"
+<null>  "c"
+3       "d"
 4       "e"
 5       "f"
 7       "g"

@@ -147,6 +147,7 @@ pub fn plan_insert_query(
         bail!("cannot insert into system table '{}'", table.name());
     }
 
+    // Validate target column order.
     let ordering = if columns.is_empty() {
         (0..desc.arity()).collect()
     } else {
@@ -171,11 +172,9 @@ pub fn plan_insert_query(
         }
         ordering
     };
-
     if ordering.iter().has_duplicates() {
         bail!("INSERT statement specifies duplicate column");
     }
-
     if ordering.len() < desc.arity() {
         unsupported!("INSERT statement with incomplete column set");
     }
@@ -186,6 +185,9 @@ pub fn plan_insert_query(
             transform_ast::transform_query(scx, &mut query)?;
 
             match query {
+                // Special-case simple VALUES clauses, as PostgreSQL does, so
+                // we can pass in a type hint for literal coercions.
+                // See: https://github.com/postgres/postgres/blob/ad77039fa/src/backend/parser/analyze.c#L504-L518
                 Query {
                     body: SetExpr::Values(values),
                     ctes,
@@ -202,7 +204,10 @@ pub fn plan_insert_query(
                     let (expr, _scope) = plan_values(&qcx, &values.0, Some(type_hints))?;
                     expr
                 }
-                _ => unsupported!("complicated INSERT bodies"),
+                _ => {
+                    let (expr, _scope) = plan_subquery(&qcx, &query)?;
+                    expr
+                }
             }
         }
         InsertSource::DefaultValues => unsupported!("INSERT ... DEFAULT VALUES"),

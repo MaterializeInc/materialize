@@ -2318,7 +2318,10 @@ where
                 self.sequence_send_diffs(id, rows, affected_rows, MutationKind::Insert)
                     .await
             }
-            other => bail!("INSERT statement expected values, found {:?}", other),
+            // If we couldn't optimize the INSERT statement to a constant, it
+            // must depend on another relation. We're not yet sophisticated
+            // enough to handle this.
+            _ => bail!("INSERT statements cannot reference other relations"),
         }
     }
 
