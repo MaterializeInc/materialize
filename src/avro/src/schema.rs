@@ -311,11 +311,27 @@ impl SchemaPiece {
 /// Represents any valid Avro schema
 /// More information about Avro schemas can be found in the
 /// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Schema {
     pub(crate) named: Vec<NamedSchemaPiece>,
     pub(crate) indices: HashMap<FullName, usize>,
     pub top: SchemaPieceOrNamed,
+}
+
+impl std::fmt::Debug for Schema {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            f.write_str(
+                &serde_json::to_string_pretty(self)
+                    .unwrap_or_else(|e| format!("failed to serialize: {}", e)),
+            )
+        } else {
+            f.write_str(
+                &serde_json::to_string(self)
+                    .unwrap_or_else(|e| format!("failed to serialize: {}", e)),
+            )
+        }
+    }
 }
 
 impl Schema {
