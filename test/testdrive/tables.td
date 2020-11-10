@@ -179,12 +179,15 @@ a       b
 ! INSERT INTO s VALUES (1 + NULL);
 NULL value in column a violates not-null constraint
 
-> CREATE TABLE v (a timestamptz);
+> CREATE TABLE v (a timestamptz, b decimal(38, 0));
 
-> INSERT INTO v VALUES (now());
+> INSERT INTO v VALUES (now(), mz_logical_timestamp());
 
-! INSERT INTO v VALUES (mz_logical_timestamp());
-column "a" is of type timestamptz but expression is of type numeric
+! CREATE INDEX ON v (now())
+now cannot be used in static queries
+
+! CREATE INDEX ON v (mz_logical_timestamp())
+mz_logical_timestamp cannot be used in static queries
 
 > DROP TABLE IF EXISTS s;
 

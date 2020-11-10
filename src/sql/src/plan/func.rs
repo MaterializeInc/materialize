@@ -287,6 +287,12 @@ impl<R> fmt::Debug for FuncImpl<R> {
     }
 }
 
+impl From<NullaryFunc> for Operation<ScalarExpr> {
+    fn from(n: NullaryFunc) -> Operation<ScalarExpr> {
+        Operation::nullary(move |_ecx| Ok(ScalarExpr::CallNullary(n.clone())))
+    }
+}
+
 impl From<UnaryFunc> for Operation<ScalarExpr> {
     fn from(u: UnaryFunc) -> Operation<ScalarExpr> {
         Operation::unary(move |_ecx, e| Ok(e.call_unary(u.clone())))
@@ -1450,14 +1456,7 @@ lazy_static! {
                 vec![ListElementAny, ListAny] => BinaryFunc::ElementListConcat
             },
             "mz_logical_timestamp" => Scalar {
-                params!() => Operation::nullary(|ecx| {
-                    match ecx.qcx.lifetime {
-                        QueryLifetime::OneShot => {
-                            Ok(ScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp))
-                        }
-                        QueryLifetime::Static => bail!("mz_logical_timestamp cannot be used in static queries"),
-                    }
-                })
+                params!() => NullaryFunc::MzLogicalTimestamp
             },
             "mz_cluster_id" => Scalar {
                 params!() => Operation::nullary(mz_cluster_id)
