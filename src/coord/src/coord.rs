@@ -3180,7 +3180,8 @@ enum ExprPrepStyle {
     /// The expression is being prepared for installation in a static context,
     /// like in a view.
     Static,
-    /// The expression is being to rune once at the specified logical time.
+    /// The expression is being prepared to run once at the specified logical
+    /// time.
     OneShot { logical_time: u64 },
 }
 
