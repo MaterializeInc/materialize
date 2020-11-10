@@ -415,7 +415,7 @@ fn plan_query(
     };
     match &q.body {
         SetExpr::Select(s) => {
-            let plan = plan_view_select_intrusive(qcx, s, &q.order_by)?;
+            let plan = plan_view_select(qcx, s, &q.order_by)?;
             let finishing = RowSetFinishing {
                 order_by: plan.order_by,
                 project: plan.project,
@@ -462,7 +462,14 @@ fn plan_subquery(qcx: &QueryContext, q: &Query) -> Result<(RelationExpr, Scope),
 
 fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match q {
-        SetExpr::Select(select) => plan_view_select(qcx, select),
+        SetExpr::Select(select) => {
+            let order_by_exprs = &[];
+            let plan = plan_view_select(qcx, select, order_by_exprs)?;
+            // We didn't provide any `order_by_exprs`, so `plan_view_select`
+            // should not have planned any ordering.
+            assert!(plan.order_by.is_empty());
+            Ok((plan.expr.project(plan.project), plan.scope))
+        }
         SetExpr::SetOperation {
             op,
             all,
@@ -664,7 +671,7 @@ struct SelectPlan {
 ///
 /// This function handles queries of the latter class. For queries of the
 /// former class, see `plan_view_select`.
-fn plan_view_select_intrusive(
+fn plan_view_select(
     qcx: &QueryContext,
     s: &Select,
     order_by_exprs: &[OrderByExpr],
@@ -1127,18 +1134,6 @@ fn plan_order_by_or_distinct_expr(
         })),
         None => plan_expr(ecx, expr)?.type_as_any(ecx),
     }
-}
-
-fn plan_view_select(
-    qcx: &QueryContext,
-    s: &Select,
-) -> Result<(RelationExpr, Scope), anyhow::Error> {
-    let order_by_exprs = &[];
-    let plan = plan_view_select_intrusive(qcx, s, order_by_exprs)?;
-    // We didn't provide any `order_by_exprs`, so `plan_view_select_intrusive`
-    // should not have planned any ordering.
-    assert!(plan.order_by.is_empty());
-    Ok((plan.expr.project(plan.project), plan.scope))
 }
 
 fn plan_table_with_joins<'a>(
