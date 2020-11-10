@@ -247,9 +247,9 @@ fn show_sources<'a>(
         )
     } else {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type,
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
             FROM mz_catalog.mz_sources
-            WHERE schema_id = {} AND mz_internal.mz_is_materialized(id) AS materialized",
+            WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
             schema_spec.id,
         )
     };
