@@ -55,6 +55,7 @@ Wrap your release notes at the 80 character mark.
   `WITH (SNAPSHOT)`. `WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
 - Report an error without crashing when a query contains unexpected UTF-8
   characters, e.g., `SELECT ’1’` {{% gh 4755 %}}.
+- [`TAIL`](/sql/tail) now supports timestamp progress.
 
 {{% version-header v0.5.1 %}}
 

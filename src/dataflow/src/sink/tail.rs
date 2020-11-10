@@ -50,6 +50,9 @@ pub fn tail<G>(
                             };
                             if should_emit {
                                 packer.push(Datum::Decimal(Significand::new(i128::from(*time))));
+                                if connector.emit_progress {
+                                    packer.push(Datum::False);
+                                }
                                 packer.push(Datum::Int64(i64::cast_from(*diff)));
                                 packer.extend_by_row(row);
                                 // Add the unpacked timestamp so we can sort by them later.
@@ -66,7 +69,23 @@ pub fn tail<G>(
             // though it is slower because it will produce deterministic results since the
             // cursor will always produce rows in the same order.
             results.sort_by_key(|(time, _)| *time);
-            let results: Vec<Row> = results.into_iter().map(|(_, row)| row).collect();
+            let mut results: Vec<Row> = results.into_iter().map(|(_, row)| row).collect();
+
+            if connector.emit_progress {
+                if let Some(upper) = batch_upper(batches.last()) {
+                    // The user has requested progress messages and there's at least one
+                    // batch. All of the batches might have zero rows, so we do not depend on
+                    // results at all. Another benefit of using upper (instead of the largest row
+                    // time) is that the batch's upper may be larger than the row time.
+                    packer.push(Datum::Decimal(Significand::new(i128::from(upper))));
+                    packer.push(Datum::True);
+                    // Fill in the diff column and all table columns with NULL.
+                    for _ in 0..(connector.object_columns + 1) {
+                        packer.push(Datum::Null);
+                    }
+                    results.push(packer.finish_and_reuse());
+                }
+            }
 
             // TODO(benesch): this blocks the Timely thread until the send
             // completes. Hopefully it's just a quick write to a kernel buffer,
@@ -75,4 +94,13 @@ pub fn tail<G>(
             block_on(tx.send(results)).expect("tail send failed");
         });
     })
+}
+
+fn batch_upper(
+    batch: Option<&Rc<OrdValBatch<GlobalId, Row, u64, isize, usize>>>,
+) -> Option<Timestamp> {
+    batch
+        .map(|b| b.desc.upper().elements().get(0))
+        .flatten()
+        .copied()
 }
