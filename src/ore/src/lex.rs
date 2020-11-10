@@ -59,7 +59,7 @@ impl<'a> LexBuf<'a> {
     /// Panics if `prev` is called when the internal cursor is positioned at
     /// the beginning of the buffer.
     pub fn prev(&mut self) -> char {
-        if let Some(c) = self.buf.chars().rev().next() {
+        if let Some(c) = self.buf[..self.pos].chars().rev().next() {
             self.pos -= c.len_utf8();
             c
         } else {

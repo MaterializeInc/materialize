@@ -174,3 +174,25 @@ Parse error:
 1e10.1
     ^^
 extra token after expression
+
+# Test that unexpected unicode characters do not cause the error message to
+# crash when rendered...
+parse-statement
+SELECT ’hello’
+----
+error:
+Parse error:
+SELECT ’hello’
+       ^^^
+unexpected character in input: ’
+
+# ...though we completely mishandle the width of unicode chars when positioning
+# the caret at the moment.
+parse-statement
+SELECT '’fancy quotes inside a string are ok’’’’' ’
+----
+error:
+Parse error:
+SELECT '’fancy quotes inside a string are ok’’’’' ’
+                                                            ^^^
+unexpected character in input: ’

@@ -51,6 +51,8 @@ Wrap your release notes at the 80 character mark.
 - Support the [`pg_typeof` function](/sql/functions#postgresql-compatibility-func).
 - [`COPY TO`](/sql/copy-to) now supports `FORMAT binary`.
 - [`TAIL`](/sql/tail) is now guaranteed to produce output ordered by timestamp.
+- Report an error without crashing when a query contains unexpected UTF-8
+  characters, e.g., `SELECT ’1’` {{% gh 4755 %}}.
 
 {{% version-header v0.5.1 %}}
 
