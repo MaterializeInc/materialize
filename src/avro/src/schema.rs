@@ -321,9 +321,15 @@ pub struct Schema {
 impl std::fmt::Debug for Schema {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
-            f.write_str(&serde_json::to_string_pretty(self).unwrap())
+            f.write_str(
+                &serde_json::to_string_pretty(self)
+                    .unwrap_or_else(|e| format!("failed to serialize: {}", e)),
+            )
         } else {
-            f.write_str(&serde_json::to_string(self).unwrap())
+            f.write_str(
+                &serde_json::to_string(self)
+                    .unwrap_or_else(|e| format!("failed to serialize: {}", e)),
+            )
         }
     }
 }
