@@ -285,7 +285,7 @@ INSERT statement with incomplete column set not yet supported
 INSERT statement with incomplete column set not yet supported
 
 ! INSERT INTO t (a, b) VALUES (1);
-INSERT statement specifies 1 expressions, but table has 2 columns
+INSERT statement specifies 1 columns, but table has 2 columns
 
 ! INSERT INTO t (a, a) VALUES (1, 'str')
 INSERT statement specifies duplicate column
