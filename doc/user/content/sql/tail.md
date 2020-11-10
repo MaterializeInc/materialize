@@ -29,6 +29,7 @@ Supported `option` values:
 Name | Type
 -----|-------
 `SNAPSHOT` | `bool`, see [SNAPSHOT](#snapshot)
+`TIMESTAMPS` | `bool`, see [TIMESTAMPS](#timestamps)
 
 ## Details
 
@@ -39,6 +40,7 @@ Name | Type
 Field         | Type        | Represents
 --------------|-------------|-----------
 `timestamp`   | [`numeric`] | Materialize's internal logical timestamp. This is guaranteed to never decrease from any previous timestamp.
+`done`        | [`bool`]    | `false` if the timestamp is not yet complete. `true` if the timestamp is complete, in which case all further columns will be `NULL`.
 `diff`        | [`bigint`]  | Whether the record is an insert (`1`), delete (`-1`), or update (delete for old value, followed by insert of new value).
 column values | The row's columns' values, each as its own column.
 
@@ -64,6 +66,10 @@ Syntax has changed. `WITH SNAPSHOT` is now `WITH (SNAPSHOT)`.
 `WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
 {{</ version-changed >}}
 
+{{< version-changed v0.5.2 >}}
+The `TIMESTAMPS` option has been added.
+{{</ version-changed >}}
+
 ### AS OF
 
 `AS OF` is the specific point in time to start reporting all events for a given `TAIL`. If you don't
@@ -74,6 +80,10 @@ use `AS OF`, Materialize will pick a timestamp itself.
 By default, each TAIL is created with a `SNAPSHOT` which contains the results of the query at its `AS OF` timestamp.
 Any further updates to these results are produced at the time when they occur. To only see results after the
 `AS OF` timestamp, specify `WITH (SNAPSHOT = false)`.
+
+### TIMESTAMPS
+
+If the `TIMESTAMPS` option is specified (`WITH (TIMESTAMPS)`) an additional `done` column appears in the output. It is `false` if there may be more rows with the same timestamp. It is `true` if there will be no more rows at or before the timestamp, in which case all further columns will be `NULL`.
 
 ## Example
 
@@ -104,6 +114,22 @@ If we wanted to see the updates that had occurred in the last 30 seconds, we cou
 ```sql
 TAIL some_materialized_view AS OF now() - '30s'::INTERVAL
 ```
+
+If we wanted timestamp completion messages:
+
+```sql
+COPY (TAIL some_materialized_view WITH (TIMESTAMPS)) TO STDOUT
+```
+```
+1580000000000 f  1 insert_key
+1580000000001 f  1 will_delete
+1580000000003 f -1 will_delete
+1580000000003 t \N \N
+1580000000005 f  1 will_update_old
+1580000000007 f -1 will_update_old
+1580000000007 f  1 will_update_new
+1580000000007 t \N \N
+````
 
 ### Tailing through a driver
 
