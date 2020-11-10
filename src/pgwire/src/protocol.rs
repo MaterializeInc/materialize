@@ -265,24 +265,23 @@ where
                 .await;
         }
 
-        let stmt = self
+        let stmt_desc = self
             .coord_client
             .session()
             .get_prepared_statement(&stmt_name)
-            .unwrap();
-        if !stmt.param_types().is_empty() {
+            .unwrap()
+            .desc()
+            .clone();
+        if !stmt_desc.param_types.is_empty() {
             return self
                 .error(SqlState::UNDEFINED_PARAMETER, "there is no parameter $1")
                 .await;
         }
 
-        let send_desc = stmt.desc().relation_desc();
-        let relation_desc = stmt.desc().relation_desc.clone();
-
         // Bind.
         let portal_name = String::from("");
         let params = vec![];
-        let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
+        let result_formats = vec![pgrepr::Format::Text; stmt_desc.arity()];
         self.coord_client
             .session()
             .set_portal(
@@ -294,19 +293,21 @@ where
             .expect("unnamed statement to be present during simple query flow");
 
         // Maybe send row description.
-        if let Some(ref desc) = send_desc {
-            self.conn
-                .send(BackendMessage::RowDescription(
-                    message::row_description_from_desc(desc),
-                ))
-                .await?;
+        if let Some(relation_desc) = &stmt_desc.relation_desc {
+            if !stmt_desc.is_copy {
+                self.conn
+                    .send(BackendMessage::RowDescription(
+                        message::row_description_from_desc(relation_desc),
+                    ))
+                    .await?;
+            }
         }
 
         // Execute.
         match self.coord_client.execute(portal_name.clone()).await {
             Ok(response) => {
                 let max_rows = usize::MAX;
-                self.send_execute_response(response, relation_desc, portal_name, max_rows)
+                self.send_execute_response(response, stmt_desc.relation_desc, portal_name, max_rows)
                     .await
             }
             Err(e) => {
@@ -414,7 +415,7 @@ where
             }
         };
 
-        let param_types = stmt.param_types();
+        let param_types = &stmt.desc().param_types;
         if param_types.len() != raw_params.len() {
             let message = format!(
                 "bind message supplies {actual} parameters, \
@@ -515,7 +516,7 @@ where
             Some(stmt) => {
                 self.conn
                     .send(BackendMessage::ParameterDescription(
-                        stmt.param_types().to_vec(),
+                        stmt.desc().param_types.clone(),
                     ))
                     .await?
             }
@@ -580,15 +581,15 @@ where
             .session()
             .get_prepared_statement(&stmt_name)
             .expect("send_describe_statement called incorrectly");
-        match stmt.desc().relation_desc() {
-            Some(desc) => {
+        match &stmt.desc().relation_desc {
+            Some(desc) if !stmt.desc().is_copy => {
                 self.conn
                     .send(BackendMessage::RowDescription(
-                        message::row_description_from_desc(&desc),
+                        message::row_description_from_desc(desc),
                     ))
                     .await?
             }
-            None => self.conn.send(BackendMessage::NoData).await?,
+            _ => self.conn.send(BackendMessage::NoData).await?,
         }
         Ok(State::Ready)
     }

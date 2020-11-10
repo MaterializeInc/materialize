@@ -55,11 +55,16 @@ Wrap your release notes at the 80 character mark.
 {{% version-header v0.5.1 %}}
 
 - **Known issue.** [`COPY TO`](/sql/copy-to) panics if executed via the
-  ["simple query" protocol][pgwire-simple], which is notably used by the `psql` command-line client {{% gh 4742 %}}.
+  ["simple query" protocol][pgwire-simple], which is notably used by the
+  `psql` command-line client {{% gh 4742 %}}.
 
   A fix is available in the latest [unstable builds](/versions/#unstable-builds)
-  and will ship in v0.5.2. In the meantime, you can use a PostgreSQL driver that supports the ["extended query" protocol][pgwire-extended], and use only the
-  extended query protocol to issue `COPY TO` statements.
+  and will ship in v0.5.2.
+
+  Note that some PostgreSQL clients instead use the
+  ["extended query" protocol][pgwire-extended] to issue `COPY TO` statements,
+  or let you choose which protocol to use. If you are using one of these
+  clients, you can safely issue `COPY TO` statements in v0.5.1.
 
 - Send the rows returned by the [`TAIL`](/sql/tail) statement to the client
   normally (i.e., as if the rows were returned by a [`SELECT`](/sql/select)

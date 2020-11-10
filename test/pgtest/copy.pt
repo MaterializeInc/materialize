@@ -19,6 +19,7 @@ ReadyForQuery {"status":"I"}
 send
 Parse {"query": "COPY (VALUES (1, '2'), (3, '4'), (5, '\\\t\n\rtest\\N'), (6, NULL) ORDER BY column1) TO STDOUT"}
 Bind
+Describe
 Execute
 Sync
 ----
@@ -28,6 +29,8 @@ ReadyForQuery
 ----
 ParseComplete
 BindComplete
+ParameterDescription {"parameters":[]}
+NoData
 CopyOut {"format":"text","column_formats":["text","text"]}
 CopyData "1\t2\n"
 CopyData "3\t4\n"
