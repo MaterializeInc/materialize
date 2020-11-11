@@ -105,7 +105,16 @@ in the infrastructure repository. All of these tests can be run in parallel.
 - [ ] Let the tests run for at least 24 hours, with the following success criteria:
 
   - [ ] chbench: The ingest rate should not be slower than the previous release.
-  - [ ] billing-demo: The container should run and finish without error.
+  - [ ] billing-demo: The container should run and finish without error. You can get the exit code
+    from Docker:
+
+    ```bash
+    docker ps -a | grep -E 'STATUS|materialized|billing-demo'
+    ```
+
+    * `materialized` should be `up` (although see #4753 for the current breakage)
+    * `billing-demo` should be `Exited (0)`
+
   - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
     have remained at 0ms or similar for the entirety of the run.
 
@@ -205,6 +214,8 @@ in the infrastructure repository. All of these tests can be run in parallel.
 ## Finish
 
 - [ ] Update the current status at the top of this issue.
+- [ ] Create a slack alert for the next person to start the release (according to [the release
+  schedule][schedule]) in the #release channel.
 - [ ] Close this issue.
 
 [`doc/user/config.toml`]: https://github.com/MaterializeInc/materialize/blob/main/doc/user/config.toml
@@ -214,3 +225,4 @@ in the infrastructure repository. All of these tests can be run in parallel.
 [release notes]: https://github.com/MaterializeInc/materialize/tree/main/doc/user/content/release-notes.md
 [releases]: https://github.com/MaterializeInc/materialize/releases
 [v0.1.2]: https://github.com/MaterializeInc/materialize/releases/tag/v0.1.2
+[schedule]: https://docs.google.com/spreadsheets/d/1kd0Tlkr-dKClFLMJuSxhXgcikiZUcKrEFwdc53CBHy0
