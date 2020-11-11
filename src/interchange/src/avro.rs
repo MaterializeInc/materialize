@@ -118,6 +118,7 @@ pub enum EnvelopeType {
 pub enum RowCoordinates {
     MySql { pos: usize, row: usize },
     Postgres { lsn: usize },
+    Unknown,
 }
 
 #[derive(Debug)]
@@ -299,9 +300,11 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                 return Err(DecodeError::Custom("no file".to_string()).into());
             }
             RowCoordinates::MySql { pos, row }
-        } else {
+        } else if pg_any {
             let lsn = lsn.ok_or_else(|| DecodeError::Custom("no lsn".to_string()))? as usize;
             RowCoordinates::Postgres { lsn }
+        } else {
+            RowCoordinates::Unknown
         };
         Ok(DebeziumSourceCoordinates { snapshot, row })
     }
@@ -1335,6 +1338,7 @@ impl DebeziumDeduplicationState {
         let (pos, row) = match row {
             RowCoordinates::MySql { pos, row } => (pos, row),
             RowCoordinates::Postgres { lsn } => (lsn, 0),
+            RowCoordinates::Unknown => return true,
         };
 
         // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
@@ -1911,6 +1915,7 @@ impl Decoder {
                     // TODO - avoid the unnecessary utf8 check here.
                     RowCoordinates::MySql { .. } => std::str::from_utf8(&self.buf2)?,
                     RowCoordinates::Postgres { .. } => "",
+                    RowCoordinates::Unknown { .. } => "",
                 };
                 dedup.should_use_record(
                     file,
