@@ -48,11 +48,29 @@ CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
 CreateTable(CreateTableStatement { name: ObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Int, collation: None, options: [] }], constraints: [], with_options: [Value { name: Ident("foo"), value: String("bar") }, Value { name: Ident("a"), value: Number("123") }], if_not_exists: false })
 
 parse-statement
+CREATE TABLE t
+----
+error:
+Parse error:
+CREATE TABLE t
+              ^
+Expected left parenthesis, found EOF
+
+parse-statement
+CREATE TABLE t ()
+----
+CREATE TABLE t ()
+=>
+CreateTable(CreateTableStatement { name: ObjectName([Ident("t")]), columns: [], constraints: [], with_options: [], if_not_exists: false })
+
+parse-statement
 CREATE TABLE foo (bar int,)
 ----
-CREATE TABLE foo (bar int)
-=>
-CreateTable(CreateTableStatement { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: Int, collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false })
+error:
+Parse error:
+CREATE TABLE foo (bar int,)
+                          ^
+Expected column name or constraint definition, found right parenthesis
 
 parse-statement
 CREATE TABLE foo (bar int list)
