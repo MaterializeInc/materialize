@@ -185,12 +185,15 @@ pub struct Select {
 
 impl AstDisplay for Select {
     fn fmt(&self, f: &mut AstFormatter) {
-        f.write_str("SELECT ");
+        f.write_str("SELECT");
         if let Some(distinct) = &self.distinct {
-            f.write_node(distinct);
             f.write_str(" ");
+            f.write_node(distinct);
         }
-        f.write_node(&display::comma_separated(&self.projection));
+        if !self.projection.is_empty() {
+            f.write_str(" ");
+            f.write_node(&display::comma_separated(&self.projection));
+        }
         if !self.from.is_empty() {
             f.write_str(" FROM ");
             f.write_node(&display::comma_separated(&self.from));

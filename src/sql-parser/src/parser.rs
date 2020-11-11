@@ -2516,7 +2516,14 @@ impl Parser {
         } else {
             None
         };
-        let projection = self.parse_comma_separated(Parser::parse_select_item)?;
+
+        let projection = match self.peek_token() {
+            // An empty target list is permissible to match PostgreSQL, which
+            // permits these for symmetry with zero column tables.
+            Some(Token::Keyword(kw)) if kw.is_reserved_in_column_alias() => vec![],
+            Some(Token::Semicolon) | None => vec![],
+            _ => self.parse_comma_separated(Parser::parse_select_item)?,
+        };
 
         // Note that for keywords to be properly handled here, they need to be
         // added to `RESERVED_FOR_COLUMN_ALIAS` / `RESERVED_FOR_TABLE_ALIAS`,

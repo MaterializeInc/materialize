@@ -309,4 +309,10 @@ v       true
 > CREATE TABLE nocols ();
 ! INSERT INTO nocols VALUES (1)
 INSERT statement specifies 1 columns, but table has 0 columns
-> SELECT * FROM nocols
+> SELECT count(*) FROM nocols
+0
+> INSERT INTO nocols SELECT UNION ALL SELECT
+> SELECT count(*) FROM nocols
+2
+> SELECT count(DISTINCT *) FROM nocols
+1
