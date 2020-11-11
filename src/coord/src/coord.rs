@@ -72,7 +72,7 @@ use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
-use crate::persistence::{CacheConfig, Cacher};
+use crate::cache::{CacheConfig, Cacher};
 use crate::session::{PreparedStatement, Session};
 use crate::sink_connector;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
@@ -2793,7 +2793,7 @@ where
                     // already cached data that can be reused, and if so, augment the source
                     // connector to use that data before importing it into the dataflow.
                     let connector = if let Some(path) = self.catalog.cache_directory() {
-                        match crate::persistence::augment_connector(
+                        match crate::cache::augment_connector(
                             source.connector.clone(),
                             path,
                             self.catalog.cluster_id(),
