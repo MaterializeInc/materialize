@@ -104,7 +104,7 @@ pub fn lex(query: &str) -> Result<Vec<(Token, Range<usize>)>, ParserError> {
     let buf = &mut LexBuf::new(query);
     let mut tokens = vec![];
     while let Some(ch) = buf.next() {
-        let pos = buf.pos() - 1;
+        let pos = buf.pos() - ch.len_utf8();
         let token = match ch {
             _ if ch.is_ascii_whitespace() => continue,
             '-' if buf.consume('-') => {
@@ -139,6 +139,13 @@ pub fn lex(query: &str) -> Result<Vec<(Token, Range<usize>)>, ParserError> {
         };
         tokens.push((token, pos..buf.pos()))
     }
+
+    #[cfg(debug_assertions)]
+    for (_token, pos) in &tokens {
+        assert!(query.is_char_boundary(pos.start));
+        assert!(query.is_char_boundary(pos.end));
+    }
+
     Ok(tokens)
 }
 
