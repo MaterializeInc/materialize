@@ -72,7 +72,7 @@ use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
-use crate::persistence::{CacheConfig, Persister};
+use crate::persistence::{CacheConfig, Cacher};
 use crate::session::{PreparedStatement, Session};
 use crate::sink_connector;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
@@ -149,9 +149,9 @@ where
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
     logging_granularity: Option<u64>,
-    // Channel to communicate source status updates and shutdown notifications to the persister
+    // Channel to communicate source status updates and shutdown notifications to the cacher
     // thread.
-    persistence_tx: Option<PersistenceSender>,
+    cache_tx: Option<PersistenceSender>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -238,7 +238,7 @@ where
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    self.maybe_begin_persistence(*id, &source.connector).await;
+                    self.maybe_begin_caching(*id, &source.connector).await;
                 }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == *id) {
@@ -604,11 +604,11 @@ where
                 Message::Shutdown => {
                     ts_tx.send(TimestampMessage::Shutdown).unwrap();
 
-                    if let Some(persistence_tx) = &mut self.persistence_tx {
-                        persistence_tx
+                    if let Some(cache_tx) = &mut self.cache_tx {
+                        cache_tx
                             .send(PersistenceMessage::Shutdown)
                             .await
-                            .expect("failed to send shutdown message to persistence thread");
+                            .expect("failed to send shutdown message to caching thread");
                     }
                     broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown).await;
                     break;
@@ -1571,8 +1571,7 @@ where
                         .await;
                 }
 
-                self.maybe_begin_persistence(source_id, &source.connector)
-                    .await;
+                self.maybe_begin_caching(source_id, &source.connector).await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
@@ -1822,11 +1821,11 @@ where
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => {
                 for id in items.iter() {
-                    if let Some(persistence_tx) = &mut self.persistence_tx {
-                        persistence_tx
+                    if let Some(cache_tx) = &mut self.cache_tx {
+                        cache_tx
                             .send(PersistenceMessage::DropSource(*id))
                             .await
-                            .expect("failed to send DROP SOURCE to persistence thread");
+                            .expect("failed to send DROP SOURCE to cache thread");
                     }
                 }
                 ExecuteResponse::DroppedSource
@@ -2790,10 +2789,10 @@ where
                     dataflow.add_source_import(*id, SourceConnector::Local, table.desc.clone());
                 }
                 CatalogItem::Source(source) => {
-                    // If Materialize has persistence enabled, check to see if the source has any
-                    // already persisted data that can be reused, and if so, augment the source
+                    // If Materialize has caching enabled, check to see if the source has any
+                    // already cached data that can be reused, and if so, augment the source
                     // connector to use that data before importing it into the dataflow.
-                    let connector = if let Some(path) = self.catalog.persistence_directory() {
+                    let connector = if let Some(path) = self.catalog.cache_directory() {
                         match crate::persistence::augment_connector(
                             source.connector.clone(),
                             path,
@@ -2803,9 +2802,9 @@ where
                             Ok(Some(connector)) => Some(connector),
                             Ok(None) => None,
                             Err(e) => {
-                                log::error!("encountered error while trying to reuse persisted data for source {}: {}", id.to_string(), e);
+                                log::error!("encountered error while trying to reuse cached data for source {}: {}", id.to_string(), e);
                                 log::trace!(
-                                    "continuing without persisted data for source {}",
+                                    "continuing without cached data for source {}",
                                     id.to_string()
                                 );
                                 None
@@ -3006,21 +3005,21 @@ where
         .await;
     }
 
-    // Tell the persister to start persisting data for `id` if that source
-    // has persistence enabled and Materialize has persistence enabled.
-    // This function is a no-op if the persister has already started persisting
+    // Tell the cacher to start caching data for `id` if that source
+    // has caching enabled and Materialize has caching enabled.
+    // This function is a no-op if the cacher has already started caching
     // this source.
-    async fn maybe_begin_persistence(&mut self, id: GlobalId, source_connector: &SourceConnector) {
+    async fn maybe_begin_caching(&mut self, id: GlobalId, source_connector: &SourceConnector) {
         if let SourceConnector::External { connector, .. } = source_connector {
             if connector.persistence_enabled() {
-                if let Some(persistence_tx) = &mut self.persistence_tx {
-                    persistence_tx
+                if let Some(cache_tx) = &mut self.cache_tx {
+                    cache_tx
                         .send(PersistenceMessage::AddSource(self.catalog.cluster_id(), id))
                         .await
-                        .expect("failed to send CREATE SOURCE notification to persistence thread");
+                        .expect("failed to send CREATE SOURCE notification to caching thread");
                 } else {
                     log::error!(
-                        "trying to create a persistent source ({}) but persistence is disabled.",
+                        "trying to create a cached source ({}) but caching is disabled.",
                         id
                     );
                 }
@@ -3053,7 +3052,7 @@ pub async fn serve<C>(
         logging,
         data_directory,
         timestamp: timestamp_config,
-        cache: persistence_config,
+        cache: cache_config,
         logical_compaction_window,
         experimental_mode,
     }: Config<'_, C>,
@@ -3088,22 +3087,22 @@ where
         .await;
     }
 
-    let persistence_tx = if let Some(persistence_config) = &persistence_config {
-        let (persistence_tx, persistence_rx) = switchboard.mpsc();
+    let cache_tx = if let Some(cache_config) = &cache_config {
+        let (cache_tx, cache_rx) = switchboard.mpsc();
         broadcast(
             &mut broadcast_tx,
-            SequencedCommand::EnablePersistence(persistence_tx.clone()),
+            SequencedCommand::EnablePersistence(cache_tx.clone()),
         )
         .await;
-        let persistence_tx = persistence_tx
+        let cache_tx = cache_tx
             .connect()
             .await
-            .expect("failed to connect persistence tx");
+            .expect("failed to connect cache tx");
 
-        let mut persister = Persister::new(persistence_rx, persistence_config.clone());
-        tokio::spawn(async move { persister.run().await });
+        let mut cacher = Cacher::new(cache_rx, cache_config.clone());
+        tokio::spawn(async move { cacher.run().await });
 
-        Some(persistence_tx)
+        Some(cache_tx)
     } else {
         None
     };
@@ -3122,7 +3121,7 @@ where
             path: catalog_path.as_deref(),
             experimental_mode: Some(experimental_mode),
             enable_logging: logging.is_some(),
-            persistence_directory: persistence_config.map(|pc| pc.path),
+            cache_directory: cache_config.map(|c| c.path),
         })?;
         let cluster_id = catalog.cluster_id();
 
@@ -3140,7 +3139,7 @@ where
             timestamp_config,
             logical_compaction_window_ms: logical_compaction_window
                 .map(duration_to_timestamp_millis),
-            persistence_tx,
+            cache_tx,
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,

@@ -1392,9 +1392,9 @@ lazy_static! {
                         CatalogItemType::Source => {},
                         _ =>  bail!("{} is a {}, but internal_read_persisted_data requires a source", source, entry.item_type()),
                     }
-                    let persistence_directory = ecx.qcx.scx.catalog.persistence_directory();
+                    let persistence_directory = ecx.qcx.scx.catalog.cache_directory();
                     if persistence_directory.is_none() {
-                        bail!("source persistence is currently disabled. Try rerunning Materialize with '--experimental'.");
+                        bail!("source caching is currently disabled. Try rerunning Materialize with '--experimental'.");
                     }
                     Ok(TableFuncPlan {
                         func: TableFunc::ReadPersistedData {
