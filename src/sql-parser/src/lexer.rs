@@ -32,6 +32,7 @@
 //! ["Lexical Structure"]: https://www.postgresql.org/docs/current/sql-syntax-lexical.html
 //! [backend/parser/scan.l]: https://github.com/postgres/postgres/blob/90851d1d26f54ccb4d7b1bc49449138113d6ec83/src/backend/parser/scan.l
 
+use std::char;
 use std::convert::TryFrom;
 
 use ore::lex::LexBuf;
@@ -117,7 +118,7 @@ pub fn lex(query: &str) -> Result<Vec<(Token, usize)>, ParserError> {
             '\'' => Token::String(lex_string(buf)?),
             'x' | 'X' if buf.consume('\'') => Token::HexString(lex_string(buf)?),
             'e' | 'E' if buf.consume('\'') => lex_extended_string(buf)?,
-            'A'..='Z' | 'a'..='z' | '\u{80}'..='\u{ff}' | '_' => lex_ident(buf),
+            'A'..='Z' | 'a'..='z' | '_' | '\u{80}'..=char::MAX => lex_ident(buf),
             '"' => lex_quoted_ident(buf)?,
             '0'..='9' => lex_number(buf),
             '.' if matches!(buf.peek(), Some('0'..='9')) => lex_number(buf),
@@ -173,7 +174,7 @@ fn lex_multiline_comment(buf: &mut LexBuf) -> Result<(), ParserError> {
 fn lex_ident(buf: &mut LexBuf) -> Token {
     buf.prev();
     let word = buf.take_while(
-        |ch| matches!(ch, 'A'..='Z' | 'a'..='z' | '\u{80}'..='\u{ff}' | '0'..='9' | '$' | '_'),
+        |ch| matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '$' | '_' | '\u{80}'..=char::MAX),
     );
     match word.parse() {
         Ok(kw) => Token::Keyword(kw),

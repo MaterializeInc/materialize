@@ -160,16 +160,22 @@ error: extra token after expression
 # Test that unexpected unicode characters do not cause the error message to
 # crash when rendered...
 parse-statement
-SELECT ’hello’
+’hello’
 ----
-error: unexpected character in input: ’
-SELECT ’hello’
-       ^
+error: Expected a keyword at the beginning of a statement, found identifier
+’hello’
+^
 
 # ...and that the caret is positioned correctly.
 parse-statement
-SELECT '’fancy quotes inside a string are ok’’’’' ’
+SELECT '’fancy quotes inside a string are ok’’’’' AS alias ’
 ----
-error: unexpected character in input: ’
-SELECT '’fancy quotes inside a string are ok’’’’' ’
-                                                  ^
+error: Expected end of statement, found identifier
+SELECT '’fancy quotes inside a string are ok’’’’' AS alias ’
+                                                           ^
+
+# Test that multi-byte Unicode characters are valid identifiers.
+parse-statement roundtrip
+SELECT "😁" AS "😨😨"
+----
+SELECT "😁" AS "😨😨"
