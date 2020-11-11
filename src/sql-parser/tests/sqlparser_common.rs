@@ -20,8 +20,6 @@
 
 use std::error::Error;
 
-use datadriven::walk;
-
 use ore::collections::CollectionExt;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit::Visit;
@@ -29,55 +27,50 @@ use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{Expr, Ident};
 use sql_parser::parser;
 
-fn trim_one<'a>(s: &'a str) -> &'a str {
-    if s.ends_with('\n') {
-        &s[..s.len() - 1]
-    } else {
-        s
-    }
-}
-
 #[test]
 fn datadriven() {
+    use datadriven::{walk, TestCase};
+
+    fn parse_statement(tc: &TestCase) -> String {
+        let input = tc.input.strip_suffix('\n').unwrap_or(&tc.input);
+        match parser::parse_statements(input.to_owned()) {
+            Ok(s) => {
+                if s.len() != 1 {
+                    "expected exactly one statement".to_string()
+                } else if tc.args.get("roundtrip").is_some() {
+                    format!("{}\n", s.into_element().to_string())
+                } else {
+                    let stmt = s.into_element();
+                    // TODO(justin): it would be nice to have a middle-ground between this
+                    // all-on-one-line and {:#?}'s huge number of lines.
+                    format!("{}\n=>\n{:?}\n", stmt.to_string(), stmt)
+                }
+            }
+            Err(e) => format!("error:\n{}\n", e),
+        }
+    }
+
+    fn parse_scalar(tc: &TestCase) -> String {
+        match parser::parse_expr(tc.input.trim().to_owned()) {
+            Ok(s) => {
+                if tc.args.get("roundtrip").is_some() {
+                    format!("{}\n", s.to_string())
+                } else {
+                    // TODO(justin): it would be nice to have a middle-ground between this
+                    // all-on-one-line and {:#?}'s huge number of lines.
+                    format!("{:?}\n", s)
+                }
+            }
+            Err(e) => format!("error:\n{}\n", e),
+        }
+    }
+
     walk("tests/testdata", |f| {
         f.run(|test_case| -> String {
             match test_case.directive.as_str() {
-                "parse-statement" => {
-                    let sql = trim_one(&test_case.input).to_owned();
-                    match parser::parse_statements(sql) {
-                        Ok(s) => {
-                            if s.len() != 1 {
-                                "expected exactly one statement".to_string()
-                            } else if test_case.args.get("roundtrip").is_some() {
-                                format!("{}\n", s.into_element().to_string())
-                            } else {
-                                let stmt = s.into_element();
-                                // TODO(justin): it would be nice to have a middle-ground between this
-                                // all-on-one-line and {:#?}'s huge number of lines.
-                                format!("{}\n=>\n{:?}\n", stmt.to_string(), stmt)
-                            }
-                        }
-                        Err(e) => format!("error:\n{}\n", e),
-                    }
-                }
-                "parse-scalar" => {
-                    let sql = test_case.input.trim().to_owned();
-                    match parser::parse_expr(sql) {
-                        Ok(s) => {
-                            if test_case.args.get("roundtrip").is_some() {
-                                format!("{}\n", s.to_string())
-                            } else {
-                                // TODO(justin): it would be nice to have a middle-ground between this
-                                // all-on-one-line and {:#?}'s huge number of lines.
-                                format!("{:?}\n", s)
-                            }
-                        }
-                        Err(e) => format!("error:\n{}\n", e),
-                    }
-                }
-                dir => {
-                    panic!("unhandled directive {}", dir);
-                }
+                "parse-statement" => parse_statement(test_case),
+                "parse-scalar" => parse_scalar(test_case),
+                dir => panic!("unhandled directive {}", dir),
             }
         })
     });
