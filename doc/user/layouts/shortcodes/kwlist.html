@@ -1,0 +1,7 @@
+<ul>
+{{range split (readFile ("sql-grammar/keywords.txt")) "\n"}}
+  {{if and (not (hasPrefix . "#")) .}}
+    <li><code>{{.|upper}}</code></li>
+  {{end}}
+{{end}}
+</ul>
