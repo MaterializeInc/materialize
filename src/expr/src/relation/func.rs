@@ -23,8 +23,7 @@ use ore::cast::CastFrom;
 use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{
-    ColumnType, Datum, Diff, PersistedRecordIter, RelationType, Row, RowArena, RowPacker,
-    ScalarType,
+    CachedRecordIter, ColumnType, Datum, Diff, RelationType, Row, RowArena, RowPacker, ScalarType,
 };
 
 use crate::id::GlobalId;
@@ -764,7 +763,7 @@ impl TableFunc {
                 files_for_source(*source, persistence_directory)
                     .iter()
                     .flat_map(|e| {
-                        PersistedRecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
+                        CachedRecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
                     })
                     .map(|(e, r)| {
                         (

@@ -22,7 +22,7 @@ use dataflow::source::persistence::RecordFileMetadata;
 use dataflow::PersistenceMessage;
 use dataflow_types::{ExternalSourceConnector, SourceConnector};
 use expr::GlobalId;
-use repr::PersistedRecord;
+use repr::CachedRecord;
 
 // Interval at which Cacher will try to flush out pending records
 static CACHE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
@@ -39,7 +39,7 @@ pub struct CacheConfig {
 #[derive(Debug)]
 struct Partition {
     last_cached_offset: Option<i64>,
-    pending: Vec<PersistedRecord>,
+    pending: Vec<CachedRecord>,
 }
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ impl Source {
     fn insert_record(
         &mut self,
         partition_id: i32,
-        record: PersistedRecord,
+        record: CachedRecord,
     ) -> Result<(), anyhow::Error> {
         // Start tracking this partition id if we are not already
         self.partitions.entry(partition_id).or_insert(Partition {
@@ -455,8 +455,8 @@ fn augment_connector_inner(
 // the data for that range.
 fn extract_prefix(
     starting_offset: Option<i64>,
-    records: &mut Vec<PersistedRecord>,
-) -> Vec<PersistedRecord> {
+    records: &mut Vec<CachedRecord>,
+) -> Vec<CachedRecord> {
     records.sort_by(|a, b| (a.offset, a.predecessor.map(|p| -p)).cmp(&(b.offset, b.predecessor)));
 
     // Keep only the minimum predecessor we received for every offset
@@ -485,8 +485,8 @@ fn extract_prefix(
 fn test_extract_prefix() {
     use repr::Timestamp;
 
-    fn record(offset: i64, predecessor: Option<i64>) -> PersistedRecord {
-        PersistedRecord {
+    fn record(offset: i64, predecessor: Option<i64>) -> CachedRecord {
+        CachedRecord {
             offset,
             predecessor,
             timestamp: Timestamp::default(),

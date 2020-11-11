@@ -20,7 +20,7 @@ use anyhow::Error;
 use expr::GlobalId;
 use futures::sink::Sink;
 use log::error;
-use repr::PersistedRecord;
+use repr::CachedRecord;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -134,5 +134,5 @@ pub struct WorkerPersistenceData {
     /// Partition the record belongs to.
     pub partition_id: i32,
     /// The record itself.
-    pub record: PersistedRecord,
+    pub record: CachedRecord,
 }
