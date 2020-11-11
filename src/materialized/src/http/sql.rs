@@ -60,7 +60,7 @@ async fn query_sql_as_system(
     sql: String,
     params: Params,
 ) -> anyhow::Result<SqlResult> {
-    let stmts = parse_statements(sql)?;
+    let stmts = parse_statements(&sql)?;
     if stmts.len() != 1 {
         bail!("expected exactly 1 statement");
     }

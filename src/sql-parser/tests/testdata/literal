@@ -277,11 +277,9 @@ Array([Array([Value(Number("1")), Value(Number("2"))]), Array([Value(Number("3")
 parse-scalar
 ARRAY[3]]
 ----
-error:
-Parse error:
+error: extra token after expression
 ARRAY[3]]
         ^
-extra token after expression
 
 parse-scalar
 ARRAY[[[[1], [2]]], [[[3]]]]

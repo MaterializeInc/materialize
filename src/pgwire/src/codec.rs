@@ -297,6 +297,7 @@ impl Encoder<BackendMessage> for Codec {
                 message,
                 detail,
                 hint,
+                position,
             }) => {
                 dst.put_u8(b'S');
                 dst.put_string(severity.as_str());
@@ -311,6 +312,10 @@ impl Encoder<BackendMessage> for Codec {
                 if let Some(hint) = &hint {
                     dst.put_u8(b'H');
                     dst.put_string(hint);
+                }
+                if let Some(position) = &position {
+                    dst.put_u8(b'P');
+                    dst.put_string(&position.to_string());
                 }
                 dst.put_u8(b'\0');
             }

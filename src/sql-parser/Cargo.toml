@@ -19,6 +19,7 @@ stacker = "0.1.12"
 [dev-dependencies]
 datadriven = "0.4.0"
 matches = "0.1"
+unicode-width = "0.1.8"
 
 [build-dependencies]
 anyhow = "1.0.33"

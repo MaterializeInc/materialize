@@ -163,20 +163,16 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT (1.a)
 ----
-error:
-Parse error:
+error: Expected right parenthesis, found identifier
 SELECT (1.a)
           ^
-Expected right parenthesis, found identifier
 
 parse-statement
 SELECT (x).*.*
 ----
-error:
-Parse error:
+error: Expected end of statement, found dot
 SELECT (x).*.*
             ^
-Expected end of statement, found dot
 
 parse-statement roundtrip
 SELECT count(employee.*) FROM "order" JOIN employee ON "order".employee = employee.id
@@ -254,47 +250,37 @@ SELECT count(+ x) FROM customer
 parse-statement
 SELECT $
 ----
-error:
-Parse error:
+error: unterminated dollar-quoted string
 SELECT $
        ^
-unterminated dollar-quoted string
 
 parse-statement
 SELECT $q
 ----
-error:
-Parse error:
+error: unterminated dollar-quoted string
 SELECT $q
-       ^^
-unterminated dollar-quoted string
+       ^
 
 parse-statement
 SELECT $1$2
 ----
-error:
-Parse error:
+error: Expected end of statement, found parameter
 SELECT $1$2
-         ^^
-Expected end of statement, found parameter
+         ^
 
 parse-statement
 SELECT $18446744073709551616
 ----
-error:
-Parse error:
+error: invalid parameter number
 SELECT $18446744073709551616
-       ^^^^^^^^^^^^^^^^^^^^^
-invalid parameter number
+       ^
 
 parse-statement
 SELECT c FROM t WHERE c NOT (
 ----
-error:
-Parse error:
+error: Expected end of statement, found NOT
 SELECT c FROM t WHERE c NOT (
-                        ^^^
-Expected end of statement, found NOT
+                        ^
 
 parse-statement roundtrip
 SELECT name COLLATE "de_DE" FROM customer
@@ -457,11 +443,9 @@ CREATE TABLE foo (bar int)
 parse-statement roundtrip
 SELECT * FROM fn(1, 2) AS foo, schema.bar AS bar WITH (nolock)
 ----
-error:
-Parse error:
+error: Expected end of statement, found WITH
 SELECT * FROM fn(1, 2) AS foo, schema.bar AS bar WITH (nolock)
-                                                 ^^^^
-Expected end of statement, found WITH
+                                                 ^
 
 parse-statement
 SELECT * FROM t1, t2
@@ -529,11 +513,9 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT * FROM t1 natural
 ----
-error:
-Parse error:
+error: Expected a join type after NATURAL, found EOF
 SELECT * FROM t1 natural
                         ^
-Expected a join type after NATURAL, found EOF
 
 parse-statement
 SELECT c1, c2 FROM t1, t4 JOIN t2 ON t2.c = t1.c LEFT JOIN t3 USING(q, c) WHERE t4.c = t1.c
@@ -580,11 +562,9 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT * FROM (a NATURAL JOIN (b))
 ----
-error:
-Parse error:
+error: Expected joined table, found right parenthesis
 SELECT * FROM (a NATURAL JOIN (b))
                                 ^
-Expected joined table, found right parenthesis
 
 parse-statement
 SELECT c1 FROM t1 INNER JOIN t2 USING(c1)
@@ -617,11 +597,9 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT * FROM a OUTER JOIN b ON 1
 ----
-error:
-Parse error:
+error: Expected LEFT, RIGHT, or FULL, found OUTER
 SELECT * FROM a OUTER JOIN b ON 1
-                ^^^^^
-Expected LEFT, RIGHT, or FULL, found OUTER
+                ^
 
 parse-statement
 WITH
@@ -677,11 +655,9 @@ SELECT * FROM (((SELECT 1) UNION (SELECT 2)) AS t1 NATURAL JOIN t2)
 parse-statement roundtrip
 SELECT * FROM ((SELECT 1) AS t)
 ----
-error:
-Parse error:
+error: Expected joined table, found right parenthesis
 SELECT * FROM ((SELECT 1) AS t)
                               ^
-Expected joined table, found right parenthesis
 
 parse-statement roundtrip
 SELECT * FROM (VALUES (1), (2), (3))
@@ -763,11 +739,9 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT foo FROM LATERAL bar
 ----
-error:
-Parse error:
+error: Expected left parenthesis, found EOF
 SELECT foo FROM LATERAL bar
                            ^
-Expected left parenthesis, found EOF
 
 parse-statement
 SELECT 'foo' OFFSET 0 ROWS
@@ -966,11 +940,9 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT * FROM a LEFT JOIN LATERAL (b CROSS JOIN c)
 ----
-error:
-Parse error:
+error: Expected SELECT, VALUES, or a subquery in the query body, found identifier
 SELECT * FROM a LEFT JOIN LATERAL (b CROSS JOIN c)
                                    ^
-Expected SELECT, VALUES, or a subquery in the query body, found identifier
 
 # Ensure parsing AS OF is case-insensitive
 parse-statement

@@ -20,20 +20,41 @@
 
 use std::error::Error;
 
+use unicode_width::UnicodeWidthStr;
+
 use ore::collections::CollectionExt;
+use ore::fmt::FormatBuffer;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit::Visit;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{Expr, Ident};
-use sql_parser::parser;
+use sql_parser::parser::{self, ParserError};
 
 #[test]
 fn datadriven() {
     use datadriven::{walk, TestCase};
 
+    fn render_error(sql: &str, e: ParserError) -> String {
+        let mut s = format!("error: {}\n", e.message);
+
+        // Do our best to emulate psql in rendering a caret pointing at the
+        // offending character in the query. This makes it possible to detect
+        // incorrect error positions by visually scanning the test files.
+        let end = sql.len();
+        let line_start = sql[..e.pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let line_end = sql[e.pos..].find('\n').map(|p| e.pos + p).unwrap_or(end);
+        writeln!(s, "{}", &sql[line_start..line_end]);
+        for _ in 0..sql[line_start..e.pos].width() {
+            write!(s, " ");
+        }
+        writeln!(s, "^");
+
+        s
+    }
+
     fn parse_statement(tc: &TestCase) -> String {
         let input = tc.input.strip_suffix('\n').unwrap_or(&tc.input);
-        match parser::parse_statements(input.to_owned()) {
+        match parser::parse_statements(input) {
             Ok(s) => {
                 if s.len() != 1 {
                     "expected exactly one statement".to_string()
@@ -46,12 +67,13 @@ fn datadriven() {
                     format!("{}\n=>\n{:?}\n", stmt.to_string(), stmt)
                 }
             }
-            Err(e) => format!("error:\n{}\n", e),
+            Err(e) => render_error(input, e),
         }
     }
 
     fn parse_scalar(tc: &TestCase) -> String {
-        match parser::parse_expr(tc.input.trim().to_owned()) {
+        let input = tc.input.trim();
+        match parser::parse_expr(input) {
             Ok(s) => {
                 if tc.args.get("roundtrip").is_some() {
                     format!("{}\n", s.to_string())
@@ -61,7 +83,7 @@ fn datadriven() {
                     format!("{:?}\n", s)
                 }
             }
-            Err(e) => format!("error:\n{}\n", e),
+            Err(e) => render_error(input, e),
         }
     }
 
@@ -105,8 +127,8 @@ fn op_precedence() -> Result<(), Box<dyn Error>> {
         ("NOT a NOT LIKE b", "NOT (a NOT LIKE b)"),
         ("NOT a NOT IN ('a')", "NOT (a NOT IN ('a'))"),
     ] {
-        let left = parser::parse_expr((*actual).to_owned())?;
-        let mut right = parser::parse_expr((*expected).to_owned())?;
+        let left = parser::parse_expr(actual)?;
+        let mut right = parser::parse_expr(expected)?;
         RemoveParens.visit_expr_mut(&mut right);
 
         assert_eq!(left, right);
@@ -205,8 +227,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
         COMMIT;
         ROLLBACK;
-"#
-        .into(),
+"#,
     )?;
 
     #[rustfmt::skip]  // rustfmt loses the structure of the expected vector by wrapping all lines

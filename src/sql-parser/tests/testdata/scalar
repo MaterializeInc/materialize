@@ -125,11 +125,9 @@ CAST(c::jsonb->>'f' AS timestamptz)
 parse-scalar roundtrip
 id::numeric FROM customer
 ----
-error:
-Parse error:
+error: extra token after expression
 id::numeric FROM customer
-            ^^^^
-extra token after expression
+            ^
 
 parse-scalar roundtrip
 CAST(id AS dec)
@@ -256,11 +254,9 @@ Coalesce { exprs: [Identifier([Ident("foo")]), Identifier([Ident("bar")])] }
 parse-scalar
 COALESCE()
 ----
-error:
-Parse error:
+error: Expected an expression, found right parenthesis
 COALESCE()
          ^
-Expected an expression, found right parenthesis
 
 
 parse-scalar

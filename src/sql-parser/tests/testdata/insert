@@ -70,8 +70,6 @@ Insert(InsertStatement { table_name: ObjectName([Ident("customer")]), columns: [
 parse-statement
 INSERT INTO customer DEFAULT VALUES, DEFAULT VALUES
 ----
-error:
-Parse error:
+error: Expected end of statement, found comma
 INSERT INTO customer DEFAULT VALUES, DEFAULT VALUES
                                    ^
-Expected end of statement, found comma

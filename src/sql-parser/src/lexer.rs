@@ -33,7 +33,6 @@
 //! [backend/parser/scan.l]: https://github.com/postgres/postgres/blob/90851d1d26f54ccb4d7b1bc49449138113d6ec83/src/backend/parser/scan.l
 
 use std::convert::TryFrom;
-use std::ops::Range;
 
 use ore::lex::LexBuf;
 
@@ -88,8 +87,8 @@ impl Token {
 }
 
 macro_rules! bail {
-    ($buf:expr, $pos:expr, $($fmt:expr),*) => {
-        return Err(err($buf, $pos, format!($($fmt),*)))
+    ($pos:expr, $($fmt:expr),*) => {
+        return Err(ParserError::new($pos, format!($($fmt),*)))
     }
 }
 
@@ -100,7 +99,7 @@ macro_rules! bail {
 ///
 /// See the module documentation for more information about the lexical
 /// structure of SQL.
-pub fn lex(query: &str) -> Result<Vec<(Token, Range<usize>)>, ParserError> {
+pub fn lex(query: &str) -> Result<Vec<(Token, usize)>, ParserError> {
     let buf = &mut LexBuf::new(query);
     let mut tokens = vec![];
     while let Some(ch) = buf.next() {
@@ -135,15 +134,14 @@ pub fn lex(query: &str) -> Result<Vec<(Token, Range<usize>)>, ParserError> {
             ']' => Token::RBracket,
             #[rustfmt::skip]
             '+'|'-'|'*'|'/'|'<'|'>'|'='|'~'|'!'|'@'|'#'|'%'|'^'|'&'|'|'|'`'|'?' => lex_op(buf)?,
-            _ => bail!(buf, pos, "unexpected character in input: {}", ch),
+            _ => bail!(pos, "unexpected character in input: {}", ch),
         };
-        tokens.push((token, pos..buf.pos()))
+        tokens.push((token, pos))
     }
 
     #[cfg(debug_assertions)]
     for (_token, pos) in &tokens {
-        assert!(query.is_char_boundary(pos.start));
-        assert!(query.is_char_boundary(pos.end));
+        assert!(query.is_char_boundary(*pos));
     }
 
     Ok(tokens)
@@ -169,7 +167,7 @@ fn lex_multiline_comment(buf: &mut LexBuf) -> Result<(), ParserError> {
             _ => (),
         }
     }
-    bail!(buf, pos, "unterminated multiline comment")
+    bail!(pos, "unterminated multiline comment")
 }
 
 fn lex_ident(buf: &mut LexBuf) -> Token {
@@ -191,7 +189,7 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, ParserError> {
             Some('"') if buf.consume('"') => s.push('"'),
             Some('"') => break,
             Some(c) => s.push(c),
-            None => bail!(buf, pos, "unterminated quoted identifier"),
+            None => bail!(pos, "unterminated quoted identifier"),
         }
     }
     Ok(Token::Ident(s))
@@ -206,7 +204,7 @@ fn lex_string(buf: &mut LexBuf) -> Result<String, ParserError> {
                 Some('\'') if buf.consume('\'') => s.push('\''),
                 Some('\'') => break,
                 Some(c) => s.push(c),
-                None => bail!(buf, pos, "unterminated quoted string"),
+                None => bail!(pos, "unterminated quoted string"),
             }
         }
         if !lex_to_adjacent_string(buf) {
@@ -221,7 +219,7 @@ fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
         buf.next_n(n)
             .and_then(|s| u32::from_str_radix(s, 16).ok())
             .and_then(|codepoint| char::try_from(codepoint).ok())
-            .ok_or_else(|| err(buf, pos, "invalid unicode escape"))
+            .ok_or_else(|| ParserError::new(pos, "invalid unicode escape"))
     }
 
     // We do not support octal (\o) or hexadecimal (\x) escapes, since it is
@@ -233,13 +231,13 @@ fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
     fn lex_octal_escape(buf: &mut LexBuf) -> ParserError {
         let pos = buf.pos() - 2;
         buf.take_while(|ch| matches!(ch, '0'..='7'));
-        err(buf, pos, "octal escapes are not supported")
+        ParserError::new(pos, "octal escapes are not supported")
     }
 
     fn lex_hexadecimal_escape(buf: &mut LexBuf) -> ParserError {
         let pos = buf.pos() - 2;
         buf.take_while(|ch| matches!(ch, '0'..='9' | 'A'..='F' | 'a'..='f'));
-        err(buf, pos, "hexadecimal escapes are not supported")
+        ParserError::new(pos, "hexadecimal escapes are not supported")
     }
 
     let mut s = String::new();
@@ -260,10 +258,10 @@ fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
                     Some('0'..='7') => return Err(lex_octal_escape(buf)),
                     Some('x') => return Err(lex_hexadecimal_escape(buf)),
                     Some(c) => s.push(c),
-                    None => bail!(buf, pos, "unterminated quoted string"),
+                    None => bail!(pos, "unterminated quoted string"),
                 },
                 Some(c) => s.push(c),
-                None => bail!(buf, pos, "unterminated quoted string"),
+                None => bail!(pos, "unterminated quoted string"),
             }
         }
         if !lex_to_adjacent_string(buf) {
@@ -286,7 +284,7 @@ fn lex_dollar_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
     if let Some(s) = buf.take_to_delimiter(&tag) {
         Ok(Token::String(s.into()))
     } else {
-        Err(err(buf, pos, "unterminated dollar-quoted string"))
+        Err(ParserError::new(pos, "unterminated dollar-quoted string"))
     }
 }
 
@@ -295,7 +293,7 @@ fn lex_parameter(buf: &mut LexBuf) -> Result<Token, ParserError> {
     let n = buf
         .take_while(|ch| matches!(ch, '0'..='9'))
         .parse()
-        .map_err(|_| err(buf, pos, "invalid parameter number"))?;
+        .map_err(|_| ParserError::new(pos, "invalid parameter number"))?;
     Ok(Token::Parameter(n))
 }
 
@@ -367,18 +365,5 @@ fn lex_op(buf: &mut LexBuf) -> Result<Token, ParserError> {
         "!=" => Ok(Token::Op("<>".into())),
         // Emit all other operators as is.
         _ => Ok(Token::Op(s)),
-    }
-}
-
-/// Constructs an error with the provided message whose range begins at
-/// `pos` and ends at the buffer's current position.
-fn err<S>(buf: &LexBuf, pos: usize, message: S) -> ParserError
-where
-    S: Into<String>,
-{
-    ParserError {
-        sql: buf.inner().into(),
-        message: message.into(),
-        range: pos..buf.pos(),
     }
 }
