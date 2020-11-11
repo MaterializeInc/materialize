@@ -34,11 +34,9 @@ CreateTable(CreateTableStatement { name: ObjectName([Ident("uk_cities")]), colum
 parse-statement
 CREATE TABLE t (a int NOT NULL GARBAGE)
 ----
-error:
-Parse error:
+error: Expected column option, found identifier
 CREATE TABLE t (a int NOT NULL GARBAGE)
-                               ^^^^^^^
-Expected column option, found identifier
+                               ^
 
 parse-statement
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
@@ -50,11 +48,9 @@ CreateTable(CreateTableStatement { name: ObjectName([Ident("t")]), columns: [Col
 parse-statement
 CREATE TABLE t
 ----
-error:
-Parse error:
+error: Expected left parenthesis, found EOF
 CREATE TABLE t
               ^
-Expected left parenthesis, found EOF
 
 parse-statement
 CREATE TABLE t ()
@@ -66,11 +62,9 @@ CreateTable(CreateTableStatement { name: ObjectName([Ident("t")]), columns: [], 
 parse-statement
 CREATE TABLE foo (bar int,)
 ----
-error:
-Parse error:
+error: Expected column name or constraint definition, found right parenthesis
 CREATE TABLE foo (bar int,)
                           ^
-Expected column name or constraint definition, found right parenthesis
 
 parse-statement
 CREATE TABLE foo (bar int list)
@@ -96,11 +90,9 @@ CreateTable(CreateTableStatement { name: ObjectName([Ident("t")]), columns: [], 
 parse-statement
 CREATE TABLE tab (foo int,
 ----
-error:
-Parse error:
+error: Expected column name or constraint definition, found EOF
 CREATE TABLE tab (foo int,
                           ^
-Expected column name or constraint definition, found EOF
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT address_pkey PRIMARY KEY (address_id))
@@ -175,20 +167,16 @@ CreateDatabase(CreateDatabaseStatement { name: Ident("foo"), if_not_exists: true
 parse-statement
 CREATE DATABASE IF EXISTS foo
 ----
-error:
-Parse error:
+error: Expected NOT, found EXISTS
 CREATE DATABASE IF EXISTS foo
-                   ^^^^^^
-Expected NOT, found EXISTS
+                   ^
 
 parse-statement
 CREATE DATABASE foo.bar
 ----
-error:
-Parse error:
+error: Expected end of statement, found dot
 CREATE DATABASE foo.bar
                    ^
-Expected end of statement, found dot
 
 parse-statement
 CREATE SCHEMA foo.bar
@@ -207,11 +195,9 @@ CreateSchema(CreateSchemaStatement { name: ObjectName([Ident("foo")]), if_not_ex
 parse-statement
 CREATE SCHEMA IF EXISTS foo
 ----
-error:
-Parse error:
+error: Expected NOT, found EXISTS
 CREATE SCHEMA IF EXISTS foo
-                 ^^^^^^
-Expected NOT, found EXISTS
+                 ^
 
 parse-statement
 CREATE VIEW myschema.myview AS SELECT foo FROM bar
@@ -251,11 +237,9 @@ CreateView(CreateViewStatement { name: ObjectName([Ident("v")]), columns: [], wi
 parse-statement
 CREATE OR REPLACE VIEW IF NOT EXISTS v AS SELECT 1
 ----
-error:
-Parse error:
+error: Expected AS, found NOT
 CREATE OR REPLACE VIEW IF NOT EXISTS v AS SELECT 1
-                          ^^^
-Expected AS, found NOT
+                          ^
 
 parse-statement
 CREATE VIEW v WITH (foo = 'bar', a = 123) AS SELECT 1
@@ -354,11 +338,9 @@ CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names
 parse-statement
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
 ----
-error:
-Parse error:
+error: Expected VIEW or SOURCE after CREATE MATERIALIZED, found OR
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
-                    ^^
-Expected VIEW or SOURCE after CREATE MATERIALIZED, found OR
+                    ^
 
 parse-statement
 CREATE SOURCE foo FROM AVRO OCF '/tmp/bar'
@@ -433,11 +415,9 @@ CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names
 parse-statement
 CREATE SOURCE IF EXISTS foo FROM FILE 'bar' USING SCHEMA ''
 ----
-error:
-Parse error:
+error: Expected NOT, found EXISTS
 CREATE SOURCE IF EXISTS foo FROM FILE 'bar' USING SCHEMA ''
-                 ^^^^^^
-Expected NOT, found EXISTS
+                 ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
@@ -470,11 +450,9 @@ CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectN
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
 ----
-error:
-Parse error:
+error: Expected a list of columns in parentheses, found FORMAT
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
-                                                                   ^^^^^^
-Expected a list of columns in parentheses, found FORMAT
+                                                                   ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO AVRO OCF 'baz'
@@ -528,11 +506,9 @@ CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectN
 parse-statement
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
 ----
-error:
-Parse error:
+error: Expected NOT, found EXISTS
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
-               ^^^^^^
-Expected NOT, found EXISTS
+               ^
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
@@ -579,20 +555,16 @@ CreateIndex(CreateIndexStatement { name: None, on_name: ObjectName([Ident("tab")
 parse-statement
 CREATE DEFAULT INDEX ON tab (a, b)
 ----
-error:
-Parse error:
+error: Expected end of statement, found left parenthesis
 CREATE DEFAULT INDEX ON tab (a, b)
                             ^
-Expected end of statement, found left parenthesis
 
 parse-statement
 CREATE INDEX ON tab;
 ----
-error:
-Parse error:
+error: Expected left parenthesis, found semicolon
 CREATE INDEX ON tab;
                    ^
-Expected left parenthesis, found semicolon
 
 parse-statement
 CREATE INDEX ON tab (a, b)
@@ -604,29 +576,23 @@ CreateIndex(CreateIndexStatement { name: None, on_name: ObjectName([Ident("tab")
 parse-statement
 CREATE INDEX IF NOT EXISTS ON tab (a, b)
 ----
-error:
-Parse error:
+error: Expected index name, found ON
 CREATE INDEX IF NOT EXISTS ON tab (a, b)
-                           ^^
-Expected index name, found ON
+                           ^
 
 parse-statement
 CREATE INDEX myschema.ind ON foo(b)
 ----
-error:
-Parse error:
+error: Expected ON, found dot
 CREATE INDEX myschema.ind ON foo(b)
                      ^
-Expected ON, found dot
 
 parse-statement
 CREATE INDEX IF EXISTS myschema.ind ON foo(b)
 ----
-error:
-Parse error:
+error: Expected NOT, found EXISTS
 CREATE INDEX IF EXISTS myschema.ind ON foo(b)
-                ^^^^^^
-Expected NOT, found EXISTS
+                ^
 
 parse-statement
 DROP DATABASE mydb
@@ -645,11 +611,9 @@ DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: true })
 parse-statement
 DROP DATABASE mydb.nope
 ----
-error:
-Parse error:
+error: Expected end of statement, found dot
 DROP DATABASE mydb.nope
                   ^
-Expected end of statement, found dot
 
 parse-statement
 DROP SCHEMA mydb.myschema
@@ -675,20 +639,16 @@ DropObjects(DropObjectsStatement { object_type: Table, if_exists: true, names: [
 parse-statement
 DROP TABLE
 ----
-error:
-Parse error:
+error: Expected identifier, found EOF
 DROP TABLE
           ^
-Expected identifier, found EOF
 
 parse-statement
 DROP TABLE IF EXISTS foo, bar CASCADE RESTRICT
 ----
-error:
-Parse error:
+error: Cannot specify both CASCADE and RESTRICT in DROP
 DROP TABLE IF EXISTS foo, bar CASCADE RESTRICT
-                              ^^^^^^^^^^^^^^^^
-Cannot specify both CASCADE and RESTRICT in DROP
+                                      ^
 
 parse-statement
 DROP VIEW myschema.myview
@@ -749,11 +709,9 @@ Tail(TailStatement { name: ObjectName([Ident("foo"), Ident("bar")]), options: [W
 parse-statement
 TAIL foo.bar WITH (SNAPSHOT false)
 ----
-error:
-Parse error:
+error: Expected equals sign, found FALSE
 TAIL foo.bar WITH (SNAPSHOT false)
-                            ^^^^^
-Expected equals sign, found FALSE
+                            ^
 
 parse-statement
 CREATE TABLE public.customer (
@@ -830,65 +788,51 @@ AlterIndexOptions(AlterIndexOptionsStatement { index_name: ObjectName([Ident("na
 parse-statement
 ALTER INDEX name SET ()
 ----
-error:
-Parse error:
+error: Expected identifier, found right parenthesis
 ALTER INDEX name SET ()
                       ^
-Expected identifier, found right parenthesis
 
 parse-statement
 ALTER INDEX name RESET ()
 ----
-error:
-Parse error:
+error: Expected identifier, found right parenthesis
 ALTER INDEX name RESET ()
                         ^
-Expected identifier, found right parenthesis
 
 parse-statement
 ALTER INDEX name SET (property)
 ----
-error:
-Parse error:
+error: Expected equals sign, found right parenthesis
 ALTER INDEX name SET (property)
                               ^
-Expected equals sign, found right parenthesis
 
 parse-statement
 ALTER INDEX name RESET (property = true)
 ----
-error:
-Parse error:
+error: Expected right parenthesis, found equals sign
 ALTER INDEX name RESET (property = true)
                                  ^
-Expected right parenthesis, found equals sign
 
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error:
-Parse error:
+error: Expected RENAME, found SET
 ALTER SOURCE name SET (property = true)
-                  ^^^
-Expected RENAME, found SET
+                  ^
 
 parse-statement
 ALTER VIEW name SET (property = true)
 ----
-error:
-Parse error:
+error: Expected RENAME, found SET
 ALTER VIEW name SET (property = true)
-                ^^^
-Expected RENAME, found SET
+                ^
 
 parse-statement
 ALTER SINK name SET (property = true)
 ----
-error:
-Parse error:
+error: Expected RENAME, found SET
 ALTER SINK name SET (property = true)
-                ^^^
-Expected RENAME, found SET
+                ^
 
 parse-statement
 ALTER INDEX name RENAME TO name2

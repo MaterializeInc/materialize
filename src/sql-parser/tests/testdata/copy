@@ -58,36 +58,28 @@ Copy(CopyStatement { relation: Table { name: ObjectName([Ident("t")]), columns: 
 parse-statement
 COPY t TO STDOUT ()
 ----
-error:
-Parse error:
+error: Expected identifier, found right parenthesis
 COPY t TO STDOUT ()
                   ^
-Expected identifier, found right parenthesis
 
 parse-statement
 COPY t TO STDIN
 ----
-error:
-Parse error:
+error: Expected STDOUT, found STDIN
 COPY t TO STDIN
-          ^^^^^
-Expected STDOUT, found STDIN
+          ^
 
 parse-statement
 COPY (select 1) FROM STDIN
 ----
-error:
-Parse error:
+error: queries not allowed in COPY FROM
 COPY (select 1) FROM STDIN
-                ^^^^
-queries not allowed in COPY FROM
+                ^
 
 # WITH must be followed by open paren.
 parse-statement
 COPY t TO STDOUT WITH
 ----
-error:
-Parse error:
+error: Expected left parenthesis, found EOF
 COPY t TO STDOUT WITH
                      ^
-Expected left parenthesis, found EOF

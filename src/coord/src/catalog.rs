@@ -283,7 +283,7 @@ impl CatalogItem {
         rename_self: bool,
     ) -> Result<CatalogItem, String> {
         let do_rewrite = |create_sql: String| -> Result<String, String> {
-            let mut create_stmt = sql::parse::parse(create_sql).unwrap().into_element();
+            let mut create_stmt = sql::parse::parse(&create_sql).unwrap().into_element();
             if rename_self {
                 sql::ast::transform::create_stmt_rename(&mut create_stmt, to_item_name.clone());
             }
@@ -1435,7 +1435,7 @@ impl Catalog {
         create_sql: String,
         pcx: PlanContext,
     ) -> Result<CatalogItem, anyhow::Error> {
-        let stmt = sql::parse::parse(create_sql)?.into_element();
+        let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable { table, .. } => CatalogItem::Table(Table {

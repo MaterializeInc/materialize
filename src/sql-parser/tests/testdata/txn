@@ -99,29 +99,23 @@ StartTransaction(StartTransactionStatement { modes: [IsolationLevel(Serializable
 parse-statement
 START TRANSACTION ISOLATION LEVEL BAD
 ----
-error:
-Parse error:
+error: Expected isolation level, found identifier
 START TRANSACTION ISOLATION LEVEL BAD
-                                  ^^^
-Expected isolation level, found identifier
+                                  ^
 
 parse-statement
 START TRANSACTION BAD
 ----
-error:
-Parse error:
+error: Expected end of statement, found identifier
 START TRANSACTION BAD
-                  ^^^
-Expected end of statement, found identifier
+                  ^
 
 parse-statement
 START TRANSACTION READ ONLY,
 ----
-error:
-Parse error:
+error: Expected transaction mode, found EOF
 START TRANSACTION READ ONLY,
                             ^
-Expected transaction mode, found EOF
 
 parse-statement
 SET TRANSACTION READ ONLY, READ WRITE, ISOLATION LEVEL SERIALIZABLE

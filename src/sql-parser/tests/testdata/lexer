@@ -32,20 +32,16 @@ SELECT 1, 2
 parse-statement roundtrip
 SELECT /* blah blah blah
 ----
-error:
-Parse error:
+error: unterminated multiline comment
 SELECT /* blah blah blah
-       ^^^^^^^^^^^^^^^^^
-unterminated multiline comment
+       ^
 
 parse-statement roundtrip
 SELECT @@/*
 ----
-error:
-Parse error:
+error: unterminated multiline comment
 SELECT @@/*
-         ^^
-unterminated multiline comment
+         ^
 
 # String adjacency.
 
@@ -63,21 +59,17 @@ SELECT 'foobarbaz'
 parse-statement roundtrip
 SELECT 'foo'  'bar'
 ----
-error:
-Parse error:
+error: Expected end of statement, found string literal
 SELECT 'foo'  'bar'
-              ^^^^^
-Expected end of statement, found string literal
+              ^
 
 parse-statement roundtrip
 SELECT e'foo'
 e'bar'
 ----
-error:
-Parse error:
+error: Expected end of statement, found string literal
 e'bar'
-^^^^^^
-Expected end of statement, found string literal
+^
 
 parse-statement roundtrip
 SELECT e'\u2713'
@@ -95,20 +87,16 @@ Value(String("az8\u{8}\n\u{c}\r\t✓👻"))
 parse-scalar
 e'\018'
 ----
-error:
-Parse error:
+error: octal escapes are not supported
 e'\018'
-  ^^^
-octal escapes are not supported
+  ^
 
 parse-scalar
 e'\x1fg'
 ----
-error:
-Parse error:
+error: hexadecimal escapes are not supported
 e'\x1fg'
-  ^^^^
-hexadecimal escapes are not supported
+  ^
 
 # Dollar string literals.
 
@@ -120,20 +108,16 @@ SELECT '$Postgre''s SQL', '$Postgre''s SQL', end
 parse-statement roundtrip
 SELECT $$POST
 ----
-error:
-Parse error:
+error: unterminated dollar-quoted string
 SELECT $$POST
-       ^^^^^^
-unterminated dollar-quoted string
+       ^
 
 parse-statement roundtrip
 SELECT $EOF$PostgreSQL$$eof$$
 ----
-error:
-Parse error:
+error: unterminated dollar-quoted string
 SELECT $EOF$PostgreSQL$$eof$$
-       ^^^^^^^^^^^^^^^^^^^^^^
-unterminated dollar-quoted string
+       ^
 
 # Numeric literals
 parse-scalar
@@ -169,30 +153,29 @@ Value(Number("1.1E10"))
 parse-scalar
 1e10.1
 ----
-error:
-Parse error:
+error: extra token after expression
 1e10.1
-    ^^
-extra token after expression
+    ^
 
 # Test that unexpected unicode characters do not cause the error message to
 # crash when rendered...
 parse-statement
-SELECT ’hello’
+’hello’
 ----
-error:
-Parse error:
-SELECT ’hello’
-       ^^^
-unexpected character in input: ’
+error: Expected a keyword at the beginning of a statement, found identifier
+’hello’
+^
 
-# ...though we completely mishandle the width of unicode chars when positioning
-# the caret at the moment.
+# ...and that the caret is positioned correctly.
 parse-statement
-SELECT '’fancy quotes inside a string are ok’’’’' ’
+SELECT '’fancy quotes inside a string are ok’’’’' AS alias ’
 ----
-error:
-Parse error:
-SELECT '’fancy quotes inside a string are ok’’’’' ’
-                                                            ^^^
-unexpected character in input: ’
+error: Expected end of statement, found identifier
+SELECT '’fancy quotes inside a string are ok’’’’' AS alias ’
+                                                           ^
+
+# Test that multi-byte Unicode characters are valid identifiers.
+parse-statement roundtrip
+SELECT "😁" AS "😨😨"
+----
+SELECT "😁" AS "😨😨"

@@ -345,26 +345,20 @@ SetVariable(SetVariableStatement { local: true, variable: Ident("timezone"), val
 parse-statement
 SET
 ----
-error:
-Parse error:
+error: Expected identifier, found EOF
 SET
    ^
-Expected identifier, found EOF
 
 parse-statement
 SET a b
 ----
-error:
-Parse error:
+error: Expected equals sign or TO, found identifier
 SET a b
       ^
-Expected equals sign or TO, found identifier
 
 parse-statement
 SET a =
 ----
-error:
-Parse error:
+error: Expected variable value, found EOF
 SET a =
        ^
-Expected variable value, found EOF

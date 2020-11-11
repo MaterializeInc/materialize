@@ -31,7 +31,7 @@
 //!            WHERE a > b AND b < 100 \
 //!            ORDER BY a DESC, b";
 //!
-//! let ast = parser::parse_statements(sql.to_string()).unwrap();
+//! let ast = parser::parse_statements(sql).unwrap();
 //! println!("AST: {:?}", ast);
 //! ```
 

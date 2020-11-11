@@ -20,64 +20,79 @@
 
 use std::error::Error;
 
-use datadriven::walk;
+use unicode_width::UnicodeWidthStr;
 
 use ore::collections::CollectionExt;
+use ore::fmt::FormatBuffer;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit::Visit;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{Expr, Ident};
-use sql_parser::parser;
-
-fn trim_one<'a>(s: &'a str) -> &'a str {
-    if s.ends_with('\n') {
-        &s[..s.len() - 1]
-    } else {
-        s
-    }
-}
+use sql_parser::parser::{self, ParserError};
 
 #[test]
 fn datadriven() {
+    use datadriven::{walk, TestCase};
+
+    fn render_error(sql: &str, e: ParserError) -> String {
+        let mut s = format!("error: {}\n", e.message);
+
+        // Do our best to emulate psql in rendering a caret pointing at the
+        // offending character in the query. This makes it possible to detect
+        // incorrect error positions by visually scanning the test files.
+        let end = sql.len();
+        let line_start = sql[..e.pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let line_end = sql[e.pos..].find('\n').map(|p| e.pos + p).unwrap_or(end);
+        writeln!(s, "{}", &sql[line_start..line_end]);
+        for _ in 0..sql[line_start..e.pos].width() {
+            write!(s, " ");
+        }
+        writeln!(s, "^");
+
+        s
+    }
+
+    fn parse_statement(tc: &TestCase) -> String {
+        let input = tc.input.strip_suffix('\n').unwrap_or(&tc.input);
+        match parser::parse_statements(input) {
+            Ok(s) => {
+                if s.len() != 1 {
+                    "expected exactly one statement".to_string()
+                } else if tc.args.get("roundtrip").is_some() {
+                    format!("{}\n", s.into_element().to_string())
+                } else {
+                    let stmt = s.into_element();
+                    // TODO(justin): it would be nice to have a middle-ground between this
+                    // all-on-one-line and {:#?}'s huge number of lines.
+                    format!("{}\n=>\n{:?}\n", stmt.to_string(), stmt)
+                }
+            }
+            Err(e) => render_error(input, e),
+        }
+    }
+
+    fn parse_scalar(tc: &TestCase) -> String {
+        let input = tc.input.trim();
+        match parser::parse_expr(input) {
+            Ok(s) => {
+                if tc.args.get("roundtrip").is_some() {
+                    format!("{}\n", s.to_string())
+                } else {
+                    // TODO(justin): it would be nice to have a middle-ground between this
+                    // all-on-one-line and {:#?}'s huge number of lines.
+                    format!("{:?}\n", s)
+                }
+            }
+            Err(e) => render_error(input, e),
+        }
+    }
+
     walk("tests/testdata", |f| {
         f.run(|test_case| -> String {
             match test_case.directive.as_str() {
-                "parse-statement" => {
-                    let sql = trim_one(&test_case.input).to_owned();
-                    match parser::parse_statements(sql) {
-                        Ok(s) => {
-                            if s.len() != 1 {
-                                "expected exactly one statement".to_string()
-                            } else if test_case.args.get("roundtrip").is_some() {
-                                format!("{}\n", s.into_element().to_string())
-                            } else {
-                                let stmt = s.into_element();
-                                // TODO(justin): it would be nice to have a middle-ground between this
-                                // all-on-one-line and {:#?}'s huge number of lines.
-                                format!("{}\n=>\n{:?}\n", stmt.to_string(), stmt)
-                            }
-                        }
-                        Err(e) => format!("error:\n{}\n", e),
-                    }
-                }
-                "parse-scalar" => {
-                    let sql = test_case.input.trim().to_owned();
-                    match parser::parse_expr(sql) {
-                        Ok(s) => {
-                            if test_case.args.get("roundtrip").is_some() {
-                                format!("{}\n", s.to_string())
-                            } else {
-                                // TODO(justin): it would be nice to have a middle-ground between this
-                                // all-on-one-line and {:#?}'s huge number of lines.
-                                format!("{:?}\n", s)
-                            }
-                        }
-                        Err(e) => format!("error:\n{}\n", e),
-                    }
-                }
-                dir => {
-                    panic!("unhandled directive {}", dir);
-                }
+                "parse-statement" => parse_statement(test_case),
+                "parse-scalar" => parse_scalar(test_case),
+                dir => panic!("unhandled directive {}", dir),
             }
         })
     });
@@ -112,8 +127,8 @@ fn op_precedence() -> Result<(), Box<dyn Error>> {
         ("NOT a NOT LIKE b", "NOT (a NOT LIKE b)"),
         ("NOT a NOT IN ('a')", "NOT (a NOT IN ('a'))"),
     ] {
-        let left = parser::parse_expr((*actual).to_owned())?;
-        let mut right = parser::parse_expr((*expected).to_owned())?;
+        let left = parser::parse_expr(actual)?;
+        let mut right = parser::parse_expr(expected)?;
         RemoveParens.visit_expr_mut(&mut right);
 
         assert_eq!(left, right);
@@ -212,8 +227,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
         COMMIT;
         ROLLBACK;
-"#
-        .into(),
+"#,
     )?;
 
     #[rustfmt::skip]  // rustfmt loses the structure of the expected vector by wrapping all lines

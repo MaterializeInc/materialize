@@ -326,14 +326,10 @@ where
     }
 
     async fn query(&mut self, sql: String) -> Result<State, comm::Error> {
-        let stmts = match sql::parse::parse(sql) {
+        let stmts = match parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                self.error(ErrorResponse::error(
-                    SqlState::SYNTAX_ERROR,
-                    format!("{:#}", err),
-                ))
-                .await?;
+                self.error(err).await?;
                 return self.sync().await;
             }
         };
@@ -369,15 +365,10 @@ where
             }
         }
 
-        let stmts = match sql::parse::parse(sql.clone()) {
+        let stmts = match parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                return self
-                    .error(ErrorResponse::error(
-                        SqlState::SYNTAX_ERROR,
-                        format!("{:#}", err),
-                    ))
-                    .await;
+                return self.error(err).await;
             }
         };
         if stmts.len() > 1 {
@@ -1038,4 +1029,13 @@ fn pad_formats(formats: Vec<pgrepr::Format>, n: usize) -> Result<Vec<pgrepr::For
             e, a
         )),
     }
+}
+
+fn parse_sql(sql: &str) -> Result<Vec<Statement>, ErrorResponse> {
+    sql::parse::parse(sql).map_err(|e| {
+        // Convert our 0-based byte position to pgwire's 1-based character
+        // position.
+        let pos = sql[..e.pos].chars().count() + 1;
+        ErrorResponse::error(SqlState::SYNTAX_ERROR, e.message).with_position(pos)
+    })
 }
