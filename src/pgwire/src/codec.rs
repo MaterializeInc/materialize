@@ -24,7 +24,6 @@ use bytes::{Buf, BufMut, BytesMut};
 use futures::{sink, SinkExt, TryStreamExt};
 use lazy_static::lazy_static;
 use log::trace;
-use postgres::error::SqlState;
 use prometheus::{register_uint_counter, UIntCounter};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio_util::codec::{Decoder, Encoder, Framed};
@@ -34,8 +33,8 @@ use ore::future::OreSinkExt;
 use ore::netio;
 
 use crate::message::{
-    BackendMessage, FrontendMessage, FrontendStartupMessage, TransactionStatus, VERSION_CANCEL,
-    VERSION_GSSENC, VERSION_SSL,
+    BackendMessage, ErrorResponse, FrontendMessage, FrontendStartupMessage, TransactionStatus,
+    VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL,
 };
 
 lazy_static! {
@@ -162,31 +161,6 @@ impl Codec {
             encode_state: vec![],
         }
     }
-
-    fn encode_error_notice_response(
-        dst: &mut BytesMut,
-        severity: &'static str,
-        code: SqlState,
-        message: String,
-        detail: Option<String>,
-        hint: Option<String>,
-    ) {
-        dst.put_u8(b'S');
-        dst.put_string(severity);
-        dst.put_u8(b'C');
-        dst.put_string(code.code());
-        dst.put_u8(b'M');
-        dst.put_string(&message);
-        if let Some(detail) = &detail {
-            dst.put_u8(b'D');
-            dst.put_string(detail);
-        }
-        if let Some(hint) = &hint {
-            dst.put_u8(b'H');
-            dst.put_string(hint);
-        }
-        dst.put_u8(b'\0');
-    }
 }
 
 impl Default for Codec {
@@ -200,7 +174,7 @@ impl Encoder<BackendMessage> for Codec {
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
         // Write type byte.
-        let byte = match msg {
+        let byte = match &msg {
             BackendMessage::AuthenticationOk => b'R',
             BackendMessage::RowDescription(_) => b'T',
             BackendMessage::DataRow(_) => b'D',
@@ -215,8 +189,13 @@ impl Encoder<BackendMessage> for Codec {
             BackendMessage::ParseComplete => b'1',
             BackendMessage::BindComplete => b'2',
             BackendMessage::CloseComplete => b'3',
-            BackendMessage::NoticeResponse { .. } => b'N',
-            BackendMessage::ErrorResponse { .. } => b'E',
+            BackendMessage::ErrorResponse(r) => {
+                if r.severity.is_error() {
+                    b'E'
+                } else {
+                    b'N'
+                }
+            }
             BackendMessage::CopyOutResponse { .. } => b'H',
             BackendMessage::CopyData(_) => b'd',
             BackendMessage::CopyDone => b'c',
@@ -312,33 +291,29 @@ impl Encoder<BackendMessage> for Codec {
                     dst.put_u32(param.oid());
                 }
             }
-            BackendMessage::ErrorResponse {
-                severity,
-                code,
-                message,
-                detail,
-            } => Self::encode_error_notice_response(
-                dst,
-                severity.string(),
-                code,
-                message,
-                detail,
-                None,
-            ),
-            BackendMessage::NoticeResponse {
+            BackendMessage::ErrorResponse(ErrorResponse {
                 severity,
                 code,
                 message,
                 detail,
                 hint,
-            } => Self::encode_error_notice_response(
-                dst,
-                severity.string(),
-                code,
-                message,
-                detail,
-                hint,
-            ),
+            }) => {
+                dst.put_u8(b'S');
+                dst.put_string(severity.as_str());
+                dst.put_u8(b'C');
+                dst.put_string(code.code());
+                dst.put_u8(b'M');
+                dst.put_string(&message);
+                if let Some(detail) = &detail {
+                    dst.put_u8(b'D');
+                    dst.put_string(detail);
+                }
+                if let Some(hint) = &hint {
+                    dst.put_u8(b'H');
+                    dst.put_string(hint);
+                }
+                dst.put_u8(b'\0');
+            }
         }
 
         let len = dst.len() - base;

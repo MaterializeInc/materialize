@@ -32,9 +32,7 @@ use sql::ast::Statement;
 use sql::plan::CopyFormat;
 
 use crate::codec::FramedConn;
-use crate::message::{
-    self, BackendMessage, ErrorSeverity, FrontendMessage, NoticeSeverity, VERSIONS, VERSION_3,
-};
+use crate::message::{self, BackendMessage, ErrorResponse, FrontendMessage, VERSIONS, VERSION_3};
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -193,10 +191,10 @@ where
     ) -> Result<State, comm::Error> {
         if version != VERSION_3 {
             return self
-                .fatal(
+                .error(ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "server does not support the client's requested protocol version",
-                )
+                ))
                 .await;
         }
 
@@ -208,26 +206,27 @@ where
             Ok(messages) => messages
                 .into_iter()
                 .map(|m| match m {
-                    StartupMessage::UnknownSessionDatabase => BackendMessage::NoticeResponse {
-                        severity: NoticeSeverity::Notice,
-                        code: SqlState::SUCCESSFUL_COMPLETION,
-                        message: format!(
+                    StartupMessage::UnknownSessionDatabase => ErrorResponse::notice(
+                        SqlState::SUCCESSFUL_COMPLETION,
+                        format!(
                             "session database '{}' does not exist",
-                            self.coord_client.session().vars().database()
+                            self.coord_client.session().vars().database(),
                         ),
-                        detail: None,
-                        hint: Some(
-                            "Create the database with CREATE DATABASE \
-                                 or pick an extant database with SET DATABASE = <name>. \
-                                 List available databases with SHOW DATABASES."
-                                .into(),
-                        ),
-                    },
+                    )
+                    .with_hint(
+                        "Create the database with CREATE DATABASE \
+                         or pick an extant database with SET DATABASE = <name>. \
+                         List available databases with SHOW DATABASES.",
+                    )
+                    .into_message(),
                 })
                 .collect(),
             Err(e) => {
                 return self
-                    .error(SqlState::INTERNAL_ERROR, format!("{:#}", e))
+                    .error(ErrorResponse::error(
+                        SqlState::INTERNAL_ERROR,
+                        format!("{:#}", e),
+                    ))
                     .await;
             }
         };
@@ -261,7 +260,10 @@ where
             .await
         {
             return self
-                .error(SqlState::INTERNAL_ERROR, format!("{:#}", e))
+                .error(ErrorResponse::error(
+                    SqlState::INTERNAL_ERROR,
+                    format!("{:#}", e),
+                ))
                 .await;
         }
 
@@ -274,7 +276,10 @@ where
             .clone();
         if !stmt_desc.param_types.is_empty() {
             return self
-                .error(SqlState::UNDEFINED_PARAMETER, "there is no parameter $1")
+                .error(ErrorResponse::error(
+                    SqlState::UNDEFINED_PARAMETER,
+                    "there is no parameter $1",
+                ))
                 .await;
         }
 
@@ -311,8 +316,11 @@ where
                     .await
             }
             Err(e) => {
-                self.error(SqlState::INTERNAL_ERROR, format!("{:#}", e))
-                    .await
+                self.error(ErrorResponse::error(
+                    SqlState::INTERNAL_ERROR,
+                    format!("{:#}", e),
+                ))
+                .await
             }
         }
     }
@@ -321,8 +329,11 @@ where
         let stmts = match sql::parse::parse(sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                self.error(SqlState::SYNTAX_ERROR, format!("{:#}", err))
-                    .await?;
+                self.error(ErrorResponse::error(
+                    SqlState::SYNTAX_ERROR,
+                    format!("{:#}", err),
+                ))
+                .await?;
                 return self.sync().await;
             }
         };
@@ -349,11 +360,11 @@ where
                 None if oid == 0 => param_types.push(None),
                 None => {
                     return self
-                        .error(
+                        .error(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
                             format!("unable to decode parameter whose type OID is {}", oid),
-                        )
-                        .await
+                        ))
+                        .await;
                 }
             }
         }
@@ -362,16 +373,19 @@ where
             Ok(stmts) => stmts,
             Err(err) => {
                 return self
-                    .error(SqlState::SYNTAX_ERROR, format!("{:#}", err))
+                    .error(ErrorResponse::error(
+                        SqlState::SYNTAX_ERROR,
+                        format!("{:#}", err),
+                    ))
                     .await;
             }
         };
         if stmts.len() > 1 {
             return self
-                .error(
+                .error(ErrorResponse::error(
                     SqlState::INTERNAL_ERROR,
                     "cannot insert multiple commands into a prepared statement",
-                )
+                ))
                 .await;
         }
         let maybe_stmt = stmts.into_iter().next();
@@ -385,8 +399,11 @@ where
                 Ok(State::Ready)
             }
             Err(e) => {
-                self.error(SqlState::INTERNAL_ERROR, format!("{:#}", e))
-                    .await
+                self.error(ErrorResponse::error(
+                    SqlState::INTERNAL_ERROR,
+                    format!("{:#}", e),
+                ))
+                .await
             }
         }
     }
@@ -407,10 +424,10 @@ where
             Some(stmt) => stmt,
             None => {
                 return self
-                    .error(
+                    .error(ErrorResponse::error(
                         SqlState::INVALID_SQL_STATEMENT_NAME,
                         "prepared statement does not exist",
-                    )
+                    ))
                     .await;
             }
         };
@@ -424,11 +441,17 @@ where
                 actual = raw_params.len(),
                 expected = param_types.len()
             );
-            return self.error(SqlState::PROTOCOL_VIOLATION, message).await;
+            return self
+                .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, message))
+                .await;
         }
         let param_formats = match pad_formats(param_formats, raw_params.len()) {
             Ok(param_formats) => param_formats,
-            Err(msg) => return self.error(SqlState::PROTOCOL_VIOLATION, msg).await,
+            Err(msg) => {
+                return self
+                    .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                    .await
+            }
         };
         let buf = RowArena::new();
         let mut params: Vec<(Datum, repr::ScalarType)> = Vec::new();
@@ -439,7 +462,9 @@ where
                     Ok(param) => params.push(param.into_datum(&buf, typ)),
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
-                        return self.error(SqlState::INVALID_PARAMETER_VALUE, msg).await;
+                        return self
+                            .error(ErrorResponse::error(SqlState::INVALID_PARAMETER_VALUE, msg))
+                            .await;
                     }
                 },
             }
@@ -454,7 +479,11 @@ where
                 .unwrap_or(0),
         ) {
             Ok(result_formats) => result_formats,
-            Err(msg) => return self.error(SqlState::PROTOCOL_VIOLATION, msg).await,
+            Err(msg) => {
+                return self
+                    .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                    .await
+            }
         };
 
         self.coord_client
@@ -480,10 +509,10 @@ where
             Some(portal) => portal,
             None => {
                 return self
-                    .error(
+                    .error(ErrorResponse::error(
                         SqlState::INVALID_SQL_STATEMENT_NAME,
                         "portal does not exist",
-                    )
+                    ))
                     .await;
             }
         };
@@ -504,8 +533,11 @@ where
                     .await
             }
             Err(e) => {
-                self.error(SqlState::INTERNAL_ERROR, format!("{:#}", e))
-                    .await
+                self.error(ErrorResponse::error(
+                    SqlState::INTERNAL_ERROR,
+                    format!("{:#}", e),
+                ))
+                .await
             }
         }
     }
@@ -522,10 +554,10 @@ where
             }
             None => {
                 return self
-                    .error(
+                    .error(ErrorResponse::error(
                         SqlState::INVALID_SQL_STATEMENT_NAME,
                         "prepared statement does not exist",
-                    )
+                    ))
                     .await
             }
         }
@@ -541,10 +573,10 @@ where
         match stmt_name {
             Some(stmt_name) => self.send_describe_rows(stmt_name).await,
             None => {
-                self.error(
+                self.error(ErrorResponse::error(
                     SqlState::INVALID_SQL_STATEMENT_NAME,
                     "portal does not exist",
-                )
+                ))
                 .await
             }
         }
@@ -615,15 +647,10 @@ where
         macro_rules! created {
             ($existed:expr, $code:expr, $type:expr) => {{
                 if $existed {
-                    self.conn
-                        .send(BackendMessage::NoticeResponse {
-                            severity: NoticeSeverity::Notice,
-                            code: $code,
-                            message: concat!($type, " already exists, skipping").into(),
-                            detail: None,
-                            hint: None,
-                        })
-                        .await?;
+                    let msg =
+                        ErrorResponse::notice($code, concat!($type, " already exists, skipping"))
+                            .into_message();
+                    self.conn.send(msg).await?;
                 }
                 command_complete!("CREATE {}", $type.to_uppercase())
             }};
@@ -680,13 +707,16 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
                 match rx.await? {
                     PeekResponse::Canceled => {
-                        self.error(
+                        self.error(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
                             "canceling statement due to user request",
-                        )
+                        ))
                         .await
                     }
-                    PeekResponse::Error(text) => self.error(SqlState::INTERNAL_ERROR, text).await,
+                    PeekResponse::Error(text) => {
+                        self.error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
+                            .await
+                    }
                     PeekResponse::Rows(rows) => {
                         self.send_rows(
                             row_desc,
@@ -736,23 +766,25 @@ where
                         // TODO(mjibson): This logic is duplicated from SendingRows. Dedup?
                         PeekResponse::Canceled => {
                             return self
-                                .error(
+                                .error(ErrorResponse::error(
                                     SqlState::QUERY_CANCELED,
                                     "canceling statement due to user request",
-                                )
+                                ))
                                 .await;
                         }
                         PeekResponse::Error(text) => {
-                            return self.error(SqlState::INTERNAL_ERROR, text).await;
+                            return self
+                                .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
+                                .await;
                         }
                         PeekResponse::Rows(rows) => Box::new(stream::iter(vec![Ok(rows)])),
                     },
                     _ => {
                         return self
-                            .error(
+                            .error(ErrorResponse::error(
                                 SqlState::INTERNAL_ERROR,
                                 "unsupported COPY response type".to_string(),
-                            )
+                            ))
                             .await;
                     }
                 };
@@ -783,26 +815,26 @@ where
             let col_types = &row_desc.typ().column_types;
             if datums.len() != col_types.len() {
                 return self
-                    .error(
+                    .error(ErrorResponse::error(
                         SqlState::INTERNAL_ERROR,
                         format!(
                             "internal error: row descriptor has {} columns but row has {} columns",
                             col_types.len(),
                             datums.len(),
                         ),
-                    )
+                    ))
                     .await;
             }
             for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
                 if !d.is_instance_of(&t) {
                     return self
-                        .error(
+                        .error(ErrorResponse::error(
                             SqlState::INTERNAL_ERROR,
                             format!(
                                 "internal error: column {} is not of expected type {}: {}",
                                 i, t, d
                             ),
-                        )
+                        ))
                         .await;
                 }
             }
@@ -884,10 +916,10 @@ where
             CopyFormat::Binary => (message::encode_copy_row_binary, pgrepr::Format::Binary),
             _ => {
                 return self
-                    .error(
+                    .error(ErrorResponse::error(
                         SqlState::FEATURE_NOT_SUPPORTED,
                         format!("COPY TO format {:?} not supported", format),
-                    )
+                    ))
                     .await
             }
         };
@@ -977,51 +1009,22 @@ where
         Ok(State::Ready)
     }
 
-    async fn error(
-        &mut self,
-        code: SqlState,
-        message: impl Into<String>,
-    ) -> Result<State, comm::Error> {
-        let message = message.into();
+    async fn error(&mut self, err: ErrorResponse) -> Result<State, comm::Error> {
+        assert!(err.severity.is_error());
         debug!(
             "cid={} error code={} message={}",
             self.conn_id,
-            code.code(),
-            message
+            err.code.code(),
+            err.message
         );
-        self.conn
-            .send(BackendMessage::ErrorResponse {
-                severity: ErrorSeverity::Error,
-                code,
-                message,
-                detail: None,
-            })
-            .await?;
+        let is_fatal = err.severity.is_fatal();
+        self.conn.send(BackendMessage::ErrorResponse(err)).await?;
         self.coord_client.session().fail_transaction();
-        Ok(State::Drain)
-    }
-
-    async fn fatal(
-        &mut self,
-        code: SqlState,
-        message: impl Into<String>,
-    ) -> Result<State, comm::Error> {
-        let message = message.into();
-        debug!(
-            "cid={} fatal code={} message={}",
-            self.conn_id,
-            code.code(),
-            message
-        );
-        self.conn
-            .send(BackendMessage::ErrorResponse {
-                severity: ErrorSeverity::Fatal,
-                code,
-                message,
-                detail: None,
-            })
-            .await?;
-        Ok(State::Done)
+        if is_fatal {
+            Ok(State::Done)
+        } else {
+            Ok(State::Drain)
+        }
     }
 }
 

@@ -45,46 +45,6 @@ pub const VERSIONS: &[i32] = &[
     VERSION_GSSENC,
 ];
 
-#[derive(Debug)]
-#[allow(dead_code)]
-pub enum ErrorSeverity {
-    Error,
-    Fatal,
-    Panic,
-}
-
-impl ErrorSeverity {
-    pub fn string(&self) -> &'static str {
-        match self {
-            ErrorSeverity::Error => "ERROR",
-            ErrorSeverity::Fatal => "FATAL",
-            ErrorSeverity::Panic => "PANIC",
-        }
-    }
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub enum NoticeSeverity {
-    Warning,
-    Notice,
-    Debug,
-    Info,
-    Log,
-}
-
-impl NoticeSeverity {
-    pub fn string(&self) -> &'static str {
-        match self {
-            NoticeSeverity::Warning => "WARNING",
-            NoticeSeverity::Notice => "NOTICE",
-            NoticeSeverity::Debug => "DEBUG",
-            NoticeSeverity::Info => "INFO",
-            NoticeSeverity::Log => "LOG",
-        }
-    }
-}
-
 /// Like [`FrontendMessage`], but only the messages that can occur during
 /// startup protocol negotiation.
 pub enum FrontendStartupMessage {
@@ -257,19 +217,7 @@ pub enum BackendMessage {
     ParseComplete,
     BindComplete,
     CloseComplete,
-    NoticeResponse {
-        severity: NoticeSeverity,
-        code: SqlState,
-        message: String,
-        detail: Option<String>,
-        hint: Option<String>,
-    },
-    ErrorResponse {
-        severity: ErrorSeverity,
-        code: SqlState,
-        message: String,
-        detail: Option<String>,
-    },
+    ErrorResponse(ErrorResponse),
     CopyOutResponse {
         overall_format: pgrepr::Format,
         column_formats: Vec<pgrepr::Format>,
@@ -304,6 +252,99 @@ impl From<&CoordTransactionStatus> for TransactionStatus {
     /// Convert from the Session's version
     fn from(status: &CoordTransactionStatus) -> TransactionStatus {
         TransactionStatus::from(*status)
+    }
+}
+
+#[derive(Debug)]
+pub struct ErrorResponse {
+    pub severity: Severity,
+    pub code: SqlState,
+    pub message: String,
+    pub detail: Option<String>,
+    pub hint: Option<String>,
+}
+
+impl ErrorResponse {
+    pub fn fatal<S>(code: SqlState, message: S) -> ErrorResponse
+    where
+        S: Into<String>,
+    {
+        ErrorResponse::new(Severity::Fatal, code, message)
+    }
+
+    pub fn error<S>(code: SqlState, message: S) -> ErrorResponse
+    where
+        S: Into<String>,
+    {
+        ErrorResponse::new(Severity::Error, code, message)
+    }
+
+    pub fn notice<S>(code: SqlState, message: S) -> ErrorResponse
+    where
+        S: Into<String>,
+    {
+        ErrorResponse::new(Severity::Notice, code, message)
+    }
+
+    fn new<S>(severity: Severity, code: SqlState, message: S) -> ErrorResponse
+    where
+        S: Into<String>,
+    {
+        ErrorResponse {
+            severity,
+            code,
+            message: message.into(),
+            detail: None,
+            hint: None,
+        }
+    }
+
+    pub fn with_hint<S>(mut self, hint: S) -> ErrorResponse
+    where
+        S: Into<String>,
+    {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn into_message(self) -> BackendMessage {
+        BackendMessage::ErrorResponse(self)
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Severity {
+    Panic,
+    Fatal,
+    Error,
+    Warning,
+    Notice,
+    Debug,
+    Info,
+    Log,
+}
+
+impl Severity {
+    pub fn is_error(&self) -> bool {
+        matches!(self, Severity::Panic | Severity::Fatal | Severity::Error)
+    }
+
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, Severity::Fatal)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Severity::Error => "ERROR",
+            Severity::Fatal => "FATAL",
+            Severity::Panic => "PANIC",
+            Severity::Warning => "WARNING",
+            Severity::Notice => "NOTICE",
+            Severity::Debug => "DEBUG",
+            Severity::Info => "INFO",
+            Severity::Log => "LOG",
+        }
     }
 }
 
