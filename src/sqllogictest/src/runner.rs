@@ -393,7 +393,7 @@ impl State {
             timestamp: TimestampConfig {
                 frequency: Duration::from_millis(10),
             },
-            persistence: None,
+            cache: None,
             logical_compaction_window: None,
             experimental_mode: true,
         })

@@ -72,7 +72,7 @@ use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
-use crate::persistence::{PersistenceConfig, Persister};
+use crate::persistence::{CacheConfig, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::sink_connector;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
@@ -120,7 +120,7 @@ where
     pub logging: Option<LoggingConfig>,
     pub data_directory: Option<&'a Path>,
     pub timestamp: TimestampConfig,
-    pub persistence: Option<PersistenceConfig>,
+    pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
 }
@@ -3053,7 +3053,7 @@ pub async fn serve<C>(
         logging,
         data_directory,
         timestamp: timestamp_config,
-        persistence: persistence_config,
+        cache: persistence_config,
         logical_compaction_window,
         experimental_mode,
     }: Config<'_, C>,

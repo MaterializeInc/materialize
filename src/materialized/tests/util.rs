@@ -87,7 +87,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
                 log_logging: false,
             }),
         timestamp_frequency: Duration::from_millis(10),
-        persistence: None,
+        cache: None,
         logical_compaction_window: None,
         threads: config.threads,
         process: 0,

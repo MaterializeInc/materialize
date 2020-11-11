@@ -24,11 +24,11 @@ use dataflow_types::{ExternalSourceConnector, SourceConnector};
 use expr::GlobalId;
 use repr::PersistedRecord;
 
-// Interval at which Persister will try to flush out pending records
-static PERSISTENCE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
+// Interval at which Cacher will try to flush out pending records
+static CACHE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug)]
-pub struct PersistenceConfig {
+pub struct CacheConfig {
     /// Maximum number of records that are allowed to be pending for a source
     /// before we attempt to flush that source immediately.
     pub max_pending_records: usize,
@@ -183,11 +183,11 @@ pub struct Persister {
     rx: Option<comm::mpsc::Receiver<PersistenceMessage>>,
     sources: HashMap<GlobalId, Source>,
     disabled_sources: HashSet<GlobalId>,
-    pub config: PersistenceConfig,
+    pub config: CacheConfig,
 }
 
 impl Persister {
-    pub fn new(rx: comm::mpsc::Receiver<PersistenceMessage>, config: PersistenceConfig) -> Self {
+    pub fn new(rx: comm::mpsc::Receiver<PersistenceMessage>, config: CacheConfig) -> Self {
         Persister {
             rx: Some(rx),
             sources: HashMap::new(),
@@ -209,7 +209,7 @@ impl Persister {
             })
             .fuse();
 
-        let mut interval = tokio::time::interval(PERSISTENCE_FLUSH_INTERVAL).fuse();
+        let mut interval = tokio::time::interval(CACHE_FLUSH_INTERVAL).fuse();
         loop {
             select! {
                 data = rx_stream.next() => {
