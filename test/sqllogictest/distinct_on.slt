@@ -33,7 +33,7 @@ statement ok
 CREATE TABLE abc (
   a text,
   b text,
-  c text,
+  c text
 )
 
 query T multiline

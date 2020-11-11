@@ -1654,7 +1654,9 @@ impl Parser {
     fn parse_columns(&mut self) -> Result<(Vec<ColumnDef>, Vec<TableConstraint>), ParserError> {
         let mut columns = vec![];
         let mut constraints = vec![];
-        if !self.consume_token(&Token::LParen) || self.consume_token(&Token::RParen) {
+        self.expect_token(&Token::LParen)?;
+        if self.consume_token(&Token::RParen) {
+            // Tables with zero columns are a PostgreSQL extension.
             return Ok((columns, constraints));
         }
 
@@ -1689,11 +1691,11 @@ impl Parser {
                     self.peek_token(),
                 );
             }
-            let comma = self.consume_token(&Token::Comma);
-            if self.consume_token(&Token::RParen) {
-                // allow a trailing comma, even though it's not in standard
+            if self.consume_token(&Token::Comma) {
+                // Continue.
+            } else if self.consume_token(&Token::RParen) {
                 break;
-            } else if !comma {
+            } else {
                 return self.expected(
                     self.peek_range(),
                     "',' or ')' after column definition",

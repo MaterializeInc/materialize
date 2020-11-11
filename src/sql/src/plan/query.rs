@@ -593,12 +593,9 @@ fn plan_values(
     let mut col_iters = Vec::with_capacity(ncols);
     let mut col_types = Vec::with_capacity(ncols);
     for (index, col) in cols.iter().enumerate() {
-        let type_hint = if let Some(type_hints) = &type_hints {
-            Some(type_hints[index])
-        } else {
-            None
-        };
-
+        let type_hint = type_hints
+            .as_ref()
+            .and_then(|type_hints| type_hints.get(index).copied());
         let col = coerce_homogeneous_exprs("VALUES", ecx, plan_exprs(ecx, col)?, type_hint)?;
         col_types.push(ecx.column_type(&col[0]));
         col_iters.push(col.into_iter());

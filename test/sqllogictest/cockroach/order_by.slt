@@ -272,7 +272,7 @@ CREATE TABLE abcd (
   a INT PRIMARY KEY,
   b INT,
   c INT,
-  d INT,
+  d INT
 )
 
 statement ok
@@ -329,7 +329,7 @@ statement ok
 CREATE TABLE store (
     id INT PRIMARY KEY,
     baz STRING,
-    extra INT,
+    extra INT
 )
 
 statement ok
