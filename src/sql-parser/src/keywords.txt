@@ -35,7 +35,6 @@ Avro
 Begin
 Between
 Bigint
-Binary
 Bool
 Boolean
 Both

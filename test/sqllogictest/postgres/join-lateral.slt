@@ -47,7 +47,7 @@ statement ok
 CREATE TABLE tenk1 (
   unique1 int,
   unique2 int,
-  two int,
+  two int
 )
 
 statement ok

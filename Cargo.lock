@@ -2949,10 +2949,10 @@ dependencies = [
 
 [[package]]
 name = "prometheus"
-version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#b4469273e253b2215abe7ce888030c019b3a3b92"
+version = "0.10.0"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#97c8de1243e5d78a6097dbec1f53d2c5ca6b18be"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "fnv",
  "lazy_static",
  "libc",
@@ -2964,11 +2964,13 @@ dependencies = [
 
 [[package]]
 name = "prometheus-static-metric"
-version = "0.3.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#b4469273e253b2215abe7ce888030c019b3a3b92"
+version = "0.5.0-rc.1"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#97c8de1243e5d78a6097dbec1f53d2c5ca6b18be"
 dependencies = [
- "proc-macro-hack",
- "static-metric-proc-macros",
+ "lazy_static",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3806,18 +3808,6 @@ name = "standback"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e4b8c631c998468961a9ea159f064c5c8499b95b5e4a34b77849d45949d540"
-
-[[package]]
-name = "static-metric-proc-macros"
-version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#b4469273e253b2215abe7ce888030c019b3a3b92"
-dependencies = [
- "lazy_static",
- "proc-macro-hack",
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "stdweb"

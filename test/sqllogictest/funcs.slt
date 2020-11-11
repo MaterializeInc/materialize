@@ -130,7 +130,7 @@ mode standard
 
 statement ok
 CREATE TABLE date_trunc_timestamps (
-    ts timestamp,
+    ts timestamp
 )
 
 query T multiline
@@ -391,7 +391,7 @@ mode standard
 statement ok
 CREATE TABLE t (
     a int,
-    b int NOT NULL,
+    b int NOT NULL
 )
 
 query T multiline

@@ -148,8 +148,8 @@ SELECT SELECT 1 FROM bar WHERE 1=1 FROM baz
 error:
 Parse error:
 SELECT SELECT 1 FROM bar WHERE 1=1 FROM baz
-              ^
-Expected end of statement, found number
+       ^^^^^^
+Expected end of statement, found SELECT
 
 parse-statement
 SELECT foo FROM

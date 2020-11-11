@@ -303,3 +303,16 @@ j       true
 large   true
 t       true
 v       true
+
+# As in PostgreSQL, tables with no columns are permitted, but they are
+# pretty useless.
+> CREATE TABLE nocols ();
+! INSERT INTO nocols VALUES (1)
+INSERT statement specifies 1 columns, but table has 0 columns
+> SELECT count(*) FROM nocols
+0
+> INSERT INTO nocols SELECT UNION ALL SELECT
+> SELECT count(*) FROM nocols
+2
+> SELECT count(DISTINCT *) FROM nocols
+1

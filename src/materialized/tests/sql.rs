@@ -99,6 +99,14 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn extract_ts(data: &[u8]) -> Result<u64, Box<dyn Error>> {
+    Ok(str::from_utf8(data)?
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()?)
+}
+
 #[test]
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
@@ -114,14 +122,6 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         file.sync_all()?;
         Ok(())
     };
-
-    fn extract_ts(data: &[u8]) -> Result<u64, Box<dyn Error>> {
-        Ok(str::from_utf8(data)?
-            .split_whitespace()
-            .next()
-            .unwrap()
-            .parse()?)
-    }
 
     client.batch_execute(&*format!(
         "CREATE MATERIALIZED SOURCE dynamic_csv FROM FILE '{}' WITH (tail = true)
@@ -160,12 +160,12 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     assert!(tail_reader.next().is_none());
     drop(tail_reader);
 
-    // Now tail WITHOUT SNAPSHOT AS OF each timestamp, verifying that when we do so we only see events
+    // Now tail WITH (SNAPSHOT = false) AS OF each timestamp, verifying that when we do so we only see events
     // that occur as of or later than that timestamp.
     for (ts, _) in &events {
         let cancel_token = client.cancel_token();
         let q = format!(
-            "COPY (TAIL dynamic_csv WITHOUT SNAPSHOT AS OF {}) TO STDOUT",
+            "COPY (TAIL dynamic_csv WITH (SNAPSHOT = false) AS OF {}) TO STDOUT",
             ts - 1
         );
         let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
@@ -217,6 +217,77 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_tail_progress() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().threads(2);
+    let (_server, mut client) = util::start_server(config)?;
+
+    let temp_dir = tempfile::tempdir()?;
+    let path = Path::join(temp_dir.path(), "dynamic.csv");
+    let mut file = File::create(&path)?;
+    let mut append = |data| -> Result<_, Box<dyn Error>> {
+        file.write_all(data)?;
+        file.sync_all()?;
+        Ok(())
+    };
+
+    client.batch_execute(&*format!(
+        "CREATE MATERIALIZED SOURCE dynamic_csv FROM FILE '{}' WITH (tail = true)
+         FORMAT CSV WITH 3 COLUMNS",
+        path.display()
+    ))?;
+
+    // Test the TAIL SQL command on the tailed file source. This is end-to-end
+    // tailing: changes to the file will propagate through Materialize and
+    // into the user's SQL console.
+    let cancel_token = client.cancel_token();
+    let mut tail_reader = client
+        .copy_out("COPY (TAIL dynamic_csv WITH (PROGRESS)) TO STDOUT")?
+        .split(b'\n');
+
+    // Test the done messages by sending inserting a single row and waiting to
+    // observe it. Since TAIL always sends a done message at the end of its batches
+    // and we won't yet insert a second row, we know that if we've seen a data row
+    // we will also see one done message.
+
+    append(b"City 1,ST,00001\n")?;
+    let next = tail_reader.next().unwrap()?;
+    println!("{}", String::from_utf8_lossy(&next));
+    assert!(next.ends_with(&b"f\t1\tCity 1\tST\t00001\t1"[..]));
+    let ts = extract_ts(&next)?;
+    let next = tail_reader.next().unwrap()?;
+    assert!(next.ends_with(&b"t\t\\N\t\\N\t\\N\t\\N\t\\N"[..]));
+    assert!(ts < extract_ts(&next)?);
+
+    append(b"City 2,ST,00002\n")?;
+    let next = tail_reader.next().unwrap()?;
+    println!("{}", String::from_utf8_lossy(&next));
+    assert!(next.ends_with(&b"f\t1\tCity 2\tST\t00002\t2"[..]));
+    let ts = extract_ts(&next)?;
+    let next = tail_reader.next().unwrap()?;
+    assert!(next.ends_with(&b"t\t\\N\t\\N\t\\N\t\\N\t\\N"[..]));
+    assert!(ts < extract_ts(&next)?);
+
+    append(b"City 3,ST,00003\n")?;
+    let next = tail_reader.next().unwrap()?;
+    println!("{}", String::from_utf8_lossy(&next));
+    assert!(next.ends_with(&b"f\t1\tCity 3\tST\t00003\t3"[..]));
+    let ts = extract_ts(&next)?;
+    let next = tail_reader.next().unwrap()?;
+    assert!(next.ends_with(&b"t\t\\N\t\\N\t\\N\t\\N\t\\N"[..]));
+    assert!(ts < extract_ts(&next)?);
+
+    // The tail won't end until a cancellation request is sent.
+    cancel_token.cancel_query(postgres::NoTls)?;
+
+    assert!(tail_reader.next().is_none());
+    drop(tail_reader);
+
+    Ok(())
+}
+
+#[test]
 fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
@@ -228,7 +299,7 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     thread::sleep(Duration::from_millis(100));
 
     let mut tail_reader = client
-        .copy_out("COPY (TAIL foo WITHOUT SNAPSHOT) TO STDOUT")?
+        .copy_out("COPY (TAIL foo WITH (SNAPSHOT = false)) TO STDOUT")?
         .split(b'\n');
     let mut without_snapshot_count = 0;
     while let Some(_value) = tail_reader.next().transpose()? {
@@ -238,7 +309,7 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     drop(tail_reader);
 
     let mut tail_reader = client
-        .copy_out("COPY (TAIL foo WITH SNAPSHOT) TO STDOUT")?
+        .copy_out("COPY (TAIL foo WITH (SNAPSHOT)) TO STDOUT")?
         .split(b'\n');
     let mut with_snapshot_count = 0;
     while let Some(_value) = tail_reader.next().transpose()? {

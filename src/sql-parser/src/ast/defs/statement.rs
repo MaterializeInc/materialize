@@ -191,22 +191,6 @@ impl AstDisplay for CopyTarget {
 }
 impl_display!(CopyTarget);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CopyOption {
-    Format(String),
-}
-
-impl AstDisplay for CopyOption {
-    fn fmt(&self, f: &mut AstFormatter) {
-        match self {
-            CopyOption::Format(s) => {
-                f.write_str("FORMAT ");
-                f.write_str(s);
-            }
-        }
-    }
-}
-
 /// `COPY`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CopyStatement {
@@ -217,7 +201,7 @@ pub struct CopyStatement {
     // TARGET
     pub target: CopyTarget,
     // OPTIONS
-    pub options: Vec<CopyOption>,
+    pub options: Vec<WithOption>,
 }
 
 impl AstDisplay for CopyStatement {
@@ -1000,7 +984,7 @@ impl_display!(RollbackStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TailStatement {
     pub name: ObjectName,
-    pub with_snapshot: bool,
+    pub options: Vec<WithOption>,
     pub as_of: Option<Expr>,
 }
 
@@ -1008,11 +992,10 @@ impl AstDisplay for TailStatement {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("TAIL ");
         f.write_node(&self.name);
-
-        if self.with_snapshot {
-            f.write_str(" WITH SNAPSHOT");
-        } else {
-            f.write_str(" WITHOUT SNAPSHOT");
+        if !self.options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
         }
         if let Some(as_of) = &self.as_of {
             f.write_str(" AS OF ");
@@ -1147,6 +1130,39 @@ impl AstDisplay for SqlOption {
     }
 }
 impl_display!(SqlOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WithOption {
+    pub key: Ident,
+    pub value: Option<WithOptionValue>,
+}
+
+impl AstDisplay for WithOption {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_node(&self.key);
+        if let Some(opt) = &self.value {
+            f.write_str(" = ");
+            f.write_node(opt);
+        }
+    }
+}
+impl_display!(WithOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum WithOptionValue {
+    Value(Value),
+    ObjectName(ObjectName),
+}
+
+impl AstDisplay for WithOptionValue {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            WithOptionValue::Value(value) => f.write_node(value),
+            WithOptionValue::ObjectName(name) => f.write_node(name),
+        }
+    }
+}
+impl_display!(WithOptionValue);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TransactionMode {

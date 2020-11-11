@@ -19,7 +19,7 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
   WITH (cache=true) FORMAT BYTES
 
-> SELECT offset, value FROM internal_read_persisted_data('data') ORDER BY OFFSET
+> SELECT "offset", value FROM internal_read_persisted_data('data') ORDER BY "offset"
  offset  value
 --------------------
 1  "\\xc2\\xa91"

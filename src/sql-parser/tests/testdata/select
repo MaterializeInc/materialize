@@ -44,6 +44,16 @@ SELECT (1)
 SELECT (1)
 
 parse-statement roundtrip
+SELECT
+----
+SELECT
+
+parse-statement roundtrip
+SELECT LIMIT 1
+----
+SELECT LIMIT 1
+
+parse-statement roundtrip
 SELECT (1, 2)
 ----
 SELECT ROW(1, 2)
