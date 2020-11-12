@@ -21,7 +21,7 @@ use repr::adt::interval::Interval as ReprInterval;
 /// A wrapper for the `repr` crate's [`Interval`](repr::adt::interval::Interval)
 /// type that can be serialized to and deserialized from the PostgreSQL binary
 /// format.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Interval(pub ReprInterval);
 
 impl fmt::Display for Interval {

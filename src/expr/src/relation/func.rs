@@ -514,7 +514,7 @@ impl AggregateFunc {
 fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<(Row, Diff)> {
     let mut row_packer = RowPacker::new();
     match a {
-        Datum::Dict(dict) => dict
+        Datum::Map(dict) => dict
             .iter()
             .map(move |(k, mut v)| {
                 if stringify {
@@ -530,7 +530,7 @@ fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> 
 fn jsonb_object_keys<'a>(a: Datum<'a>) -> Vec<(Row, Diff)> {
     let mut row_packer = RowPacker::new();
     match a {
-        Datum::Dict(dict) => dict
+        Datum::Map(dict) => dict
             .iter()
             .map(move |(k, _)| (row_packer.pack(&[Datum::String(k)]), 1))
             .collect(),

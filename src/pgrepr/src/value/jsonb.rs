@@ -16,7 +16,7 @@ use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 /// A wrapper for the `repr` crate's [`Jsonb`](repr::adt::jsonb::Jsonb) type
 /// that can be serialized to and deserialized from the PostgreSQL binary
 /// format.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Jsonb(pub repr::adt::jsonb::Jsonb);
 
 impl ToSql for Jsonb {

@@ -93,7 +93,7 @@ use crate::{Datum, Row, RowPacker};
 /// All numbers are represented as [`f64`]s. It is not possible to construct a
 /// `Jsonb` from a JSON object that contains integers that cannot be represented
 /// exactly as `f64`s.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Jsonb {
     row: Row,
 }
@@ -506,7 +506,7 @@ impl Serialize for JsonbDatum<'_> {
                 }
                 seq.end()
             }
-            Datum::Dict(dict) => {
+            Datum::Map(dict) => {
                 let mut map = serializer.serialize_map(None)?;
                 for (k, v) in dict.iter() {
                     map.serialize_entry(k, &JsonbDatum(v))?;

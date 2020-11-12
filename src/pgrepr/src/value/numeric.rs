@@ -22,7 +22,7 @@ use repr::adt::decimal::{Decimal, Significand};
 /// A wrapper for the `repr` crate's [`Decimal`](repr::adt::decimal::Decimal)
 /// type that can be serialized to and deserialized from the PostgreSQL binasry
 /// format.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Numeric(pub Decimal);
 
 impl fmt::Display for Numeric {

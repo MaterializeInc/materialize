@@ -24,6 +24,7 @@
 //! should be considered a bug.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
@@ -482,6 +483,89 @@ where
     }
 }
 
+pub fn parse_map<'a, V, E>(
+    s: &'a str,
+    gen_key: impl FnMut(Cow<'a, str>) -> String,
+    gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+) -> Result<HashMap<String, V>, ParseError>
+where
+    E: fmt::Display,
+{
+    parse_map_inner(s, gen_key, gen_elem)
+        .map_err(|details| ParseError::new("map", s).with_details(details))
+}
+
+pub fn parse_map_inner<'a, V, E>(
+    s: &'a str,
+    mut gen_key: impl FnMut(Cow<'a, str>) -> String,
+    mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+) -> Result<HashMap<String, V>, String>
+where
+    E: fmt::Display,
+{
+    let mut map = HashMap::new();
+    let buf = &mut LexBuf::new(s);
+
+    // Consume opening paren.
+    if !buf.consume('{') {
+        bail!(
+            "expected '{{', found {}",
+            match buf.next() {
+                Some(c) => format!("{}", c),
+                None => "empty string".to_string(),
+            }
+        )
+    }
+
+    // Simplifies calls to `gen_elem` by handling errors
+    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+
+    loop {
+        // Get key.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        let key = match buf.peek() {
+            Some('"') => Some(lex_quoted_element(buf)?),
+            Some(_) => map_lex_unquoted_element(buf)?,
+            None => bail!("unexpected end of input"),
+        };
+        let key = gen_key(key.unwrap());
+
+        // Assert mapping arrow (=>) is present.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        if !buf.consume('=') {
+            bail!("expected =")
+        }
+        if !buf.consume('>') {
+            bail!("expected >")
+        }
+
+        // Get value.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        let value = match buf.peek() {
+            Some('"') => Some(lex_quoted_element(buf)?),
+            Some(_) => map_lex_unquoted_element(buf)?,
+            None => bail!("unexpected end of input"),
+        };
+        let value = gen(value.unwrap())?;
+
+        // Insert elements.
+        map.insert(key, value);
+
+        // Check for terminals.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        match buf.next() {
+            _ if map.len() == 0 => {
+                buf.prev();
+            }
+            Some('}') => break,
+            Some(',') => {}
+            Some(c) => bail!("expected ',' or end of input, got '{}'", c),
+            None => bail!("unexpected end of input"),
+        }
+    }
+    Ok(map)
+}
+
 pub fn parse_list<'a, T, E>(
     s: &'a str,
     is_element_type_list: bool,
@@ -542,7 +626,7 @@ where
         buf.take_while(|ch| ch.is_ascii_whitespace());
         // Get elements.
         let elem = match buf.peek() {
-            Some('"') => gen(list_lex_quoted_element(buf)?)?,
+            Some('"') => gen(lex_quoted_element(buf)?)?,
             Some('{') => {
                 if !is_element_type_list {
                     bail!(
@@ -572,7 +656,7 @@ where
     Ok(elems)
 }
 
-fn list_lex_quoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, String> {
+fn lex_quoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, String> {
     assert!(buf.consume('"'));
     let s = buf.take_while(|ch| !matches!(ch, '"' | '\\'));
 
@@ -689,6 +773,117 @@ fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, 
     } else {
         Some(Cow::Owned(s))
     })
+}
+
+fn map_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, str>>, String> {
+    // first char is guaranteed to be non-whitespace
+    assert!(!buf.peek().unwrap().is_ascii_whitespace());
+
+    fn is_special_char(c: char) -> bool {
+        matches!(c, '{' | '}' | ',' | '=' | '>' | '\\')
+    }
+
+    let s = buf.take_while(|ch| !is_special_char(ch) && !ch.is_ascii_whitespace());
+
+    // `Cow::Borrowed` optimization for elements without special characters.
+    match buf.peek() {
+        Some(',') | Some('}') if !s.is_empty() => {
+            return Ok(if s.to_uppercase() == "NULL" {
+                None
+            } else {
+                Some(s.into())
+            });
+        }
+        _ => {}
+    }
+
+    // Track whether there are any escaped characters to determine if the string
+    // "NULL" should be treated as a NULL, or if it had any escaped characters
+    // and should be treated as the string "NULL".
+    let mut escaped_char = false;
+
+    let mut s = s.to_string();
+    // As we go, we keep track of where to truncate to in order to remove any
+    // trailing whitespace.
+    let mut trimmed_len = s.len();
+
+    loop {
+        match buf.next() {
+            Some('\\') => match buf.next() {
+                Some('=') if buf.peek() == Some('>') => {
+                    escaped_char = true;
+                    s.push('=');
+                    s.push('>');
+                    buf.next();
+                    trimmed_len = s.len();
+                }
+                Some(c) => {
+                    escaped_char = true;
+                    s.push(c);
+                    trimmed_len = s.len();
+                }
+                None => return Err("unterminated element".into()),
+            },
+            // End of element/map literal.
+            Some('=') if buf.peek() == Some('>') => {
+                // An arrow indicates as the first characters indicates missing
+                // key information.
+                if s.is_empty() {
+                    bail!("malformed map literal; missing key element")
+                }
+                buf.prev();
+                break;
+            }
+            Some(',') | Some('}') => {
+                // An comma or closing bracket as the first character
+                // indicates missing element information.
+                if s.is_empty() {
+                    bail!("malformed map literal; missing element")
+                }
+                buf.prev();
+                break;
+            }
+            Some(c) if is_special_char(c) => bail!(
+                "malformed map literal; must escape special character '{}'",
+                c
+            ),
+            Some(c) => {
+                s.push(c);
+                if !c.is_ascii_whitespace() {
+                    trimmed_len = s.len();
+                }
+            }
+            None => bail!("unterminated element"),
+        }
+    }
+    s.truncate(trimmed_len);
+    Ok(if s.to_uppercase() == "NULL" && !escaped_char {
+        None
+    } else {
+        Some(Cow::Owned(s))
+    })
+}
+
+pub fn format_map<F, T>(
+    buf: &mut F,
+    elems: Vec<(&str, T)>,
+    mut format_elem: impl FnMut(MapElementWriter<F>, &T) -> Nestable,
+) -> Nestable
+where
+    F: FormatBuffer,
+{
+    buf.write_char('{');
+    let mut elems = elems.iter().peekable();
+    while let Some((key, value)) = elems.next() {
+        buf.write_str(key);
+        buf.write_str("=>");
+        format_elem(MapElementWriter(buf), value);
+        if elems.peek().is_some() {
+            buf.write_char(',');
+        }
+    }
+    buf.write_char('}');
+    Nestable::Yes
 }
 
 pub fn format_array<F, T>(
@@ -860,6 +1055,27 @@ where
     F: FormatBuffer,
 {
     /// Marks this list element as null.
+    pub fn write_null(self) -> Nestable {
+        self.0.write_str("NULL");
+        Nestable::Yes
+    }
+
+    /// Returns a [`FormatBuffer`] into which a non-null element can be
+    /// written.
+    pub fn nonnull_buffer(self) -> &'a mut F {
+        self.0
+    }
+}
+
+/// A helper for `format_map` that formats a single map key, value pair.
+#[derive(Debug)]
+pub struct MapElementWriter<'a, F>(&'a mut F);
+
+impl<'a, F> MapElementWriter<'a, F>
+where
+    F: FormatBuffer,
+{
+    /// Marks this value element as null.
     pub fn write_null(self) -> Nestable {
         self.0.write_str("NULL");
         Nestable::Yes
