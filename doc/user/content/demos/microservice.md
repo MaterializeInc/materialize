@@ -409,10 +409,10 @@ In a future iteration, we'll make this demo more interactive.
     git clone https://github.com/MaterializeInc/materialize.git
     ```
 
-1. Move to the `demo/billing` directory:
+1. Move to the Materialize directory:
 
     ```shell
-    cd <path to materialize>/demo/billing
+    cd <path to materialize>/
     ```
 
     You can also view the demo's code on
@@ -421,7 +421,7 @@ In a future iteration, we'll make this demo more interactive.
 1. Download and start all of the components we've listed above by running:
 
     ```shell
-    ./mzcompose up
+    bin/mzconduct up billing -w local
     ```
 
    Note that downloading the Docker images necessary for the demo can take quite
