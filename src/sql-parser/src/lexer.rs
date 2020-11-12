@@ -60,6 +60,7 @@ pub enum Token {
     Colon,
     DoubleColon,
     Semicolon,
+    Arrow,
 }
 
 impl Token {
@@ -83,6 +84,7 @@ impl Token {
             Token::Colon => "colon",
             Token::DoubleColon => "double colon",
             Token::Semicolon => "semicolon",
+            Token::Arrow => "arrow",
         }
     }
 }
@@ -133,6 +135,7 @@ pub fn lex(query: &str) -> Result<Vec<(Token, Range<usize>)>, ParserError> {
             ';' => Token::Semicolon,
             '[' => Token::LBracket,
             ']' => Token::RBracket,
+            '=' if buf.consume('>') => Token::Arrow,
             #[rustfmt::skip]
             '+'|'-'|'*'|'/'|'<'|'>'|'='|'~'|'!'|'@'|'#'|'%'|'^'|'&'|'|'|'`'|'?' => lex_op(buf)?,
             _ => bail!(buf, pos, "unexpected character in input: {}", ch),

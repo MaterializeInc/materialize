@@ -24,6 +24,7 @@
 //! should be considered a bug.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
@@ -482,6 +483,74 @@ where
     }
 }
 
+pub fn parse_map<'a, V, E>(
+    s: &'a str,
+    make_null: impl FnMut() -> V,
+    gen_key: impl FnMut(Cow<'a, str>) -> String,
+    gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+) -> Result<HashMap<String, V>, ParseError>
+where
+    E: fmt::Display,
+{
+    parse_map_inner(s, make_null, gen_key, gen_elem)
+        .map_err(|details| ParseError::new("map", s).with_details(details))
+}
+
+pub fn parse_map_inner<'a, V, E>(
+    s: &'a str,
+    _make_null: impl FnMut() -> V,
+    mut gen_key: impl FnMut(Cow<'a, str>) -> String,
+    mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+) -> Result<HashMap<String, V>, String>
+where
+    E: fmt::Display,
+{
+    let mut map = HashMap::new();
+    let buf = &mut LexBuf::new(s);
+
+    // Simplifies calls to `gen_elem` by handling errors
+    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+
+    loop {
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+
+        // Get elements.
+        let key = match buf.peek() {
+            Some(_) => map_lex_unquoted_element(buf)?,
+            None => bail!("unexpected end of input"),
+        };
+        let key = gen_key(key.unwrap());
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        if !buf.consume('=') {
+            bail!("expected =")
+        }
+        if !buf.consume('>') {
+            bail!("expected >")
+        }
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        let value = match buf.peek() {
+            Some(_) => map_lex_unquoted_element(buf)?,
+            None => bail!("unexpected end of input"),
+        };
+        let value = gen(value.unwrap())?;
+
+        // Insert elements.
+        map.insert(key, value);
+
+        // Check for terminals.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        match buf.next() {
+            _ if map.len() == 0 => {
+                buf.prev();
+            }
+            Some(',') => {}
+            Some(c) => bail!("expected ',' or '}}', got '{}'", c),
+            None => break,
+        }
+    }
+    Ok(map)
+}
+
 pub fn parse_list<'a, T, E>(
     s: &'a str,
     is_element_type_list: bool,
@@ -618,6 +687,44 @@ fn list_lex_embedded_list<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, Stri
     Ok(Cow::Borrowed(s))
 }
 
+fn map_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, str>>, String> {
+    let mut s = String::new();
+    let mut trimmed_len = s.len();
+
+    loop {
+        let elem = buf.next();
+        match elem {
+            Some('=') if buf.peek() == Some('>') => {
+                if s.is_empty() {
+                    bail!("malformed map literal; missing key")
+                }
+                buf.prev();
+                break;
+            }
+            Some(',') => {
+                if s.is_empty() {
+                    bail!("malformed map literal; missing value")
+                }
+                buf.prev();
+                break;
+            }
+            Some(c) => {
+                s.push(c);
+                if !c.is_ascii_whitespace() {
+                    trimmed_len = s.len();
+                }
+            }
+            None => break,
+        }
+    }
+    s.truncate(trimmed_len);
+    Ok(if s.to_uppercase() == "NULL" {
+        None
+    } else {
+        Some(Cow::Owned(s))
+    })
+}
+
 // Result of `None` indicates element is NULL.
 fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, str>>, String> {
     // first char is guaranteed to be non-whitespace
@@ -689,6 +796,28 @@ fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, 
     } else {
         Some(Cow::Owned(s))
     })
+}
+
+pub fn format_map<F, T>(
+    buf: &mut F,
+    elems: &HashMap<String, T>,
+    mut format_elem: impl FnMut(MapElementWriter<F>, &T) -> Nestable,
+) -> Nestable
+where
+    F: FormatBuffer,
+{
+    buf.write_char('{');
+    let mut elems = elems.iter().peekable();
+    while let Some((key, value)) = elems.next() {
+        buf.write_str(&key);
+        buf.write_str("=>");
+        format_elem(MapElementWriter(buf), value);
+        if elems.peek().is_some() {
+            buf.write_char(',');
+        }
+    }
+    buf.write_char('}');
+    Nestable::Yes
 }
 
 pub fn format_array<F, T>(
@@ -860,6 +989,27 @@ where
     F: FormatBuffer,
 {
     /// Marks this list element as null.
+    pub fn write_null(self) -> Nestable {
+        self.0.write_str("NULL");
+        Nestable::Yes
+    }
+
+    /// Returns a [`FormatBuffer`] into which a non-null element can be
+    /// written.
+    pub fn nonnull_buffer(self) -> &'a mut F {
+        self.0
+    }
+}
+
+/// A helper for `format_map` that formats a single map key, value pair.
+#[derive(Debug)]
+pub struct MapElementWriter<'a, F>(&'a mut F);
+
+impl<'a, F> MapElementWriter<'a, F>
+where
+    F: FormatBuffer,
+{
+    /// Marks this value element as null.
     pub fn write_null(self) -> Nestable {
         self.0.write_str("NULL");
         Nestable::Yes

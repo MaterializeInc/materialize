@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::error::Error;
 use std::fmt;
@@ -76,6 +78,19 @@ pub enum Value {
     Text(String),
     /// A universally unique identifier.
     Uuid(Uuid),
+    /// A map of string keys and homogeneous values.
+    Map(HashMap<String, Option<Value>>),
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Map(a), Value::Map(b)) => a == b,
+            (Value::Map(_), _) => false,
+            // todo: other comparisons
+            _ => false,
+        }
+    }
 }
 
 impl Value {
@@ -127,6 +142,13 @@ impl Value {
                     .map(|(e, (_name, ty))| Value::from_datum(e, ty))
                     .collect(),
             )),
+            (Datum::Dict(dict), ScalarType::Map(typ)) => {
+                let value_dict: HashMap<String, Option<Value>> = dict
+                    .iter()
+                    .map(|(k, v)| (k.to_owned(), Value::from_datum(v, typ)))
+                    .collect();
+                Some(Value::Map(value_dict))
+            }
             _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
@@ -189,6 +211,28 @@ impl Value {
                 // wind up here it's a programming error.
                 unreachable!("into_datum cannot be called on Value::Record");
             }
+            Value::Map(map) => {
+                let elem_pg_type = match typ {
+                    Type::Map(t) => &*t,
+                    _ => panic!("Value::Map should have type Type::Map. Found {:?}", typ),
+                };
+                let (_, elem_type) = null_datum(&elem_pg_type);
+                let mut packer = RowPacker::new();
+                for (k, v) in map {
+                    packer.push_dict_with(|packer| {
+                        packer.push(Datum::String(&k));
+                        let v = match v {
+                            Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
+                            None => Datum::Null,
+                        };
+                        packer.push(v);
+                    });
+                }
+                (
+                    buf.push_unary_row(packer.finish()),
+                    ScalarType::Map(Box::new(elem_type)),
+                )
+            }
         }
     }
 
@@ -228,6 +272,7 @@ impl Value {
             Value::Array { dims, elements } => encode_array(buf, dims, elements),
             Value::List(elems) => encode_list(buf, elems),
             Value::Record(elems) => encode_record(buf, elems),
+            Value::Map(map) => encode_map(buf, map),
         }
     }
 
@@ -287,6 +332,11 @@ impl Value {
                 }
                 Ok(postgres_types::IsNull::No)
             }
+            Value::Map(_map) => {
+                // for now just use text encoding
+                self.encode_text(buf);
+                Ok(postgres_types::IsNull::No)
+            },
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -339,6 +389,7 @@ impl Value {
                     "input of anonymous composite types is not implemented",
                 )))
             }
+            Type::Map(val_type) => Value::Map(decode_map(&val_type, raw)?),
         })
     }
 
@@ -371,6 +422,10 @@ impl Value {
             Type::Record(_) => Err(Box::new(DecodeError::new(
                 "input of anonymous composite types is not implemented",
             ))),
+            Type::Map(_) => {
+                // just using the text encoding for now
+                Value::decode_text(ty, raw)
+            },
         }
     }
 }
@@ -424,6 +479,33 @@ fn decode_list(
         matches!(elem_type, Type::List(..)),
         || None,
         |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
+    )?)
+}
+
+fn encode_map<F>(buf: &mut F, elems: &HashMap<String, Option<Value>>) -> Nestable
+where
+    F: FormatBuffer,
+{
+    strconv::format_map(buf, elems, |buf, elem| match elem {
+        None => buf.write_null(),
+        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+    })
+}
+
+fn decode_map(
+    val_type: &Type,
+    raw: &str,
+) -> Result<HashMap<String, Option<Value>>, Box<dyn Error + Sync + Send>> {
+    Ok(strconv::parse_map(
+        raw,
+        || None,
+        |key_text| -> String {
+            match key_text {
+                Cow::Owned(s) => s,
+                Cow::Borrowed(s) => s.to_owned(),
+            }
+        },
+        |elem_text| Value::decode_text(val_type, elem_text.as_bytes()).map(Some),
     )?)
 }
 
@@ -497,6 +579,10 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
                 })
                 .collect(),
         },
+        Type::Map(t) => {
+            let (_, elem_type) = null_datum(t);
+            ScalarType::Map(Box::new(elem_type))
+        }
     };
     (Datum::Null, ty)
 }

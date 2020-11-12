@@ -407,6 +407,9 @@ impl<'a> Datum<'a> {
                         .zip_eq(fields)
                         .all(|(e, (_, t))| e.is_null() || is_instance_of_scalar(e, t)),
                     (Datum::List(_), _) => false,
+                    (Datum::Dict(map), ScalarType::Map(t)) => map
+                        .iter()
+                        .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, t)),
                     (Datum::Dict(_), _) => false,
                     (Datum::JsonNull, _) => false,
                 }
@@ -696,6 +699,12 @@ pub enum ScalarType {
     },
     /// A PostgreSQL object identifier.
     Oid,
+    /// The type of [`Datum::Dict`]
+    ///
+    /// Keys within the map are always of type [`ScalarType::String`].
+    /// Values within the map are of the specified type. Values may always
+    /// be [`Datum::Null`].
+    Map(Box<ScalarType>),
 }
 
 impl<'a> ScalarType {
@@ -749,6 +758,18 @@ impl<'a> ScalarType {
         match self {
             ScalarType::Array(s) => &**s,
             _ => panic!("ScalarType::unwrap_array_element_type called on {:?}", self),
+        }
+    }
+
+    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Map`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Map`].
+    pub fn unwrap_map_element_type(&self) -> &ScalarType {
+        match self {
+            ScalarType::Map(t) => &**t,
+            _ => panic!("ScalarType::unwrap_map_element_type called on {:?}", self),
         }
     }
 
@@ -809,6 +830,7 @@ impl PartialEq for ScalarType {
 
             (List(a), List(b)) | (Array(a), Array(b)) => a.eq(b),
             (Record { fields: fields_a }, Record { fields: fields_b }) => fields_a.eq(fields_b),
+            (Map(a), Map(b)) => a.eq(b),
 
             (Bool, _)
             | (Int32, _)
@@ -828,7 +850,8 @@ impl PartialEq for ScalarType {
             | (Array(_), _)
             | (List(_), _)
             | (Record { .. }, _)
-            | (Oid, _) => false,
+            | (Oid, _)
+            | (Map(_), _) => false,
         }
     }
 }
@@ -870,6 +893,10 @@ impl Hash for ScalarType {
             }
             Uuid => state.write_u8(16),
             Oid => state.write_u8(17),
+            Map(value) => {
+                state.write_u8(18);
+                value.hash(state);
+            }
         }
     }
 }
@@ -906,6 +933,7 @@ impl fmt::Display for ScalarType {
                 f.write_str(")")
             }
             Oid => f.write_str("oid"),
+            Map(t) => write!(f, "map(string=>{})", t),
         }
     }
 }

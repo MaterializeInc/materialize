@@ -20,3 +20,24 @@ CREATE TYPE custom AS MAP (key_type=text, value_type='bool', extra_type=customth
 
 query error CREATE TYPE not yet supported
 CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
+
+query T
+SELECT 'a=>1'::map[text=>int]
+----
+{a=>1}
+
+query T
+SELECT 'a=>2, a=>1'::map[text=>int]
+----
+{a=>1}
+
+query error expected TEXT, found arrow
+SELECT '1=>true'::map[int=>bool]
+
+query T
+SELECT '1=>true'::map[text=>bool]
+----
+{1=>t}
+
+query error unexpected end of input
+SELECT ''::map[text=>int]
