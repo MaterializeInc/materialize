@@ -336,7 +336,7 @@ impl Value {
                 // for now just use text encoding
                 self.encode_text(buf);
                 Ok(postgres_types::IsNull::No)
-            },
+            }
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -425,7 +425,7 @@ impl Value {
             Type::Map(_) => {
                 // just using the text encoding for now
                 Value::decode_text(ty, raw)
-            },
+            }
         }
     }
 }
