@@ -1355,6 +1355,8 @@ struct TrackFull {
     /// Optimization to avoid re-allocating the row packer over and over when extracting the key..
     key_buf: RowPacker,
     range: Option<TrackRange>,
+    /// Whether we have started full deduplication mode
+    started: bool,
 }
 
 /// When to start and end full-range tracking
@@ -1409,6 +1411,7 @@ impl TrackFull {
             key_indices,
             key_buf: Default::default(),
             range: None,
+            started: false,
         }
     }
 
@@ -1529,6 +1532,7 @@ impl DebeziumDeduplicationState {
                 key_indices,
                 key_buf,
                 range,
+                started,
             }) => {
                 if is_snapshot {
                     let key_indices = match key_indices.as_ref() {
@@ -1586,11 +1590,22 @@ impl DebeziumDeduplicationState {
                         if let Some(range) = range {
                             if let Some(upstream_time_millis) = upstream_time_millis {
                                 if upstream_time_millis < range.pad_start {
+                                    *started = false;
                                     return should_skip.is_none();
                                 }
                                 if upstream_time_millis < range.start {
                                     seen_offsets.insert((pos, row), upstream_time_millis);
+                                    *started = false;
                                     return should_skip.is_none();
+                                }
+                                if upstream_time_millis <= range.end && !*started {
+                                    *started = true;
+                                    info!(
+                                        "starting full deduplication source={}:{} buffer_size={}",
+                                        debug_name,
+                                        worker_idx,
+                                        seen_offsets.len()
+                                    );
                                 }
                                 if upstream_time_millis > range.end {
                                     // don't abort early, but we will clean up after this validation
