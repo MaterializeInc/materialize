@@ -482,7 +482,7 @@ impl<'a> ShowSelect<'a> {
             None => "true".to_string(),
         };
         let query = format!("SELECT * FROM ({}) q WHERE {} ORDER BY q.*", query, filter);
-        let stmts = parse::parse(query).expect("ShowSelect::new called with invalid SQL");
+        let stmts = parse::parse(&query).expect("ShowSelect::new called with invalid SQL");
         let stmt = match stmts.into_element() {
             Statement::Select(select) => select,
             _ => panic!("ShowSelect::new called with non-SELECT statement"),

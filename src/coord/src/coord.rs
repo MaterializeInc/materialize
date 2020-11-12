@@ -997,7 +997,7 @@ where
         nullable: Vec<bool>,
         diff: isize,
     ) {
-        let key_sqls = match sql::parse::parse(index.create_sql.to_owned())
+        let key_sqls = match sql::parse::parse(&index.create_sql)
             .expect("create_sql cannot be invalid")
             .into_element()
         {

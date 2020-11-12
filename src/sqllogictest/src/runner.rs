@@ -513,7 +513,7 @@ impl State {
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
         // get statement
-        let statements = match sql::parse::parse(sql.to_string()) {
+        let statements = match sql::parse::parse(sql) {
             Ok(statements) => statements,
             Err(_) if output.is_err() => return Ok(Outcome::Success),
             Err(e) => {
@@ -727,7 +727,7 @@ impl State {
         &mut self,
         sql: &str,
     ) -> Result<(Option<RelationDesc>, ExecuteResponse), anyhow::Error> {
-        let stmts = sql::parse::parse(sql.into())?;
+        let stmts = sql::parse::parse(sql)?;
         let stmt = if stmts.len() == 1 {
             stmts.into_iter().next().unwrap()
         } else {

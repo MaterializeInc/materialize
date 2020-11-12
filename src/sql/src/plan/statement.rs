@@ -1766,7 +1766,7 @@ fn handle_explain(
                     entry.item_type(),
                 );
             }
-            let parsed = crate::parse::parse(entry.create_sql().to_owned())
+            let parsed = crate::parse::parse(entry.create_sql())
                 .expect("Sql for existing view should be valid sql");
             let query = match parsed.into_last() {
                 Statement::CreateView(CreateViewStatement { query, .. }) => query,

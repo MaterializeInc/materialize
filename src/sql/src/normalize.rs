@@ -306,7 +306,7 @@ mod tests {
         };
 
         let parsed = sql_parser::parser::parse_statements(
-            "create materialized view foo as select 1 as bar".into(),
+            "create materialized view foo as select 1 as bar",
         )?
         .into_element();
 

@@ -262,6 +262,7 @@ pub struct ErrorResponse {
     pub message: String,
     pub detail: Option<String>,
     pub hint: Option<String>,
+    pub position: Option<usize>,
 }
 
 impl ErrorResponse {
@@ -296,6 +297,7 @@ impl ErrorResponse {
             message: message.into(),
             detail: None,
             hint: None,
+            position: None,
         }
     }
 
@@ -304,6 +306,11 @@ impl ErrorResponse {
         S: Into<String>,
     {
         self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn with_position(mut self, position: usize) -> ErrorResponse {
+        self.position = Some(position);
         self
     }
 

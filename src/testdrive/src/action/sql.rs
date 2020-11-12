@@ -38,7 +38,7 @@ pub struct SqlAction {
 }
 
 pub fn build_sql(mut cmd: SqlCommand, timeout: Duration) -> Result<SqlAction, String> {
-    let stmts = sql_parser::parser::parse_statements(cmd.query.clone())
+    let stmts = sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
     if stmts.len() != 1 {
         return Err(format!("expected one statement, but got {}", stmts.len()));

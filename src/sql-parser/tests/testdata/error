@@ -21,110 +21,86 @@
 parse-statement
 SELECT 1, 2, FROM a
 ----
-error:
-Parse error:
+error: expected expression, but found reserved keyword
 SELECT 1, 2, FROM a
-             ^^^^
-expected expression, but found reserved keyword
+             ^
 
 parse-statement
 UPDATE t WHERE 1
 ----
-error:
-Parse error:
+error: Expected SET, found WHERE
 UPDATE t WHERE 1
-         ^^^^^
-Expected SET, found WHERE
+         ^
 
 parse-statement
 UPDATE t SET a = 1 extrabadstuff
 ----
-error:
-Parse error:
+error: Expected end of statement, found identifier
 UPDATE t SET a = 1 extrabadstuff
-                   ^^^^^^^^^^^^^
-Expected end of statement, found identifier
+                   ^
 
 parse-statement
 SELECT ALL DISTINCT name FROM customer
 ----
-error:
-Parse error:
+error: Cannot specify both ALL and DISTINCT in SELECT
 SELECT ALL DISTINCT name FROM customer
-       ^^^^^^^^^^^^
-Cannot specify both ALL and DISTINCT in SELECT
+           ^
 
 parse-statement
 INSERT public.customer (id, name, active) VALUES (1, 2, 3)
 ----
-error:
-Parse error:
+error: Expected INTO, found identifier
 INSERT public.customer (id, name, active) VALUES (1, 2, 3)
-       ^^^^^^
-Expected INTO, found identifier
+       ^
 
 parse-statement
 SELECT foo AS
 ----
-error:
-Parse error:
+error: Expected an identifier after AS, found EOF
 SELECT foo AS
              ^
-Expected an identifier after AS, found EOF
 
 parse-statement
 SELECT 1 FROM foo AS
 ----
-error:
-Parse error:
+error: Expected an identifier after AS, found EOF
 SELECT 1 FROM foo AS
                     ^
-Expected an identifier after AS, found EOF
 
 parse-statement
 SELECT count(ALL DISTINCT + x) FROM customer
 ----
-error:
-Parse error:
+error: Cannot specify both ALL and DISTINCT in function: count
 SELECT count(ALL DISTINCT + x) FROM customer
-             ^^^^^^^^^^^^
-Cannot specify both ALL and DISTINCT in function: count
+                 ^
 
 parse-statement
 SELECT INTERVAL '01:01.01' MINUTE (5) TO SECOND (5)
 ----
-error:
-Parse error:
+error: Expected end of statement, found left parenthesis
 SELECT INTERVAL '01:01.01' MINUTE (5) TO SECOND (5)
                                   ^
-Expected end of statement, found left parenthesis
 
 parse-statement
 SELECT 1 WHERE 1 < ANY SELECT 2
 ----
-error:
-Parse error:
+error: Expected left parenthesis, found SELECT
 SELECT 1 WHERE 1 < ANY SELECT 2
-                       ^^^^^^
-Expected left parenthesis, found SELECT
+                       ^
 
 parse-statement
 SELECT 1 WHERE 1 < NONE (SELECT 2)
 ----
-error:
-Parse error:
+error: Expected right parenthesis, found number
 SELECT 1 WHERE 1 < NONE (SELECT 2)
                                 ^
-Expected right parenthesis, found number
 
 parse-statement
 SELECT 1 WHERE 1 < ANY (SELECT 2
 ----
-error:
-Parse error:
+error: Expected right parenthesis, found EOF
 SELECT 1 WHERE 1 < ANY (SELECT 2
                                 ^
-Expected right parenthesis, found EOF
 
 parse-statement
 SELECT 1 WHERE 1 + ANY (SELECT 2)
@@ -136,31 +112,25 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT EXISTS (NULL)
 ----
-error:
-Parse error:
+error: Expected SELECT, VALUES, or a subquery in the query body, found NULL
 SELECT EXISTS (NULL)
-               ^^^^
-Expected SELECT, VALUES, or a subquery in the query body, found NULL
+               ^
 
 parse-statement
 SELECT SELECT 1 FROM bar WHERE 1=1 FROM baz
 ----
-error:
-Parse error:
+error: Expected end of statement, found SELECT
 SELECT SELECT 1 FROM bar WHERE 1=1 FROM baz
-       ^^^^^^
-Expected end of statement, found SELECT
+       ^
 
 parse-statement
 SELECT foo FROM
 
 ----
 ----
-error:
-Parse error:
+error: Expected identifier, found EOF
 
 ^
-Expected identifier, found EOF
 ----
 ----
 
@@ -171,140 +141,110 @@ SEL
 
 ECT
 ----
-error:
-Parse error:
+error: Expected a keyword at the beginning of a statement, found identifier
 SEL
-^^^
-Expected a keyword at the beginning of a statement, found identifier
+^
 
 parse-statement
 SELECT foo
 FROM bar+1 ORDER
 BY
 ----
-error:
-Parse error:
+error: Expected end of statement, found operator
 FROM bar+1 ORDER
         ^
-Expected end of statement, found operator
 
 parse-statement
 SELECT * FROM db.public..customer
 ----
-error:
-Parse error:
+error: Expected identifier, found dot
 SELECT * FROM db.public..customer
                         ^
-Expected identifier, found dot
 
 parse-statement
 SELECT * FROM
 ----
-error:
-Parse error:
+error: Expected identifier, found EOF
 SELECT * FROM
              ^
-Expected identifier, found EOF
 
 parse-statement
 SELECT '
 ----
-error:
-Parse error:
+error: unterminated quoted string
 SELECT '
        ^
-unterminated quoted string
 
 parse-statement
 SELECT E'
 ----
-error:
-Parse error:
+error: unterminated quoted string
 SELECT E'
         ^
-unterminated quoted string
 
 parse-statement
 SELECT E'\u&'
 ----
-error:
-Parse error:
+error: invalid unicode escape
 SELECT E'\u&'
-         ^^^^
-invalid unicode escape
+         ^
 
 parse-statement
 SELECT E'\u&&&&'
 ----
-error:
-Parse error:
+error: invalid unicode escape
 SELECT E'\u&&&&'
-         ^^^^^^
-invalid unicode escape
+         ^
 
 # List literal expressions must begin with `LIST` before interior lists can
 # omit it.
 parse-statement
 SELECT [1, 2]
 ----
-error:
-Parse error:
+error: Expected an expression, found left square bracket
 SELECT [1, 2]
        ^
-Expected an expression, found left square bracket
 
 # Subscripts must have values
 parse-statement
 SELECT LIST[1][]
 ----
-error:
-Parse error:
+error: Expected an expression, found right square bracket
 SELECT LIST[1][]
                ^
-Expected an expression, found right square bracket
 
 # Multi-dimensional subscripts must all be slices
 parse-statement
 SELECT LIST[1][1:2, 1]
 ----
-error:
-Parse error:
+error: Expected colon, found right square bracket
 SELECT LIST[1][1:2, 1]
                      ^
-Expected colon, found right square bracket
 
 parse-statement
 SELECT LIST[1][1, 1]
 ----
-error:
-Parse error:
+error: Expected right square bracket, found comma
 SELECT LIST[1][1, 1]
                 ^
-Expected right square bracket, found comma
 
 parse-statement
 SELECT LIST[1][1, 1:1]
 ----
-error:
-Parse error:
+error: Expected right square bracket, found comma
 SELECT LIST[1][1, 1:1]
                 ^
-Expected right square bracket, found comma
 
 parse-statement
 SELECT LIST[1][1:1, ]
 ----
-error:
-Parse error:
+error: Expected an expression, found right square bracket
 SELECT LIST[1][1:1, ]
                     ^
-Expected an expression, found right square bracket
 
 parse-scalar
 ARRAY[]::int[1 + 1]
 ----
-error:
-Parse error:
+error: Expected right square bracket, found operator
 ARRAY[]::int[1 + 1]
                ^
-Expected right square bracket, found operator
