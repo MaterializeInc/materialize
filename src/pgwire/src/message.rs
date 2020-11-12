@@ -11,6 +11,7 @@ use std::convert::TryFrom;
 use std::io;
 
 use bytes::BytesMut;
+use itertools::Itertools;
 use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
@@ -444,9 +445,13 @@ pub fn encode_copy_row_text(
     Ok(())
 }
 
-pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
+pub fn encode_row_description(
+    desc: &RelationDesc,
+    formats: &[pgrepr::Format],
+) -> Vec<FieldDescription> {
     desc.iter()
-        .map(|(name, typ)| {
+        .zip_eq(formats)
+        .map(|((name, typ), format)| {
             let pg_type = pgrepr::Type::from(&typ.scalar_type);
             FieldDescription {
                 name: name.cloned().unwrap_or_else(|| "?column?".into()),
@@ -465,7 +470,7 @@ pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
                     }
                     _ => -1,
                 },
-                format: pgrepr::Format::Text,
+                format: *format,
             }
         })
         .collect()
