@@ -56,6 +56,8 @@ Wrap your release notes at the 80 character mark.
 - Report an error without crashing when a query contains unexpected UTF-8
   characters, e.g., `SELECT ’1’` {{% gh 4755 %}}.
 - [`TAIL`](/sql/tail) now supports timestamp progress.
+- Log messages are no longer emitted to stderr if an explicit `--log-file` is
+  supplied at startup. {{ gh 4777 }}
 
 {{% version-header v0.5.1 %}}
 
