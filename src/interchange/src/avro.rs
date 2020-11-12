@@ -1204,6 +1204,7 @@ struct DebeziumDeduplicationState {
     binlog_offsets: HashMap<String, (usize, usize, Option<i64>)>,
     /// Whether or not to track every message we've ever seen
     full: Option<TrackFull>,
+    messages_processed: u64,
 }
 
 /// If we need to deal with debezium possibly going back after it hasn't seen things.
@@ -1221,6 +1222,7 @@ struct TrackFull {
     /// Optimization to avoid re-allocating the row packer over and over when extracting the key..
     key_buf: RowPacker,
     range: Option<TrackRange>,
+    started_padding: bool,
     /// Whether we have started full deduplication mode
     started: bool,
 }
@@ -1277,6 +1279,7 @@ impl TrackFull {
             key_indices,
             key_buf: Default::default(),
             range: None,
+            started_padding: false,
             started: false,
         }
     }
@@ -1319,6 +1322,7 @@ impl DebeziumDeduplicationState {
         DebeziumDeduplicationState {
             binlog_offsets: Default::default(),
             full,
+            messages_processed: 0,
         }
     }
 
@@ -1339,6 +1343,7 @@ impl DebeziumDeduplicationState {
             RowCoordinates::MySql { pos, row } => (pos, row),
             RowCoordinates::Postgres { lsn } => (lsn, 0),
         };
+        self.messages_processed += 1;
 
         // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
         // duplicates, since it is always the same.
@@ -1381,6 +1386,7 @@ impl DebeziumDeduplicationState {
                 key_indices,
                 key_buf,
                 range,
+                started_padding,
                 started,
             }) => {
                 if is_snapshot {
@@ -1439,21 +1445,48 @@ impl DebeziumDeduplicationState {
                         if let Some(range) = range {
                             if let Some(upstream_time_millis) = upstream_time_millis {
                                 if upstream_time_millis < range.pad_start {
+                                    if *started_padding {
+                                        warn!("went back to before padding start, after entering padding\
+                                               source={}:{} message_time={} messages_processed={}",
+                                              debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
+                                              self.messages_processed);
+                                    }
+                                    if *started {
+                                        warn!("went back to before padding start, after entering full dedupe\
+                                               source={}:{} message_time={} messages_processed={}",
+                                              debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
+                                              self.messages_processed);
+                                    }
+                                    *started_padding = false;
                                     *started = false;
                                     return should_skip.is_none();
                                 }
                                 if upstream_time_millis < range.start {
-                                    seen_offsets.insert((pos, row), upstream_time_millis);
+                                    // in the padding time range
+                                    *started_padding = true;
+                                    if *started {
+                                        warn!("went back to before padding start, after entering full dedupe\
+                                               source={}:{} message_time={} messages_processed={}",
+                                              debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
+                                              self.messages_processed);
+                                    }
                                     *started = false;
+
+                                    seen_offsets
+                                        .entry((pos, row))
+                                        .or_insert_with(|| upstream_time_millis);
                                     return should_skip.is_none();
                                 }
                                 if upstream_time_millis <= range.end && !*started {
                                     *started = true;
                                     info!(
-                                        "starting full deduplication source={}:{} buffer_size={}",
+                                        "starting full deduplication source={}:{} buffer_size={} \
+                                         messages_processed={} message_time={}",
                                         debug_name,
                                         worker_idx,
-                                        seen_offsets.len()
+                                        seen_offsets.len(),
+                                        self.messages_processed,
+                                        fmt_timestamp(upstream_time_millis)
                                     );
                                 }
                                 if upstream_time_millis > range.end {
