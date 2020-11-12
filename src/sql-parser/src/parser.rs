@@ -2352,31 +2352,59 @@ impl<'a> Parser<'a> {
                 vec![]
             };
 
-            let limit = if parser.parse_keyword(LIMIT) {
-                parser.parse_limit()?
+            let mut limit = if parser.parse_keyword(LIMIT) {
+                if parser.parse_keyword(ALL) {
+                    None
+                } else {
+                    Some(Limit {
+                        with_ties: false,
+                        quantity: parser.parse_expr()?,
+                    })
+                }
             } else {
                 None
             };
 
             let offset = if parser.parse_keyword(OFFSET) {
-                Some(parser.parse_offset()?)
+                let value = parser.parse_expr()?;
+                let _ = parser.parse_one_of_keywords(&[ROW, ROWS]);
+                Some(value)
             } else {
                 None
             };
 
-            let fetch = if parser.parse_keyword(FETCH) {
-                Some(parser.parse_fetch()?)
-            } else {
-                None
-            };
+            if limit.is_none() && parser.parse_keyword(FETCH) {
+                parser.expect_one_of_keywords(&[FIRST, NEXT])?;
+                let quantity = if parser.parse_one_of_keywords(&[ROW, ROWS]).is_some() {
+                    Expr::Value(Value::Number('1'.into()))
+                } else {
+                    let quantity = parser.parse_expr()?;
+                    parser.expect_one_of_keywords(&[ROW, ROWS])?;
+                    quantity
+                };
+                let with_ties = if parser.parse_keyword(ONLY) {
+                    false
+                } else if parser.parse_keywords(&[WITH, TIES]) {
+                    true
+                } else {
+                    return parser.expected(
+                        parser.peek_pos(),
+                        "one of ONLY or WITH TIES",
+                        parser.peek_token(),
+                    );
+                };
+                limit = Some(Limit {
+                    with_ties,
+                    quantity,
+                });
+            }
 
             Ok(Query {
                 ctes,
                 body,
-                limit,
                 order_by,
+                limit,
                 offset,
-                fetch,
             })
         })
     }
@@ -2997,51 +3025,6 @@ impl<'a> Parser<'a> {
             None
         };
         Ok(OrderByExpr { expr, asc })
-    }
-
-    /// Parse a LIMIT clause
-    fn parse_limit(&mut self) -> Result<Option<Expr>, ParserError> {
-        if self.parse_keyword(ALL) {
-            Ok(None)
-        } else {
-            Ok(Some(Expr::Value(self.parse_number_value()?)))
-        }
-    }
-
-    /// Parse an OFFSET clause
-    fn parse_offset(&mut self) -> Result<Expr, ParserError> {
-        let value = Expr::Value(self.parse_number_value()?);
-        let _ = self.parse_one_of_keywords(&[ROW, ROWS]);
-        Ok(value)
-    }
-
-    /// Parse a FETCH clause
-    fn parse_fetch(&mut self) -> Result<Fetch, ParserError> {
-        self.expect_one_of_keywords(&[FIRST, NEXT])?;
-        let (quantity, percent) = if self.parse_one_of_keywords(&[ROW, ROWS]).is_some() {
-            (None, false)
-        } else {
-            let quantity = Expr::Value(self.parse_value()?);
-            let percent = self.parse_keyword(PERCENT);
-            self.expect_one_of_keywords(&[ROW, ROWS])?;
-            (Some(quantity), percent)
-        };
-        let with_ties = if self.parse_keyword(ONLY) {
-            false
-        } else if self.parse_keywords(&[WITH, TIES]) {
-            true
-        } else {
-            return self.expected(
-                self.peek_pos(),
-                "one of ONLY or WITH TIES",
-                self.peek_token(),
-            );
-        };
-        Ok(Fetch {
-            with_ties,
-            percent,
-            quantity,
-        })
     }
 
     fn parse_values(&mut self) -> Result<Values, ParserError> {

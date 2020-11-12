@@ -232,6 +232,9 @@ SELECT count(*) FROM fizz WHERE exists(SELECT val1 FROM baz ORDER BY val1 limit 
 ----
 0
 
+query error FETCH ... WITH TIES not yet supported
+SELECT * FROM fizz FETCH FIRST 2 ROWS WITH TIES
+
 # offset + limit
 query TI
 SELECT b, (SELECT val1 FROM baz WHERE val2 = a ORDER BY val1 limit 1 offset 1 rows) c
