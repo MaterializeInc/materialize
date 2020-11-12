@@ -493,8 +493,7 @@ pub fn plan_coerce<'a>(
         }
 
         Parameter(n) => {
-            let prev = ecx.param_types().borrow_mut().insert(n, coerce_to.clone());
-            assert!(prev.is_none());
+            ecx.qcx.scx.set_param_type(n, coerce_to.clone());
             ScalarExpr::Parameter(n)
         }
     })

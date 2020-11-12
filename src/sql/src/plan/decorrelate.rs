@@ -112,12 +112,11 @@ impl ColumnMap {
 impl RelationExpr {
     /// Rewrite `self` into a `expr::RelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `RelationExpr`s) into flat queries
-    pub fn decorrelate(mut self) -> expr::RelationExpr {
-        let mut id_gen = expr::IdGen::default();
+    pub fn decorrelate(mut self, id_gen: &mut expr::IdGen) -> expr::RelationExpr {
         transform_expr::split_subquery_predicates(&mut self);
         transform_expr::try_simplify_quantified_comparisons(&mut self);
         expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
-            .let_in(&mut id_gen, |id_gen, get_outer| {
+            .let_in(id_gen, |id_gen, get_outer| {
                 self.applied_to(id_gen, get_outer, &ColumnMap::empty())
             })
     }

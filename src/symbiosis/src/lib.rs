@@ -24,11 +24,9 @@
 //! Symbiosis mode is only suitable for development. It is likely to be
 //! extremely slow and inefficient on large data sets.
 
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::env;
-use std::rc::Rc;
 
 use anyhow::{anyhow, bail};
 use chrono::Utc;
@@ -129,11 +127,7 @@ END $$;
         catalog: &dyn Catalog,
         stmt: &Statement,
     ) -> Result<Plan, anyhow::Error> {
-        let scx = StatementContext {
-            pcx,
-            catalog,
-            param_types: Rc::new(RefCell::new(BTreeMap::new())),
-        };
+        let scx = StatementContext::new(pcx, catalog);
         Ok(match stmt {
             Statement::CreateTable(CreateTableStatement {
                 name,

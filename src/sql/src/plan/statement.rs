@@ -29,7 +29,7 @@ use dataflow_types::{
     KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding,
     RegexEncoding, SinkConnectorBuilder, SourceConnector,
 };
-use expr::{GlobalId, RowSetFinishing};
+use expr::{GlobalId, LocalId, IdGen, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
@@ -51,6 +51,7 @@ use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
 use crate::normalize;
 use crate::plan::error::PlanError;
+use crate::plan::expr::RelationExpr;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
     query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, CopyFormat, Index,
@@ -112,17 +113,13 @@ pub fn describe_statement(
     stmt: Statement,
     param_types_in: &[Option<pgrepr::Type>],
 ) -> Result<StatementDesc, anyhow::Error> {
-    let mut param_types = BTreeMap::new();
+    let pcx = PlanContext::default();
+    let scx = StatementContext::new(&pcx, catalog);
     for (i, ty) in param_types_in.iter().enumerate() {
         if let Some(ty) = ty {
-            param_types.insert(i + 1, query::scalar_type_from_pg(ty)?);
+            scx.set_param_type(i + 1, query::scalar_type_from_pg(ty)?);
         }
     }
-    let scx = StatementContext {
-        catalog,
-        pcx: &PlanContext::default(),
-        param_types: Rc::new(RefCell::new(param_types)),
-    };
     Ok(match stmt {
         Statement::CreateDatabase(_)
         | Statement::CreateSchema(_)
@@ -275,17 +272,10 @@ pub fn handle_statement(
     stmt: Statement,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    let param_types = params
-        .types
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| (i + 1, ty.clone()))
-        .collect();
-    let scx = &StatementContext {
-        pcx,
-        catalog,
-        param_types: Rc::new(RefCell::new(param_types)),
-    };
+    let scx = &StatementContext::new(pcx, catalog);
+    for (i, ty) in params.types.iter().enumerate() {
+        scx.set_param_type(i + 1, ty.clone());
+    }
     match stmt {
         Statement::CreateDatabase(stmt) => handle_create_database(scx, stmt),
         Statement::CreateIndex(stmt) => handle_create_index(scx, stmt),
@@ -919,7 +909,7 @@ fn handle_create_view(
     relation_expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     relation_expr.finish(finishing);
-    let relation_expr = relation_expr.decorrelate();
+    let relation_expr = scx.decorrelate(relation_expr);
     desc = maybe_rename_columns(format!("view {}", name), desc, columns)?;
     let temporary = *temporary;
     let materialize = *materialized; // Normalize for `raw_sql` below.
@@ -1740,7 +1730,7 @@ fn handle_insert(
 ) -> Result<Plan, anyhow::Error> {
     let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
     expr.bind_parameters(&params)?;
-    let expr = expr.decorrelate();
+    let expr = scx.decorrelate(expr);
 
     Ok(Plan::Insert { id, values: expr })
 }
@@ -1792,11 +1782,7 @@ fn handle_explain(
                 Statement::CreateView(CreateViewStatement { query, .. }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            let scx = StatementContext {
-                pcx: entry.plan_cx(),
-                catalog: scx.catalog,
-                param_types: scx.param_types.clone(),
-            };
+            let scx = StatementContext::new(entry.plan_cx(), scx.catalog);
             (scx, query)
         }
         Explainee::Query(query) => (scx.clone(), query),
@@ -1815,7 +1801,7 @@ fn handle_explain(
         Some(finishing)
     };
     sql_expr.bind_parameters(&params)?;
-    let expr = sql_expr.clone().decorrelate();
+    let expr = scx.decorrelate(sql_expr.clone());
     Ok(Plan::ExplainPlan {
         raw_plan: sql_expr,
         decorrelated_plan: expr,
@@ -1835,7 +1821,7 @@ fn handle_query(
 ) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
     let (mut expr, desc, finishing) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
-    Ok((expr.decorrelate(), desc, finishing))
+    Ok((scx.decorrelate(expr), desc, finishing))
 }
 
 /// Whether a SQL object type can be interpreted as matching the type of the given catalog item.
@@ -1872,9 +1858,30 @@ pub struct StatementContext<'a> {
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
+    /// Generates IDs for use in `RelationExpr`s that are unique for the
+    /// lifetime of the `StatementContext`.
+    pub id_gen: Rc<RefCell<IdGen>>,
 }
 
 impl<'a> StatementContext<'a> {
+    pub fn new(pcx: &'a PlanContext, catalog: &'a dyn Catalog) -> StatementContext<'a> {
+        StatementContext {
+            pcx,
+            catalog,
+            param_types: Rc::new(RefCell::new(BTreeMap::new())),
+            id_gen: Rc::new(RefCell::new(IdGen::default())),
+        }
+    }
+
+    pub fn set_param_type(&self, n: usize, ty: ScalarType) {
+        let prev = self.param_types.borrow_mut().insert(n, ty);
+        assert!(prev.is_none());
+    }
+
+    pub fn allocate_id(&self) -> LocalId {
+        LocalId::new(self.id_gen.borrow_mut().allocate_id())
+    }
+
     pub fn allocate_name(&self, name: PartialName) -> FullName {
         FullName {
             database: match name.database {
@@ -1949,6 +1956,11 @@ impl<'a> StatementContext<'a> {
             )
         }
         Ok(())
+    }
+
+    pub fn decorrelate(&self, expr: RelationExpr) -> ::expr::RelationExpr {
+        let mut id_gen = self.id_gen.borrow_mut();
+        expr.decorrelate(&mut *id_gen)
     }
 
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, anyhow::Error> {

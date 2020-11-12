@@ -20,7 +20,6 @@
 //! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `RelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::iter;
@@ -1801,7 +1800,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             if *n == 0 || *n > 65536 {
                 bail!("there is no parameter ${}", n);
             }
-            if ecx.param_types().borrow().contains_key(n) {
+            if ecx.qcx.scx.param_types.borrow().contains_key(n) {
                 ScalarExpr::Parameter(*n).into()
             } else {
                 CoercibleScalarExpr::Parameter(*n)
@@ -2847,9 +2846,5 @@ impl<'a> ExprContext<'a> {
 
     pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
         self.qcx.scx.require_experimental_mode(feature_name)
-    }
-
-    pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {
-        &self.qcx.scx.param_types
     }
 }

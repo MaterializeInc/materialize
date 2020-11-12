@@ -286,10 +286,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::collections::BTreeMap;
     use std::error::Error;
-    use std::rc::Rc;
 
     use ore::collections::CollectionExt;
 
@@ -299,11 +296,8 @@ mod tests {
 
     #[test]
     fn normalized_create() -> Result<(), Box<dyn Error>> {
-        let scx = &StatementContext {
-            pcx: &PlanContext::default(),
-            catalog: &DummyCatalog,
-            param_types: Rc::new(RefCell::new(BTreeMap::new())),
-        };
+        let pcx = PlanContext::default();
+        let scx = &StatementContext::new(&pcx, &DummyCatalog);
 
         let parsed = sql_parser::parser::parse_statements(
             "create materialized view foo as select 1 as bar",
