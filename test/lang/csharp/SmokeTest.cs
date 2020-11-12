@@ -20,15 +20,11 @@ namespace csharp
             using var conn = new NpgsqlConnection("host=materialized;port=6875");
             conn.Open();
 
-            // TODO(benesch): enable once pg_type is sufficiently supported
-            // for Npgsql to determine the types here.
-            if (false) {
-                using var cmd = new NpgsqlCommand("SELECT 42::int8", conn);
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    Assert.AreEqual(42, reader.GetInt64(0));
-                }
+            using var cmd = new NpgsqlCommand("SELECT 42::int8", conn);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                Assert.AreEqual(42, reader.GetValue(0));
             }
         }
     }

@@ -189,6 +189,16 @@ steps:
           config: test/metabase/mzcompose.yml
           run: smoketest
 
+  - id: lang-csharp
+    label: ":csharp: tests"
+    depends_on: build
+    timeout_in_minutes: 10
+    inputs: [test/lang/csharp]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/lang/csharp/mzcompose.yml
+          run: csharp
+
   - id: lang-js
     label: ":javascript: tests"
     depends_on: build
