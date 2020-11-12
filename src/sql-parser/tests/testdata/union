@@ -66,7 +66,7 @@ SELECT 1 INTERSECT (SELECT 2 EXCEPT SELECT 3)
 parse-statement roundtrip
 WITH cte AS (SELECT 1 AS foo) (SELECT foo FROM cte ORDER BY 1 LIMIT 1)
 ----
-WITH cte AS (SELECT 1 AS foo) (SELECT foo FROM cte ORDER BY 1 LIMIT 1)
+WITH cte AS (SELECT 1 AS foo) SELECT foo FROM cte ORDER BY 1 LIMIT 1
 
 parse-statement roundtrip
 SELECT 1 UNION (SELECT 2 ORDER BY 1 LIMIT 1)

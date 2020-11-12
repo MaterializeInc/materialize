@@ -34,11 +34,10 @@ pub struct Query {
     /// ORDER BY
     pub order_by: Vec<OrderByExpr>,
     /// `LIMIT { <N> | ALL }`
-    pub limit: Option<Expr>,
+    /// `FETCH { FIRST | NEXT } <N> { ROW | ROWS } | { ONLY | WITH TIES }`
+    pub limit: Option<Limit>,
     /// `OFFSET <N> { ROW | ROWS }`
     pub offset: Option<Expr>,
-    /// `FETCH { FIRST | NEXT } <N> [ PERCENT ] { ROW | ROWS } | { ONLY | WITH TIES }`
-    pub fetch: Option<Fetch>,
 }
 
 impl AstDisplay for Query {
@@ -53,18 +52,27 @@ impl AstDisplay for Query {
             f.write_str(" ORDER BY ");
             f.write_node(&display::comma_separated(&self.order_by));
         }
-        if let Some(ref limit) = self.limit {
-            f.write_str(" LIMIT ");
-            f.write_node(limit);
-        }
-        if let Some(ref offset) = self.offset {
-            f.write_str(" OFFSET ");
-            f.write_node(offset);
-            f.write_str(" ROWS");
-        }
-        if let Some(ref fetch) = self.fetch {
-            f.write_str(" ");
-            f.write_node(fetch);
+
+        let write_offset = |f: &mut AstFormatter| {
+            if let Some(offset) = &self.offset {
+                f.write_str(" OFFSET ");
+                f.write_node(offset);
+            }
+        };
+
+        if let Some(limit) = &self.limit {
+            if limit.with_ties {
+                write_offset(f);
+                f.write_str(" FETCH FIRST ");
+                f.write_node(&limit.quantity);
+                f.write_str(" ROWS WITH TIES");
+            } else {
+                f.write_str(" LIMIT ");
+                f.write_node(&limit.quantity);
+                write_offset(f);
+            }
+        } else {
+            write_offset(f);
         }
     }
 }
@@ -78,7 +86,6 @@ impl Query {
             order_by: vec![],
             limit: None,
             offset: None,
-            fetch: None,
         }
     }
 
@@ -91,7 +98,6 @@ impl Query {
                 body: SetExpr::Values(Values(vec![])),
                 limit: None,
                 offset: None,
-                fetch: None,
             },
         )
     }
@@ -534,29 +540,10 @@ impl AstDisplay for OrderByExpr {
 impl_display!(OrderByExpr);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Fetch {
+pub struct Limit {
     pub with_ties: bool,
-    pub percent: bool,
-    pub quantity: Option<Expr>,
+    pub quantity: Expr,
 }
-
-impl AstDisplay for Fetch {
-    fn fmt(&self, f: &mut AstFormatter) {
-        let extension = if self.with_ties { "WITH TIES" } else { "ONLY" };
-        if let Some(ref quantity) = self.quantity {
-            let percent = if self.percent { " PERCENT" } else { "" };
-            f.write_str("FETCH FIRST ");
-            f.write_node(quantity);
-            f.write_str(percent);
-            f.write_str(" ROWS ");
-            f.write_str(extension);
-        } else {
-            f.write_str("FETCH FIRST ROWS ");
-            f.write_str(extension);
-        }
-    }
-}
-impl_display!(Fetch);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Values(pub Vec<Vec<Expr>>);

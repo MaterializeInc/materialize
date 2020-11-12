@@ -164,7 +164,6 @@ Order
 Outer
 Over
 Partition
-Percent
 Plan
 Preceding
 Precision

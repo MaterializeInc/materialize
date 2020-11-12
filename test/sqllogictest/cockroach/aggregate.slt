@@ -239,10 +239,10 @@ SELECT count(DISTINCT w) FROM kv GROUP BY 1
 query error aggregate functions are not allowed in RETURNING
 INSERT INTO kv (k, v) VALUES (99, 100) RETURNING sum(v)
 
-query error aggregate functions are not allowed in LIMIT
+query error LIMIT must be an integer constant
 SELECT sum(v) FROM kv GROUP BY k LIMIT sum(v)
 
-query error aggregate functions are not allowed in OFFSET
+query error OFFSET must be an integer constant
 SELECT sum(v) FROM kv GROUP BY k LIMIT 1 OFFSET sum(v)
 
 query error aggregate functions are not allowed in VALUES

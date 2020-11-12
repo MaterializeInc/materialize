@@ -241,9 +241,16 @@ impl<'a> Parser<'a> {
 
     /// Parse tokens until the precedence changes
     fn parse_subexpr(&mut self, precedence: Precedence) -> Result<Expr, ParserError> {
+        let expr = self.check_descent(|parser| parser.parse_prefix())?;
+        self.parse_subexpr_seeded(precedence, expr)
+    }
+
+    fn parse_subexpr_seeded(
+        &mut self,
+        precedence: Precedence,
+        mut expr: Expr,
+    ) -> Result<Expr, ParserError> {
         self.check_descent(|parser| {
-            debug!("parsing expr");
-            let mut expr = parser.parse_prefix()?;
             debug!("prefix: {:?}", expr);
             loop {
                 let next_precedence = parser.get_next_precedence();
@@ -328,17 +335,7 @@ impl<'a> Parser<'a> {
             }
             Token::Parameter(n) => Ok(Expr::Parameter(n)),
             Token::LParen => {
-                let mut expr = if self.parse_keyword(SELECT) || self.parse_keyword(WITH) {
-                    self.prev_token();
-                    Expr::Subquery(Box::new(self.parse_query()?))
-                } else {
-                    let exprs = self.parse_comma_separated(Parser::parse_expr)?;
-                    if exprs.len() == 1 {
-                        Expr::Nested(Box::new(exprs.into_element()))
-                    } else {
-                        Expr::Row { exprs }
-                    }
-                };
+                let mut expr = self.parse_parenthesized_expr()?;
                 self.expect_token(&Token::RParen)?;
                 while self.consume_token(&Token::Dot) {
                     match self.next_token() {
@@ -374,6 +371,127 @@ impl<'a> Parser<'a> {
         } else {
             Ok(expr)
         }
+    }
+
+    /// Parses an expression that appears in parentheses, like `(1 + 1)` or
+    /// `(SELECT 1)`. Assumes that the opening parenthesis has already been
+    /// parsed. Parses up to the closing parenthesis without consuming it.
+    fn parse_parenthesized_expr(&mut self) -> Result<Expr, ParserError> {
+        // The SQL grammar has an irritating ambiguity that presents here.
+        // Consider these two expression fragments:
+        //
+        //     SELECT (((SELECT 2)) + 3)
+        //     SELECT (((SELECT 2)) UNION SELECT 2)
+        //             ^           ^
+        //            (1)         (2)
+        // When we see the parenthesis marked (1), we have no way to know ahead
+        // of time whether that parenthesis is part of a `SetExpr::Query` inside
+        // of an `Expr::Subquery` or whether it introduces an `Expr::Nested`.
+        // The approach taken here avoids backtracking by deferring the decision
+        // of whether to parse as a subquery or a nested expression until we get
+        // to the point marked (2) above. Once there, we know that the presence
+        // of a set operator implies that the parentheses belonged to a the
+        // subquery; otherwise, they belonged to the expression.
+        //
+        // See also PostgreSQL's comments on the matter:
+        // https://github.com/postgres/postgres/blob/42c63ab/src/backend/parser/gram.y#L11125-L11136
+
+        enum Either {
+            Query(Query),
+            Expr(Expr),
+        }
+
+        impl Either {
+            fn into_expr(self) -> Expr {
+                match self {
+                    Either::Query(query) => Expr::Subquery(Box::new(query)),
+                    Either::Expr(expr) => expr,
+                }
+            }
+
+            fn nest(self) -> Either {
+                // Need to be careful to maintain expression nesting to preserve
+                // operator precedence. But there are no precedence concerns for
+                // queries, so we flatten to match parse_query's behavior.
+                match self {
+                    Either::Expr(expr) => Either::Expr(Expr::Nested(Box::new(expr))),
+                    Either::Query(_) => self,
+                }
+            }
+        }
+
+        // Recursive helper for parsing parenthesized expressions. Each call
+        // handles one layer of parentheses. Before every call, the parser must
+        // be positioned after an opening parenthesis; upon non-error return,
+        // the parser will be positioned before the corresponding close
+        // parenthesis. Somewhat weirdly, the returned expression semantically
+        // includes the opening/closing parentheses, even though this function
+        // is not responsible for parsing them.
+        fn parse(parser: &mut Parser) -> Result<Either, ParserError> {
+            if let Some(SELECT) | Some(WITH) = parser.peek_keyword() {
+                // Easy case one: unambiguously a subquery.
+                Ok(Either::Query(parser.parse_query()?))
+            } else if !parser.consume_token(&Token::LParen) {
+                // Easy case two: unambiguously an expression.
+                let exprs = parser.parse_comma_separated(Parser::parse_expr)?;
+                if exprs.len() == 1 {
+                    Ok(Either::Expr(Expr::Nested(Box::new(exprs.into_element()))))
+                } else {
+                    Ok(Either::Expr(Expr::Row { exprs }))
+                }
+            } else {
+                // Hard case: we have an open parenthesis, and we need to decide
+                // whether it belongs to the query or the expression.
+
+                // Parse to the closing parenthesis.
+                let either = parser.check_descent(parse)?;
+                parser.expect_token(&Token::RParen)?;
+
+                // Decide if we need to associate any tokens after the closing
+                // parenthesis with what we've parsed so far.
+                match (either, parser.peek_token()) {
+                    // The next token is another closing parenthesis. Can't
+                    // resolve the amibiguity yet. Return to let our caller
+                    // handle it.
+                    (either, Some(Token::RParen)) => Ok(either.nest()),
+
+                    // The next token is a comma, which means `either` was the
+                    // first expression in an implicit row constructor.
+                    (either, Some(Token::Comma)) => {
+                        let mut exprs = vec![either.into_expr()];
+                        while parser.consume_token(&Token::Comma) {
+                            exprs.push(parser.parse_expr()?);
+                        }
+                        Ok(Either::Expr(Expr::Row { exprs }))
+                    }
+
+                    // We have a subquery and the next token is a set operator.
+                    // That implies we have a partially-parsed subquery (or a
+                    // syntax error). Hop into parsing a set expression where
+                    // our subquery is the LHS of the set operator.
+                    (Either::Query(query), Some(Token::Keyword(kw)))
+                        if matches!(kw, UNION | INTERSECT | EXCEPT) =>
+                    {
+                        let query = SetExpr::Query(Box::new(query));
+                        let ctes = vec![];
+                        let body = parser.parse_query_body_seeded(Precedence::Zero, query)?;
+                        Ok(Either::Query(parser.parse_query_tail(ctes, body)?))
+                    }
+
+                    // The next token is something else. That implies we have a
+                    // partially-parsed expression (or a syntax error). Hop into
+                    // parsing an expression where `either` is the expression
+                    // prefix.
+                    (either, _) => {
+                        let prefix = either.into_expr();
+                        let expr = parser.parse_subexpr_seeded(Precedence::Zero, prefix)?;
+                        Ok(Either::Expr(expr).nest())
+                    }
+                }
+            }
+        }
+
+        Ok(parse(self)?.into_expr())
     }
 
     fn parse_function(&mut self, name: ObjectName) -> Result<Expr, ParserError> {
@@ -950,6 +1068,13 @@ impl<'a> Parser<'a> {
     /// (or None if reached end-of-file)
     fn peek_token(&self) -> Option<Token> {
         self.peek_nth_token(0)
+    }
+
+    fn peek_keyword(&self) -> Option<Keyword> {
+        match self.peek_token() {
+            Some(Token::Keyword(kw)) => Some(kw),
+            _ => None,
+        }
     }
 
     /// Return the nth token that has not yet been processed.
@@ -2346,38 +2471,113 @@ impl<'a> Parser<'a> {
 
             let body = parser.parse_query_body(Precedence::Zero)?;
 
-            let order_by = if parser.parse_keywords(&[ORDER, BY]) {
-                parser.parse_comma_separated(Parser::parse_order_by_expr)?
-            } else {
-                vec![]
-            };
+            parser.parse_query_tail(ctes, body)
+        })
+    }
 
-            let limit = if parser.parse_keyword(LIMIT) {
-                parser.parse_limit()?
-            } else {
+    fn parse_query_tail(&mut self, ctes: Vec<Cte>, body: SetExpr) -> Result<Query, ParserError> {
+        let (inner_ctes, inner_order_by, inner_limit, inner_offset, body) = match body {
+            SetExpr::Query(query) => {
+                let Query {
+                    ctes,
+                    body,
+                    order_by,
+                    limit,
+                    offset,
+                } = *query;
+                (ctes, order_by, limit, offset, body)
+            }
+            _ => (vec![], vec![], None, None, body),
+        };
+
+        let ctes = if ctes.is_empty() {
+            inner_ctes
+        } else if !inner_ctes.is_empty() {
+            return parser_err!(self, self.peek_pos(), "multiple WITH clauses not allowed");
+        } else {
+            ctes
+        };
+
+        let order_by = if self.parse_keywords(&[ORDER, BY]) {
+            if !inner_order_by.is_empty() {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "multiple ORDER BY clauses not allowed"
+                );
+            }
+            self.parse_comma_separated(Parser::parse_order_by_expr)?
+        } else {
+            inner_order_by
+        };
+
+        let mut limit = if self.parse_keyword(LIMIT) {
+            if inner_limit.is_some() {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "multiple LIMIT/FETCH clauses not allowed"
+                );
+            }
+            if self.parse_keyword(ALL) {
                 None
-            };
-
-            let offset = if parser.parse_keyword(OFFSET) {
-                Some(parser.parse_offset()?)
             } else {
-                None
-            };
+                Some(Limit {
+                    with_ties: false,
+                    quantity: self.parse_expr()?,
+                })
+            }
+        } else {
+            inner_limit
+        };
 
-            let fetch = if parser.parse_keyword(FETCH) {
-                Some(parser.parse_fetch()?)
+        let offset = if self.parse_keyword(OFFSET) {
+            if inner_offset.is_some() {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "multiple OFFSET clauses not allowed"
+                );
+            }
+            let value = self.parse_expr()?;
+            let _ = self.parse_one_of_keywords(&[ROW, ROWS]);
+            Some(value)
+        } else {
+            inner_offset
+        };
+
+        if limit.is_none() && self.parse_keyword(FETCH) {
+            self.expect_one_of_keywords(&[FIRST, NEXT])?;
+            let quantity = if self.parse_one_of_keywords(&[ROW, ROWS]).is_some() {
+                Expr::Value(Value::Number('1'.into()))
             } else {
-                None
+                let quantity = self.parse_expr()?;
+                self.expect_one_of_keywords(&[ROW, ROWS])?;
+                quantity
             };
+            let with_ties = if self.parse_keyword(ONLY) {
+                false
+            } else if self.parse_keywords(&[WITH, TIES]) {
+                true
+            } else {
+                return self.expected(
+                    self.peek_pos(),
+                    "one of ONLY or WITH TIES",
+                    self.peek_token(),
+                );
+            };
+            limit = Some(Limit {
+                with_ties,
+                quantity,
+            });
+        }
 
-            Ok(Query {
-                ctes,
-                body,
-                limit,
-                order_by,
-                offset,
-                fetch,
-            })
+        Ok(Query {
+            ctes,
+            body,
+            order_by,
+            limit,
+            offset,
         })
     }
 
@@ -2406,7 +2606,7 @@ impl<'a> Parser<'a> {
     fn parse_query_body(&mut self, precedence: Precedence) -> Result<SetExpr, ParserError> {
         // We parse the expression using a Pratt parser, as in `parse_expr()`.
         // Start by parsing a restricted SELECT or a `(subquery)`:
-        let mut expr = if self.parse_keyword(SELECT) {
+        let expr = if self.parse_keyword(SELECT) {
             SetExpr::Select(Box::new(self.parse_select()?))
         } else if self.consume_token(&Token::LParen) {
             // CTEs are not allowed here, but the parser currently accepts them
@@ -2423,6 +2623,14 @@ impl<'a> Parser<'a> {
             );
         };
 
+        self.parse_query_body_seeded(precedence, expr)
+    }
+
+    fn parse_query_body_seeded(
+        &mut self,
+        precedence: Precedence,
+        mut expr: SetExpr,
+    ) -> Result<SetExpr, ParserError> {
         loop {
             // The query can be optionally followed by a set operator:
             let next_token = self.peek_token();
@@ -2997,51 +3205,6 @@ impl<'a> Parser<'a> {
             None
         };
         Ok(OrderByExpr { expr, asc })
-    }
-
-    /// Parse a LIMIT clause
-    fn parse_limit(&mut self) -> Result<Option<Expr>, ParserError> {
-        if self.parse_keyword(ALL) {
-            Ok(None)
-        } else {
-            Ok(Some(Expr::Value(self.parse_number_value()?)))
-        }
-    }
-
-    /// Parse an OFFSET clause
-    fn parse_offset(&mut self) -> Result<Expr, ParserError> {
-        let value = Expr::Value(self.parse_number_value()?);
-        let _ = self.parse_one_of_keywords(&[ROW, ROWS]);
-        Ok(value)
-    }
-
-    /// Parse a FETCH clause
-    fn parse_fetch(&mut self) -> Result<Fetch, ParserError> {
-        self.expect_one_of_keywords(&[FIRST, NEXT])?;
-        let (quantity, percent) = if self.parse_one_of_keywords(&[ROW, ROWS]).is_some() {
-            (None, false)
-        } else {
-            let quantity = Expr::Value(self.parse_value()?);
-            let percent = self.parse_keyword(PERCENT);
-            self.expect_one_of_keywords(&[ROW, ROWS])?;
-            (Some(quantity), percent)
-        };
-        let with_ties = if self.parse_keyword(ONLY) {
-            false
-        } else if self.parse_keywords(&[WITH, TIES]) {
-            true
-        } else {
-            return self.expected(
-                self.peek_pos(),
-                "one of ONLY or WITH TIES",
-                self.peek_token(),
-            );
-        };
-        Ok(Fetch {
-            with_ties,
-            percent,
-            quantity,
-        })
     }
 
     fn parse_values(&mut self) -> Result<Values, ParserError> {
