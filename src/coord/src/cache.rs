@@ -18,8 +18,8 @@ use futures::stream::StreamExt;
 use log::{error, info, trace};
 use uuid::Uuid;
 
-use dataflow::source::persistence::RecordFileMetadata;
-use dataflow::PersistenceMessage;
+use dataflow::source::cache::RecordFileMetadata;
+use dataflow::CacheMessage;
 use dataflow_types::{ExternalSourceConnector, SourceConnector};
 use expr::GlobalId;
 use repr::CachedRecord;
@@ -185,14 +185,14 @@ impl Source {
 }
 
 pub struct Cacher {
-    rx: Option<comm::mpsc::Receiver<PersistenceMessage>>,
+    rx: Option<comm::mpsc::Receiver<CacheMessage>>,
     sources: HashMap<GlobalId, Source>,
     disabled_sources: HashSet<GlobalId>,
     pub config: CacheConfig,
 }
 
 impl Cacher {
-    pub fn new(rx: comm::mpsc::Receiver<PersistenceMessage>, config: CacheConfig) -> Self {
+    pub fn new(rx: comm::mpsc::Receiver<CacheMessage>, config: CacheConfig) -> Self {
         Cacher {
             rx: Some(rx),
             sources: HashMap::new(),
@@ -242,10 +242,10 @@ impl Cacher {
         Ok(())
     }
 
-    /// Process a new PersistenceMessage and return true if we should halt processing.
-    fn handle_cache_message(&mut self, data: PersistenceMessage) -> Result<bool, anyhow::Error> {
+    /// Process a new CacheMessage and return true if we should halt processing.
+    fn handle_cache_message(&mut self, data: CacheMessage) -> Result<bool, anyhow::Error> {
         match data {
-            PersistenceMessage::Data(data) => {
+            CacheMessage::Data(data) => {
                 if !self.sources.contains_key(&data.source_id) {
                     if self.disabled_sources.contains(&data.source_id) {
                         // It's possible that there was a delay between when the coordinator
@@ -274,7 +274,7 @@ impl Cacher {
                     source.insert_record(data.partition_id, data.record)?;
                 }
             }
-            PersistenceMessage::AddSource(cluster_id, source_id) => {
+            CacheMessage::AddSource(cluster_id, source_id) => {
                 // Check if we already have a source
                 if self.sources.contains_key(&source_id) {
                     error!(
@@ -308,7 +308,7 @@ impl Cacher {
                 self.sources.insert(source_id, source);
                 info!("Enabled caching for source: {}", source_id);
             }
-            PersistenceMessage::DropSource(id) => {
+            CacheMessage::DropSource(id) => {
                 if !self.sources.contains_key(&id) {
                     // This will actually happen fairly often because the
                     // coordinator doesn't see which sources had caching
@@ -324,7 +324,7 @@ impl Cacher {
                     info!("Disabled caching for source: {}", id);
                 }
             }
-            PersistenceMessage::Shutdown => {
+            CacheMessage::Shutdown => {
                 return Ok(true);
             }
         };
@@ -365,7 +365,7 @@ pub fn augment_connector(
         SourceConnector::External {
             ref mut connector, ..
         } => {
-            if !connector.persistence_enabled() {
+            if !connector.caching_enabled() {
                 // This connector has no caching, so do nothing.
                 Ok(None)
             } else {
@@ -443,7 +443,7 @@ fn augment_connector_inner(
             }
 
             k.start_offsets = read_offsets;
-            k.persisted_files = Some(paths);
+            k.cached_files = Some(paths);
         }
         _ => bail!("caching only enabled for Kafka sources at this time"),
     }

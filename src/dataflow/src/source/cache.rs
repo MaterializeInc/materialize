@@ -79,10 +79,7 @@ impl RecordFileMetadata {
 
         if parts.len() != 6 {
             // File is either partially written, or entirely irrelevant.
-            error!(
-                "Found invalid cache file name: {}. Ignoring",
-                file_name
-            );
+            error!("Found invalid cache file name: {}. Ignoring", file_name);
             return Ok(None);
         }
         Ok(Some(Self {

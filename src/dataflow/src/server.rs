@@ -54,7 +54,7 @@ use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
 use crate::render::{self, RenderState};
 use crate::server::metrics::Metrics;
-use crate::source::persistence::WorkerCacheData;
+use crate::source::cache::WorkerCacheData;
 
 mod metrics;
 

@@ -23,6 +23,5 @@ pub mod logging;
 pub mod source;
 
 pub use server::{
-    serve, BroadcastToken, PersistenceMessage, SequencedCommand, WorkerFeedback,
-    WorkerFeedbackWithMeta,
+    serve, BroadcastToken, CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta,
 };

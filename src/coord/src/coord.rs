@@ -34,8 +34,8 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle;
 use uuid::Uuid;
 
-use dataflow::source::persistence::PersistenceSender;
-use dataflow::{PersistenceMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
+use dataflow::source::cache::CacheSender;
+use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, SinkConnector,
@@ -151,7 +151,7 @@ where
     logging_granularity: Option<u64>,
     // Channel to communicate source status updates and shutdown notifications to the cacher
     // thread.
-    cache_tx: Option<PersistenceSender>,
+    cache_tx: Option<CacheSender>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -606,7 +606,7 @@ where
 
                     if let Some(cache_tx) = &mut self.cache_tx {
                         cache_tx
-                            .send(PersistenceMessage::Shutdown)
+                            .send(CacheMessage::Shutdown)
                             .await
                             .expect("failed to send shutdown message to caching thread");
                     }
@@ -1823,7 +1823,7 @@ where
                 for id in items.iter() {
                     if let Some(cache_tx) = &mut self.cache_tx {
                         cache_tx
-                            .send(PersistenceMessage::DropSource(*id))
+                            .send(CacheMessage::DropSource(*id))
                             .await
                             .expect("failed to send DROP SOURCE to cache thread");
                     }
@@ -3011,10 +3011,10 @@ where
     // this source.
     async fn maybe_begin_caching(&mut self, id: GlobalId, source_connector: &SourceConnector) {
         if let SourceConnector::External { connector, .. } = source_connector {
-            if connector.persistence_enabled() {
+            if connector.caching_enabled() {
                 if let Some(cache_tx) = &mut self.cache_tx {
                     cache_tx
-                        .send(PersistenceMessage::AddSource(self.catalog.cluster_id(), id))
+                        .send(CacheMessage::AddSource(self.catalog.cluster_id(), id))
                         .await
                         .expect("failed to send CREATE SOURCE notification to caching thread");
                 } else {
@@ -3091,7 +3091,7 @@ where
         let (cache_tx, cache_rx) = switchboard.mpsc();
         broadcast(
             &mut broadcast_tx,
-            SequencedCommand::EnablePersistence(cache_tx.clone()),
+            SequencedCommand::EnableCaching(cache_tx.clone()),
         )
         .await;
         let cache_tx = cache_tx

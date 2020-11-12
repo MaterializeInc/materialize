@@ -153,8 +153,7 @@ impl CommandsProcessedMetrics {
             enable_logging_int: 0,
             enable_logging: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_logging"]),
             enable_caching_int: 0,
-            enable_caching: COMMANDS_PROCESSED_RAW
-                .with_label_values(&[worker, "enable_caching"]),
+            enable_caching: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_caching"]),
             shutdown_int: 0,
             shutdown: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "shutdown"]),
             advance_all_local_inputs_int: 0,
@@ -231,8 +230,7 @@ impl CommandsProcessedMetrics {
             self.enable_feedback_int = 0;
         }
         if self.enable_caching_int > 0 {
-            self.enable_caching
-                .inc_by(self.enable_caching_int as i64);
+            self.enable_caching.inc_by(self.enable_caching_int as i64);
             self.enable_caching_int = 0;
         }
         if self.shutdown_int > 0 {

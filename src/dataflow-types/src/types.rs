@@ -480,11 +480,11 @@ pub enum SourceConnector {
     Local,
 }
 
-pub fn persisted_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
+pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
     match e {
-        ExternalSourceConnector::Kafka(KafkaSourceConnector {
-            persisted_files, ..
-        }) => persisted_files.clone().unwrap_or_else(Vec::new),
+        ExternalSourceConnector::Kafka(KafkaSourceConnector { cached_files, .. }) => {
+            cached_files.clone().unwrap_or_else(Vec::new)
+        }
         _ => vec![],
     }
 }
@@ -517,10 +517,10 @@ impl ExternalSourceConnector {
         }
     }
 
-    /// Returns whether or not persistence is enabled for this connector
-    pub fn persistence_enabled(&self) -> bool {
+    /// Returns whether or not source caching is enabled for this connector
+    pub fn caching_enabled(&self) -> bool {
         match self {
-            ExternalSourceConnector::Kafka(k) => k.enable_persistence,
+            ExternalSourceConnector::Kafka(k) => k.enable_caching,
             _ => false,
         }
     }
@@ -595,10 +595,10 @@ pub struct KafkaSourceConnector {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
-    pub enable_persistence: bool,
+    pub enable_caching: bool,
     // This field gets set after the initial construction of this struct, so this is None if it has
     // not yet been set.
-    pub persisted_files: Option<Vec<PathBuf>>,
+    pub cached_files: Option<Vec<PathBuf>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
