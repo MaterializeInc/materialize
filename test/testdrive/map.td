@@ -16,13 +16,17 @@
 > CREATE TYPE custom AS MAP (key_type='text', value_type=bool)
 
 # Without qualifiers, should default to builtin bool.
-> SELECT mz_internal.mz_classify_object_id(value_id) FROM mz_map_types WHERE name = 'custom'
+> SELECT mz_internal.mz_classify_object_id(value_id)
+  FROM mz_map_types JOIN mz_types ON mz_map_types.type_id = mz_types.id
+  WHERE name = 'custom'
 system
 
 > CREATE TYPE another_custom AS MAP (key_type='text', value_type=public.bool)
 
 # Qualified name should point to user-defined bool.
-> SELECT mz_internal.mz_classify_object_id(value_id) FROM mz_map_types WHERE name = 'another_custom'
+> SELECT mz_internal.mz_classify_object_id(value_id)
+  FROM mz_map_types JOIN mz_types ON mz_map_types.type_id = mz_types.id
+  WHERE name = 'another_custom'
 user
 
 > SHOW TYPES

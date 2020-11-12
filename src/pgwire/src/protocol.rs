@@ -29,7 +29,7 @@ use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::Statement;
-use sql::plan::CopyFormat;
+use sql::plan::{CopyFormat, StatementDesc};
 
 use crate::codec::FramedConn;
 use crate::message::{self, BackendMessage, ErrorResponse, FrontendMessage, VERSIONS, VERSION_3};
@@ -300,9 +300,10 @@ where
         // Maybe send row description.
         if let Some(relation_desc) = &stmt_desc.relation_desc {
             if !stmt_desc.is_copy {
+                let formats = vec![pgrepr::Format::Text; stmt_desc.arity()];
                 self.conn
                     .send(BackendMessage::RowDescription(
-                        message::row_description_from_desc(relation_desc),
+                        message::encode_row_description(relation_desc, &formats),
                     ))
                     .await?;
             }
@@ -541,28 +542,37 @@ where
                     .send(BackendMessage::ParameterDescription(
                         stmt.desc().param_types.clone(),
                     ))
-                    .await?
+                    .await?;
+                // Claim that all results will be output in text format, even
+                // though the true result formats are not yet known. A bit
+                // weird, but this is the behavior that PostgreSQL specifies.
+                let formats = vec![pgrepr::Format::Text; stmt.desc().arity()];
+                self.conn.send(describe_rows(stmt.desc(), &formats)).await?;
+                Ok(State::Ready)
             }
             None => {
-                return self
-                    .error(ErrorResponse::error(
-                        SqlState::INVALID_SQL_STATEMENT_NAME,
-                        "prepared statement does not exist",
-                    ))
-                    .await
+                self.error(ErrorResponse::error(
+                    SqlState::INVALID_SQL_STATEMENT_NAME,
+                    "prepared statement does not exist",
+                ))
+                .await
             }
         }
-        self.send_describe_rows(name).await
     }
 
     async fn describe_portal(&mut self, name: String) -> Result<State, comm::Error> {
-        let stmt_name = self
-            .coord_client
-            .session()
-            .get_portal(&name)
-            .map(|portal| portal.statement_name.clone());
-        match stmt_name {
-            Some(stmt_name) => self.send_describe_rows(stmt_name).await,
+        let session = self.coord_client.session();
+        let row_desc = session.get_portal(&name).map(|portal| {
+            let stmt = session
+                .get_prepared_statement(&portal.statement_name)
+                .expect("statement name known to be valid");
+            describe_rows(stmt.desc(), &portal.result_formats)
+        });
+        match row_desc {
+            Some(row_desc) => {
+                self.conn.send(row_desc).await?;
+                Ok(State::Ready)
+            }
             None => {
                 self.error(ErrorResponse::error(
                     SqlState::INVALID_SQL_STATEMENT_NAME,
@@ -596,25 +606,6 @@ where
             .send(BackendMessage::ReadyForQuery(txn_state))
             .await?;
         self.flush().await
-    }
-
-    async fn send_describe_rows(&mut self, stmt_name: String) -> Result<State, comm::Error> {
-        let stmt = self
-            .coord_client
-            .session()
-            .get_prepared_statement(&stmt_name)
-            .expect("send_describe_statement called incorrectly");
-        match &stmt.desc().relation_desc {
-            Some(desc) if !stmt.desc().is_copy => {
-                self.conn
-                    .send(BackendMessage::RowDescription(
-                        message::row_description_from_desc(desc),
-                    ))
-                    .await?
-            }
-            _ => self.conn.send(BackendMessage::NoData).await?,
-        }
-        Ok(State::Ready)
     }
 
     async fn send_execute_response(
@@ -1028,6 +1019,15 @@ fn pad_formats(formats: Vec<pgrepr::Format>, n: usize) -> Result<Vec<pgrepr::For
             "expected {} field format specifiers, but got {}",
             e, a
         )),
+    }
+}
+
+fn describe_rows(stmt_desc: &StatementDesc, formats: &[pgrepr::Format]) -> BackendMessage {
+    match &stmt_desc.relation_desc {
+        Some(desc) if !stmt_desc.is_copy => {
+            BackendMessage::RowDescription(message::encode_row_description(desc, formats))
+        }
+        _ => BackendMessage::NoData,
     }
 }
 
