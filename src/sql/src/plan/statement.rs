@@ -54,7 +54,8 @@ use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
     query, scalar_type_from_sql, AlterIndexLogicalCompactionWindow, CopyFormat, Index,
-    LogicalCompactionWindow, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, Type, View,
+    LogicalCompactionWindow, Params, PeekWhen, Plan, PlanContext, Sink, Source, Table, Type,
+    TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -978,8 +979,7 @@ fn handle_create_map_type(
         name,
         typ: Type {
             create_sql,
-            key_id,
-            value_id,
+            inner: TypeInner::Map { key_id, value_id },
         },
     })
 }
