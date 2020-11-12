@@ -323,55 +323,66 @@ fn run() -> Result<(), anyhow::Error> {
 
     // Configure tracing.
     {
-        use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+        use tracing_subscriber::filter::EnvFilter;
         use tracing_subscriber::fmt;
         use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::util::SubscriberInitExt;
-
-        use crate::tracing::FilterLayer;
 
         let env_filter = EnvFilter::try_from_env("MZ_LOG")
             .or_else(|_| EnvFilter::try_new("info")) // default log level
             .unwrap()
             .add_directive("panic=error".parse().unwrap()); // prevent suppressing logs about panics
 
-        if popts.opt_str("log-file").as_deref() == Some("stderr") {
+        match popts.opt_str("log-file").as_deref() {
+            Some("stderr") =>
             // The user explicitly directed logs to stderr. Log only to stderr
             // with the user-specified `env_filter`.
-            tracing_subscriber::registry()
-                .with(env_filter)
-                .with(fmt::layer().with_writer(io::stderr))
-                .init();
-        } else {
-            // The user directed logs to a file. Use the user-specified
-            // `env_filter` to control what gets written to the file, but bubble
-            // any warnings and errors up to stderr as well.
-            tracing_subscriber::registry()
-                .with(env_filter)
-                .with({
-                    let path = match popts.opt_str("log-file") {
-                        Some(path) => PathBuf::from(path),
-                        None => data_directory.join("materialized.log"),
-                    };
-                    if let Some(parent) = path.parent() {
-                        fs::create_dir_all(parent).with_context(|| {
-                            format!("creating log file directory: {}", parent.display())
-                        })?;
-                    }
-                    let file = fs::OpenOptions::new()
-                        .append(true)
-                        .create(true)
-                        .open(&path)
-                        .with_context(|| format!("creating log file: {}", path.display()))?;
-                    fmt::layer()
-                        .with_ansi(false)
-                        .with_writer(move || file.try_clone().expect("failed to clone log file"))
-                })
-                .with(FilterLayer::new(
-                    fmt::layer().with_writer(io::stderr),
-                    LevelFilter::WARN,
-                ))
-                .init();
+            {
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(fmt::layer().with_writer(io::stderr))
+                    .init()
+            }
+            Some(log_file) => {
+                // The user directed logs to a file. Use the user-specified
+                // `env_filter` to control what gets written to the file, but bubble
+                // any warnings and errors up to stderr as well.
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with({
+                        let path = PathBuf::from(log_file);
+                        if let Some(parent) = path.parent() {
+                            fs::create_dir_all(parent).with_context(|| {
+                                format!("creating log file directory: {}", parent.display())
+                            })?;
+                        }
+                        let file = fs::OpenOptions::new()
+                            .append(true)
+                            .create(true)
+                            .open(&path)
+                            .with_context(|| format!("creating log file: {}", path.display()))?;
+                        fmt::layer().with_ansi(false).with_writer(move || {
+                            file.try_clone().expect("failed to clone log file")
+                        })
+                    })
+                    .init();
+            }
+            None => {
+                let path = data_directory.join("materialized.log");
+                let file = fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&path)
+                    .with_context(|| format!("creating log file: {}", path.display()))?;
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(
+                        fmt::layer().with_ansi(false).with_writer(move || {
+                            file.try_clone().expect("failed to clone log file")
+                        }),
+                    )
+                    .init();
+            }
         }
     }
 
