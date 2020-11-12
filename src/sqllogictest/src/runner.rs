@@ -747,18 +747,20 @@ impl State {
             .session()
             .get_prepared_statement(&statement_name)
             .expect("unnamed prepared statement missing");
-        let desc = stmt.desc().relation_desc.clone();
-        let result_formats = vec![pgrepr::Format::Text; stmt.desc().arity()];
+        let desc = stmt.desc().clone();
+        let stmt = stmt.sql().cloned();
+        let result_formats = vec![pgrepr::Format::Text; desc.arity()];
         self.coord_client.session().set_portal(
             portal_name.clone(),
-            statement_name,
+            desc.clone(),
+            stmt,
             vec![],
             result_formats,
         )?;
 
         // Execute.
         let res = self.coord_client.execute(portal_name).await?;
-        Ok((desc, res))
+        Ok((desc.relation_desc, res))
     }
 }
 
