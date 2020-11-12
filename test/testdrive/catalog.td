@@ -264,50 +264,52 @@ mz_worker_materialization_frontiers  system true
 
 > SHOW TABLES FROM mz_catalog
 mz_avro_ocf_sinks
+mz_base_types
+mz_columns
+mz_databases
+mz_index_columns
+mz_indexes
 mz_kafka_sinks
+mz_map_types
+mz_schemas
+mz_sinks
+mz_sources
+mz_tables
+mz_types
 mz_view_foreign_keys
 mz_view_keys
-mz_databases
-mz_schemas
-mz_columns
-mz_indexes
-mz_index_columns
-mz_tables
-mz_sources
-mz_sinks
 mz_views
-mz_builtin_types
-mz_map_types
 
 > SHOW FULL TABLES FROM mz_catalog
 name                  type
 ----------------------------
 mz_avro_ocf_sinks     system
-mz_kafka_sinks        system
-mz_view_foreign_keys  system
-mz_view_keys          system
-mz_databases          system
-mz_schemas            system
+mz_base_types         system
 mz_columns            system
-mz_indexes            system
+mz_databases          system
 mz_index_columns      system
-mz_tables             system
+mz_indexes            system
+mz_kafka_sinks        system
+mz_map_types          system
+mz_schemas            system
 mz_sinks              system
 mz_sources            system
+mz_tables             system
+mz_types              system
+mz_view_foreign_keys  system
+mz_view_keys          system
 mz_views              system
-mz_builtin_types      system
-mz_map_types          system
 
 ! SHOW EXTENDED TABLES
 SHOW EXTENDED TABLES not yet supported
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-15
+16
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-29
+30
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

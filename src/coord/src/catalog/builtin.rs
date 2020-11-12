@@ -383,28 +383,34 @@ lazy_static! {
         id: GlobalId::System(2025),
         index_id: GlobalId::System(2026),
     };
-    pub static ref MZ_BUILTIN_TYPES: BuiltinTable = BuiltinTable {
-        name: "mz_builtin_types",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
-            .with_column("id", ScalarType::String.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2027),
-        index_id: GlobalId::System(2028),
-    };
-    pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
-        name: "mz_map_types",
+    pub static ref MZ_TYPES: BuiltinTable = BuiltinTable {
+        name: "mz_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("key_id", ScalarType::String.nullable(false))
-            .with_column("value_id", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false)),
+        id: GlobalId::System(2027),
+        index_id: GlobalId::System(2028),
+    };
+    pub static ref MZ_BASE_TYPES: BuiltinTable = BuiltinTable {
+        name: "mz_base_types",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("type_id", ScalarType::String.nullable(false)),
         id: GlobalId::System(2029),
         index_id: GlobalId::System(2030),
+    };
+    pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
+        name: "mz_map_types",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("type_id", ScalarType::String.nullable(false))
+            .with_column("key_id", ScalarType::String.nullable(false))
+            .with_column("value_id", ScalarType::String.nullable(false)),
+        id: GlobalId::System(2031),
+        index_id: GlobalId::System(2032),
     };
 }
 
@@ -759,16 +765,20 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     name: "pg_type",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_type AS SELECT
-    NULL::oid AS oid,
-    NULL::text AS typname,
-    NULL::oid AS typnamespace,
-    NULL::text AS typtype,
-    NULL::oid AS typrelid,
+    mz_types.oid,
+    mz_types.name AS typname,
+    mz_schemas.oid AS typnamespace,
+    CASE
+        WHEN EXISTS (SELECT 1 FROM mz_catalog.mz_base_types WHERE type_id = mz_types.id) THEN 'b'
+        WHEN EXISTS (SELECT 1 FROM mz_catalog.mz_map_types WHERE type_id = mz_types.id) THEN 'm'
+    END AS typtype,
+    0::oid AS typrelid,
     NULL::oid AS typelem,
     NULL::oid AS typreceive,
-    NULL::bool AS typnotnull,
-    NULL::oid AS typbasetype
-    WHERE false",
+    false::bool AS typnotnull,
+    0::oid AS typbasetype
+FROM mz_catalog.mz_types
+JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id",
     id: GlobalId::System(3021),
     needs_logs: false,
 };
@@ -1082,7 +1092,8 @@ lazy_static! {
             Builtin::Table(&MZ_SOURCES),
             Builtin::Table(&MZ_SINKS),
             Builtin::Table(&MZ_VIEWS),
-            Builtin::Table(&MZ_BUILTIN_TYPES),
+            Builtin::Table(&MZ_TYPES),
+            Builtin::Table(&MZ_BASE_TYPES),
             Builtin::Table(&MZ_MAP_TYPES),
             Builtin::View(&MZ_RELATIONS),
             Builtin::View(&MZ_OBJECTS),

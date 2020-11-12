@@ -343,39 +343,20 @@ fn show_types<'a>(
         scx.resolve_default_schema()?
     };
 
-    let query = if !full & !extended {
-        format!(
-            "SELECT name FROM mz_catalog.mz_map_types WHERE schema_id = {}",
-            schema_spec.id,
-        )
-    } else if full & !extended {
-        format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
-            FROM mz_catalog.mz_map_types
-            WHERE schema_id = {}",
-            schema_spec.id,
-        )
-    } else if !full & extended {
-        format!(
-            "SELECT name
-            FROM mz_catalog.mz_map_types
-            WHERE schema_id = {}
-            UNION
-            SELECT name AS type
-            FROM mz_catalog.mz_builtin_types",
-            schema_spec.id,
-        )
-    } else {
-        format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
-            FROM mz_catalog.mz_map_types
-            WHERE schema_id = {}
-            UNION
-            SELECT name, 'system'
-            FROM mz_catalog.mz_builtin_types",
-            schema_spec.id,
-        )
-    };
+    let mut query = format!(
+        "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
+        FROM mz_catalog.mz_types t
+        JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
+        WHERE t.schema_id = {}",
+        schema_spec.id,
+    );
+    if extended {
+        query += " OR s.database_id IS NULL";
+    }
+    if !full {
+        query = format!("SELECT name FROM ({})", query);
+    }
+
     Ok(ShowSelect::new(scx, query, filter))
 }
 

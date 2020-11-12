@@ -61,6 +61,14 @@ Field     | Type     | Meaning
 `sink_id` | [`text`] | The ID of the sink.
 `path`    | `bytea`  | The path to the Avro OCF file into which the sink is writing.
 
+### `mz_base_types`
+
+The `mz_base_types` table contains a row for each base type in the system.
+
+Field          | Type       | Meaning
+---------------|------------|----------
+`type_id`      | [`text`]   | The ID of the type.
+
 ### `mz_columns`
 
 The `mz_columns` contains a row for each column in each table, source, and view
@@ -121,6 +129,16 @@ Field     | Type     | Meaning
 ----------|----------|--------
 `sink_id` | [`text`] | The ID of the sink.
 `topic`   | [`text`] | The name of the Kafka topic into which the sink is writing.
+
+### `mz_map_types`
+
+The `mz_map_types` table contains a row for each map type in the system.
+
+Field          | Type       | Meaning
+---------------|------------|----------
+`type_id`      | [`text`]   | The ID of the map type.
+`key_id `      | [`text`]   | The ID of the map's key type.
+`value_id`     | [`text`]   | The ID of the map's value type.
 
 ### `mz_objects`
 
@@ -191,6 +209,17 @@ Field          | Type       | Meaning
 `oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the table.
 `schema_id`    | [`bigint`] | The ID of the schema to which the table belongs.
 `name`         | [`text`]   | The name of the table.
+
+### `mz_types`
+
+The `mz_types` table contains a row for each type in the system.
+
+Field          | Type       | Meaning
+---------------|------------|----------
+`id`           | [`text`]   | Materialize's unique ID for the type.
+`oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the type.
+`schema_id`    | [`bigint`] | The ID of the schema to which the type belongs.
+`name`         | [`text`]   | The name of the type.
 
 ### `mz_views`
 

@@ -64,11 +64,11 @@ use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_BUILTIN_TYPES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
+    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
     MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_MAP_TYPES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES,
-    MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type};
+use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type, TypeInner};
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
@@ -1143,23 +1143,41 @@ where
         .await
     }
 
-    async fn report_builtin_type_update(
+    async fn report_type_update(
         &mut self,
         id: GlobalId,
         oid: u32,
+        schema_id: i64,
         name: &str,
+        typ: &Type,
         diff: isize,
     ) {
         self.update_catalog_view(
-            MZ_BUILTIN_TYPES.id,
+            MZ_TYPES.id,
             iter::once((
                 Row::pack(&[
                     Datum::String(&id.to_string()),
                     Datum::Int32(oid as i32),
+                    Datum::Int64(schema_id),
                     Datum::String(name),
                 ]),
                 diff,
             )),
+        )
+        .await;
+        match typ.inner {
+            TypeInner::Map { key_id, value_id } => {
+                self.report_map_type_update(id, key_id, value_id, diff)
+                    .await
+            }
+            TypeInner::Base => self.report_base_type_update(id, diff).await,
+        }
+    }
+
+    async fn report_base_type_update(&mut self, id: GlobalId, diff: isize) {
+        self.update_catalog_view(
+            MZ_BASE_TYPES.id,
+            iter::once((Row::pack(&[Datum::String(&id.to_string())]), diff)),
         )
         .await
     }
@@ -1168,9 +1186,6 @@ where
     async fn report_map_type_update(
         &mut self,
         id: GlobalId,
-        name: &str,
-        oid: u32,
-        schema_id: i64,
         key_id: GlobalId,
         value_id: GlobalId,
         diff: isize,
@@ -1180,9 +1195,6 @@ where
             iter::once((
                 Row::pack(&[
                     Datum::String(&id.to_string()),
-                    Datum::Int32(oid as i32),
-                    Datum::Int64(schema_id),
-                    Datum::String(name),
                     Datum::String(&key_id.to_string()),
                     Datum::String(&value_id.to_string()),
                 ]),
@@ -1757,11 +1769,14 @@ where
         name: FullName,
         typ: sql::plan::Type,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        let typ = catalog::Type::Map {
+        let typ = catalog::Type {
             create_sql: typ.create_sql,
             plan_cx: pcx,
-            key_id: typ.key_id,
-            value_id: typ.value_id,
+            inner: match typ.inner {
+                sql::plan::TypeInner::Map { key_id, value_id } => {
+                    catalog::TypeInner::Map { key_id, value_id }
+                }
+            },
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -2450,16 +2465,8 @@ where
                                     .await;
                             }
                         }
-                        CatalogItem::Type(Type::Map {
-                            key_id, value_id, ..
-                        }) => {
-                            self.report_map_type_update(
-                                *id, &name.item, *oid, *schema_id, *key_id, *value_id, 1,
-                            )
-                            .await;
-                        }
-                        CatalogItem::Type(Type::Builtin { .. }) => {
-                            self.report_builtin_type_update(*id, *oid, &name.item, 1)
+                        CatalogItem::Type(ty) => {
+                            self.report_type_update(*id, *oid, *schema_id, &name.item, ty, 1)
                                 .await;
                         }
                     }
@@ -2510,32 +2517,18 @@ where
                             self.report_index_update(*id, *oid, &index, &to_name.item, 1)
                                 .await;
                         }
-                        CatalogItem::Type(Type::Map {
-                            key_id, value_id, ..
-                        }) => {
-                            self.report_map_type_update(
+                        CatalogItem::Type(typ) => {
+                            self.report_type_update(
                                 *id,
-                                &from_name.item,
                                 *oid,
                                 *schema_id,
-                                *key_id,
-                                *value_id,
+                                &from_name.item,
+                                &typ,
                                 -1,
                             )
                             .await;
-                            self.report_map_type_update(
-                                *id,
-                                &to_name.item,
-                                *oid,
-                                *schema_id,
-                                *key_id,
-                                *value_id,
-                                1,
-                            )
-                            .await;
-                        }
-                        CatalogItem::Type(Type::Builtin { .. }) => {
-                            unreachable!("builtin types cannot be updated")
+                            self.report_type_update(*id, *oid, *schema_id, &to_name.item, &typ, 1)
+                                .await;
                         }
                     }
                 }
@@ -2652,22 +2645,16 @@ where
                             // If the sink connector state is pending, the sink
                             // dataflow was never created, so nothing to drop.
                         }
-                        CatalogItem::Type(Type::Map {
-                            key_id, value_id, ..
-                        }) => {
-                            self.report_map_type_update(
+                        CatalogItem::Type(typ) => {
+                            self.report_type_update(
                                 entry.id(),
-                                &entry.name().item,
                                 entry.oid(),
                                 *schema_id,
-                                *key_id,
-                                *value_id,
+                                &entry.name().item,
+                                typ,
                                 -1,
                             )
                             .await;
-                        }
-                        CatalogItem::Type(Type::Builtin { .. }) => {
-                            unreachable!("builtin types cannot be dropped")
                         }
                         CatalogItem::Index(_) => {
                             unreachable!("dropped indexes should be handled by DroppedIndex");
