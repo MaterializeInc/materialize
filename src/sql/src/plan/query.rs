@@ -1911,7 +1911,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 "subscript expression must contain at least one position"
             );
             if positions.len() > 1 {
-                ecx.require_experimental_mode("multi-dimensional slicing")?;
+                ecx.require_experimental_mode("layered/multidimensional slicing")?;
             }
             let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
             let ty = ecx.scalar_type(&expr);
@@ -1921,7 +1921,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                     let n_dims = ty.unwrap_list_n_dims();
                     if pos_len > n_dims {
                         bail!(
-                            "cannot slice on {} dimensions; list only has {} dimension{}",
+                            "cannot slice into {} layers; list only has {} layer{}",
                             pos_len,
                             n_dims,
                             if n_dims == 1 { "" } else { "s" }

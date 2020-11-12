@@ -139,7 +139,7 @@ SELECT LIST [1, 2, 3][:100];
 {1,2,3}
 
 # exceeds maximum dimension
-query error cannot slice on 2 dimensions; list only has 1 dimension
+query error cannot slice into 2 layers; list only has 1 layer
 SELECT LIST [1, 2, 3][:, :]
 
 # successive slices
@@ -245,7 +245,7 @@ SELECT LIST [[1, 2, 3], [4, 5]][:, :100]
 {{1,2,3},{4,5}}
 
 # exceeds maximum dimension
-query error cannot slice on 3 dimensions; list only has 2 dimensions
+query error cannot slice into 3 layers; list only has 2 layers
 SELECT LIST [[1, 2, 3], [4, 5]][:, :, :]
 
 # successive slice operations
@@ -386,7 +386,7 @@ SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :100, :100];
 {{{1,2},{3,4,5}},{{6}},{{7,8},{9}}}
 
 # exceeds maximum dimension
-query error cannot slice on 4 dimensions; list only has 3 dimensions
+query error cannot slice into 4 layers; list only has 3 layers
 SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, :, :];
 
 # 🔬🔬 list list list slices + index
