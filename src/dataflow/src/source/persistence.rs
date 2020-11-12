@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Types related to source persistence.
+//! Types related to source caching.
 //
 // TODO: currently everything is fairly Kafka-centric and we should probably
 // not directly usable for some other source types.
@@ -24,14 +24,14 @@ use repr::CachedRecord;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::server::PersistenceMessage;
+use crate::server::CacheMessage;
 
 static RECORD_FILE_PREFIX: &str = "materialize";
 
-/// Type alias for object that sends data to the persister.
-pub type PersistenceSender = Pin<Box<dyn Sink<PersistenceMessage, Error = comm::Error> + Send>>;
+/// Type alias for object that sends data to the cacher.
+pub type CacheSender = Pin<Box<dyn Sink<CacheMessage, Error = comm::Error> + Send>>;
 
-/// Describes what is provided from a persisted file.
+/// Describes what is provided from a cached file.
 #[derive(Debug)]
 pub struct RecordFileMetadata {
     /// The cluster id of the Materialize instance that wrote this file.
@@ -61,7 +61,7 @@ impl RecordFileMetadata {
 
         if file_name.is_none() {
             // Path cannot be converted to a UTF-8 string. This
-            // should not be the case for persistence files as we
+            // should not be the case for cache files as we
             // control every aspect of the name.
             // TODO(rkhaitan): Make sure this assumption is valid.
             return Ok(None);
@@ -71,7 +71,7 @@ impl RecordFileMetadata {
 
         if !file_name.starts_with(RECORD_FILE_PREFIX) {
             // File name doesn't match the prefix we use to write
-            // down persistence data.
+            // down cache data.
             return Ok(None);
         }
 
@@ -80,7 +80,7 @@ impl RecordFileMetadata {
         if parts.len() != 6 {
             // File is either partially written, or entirely irrelevant.
             error!(
-                "Found invalid persistence file name: {}. Ignoring",
+                "Found invalid cache file name: {}. Ignoring",
                 file_name
             );
             return Ok(None);
@@ -126,10 +126,10 @@ impl RecordFileMetadata {
     }
 }
 
-/// Source data that gets sent to the persistence thread to place in persistent storage.
+/// Source data that gets sent to the cache thread to flush to the cache.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WorkerPersistenceData {
-    /// Global Id of the Source whose data is being persisted.
+pub struct WorkerCacheData {
+    /// Global Id of the Source whose data is being cached.
     pub source_id: GlobalId,
     /// Partition the record belongs to.
     pub partition_id: i32,

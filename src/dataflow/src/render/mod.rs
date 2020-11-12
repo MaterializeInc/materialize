@@ -134,7 +134,7 @@ use crate::decode::{decode_avro_values, decode_values};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::{
-    LocalInput, PersistenceMessage, TimestampDataUpdates, TimestampMetadataUpdates,
+    LocalInput, CacheMessage, TimestampDataUpdates, TimestampMetadataUpdates,
 };
 use crate::sink;
 use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
@@ -169,8 +169,8 @@ pub struct RenderState {
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
-    /// Sender to give data to be persisted.
-    pub persistence_tx: Option<comm::mpsc::Sender<PersistenceMessage>>,
+    /// Sender to give data to be cahed.
+    pub caching_tx: Option<comm::mpsc::Sender<CacheMessage>>,
 }
 
 pub fn build_dataflow<A: Allocate>(
@@ -304,13 +304,13 @@ where
                     (usize::cast_from(uid.hashed()) % scope.peers()) == scope.index()
                 };
 
-                let persistence_tx = if let (true, Some(persistence_tx)) = (
+                let caching_tx = if let (true, Some(caching_tx)) = (
                     connector.persistence_enabled(),
-                    render_state.persistence_tx.clone(),
+                    render_state.caching_tx.clone(),
                 ) {
                     Some(
-                        block_on(persistence_tx.connect())
-                            .expect("failed to connect persistence tx"),
+                        block_on(caching_tx.connect())
+                            .expect("failed to connect caching tx"),
                     )
                 } else {
                     None
