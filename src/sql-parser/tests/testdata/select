@@ -26,12 +26,91 @@ SELECT 1
 parse-statement roundtrip
 (SELECT 1)
 ----
-(SELECT 1)
+SELECT 1
 
-parse-statement roundtrip
+parse-statement
 ((SELECT 1))
 ----
-((SELECT 1))
+SELECT 1
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement roundtrip
+SELECT (((SELECT 2)) + 3)
+----
+SELECT ((SELECT 2) + 3)
+
+parse-statement roundtrip
+SELECT ((((2 + 3)) - 4)) * 5
+----
+SELECT ((((2 + 3)) - 4)) * 5
+
+parse-statement roundtrip
+((SELECT 2)) UNION SELECT 2
+----
+(SELECT 2) UNION SELECT 2
+
+parse-statement roundtrip
+SELECT (((SELECT 2)) UNION SELECT 2)
+----
+SELECT ((SELECT 2) UNION SELECT 2)
+
+parse-statement roundtrip
+SELECT (((2)) UNION SELECT 2)
+----
+error: Expected right parenthesis, found UNION
+SELECT (((2)) UNION SELECT 2)
+              ^
+
+parse-statement roundtrip
+SELECT (SELECT 2) UNION (SELECT 2), 1
+----
+error: Expected end of statement, found comma
+SELECT (SELECT 2) UNION (SELECT 2), 1
+                                  ^
+
+parse-statement roundtrip
+(SELECT LIMIT 1) LIMIT 1
+----
+error: multiple LIMIT/FETCH clauses not allowed
+(SELECT LIMIT 1) LIMIT 1
+                 ^
+
+parse-statement roundtrip
+(SELECT LIMIT 1) FETCH FIRST ROW
+----
+error: Expected end of statement, found FETCH
+(SELECT LIMIT 1) FETCH FIRST ROW
+                 ^
+
+parse-statement roundtrip
+(SELECT 1) LIMIT 1
+----
+SELECT 1 LIMIT 1
+
+parse-statement roundtrip
+(SELECT 1 ORDER BY 1) ORDER BY 1
+----
+error: multiple ORDER BY clauses not allowed
+(SELECT 1 ORDER BY 1) ORDER BY 1
+                            ^
+
+parse-statement roundtrip
+(SELECT 1) ORDER BY 1
+----
+SELECT 1 ORDER BY 1
+
+parse-statement roundtrip
+WITH a AS (SELECT 1) (WITH b AS (SELECT 2) SELECT 3)
+----
+error: multiple WITH clauses not allowed
+WITH a AS (SELECT 1) (WITH b AS (SELECT 2) SELECT 3)
+                                                    ^
+
+parse-statement roundtrip
+(WITH b AS (SELECT 2) SELECT 3)
+----
+WITH b AS (SELECT 2) SELECT 3
 
 parse-statement roundtrip
 VALUES (1)
@@ -640,12 +719,12 @@ SELECT a.x, b.y FROM (SELECT x FROM foo) AS a (x) CROSS JOIN (SELECT y FROM bar)
 parse-statement roundtrip
 SELECT * FROM (((SELECT 1)))
 ----
-SELECT * FROM (((SELECT 1)))
+SELECT * FROM (SELECT 1)
 
 parse-statement roundtrip
 SELECT * FROM t NATURAL JOIN (((SELECT 1)))
 ----
-SELECT * FROM t NATURAL JOIN (((SELECT 1)))
+SELECT * FROM t NATURAL JOIN (SELECT 1)
 
 parse-statement roundtrip
 SELECT * FROM (((SELECT 1) UNION (SELECT 2)) AS t1 NATURAL JOIN t2)

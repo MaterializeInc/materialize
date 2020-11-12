@@ -176,7 +176,6 @@ query I
 3
 2
 
-skipif postgresql # TODO(benesch): similar to below; we consider this a subquery and lose the ORDER BY
 query I
 (((SELECT a FROM t ORDER BY a DESC LIMIT 4)))
 ----
@@ -185,7 +184,6 @@ query I
 3
 2
 
-skipif postgresql # TODO(benesch): we should match PostgreSQL here
 query error pgcode 42601 multiple ORDER BY clauses not allowed
 ((SELECT a FROM t ORDER BY a)) ORDER BY a
 
