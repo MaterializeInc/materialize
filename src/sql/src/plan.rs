@@ -105,6 +105,8 @@ pub enum Plan {
         name: FullName,
         typ: Type,
     },
+    DiscardTemp,
+    DiscardAll,
     DropDatabase {
         name: String,
     },

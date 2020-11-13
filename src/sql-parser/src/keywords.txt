@@ -74,6 +74,7 @@ Default
 Delete
 Delimited
 Desc
+Discard
 Distinct
 Double
 Drop
@@ -165,6 +166,7 @@ Outer
 Over
 Partition
 Plan
+Plans
 Preceding
 Precision
 Primary
@@ -192,6 +194,7 @@ Second
 Seconds
 Seed
 Select
+Sequences
 Serializable
 Session
 Set

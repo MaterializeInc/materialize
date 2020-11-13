@@ -87,10 +87,10 @@ cannot drop mz_temp.temp_v: still depended upon by catalog item 'mz_temp.double_
 
 > DROP VIEW double_temp_v;
 
-> DROP VIEW temp_v;
-
 ! SELECT * FROM double_temp_v;
 unknown catalog item 'double_temp_v'
+
+> DISCARD TEMP
 
 ! SELECT * FROM temp_v;
 unknown catalog item 'temp_v'
