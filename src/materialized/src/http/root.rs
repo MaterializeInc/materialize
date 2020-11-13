@@ -37,7 +37,6 @@ impl Server {
         }))
     }
 
-    #[allow(clippy::manual_async_fn)] // clippy bug: https://github.com/rust-lang/rust-clippy/issues/5765
     pub fn handle_static(
         &self,
         req: Request<Body>,
