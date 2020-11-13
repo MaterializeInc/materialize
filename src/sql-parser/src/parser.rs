@@ -1555,6 +1555,11 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        let envelope = if self.parse_keyword(ENVELOPE) {
+            Some(self.parse_envelope()?)
+        } else {
+            None
+        };
         let with_snapshot = if self.parse_keyword(WITH) {
             self.expect_keyword(SNAPSHOT)?;
             true
@@ -1573,6 +1578,7 @@ impl<'a> Parser<'a> {
             connector,
             with_options,
             format,
+            envelope,
             with_snapshot,
             as_of,
             if_not_exists,

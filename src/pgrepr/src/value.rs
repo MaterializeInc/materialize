@@ -502,7 +502,10 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
                     )
                 })
                 .collect();
-            ScalarType::Record { fields }
+            ScalarType::Record {
+                fields,
+                custom_oid: None,
+            }
         }
         Type::Map { value_type } => {
             let (_, value_type) = null_datum(value_type);

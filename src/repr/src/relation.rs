@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::iter;
 use std::vec;
@@ -113,6 +114,21 @@ impl RelationType {
         } else {
             (0..self.column_types.len()).collect()
         }
+    }
+}
+
+#[derive(Debug, Default, Serialize, PartialEq, Eq, Deserialize, Clone)]
+pub struct CustomTypesInfo {
+    pub oids_to_names: HashMap<u32, String>,
+    pub next_available_oid: u32,
+}
+
+impl CustomTypesInfo {
+    pub fn new_named(&mut self, name: String) -> u32 {
+        let oid = self.next_available_oid;
+        self.next_available_oid += 1;
+        self.oids_to_names.insert(oid, name);
+        oid
     }
 }
 

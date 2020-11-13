@@ -169,12 +169,13 @@ impl<'a> DataflowBuilder<'a> {
         id: GlobalId,
         from: GlobalId,
         connector: SinkConnector,
+        envelope: SinkEnvelope,
     ) -> DataflowDesc {
         let mut dataflow = DataflowDesc::new(name);
         dataflow.set_as_of(connector.get_frontier());
         self.import_into_dataflow(&from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
-        dataflow.add_sink_export(id, from, from_type, connector);
+        dataflow.add_sink_export(id, from, from_type, connector, envelope);
         dataflow
     }
 }

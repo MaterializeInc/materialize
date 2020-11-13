@@ -32,7 +32,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
-use dataflow_types::{SinkConnectorBuilder, SourceConnector};
+use dataflow_types::{SinkConnectorBuilder, SinkEnvelope, SourceConnector};
 use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
 use sql_parser::ast::Expr;
 
@@ -142,6 +142,7 @@ pub enum Plan {
         copy_to: Option<CopyFormat>,
         emit_progress: bool,
         object_columns: usize,
+        desc: RelationDesc,
     },
     SendRows(Vec<Row>),
     ExplainPlan {
@@ -200,6 +201,7 @@ pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
     pub connector_builder: SinkConnectorBuilder,
+    pub envelope: SinkEnvelope,
 }
 
 #[derive(Clone, Debug)]

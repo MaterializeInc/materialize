@@ -432,7 +432,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: ScalarExpr) -> ScalarExpr {
                 .expect("cast known to exist")
                 .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
         }
-        Record { fields } => {
+        Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {
                 exprs.push(ScalarExpr::literal(
