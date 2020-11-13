@@ -248,4 +248,19 @@ a {
   .symbol {
     color: $purple;
   }
+
+  .breadcrumb {
+    margin-top: 1rem;
+    color: $grey-dark;
+    font-size: .9rem;
+    a {
+      color: $grey-dark;
+      font-weight: lighter;
+
+      &:hover {
+        color: $black;
+        opacity: 1.0;
+      }
+    }
+  }
 }
