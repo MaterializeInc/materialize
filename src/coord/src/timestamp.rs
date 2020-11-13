@@ -37,8 +37,8 @@ use rusoto_kinesis::KinesisClient;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
-    AvroOcfEncoding, Consistency, DataEncoding, Envelope, ExternalSourceConnector,
-    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector,
+    AvroOcfEncoding, Consistency, DataEncoding, ExternalSourceConnector, FileSourceConnector,
+    KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector, SourceEnvelope,
     TimestampSourceUpdate,
 };
 use expr::{PartitionId, SourceInstanceId};
@@ -701,8 +701,8 @@ fn is_ts_valid(
 /// 5) any source that uses the Avro format currently expects a consistency source that is formatted
 /// using the BYO_CONSISTENCY_SCHEMA Avro spec outlined above.
 ///
-fn identify_consistency_format(enc: DataEncoding, env: Envelope) -> ConsistencyFormatting {
-    if let Envelope::Debezium(_) = env {
+fn identify_consistency_format(enc: DataEncoding, env: SourceEnvelope) -> ConsistencyFormatting {
+    if let SourceEnvelope::Debezium(_) = env {
         if let DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema: _ }) = enc {
             ConsistencyFormatting::DebeziumOcf
         } else {
@@ -1218,7 +1218,7 @@ impl Timestamper {
         id: SourceInstanceId,
         sc: ExternalSourceConnector,
         enc: DataEncoding,
-        env: Envelope,
+        env: SourceEnvelope,
         timestamp_topic: String,
     ) -> Option<ByoTimestampConsumer> {
         match sc {

@@ -14,6 +14,7 @@ use std::time::SystemTime;
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
+use dataflow_types::SinkEnvelope;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
@@ -159,6 +160,7 @@ pub struct Sink {
     pub plan_cx: PlanContext,
     pub from: GlobalId,
     pub connector: SinkConnectorState,
+    pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub as_of: Option<u64>,
 }
@@ -1490,6 +1492,7 @@ impl Catalog {
                 plan_cx: pcx,
                 from: sink.from,
                 connector: SinkConnectorState::Pending(sink.connector_builder),
+                envelope: sink.envelope,
                 with_snapshot,
                 as_of,
             }),
