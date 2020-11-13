@@ -1379,12 +1379,12 @@ lazy_static! {
                         None => bail!("source passed to internal_read_cached_data must be literal string"),
                     };
                     let item = ecx.qcx.scx.resolve_item(ObjectName(vec![Ident::new(source.clone())]))?;
-                    let entry = ecx.qcx.scx.catalog.get_item(&item);
+                    let entry = ecx.catalog().get_item(&item);
                     match entry.item_type() {
                         CatalogItemType::Source => {},
                         _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, entry.item_type()),
                     }
-                    let cache_directory = ecx.qcx.scx.catalog.cache_directory();
+                    let cache_directory = ecx.catalog().config().cache_directory.as_deref();
                     if cache_directory.is_none() {
                         bail!("source caching is currently disabled. Try rerunning Materialize with '--experimental'.");
                     }
@@ -1551,7 +1551,7 @@ fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, a
 
 fn mz_cluster_id(ecx: &ExprContext) -> Result<ScalarExpr, anyhow::Error> {
     Ok(ScalarExpr::literal(
-        Datum::from(ecx.qcx.scx.catalog.cluster_id()),
+        Datum::from(ecx.catalog().config().cluster_id),
         ScalarType::Uuid,
     ))
 }
