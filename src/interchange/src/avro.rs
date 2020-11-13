@@ -1305,6 +1305,8 @@ struct DebeziumDeduplicationState {
     binlog_offsets: HashMap<Vec<u8>, (usize, usize, Option<i64>)>,
     /// Whether or not to track every message we've ever seen
     full: Option<TrackFull>,
+    /// Whether we have printed a warning due to seeing unknown source coordinates
+    warned_on_unknown: bool,
 }
 
 /// If we need to deal with debezium possibly going back after it hasn't seen things.
@@ -1417,6 +1419,7 @@ impl DebeziumDeduplicationState {
         DebeziumDeduplicationState {
             binlog_offsets: Default::default(),
             full,
+            warned_on_unknown: false,
         }
     }
 
@@ -1444,7 +1447,13 @@ impl DebeziumDeduplicationState {
                     ((change_lsn.log_block_offset as usize) << 16) | (change_lsn.slot_num as usize);
                 (offset_in_file, event_serial_no)
             }
-            RowCoordinates::Unknown => return true,
+            RowCoordinates::Unknown => {
+                if !self.warned_on_unknown {
+                    self.warned_on_unknown = true;
+                    log::warn!("Record with unrecognized source coordinates in {}. You might be using an unsupported upstream database.", debug_name);
+                }
+                return true;
+            }
         };
 
         // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
