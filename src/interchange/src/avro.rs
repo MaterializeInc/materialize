@@ -114,6 +114,7 @@ pub enum EnvelopeType {
     CdcV2,
 }
 
+// See https://rusanu.com/2012/01/17/what-is-an-lsn-log-sequence-number/
 #[derive(Debug, Copy, Clone)]
 struct MSSqlLsn {
     file_seq_num: u32,
@@ -362,10 +363,11 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                         Value::Null => None,
                         Value::Int(i) => Some(i.into()),
                         Value::Long(i) => Some(i),
-                        _ => {
-                            return Err(AvroError::Decode(DecodeError::Custom(
-                                "\"event_serial_no\" is not an integer".to_string(),
-                            )))
+                        val => {
+                            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                                "\"event_serial_no\" is not an integer: {:?}",
+                                val
+                            ))))
                         }
                     };
                 }
@@ -1316,8 +1318,8 @@ struct DebeziumDeduplicationState {
 #[derive(Debug)]
 struct TrackFull {
     /// binlog filename to (offset to (timestamp that this binlog entry was first seen))
-    seen_offsets: HashMap<Vec<u8>, HashMap<(usize, usize), i64>>,
-    seen_snapshot_keys: HashMap<Vec<u8>, HashSet<Row>>,
+    seen_offsets: HashMap<Box<[u8]>, HashMap<(usize, usize), i64>>,
+    seen_snapshot_keys: HashMap<Box<[u8]>, HashSet<Row>>,
     /// The highest-ever seen timestamp, used in logging to let us know how far backwards time might go
     max_seen_time: i64,
     key_indices: Option<Vec<usize>>,
@@ -1443,6 +1445,7 @@ impl DebeziumDeduplicationState {
                 change_lsn,
                 event_serial_no,
             } => {
+                // Consider everything but the file ID to be the offset within the file.
                 let offset_in_file =
                     ((change_lsn.log_block_offset as usize) << 16) | (change_lsn.slot_num as usize);
                 (offset_in_file, event_serial_no)
@@ -1544,7 +1547,7 @@ impl DebeziumDeduplicationState {
                     } else {
                         let mut hs = HashSet::new();
                         hs.insert(key);
-                        seen_snapshot_keys.insert(file.to_owned(), hs);
+                        seen_snapshot_keys.insert(file.into(), hs);
                         true
                     }
                 } else {
@@ -1591,7 +1594,7 @@ impl DebeziumDeduplicationState {
                     } else {
                         let mut hs = HashMap::new();
                         hs.insert((pos, row), upstream_time_millis.unwrap_or(0));
-                        seen_offsets.insert(file.to_owned(), hs);
+                        seen_offsets.insert(file.into(), hs);
                         true
                     }
                 }
