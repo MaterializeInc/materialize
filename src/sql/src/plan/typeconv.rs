@@ -685,10 +685,13 @@ where
             Ok(e) => Ok(e),
             Err(_) => cast_bail(),
         },
-        ScalarType::Map(_) => match plan_cast_to_map(ecx, ccx, expr, &from_typ, &cast_to) {
-            Ok(e) => Ok(e),
-            Err(_) => cast_bail(),
-        },
+        ScalarType::Map(_) => {
+            ecx.require_experimental_mode("maps")?;
+            match plan_cast_to_map(ecx, ccx, expr, &from_typ, &cast_to) {
+                Ok(e) => Ok(e),
+                Err(_) => cast_bail(),
+            }
+        }
         _ => {
             let cast_op = match get_cast(ccx, &from_typ, cast_to) {
                 Some(cast_op) => cast_op,

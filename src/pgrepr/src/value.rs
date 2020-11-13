@@ -528,8 +528,7 @@ fn encode_map<F>(buf: &mut F, elems: &HashMap<String, Option<Value>>) -> Nestabl
 where
     F: FormatBuffer,
 {
-    let mut pairs: Vec<(&String, &Option<Value>)> =
-        elems.into_iter().map(|(k, v)| (k, v)).collect();
+    let mut pairs: Vec<(&String, &Option<Value>)> = elems.iter().map(|(k, v)| (k, v)).collect();
     pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
     pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
     strconv::format_map(buf, pairs, |buf, elem| match elem {
