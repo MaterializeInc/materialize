@@ -65,7 +65,7 @@ pub enum Datum<'a> {
     /// Unlike [`Datum::Array`], lists are permitted to be ragged.
     List(DatumList<'a>),
     /// A mapping from string keys to `Datum`s.
-    Dict(DatumDict<'a>),
+    Map(DatumDict<'a>),
     /// An unknown value within a JSON-typed `Datum`.
     ///
     /// This variant is distinct from [`Datum::Null`] as a null datum is
@@ -331,7 +331,7 @@ impl<'a> Datum<'a> {
     #[track_caller]
     pub fn unwrap_dict(&self) -> DatumDict<'a> {
         match self {
-            Datum::Dict(dict) => *dict,
+            Datum::Map(dict) => *dict,
             _ => panic!("Datum::unwrap_dict called on {:?}", self),
         }
     }
@@ -350,7 +350,7 @@ impl<'a> Datum<'a> {
                     Datum::List(list) => list
                         .iter()
                         .all(|elem| is_instance_of_scalar(elem, scalar_type)),
-                    Datum::Dict(dict) => dict
+                    Datum::Map(dict) => dict
                         .iter()
                         .all(|(_key, val)| is_instance_of_scalar(val, scalar_type)),
                     _ => false,
@@ -407,10 +407,10 @@ impl<'a> Datum<'a> {
                         .zip_eq(fields)
                         .all(|(e, (_, t))| e.is_null() || is_instance_of_scalar(e, t)),
                     (Datum::List(_), _) => false,
-                    (Datum::Dict(map), ScalarType::Map(t)) => map
+                    (Datum::Map(map), ScalarType::Map(t)) => map
                         .iter()
                         .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, t)),
-                    (Datum::Dict(_), _) => false,
+                    (Datum::Map(_), _) => false,
                     (Datum::JsonNull, _) => false,
                 }
             }
@@ -615,7 +615,7 @@ impl fmt::Display for Datum<'_> {
                 write_delimited(f, ", ", list, |f, e| write!(f, "{}", e))?;
                 f.write_str("]")
             }
-            Datum::Dict(dict) => {
+            Datum::Map(dict) => {
                 f.write_str("{")?;
                 write_delimited(f, ", ", dict, |f, (k, v)| write!(f, "{}: {}", k, v))?;
                 f.write_str("}")

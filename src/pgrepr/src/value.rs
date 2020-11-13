@@ -85,10 +85,55 @@ pub enum Value {
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Value::Map(a), Value::Map(b)) => a == b,
-            (Value::Map(_), _) => false,
-            // todo: other comparisons
-            _ => false,
+            (Value::Bool(a), Value::Bool(b)) => a.eq(b),
+            (Value::Bytea(a), Value::Bytea(b)) => a.eq(b),
+            (Value::Date(a), Value::Date(b)) => a.eq(b),
+            (Value::Float4(a), Value::Float4(b)) => a.eq(b),
+            (Value::Float8(a), Value::Float8(b)) => a.eq(b),
+            (Value::Int4(a), Value::Int4(b)) => a.eq(b),
+            (Value::Int8(a), Value::Int8(b)) => a.eq(b),
+            (Value::Jsonb(a), Value::Jsonb(b)) => a.0.eq(&b.0),
+            (Value::List(a), Value::List(b)) => a.eq(b),
+            (Value::Numeric(a), Value::Numeric(b)) => a.eq(b),
+            (Value::Record(a), Value::Record(b)) => a.eq(b),
+            (Value::Time(a), Value::Time(b)) => a.eq(b),
+            (Value::Timestamp(a), Value::Timestamp(b)) => a.eq(b),
+            (Value::TimestampTz(a), Value::TimestampTz(b)) => a.eq(b),
+            (Value::Interval(a), Value::Interval(b)) => a.eq(b),
+            (Value::Text(a), Value::Text(b)) => a.eq(b),
+            (Value::Uuid(a), Value::Uuid(b)) => a.eq(b),
+            (Value::Map(a), Value::Map(b)) => a.eq(b),
+
+            (
+                Value::Array {
+                    dims: dims_a,
+                    elements: elems_a,
+                },
+                Value::Array {
+                    dims: dims_b,
+                    elements: elems_b,
+                },
+            ) => dims_a.eq(dims_b) && elems_a.eq(elems_b),
+
+            (Value::Bool(_), _)
+            | (Value::Bytea(_), _)
+            | (Value::Date(_), _)
+            | (Value::Float4(_), _)
+            | (Value::Float8(_), _)
+            | (Value::Int4(_), _)
+            | (Value::Int8(_), _)
+            | (Value::Jsonb(_), _)
+            | (Value::Array { .. }, _)
+            | (Value::List(_), _)
+            | (Value::Numeric(_), _)
+            | (Value::Record(_), _)
+            | (Value::Time(_), _)
+            | (Value::Timestamp(_), _)
+            | (Value::TimestampTz(_), _)
+            | (Value::Interval(_), _)
+            | (Value::Text(_), _)
+            | (Value::Uuid(_), _)
+            | (Value::Map(_), _) => false,
         }
     }
 }
@@ -142,13 +187,11 @@ impl Value {
                     .map(|(e, (_name, ty))| Value::from_datum(e, ty))
                     .collect(),
             )),
-            (Datum::Dict(dict), ScalarType::Map(typ)) => {
-                let value_dict: HashMap<String, Option<Value>> = dict
-                    .iter()
+            (Datum::Map(dict), ScalarType::Map(typ)) => Some(Value::Map(
+                dict.iter()
                     .map(|(k, v)| (k.to_owned(), Value::from_datum(v, typ)))
-                    .collect();
-                Some(Value::Map(value_dict))
-            }
+                    .collect(),
+            )),
             _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
@@ -218,16 +261,15 @@ impl Value {
                 };
                 let (_, elem_type) = null_datum(&elem_pg_type);
                 let mut packer = RowPacker::new();
-                for (k, v) in map {
-                    packer.push_dict_with(|packer| {
+                packer.push_dict_with(|packer| {
+                    for (k, v) in map {
                         packer.push(Datum::String(&k));
-                        let v = match v {
+                        packer.push(match v {
                             Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
                             None => Datum::Null,
-                        };
-                        packer.push(v);
-                    });
-                }
+                        });
+                    }
+                });
                 (
                     buf.push_unary_row(packer.finish()),
                     ScalarType::Map(Box::new(elem_type)),
@@ -486,7 +528,11 @@ fn encode_map<F>(buf: &mut F, elems: &HashMap<String, Option<Value>>) -> Nestabl
 where
     F: FormatBuffer,
 {
-    strconv::format_map(buf, elems, |buf, elem| match elem {
+    let mut pairs: Vec<(&String, &Option<Value>)> =
+        elems.into_iter().map(|(k, v)| (k, v)).collect();
+    pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
+    pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
+    strconv::format_map(buf, pairs, |buf, elem| match elem {
         None => buf.write_null(),
         Some(elem) => elem.encode_text(buf.nonnull_buffer()),
     })
@@ -498,7 +544,6 @@ fn decode_map(
 ) -> Result<HashMap<String, Option<Value>>, Box<dyn Error + Sync + Send>> {
     Ok(strconv::parse_map(
         raw,
-        || None,
         |key_text| -> String {
             match key_text {
                 Cow::Owned(s) => s,

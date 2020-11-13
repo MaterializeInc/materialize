@@ -372,26 +372,25 @@ fn cast_string_to_list<'a>(
     Ok(temp_storage.make_datum(|packer| packer.push_list(parsed_datums)))
 }
 
-fn cast_string_to_dict<'a>(
+fn cast_string_to_map<'a>(
     a: Datum<'a>,
     cast_expr: &'a ScalarExpr,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     let parsed_map = strconv::parse_map(
         a.unwrap_str(),
-        || Datum::Null,
         |key_text| -> String {
             match key_text {
                 Cow::Owned(s) => s,
                 Cow::Borrowed(s) => s.to_owned(),
             }
         },
-        |elem_text| -> Result<Datum, EvalError> {
-            let elem_text = match elem_text {
+        |value_text| -> Result<Datum, EvalError> {
+            let value_text = match value_text {
                 Cow::Owned(s) => temp_storage.push_string(s),
                 Cow::Borrowed(s) => s,
             };
-            cast_expr.eval(&[Datum::String(elem_text)], temp_storage)
+            cast_expr.eval(&[Datum::String(value_text)], temp_storage)
         },
     )?;
     let mut pairs: Vec<(String, Datum)> = parsed_map.into_iter().map(|(k, v)| (k, v)).collect();
@@ -1161,7 +1160,7 @@ fn jsonb_get_int64<'a>(
                 None => Datum::Null,
             }
         }
-        Datum::Dict(_) => Datum::Null,
+        Datum::Map(_) => Datum::Null,
         _ => {
             if i == 0 || i == -1 {
                 // I have no idea why postgres does this, but we're stuck with it
@@ -1185,7 +1184,7 @@ fn jsonb_get_string<'a>(
 ) -> Datum<'a> {
     let k = b.unwrap_str();
     match a {
-        Datum::Dict(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
+        Datum::Map(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
             Some((_k, v)) if stringify => jsonb_stringify(v, temp_storage),
             Some((_k, v)) => v,
             None => Datum::Null,
@@ -1199,7 +1198,7 @@ fn jsonb_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
     match a {
         Datum::List(list) => list.iter().any(|k2| b == k2).into(),
-        Datum::Dict(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
+        Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
         Datum::String(string) => (string == k).into(),
         _ => false.into(),
     }
@@ -1218,7 +1217,7 @@ fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             (Datum::List(a), Datum::List(b)) => b
                 .iter()
                 .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false))),
-            (Datum::Dict(a), Datum::Dict(b)) => b.iter().all(|(b_key, b_val)| {
+            (Datum::Map(a), Datum::Map(b)) => b.iter().all(|(b_key, b_val)| {
                 a.iter()
                     .any(|(a_key, a_val)| (a_key == b_key) && contains(a_val, b_val, false))
             }),
@@ -1236,7 +1235,7 @@ fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
 fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     match (a, b) {
-        (Datum::Dict(dict_a), Datum::Dict(dict_b)) => {
+        (Datum::Map(dict_a), Datum::Map(dict_b)) => {
             let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();
             // stable sort, so if keys collide dedup prefers dict_b
             pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
@@ -1286,7 +1285,7 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
             let elems = list.iter().filter(|e| b != *e);
             temp_storage.make_datum(|packer| packer.push_list(elems))
         }
-        Datum::Dict(dict) => {
+        Datum::Map(dict) => {
             let k = b.unwrap_str();
             let pairs = dict.iter().filter(|(k2, _v)| k != *k2);
             temp_storage.make_datum(|packer| packer.push_dict(pairs))
@@ -1719,7 +1718,7 @@ fn jsonb_array_length<'a>(a: Datum<'a>) -> Datum<'a> {
 
 fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
-        Datum::Dict(_) => Datum::String("object"),
+        Datum::Map(_) => Datum::String("object"),
         Datum::List(_) => Datum::String("array"),
         Datum::String(_) => Datum::String("string"),
         Datum::Float64(_) => Datum::String("number"),
@@ -1733,7 +1732,7 @@ fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
 fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     fn strip_nulls(a: Datum, packer: &mut RowPacker) {
         match a {
-            Datum::Dict(dict) => packer.push_dict_with(|packer| {
+            Datum::Map(dict) => packer.push_dict_with(|packer| {
                 for (k, v) in dict.iter() {
                     match v {
                         Datum::JsonNull => (),
@@ -2429,11 +2428,11 @@ pub enum UnaryFunc {
         // elements' type
         cast_expr: Box<ScalarExpr>,
     },
-    CastStringToDict {
-        // Target dict's value type
+    CastStringToMap {
+        // Target map's value type
         return_ty: ScalarType,
-        // The expression used to cast the discovered elements to the
-        // dict's values' type
+        // The expression used to cast the discovered values to the map's
+        // values' type
         cast_expr: Box<ScalarExpr>,
     },
     CastStringToTime,
@@ -2576,8 +2575,8 @@ impl UnaryFunc {
                 cast_expr,
                 return_ty,
             } => cast_string_to_list(a, return_ty, &*cast_expr, temp_storage),
-            UnaryFunc::CastStringToDict { cast_expr, .. } => {
-                cast_string_to_dict(a, &*cast_expr, temp_storage)
+            UnaryFunc::CastStringToMap { cast_expr, .. } => {
+                cast_string_to_map(a, &*cast_expr, temp_storage)
             }
             UnaryFunc::CastStringToTime => cast_string_to_time(a),
             UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
@@ -2762,7 +2761,7 @@ impl UnaryFunc {
                 (return_ty.clone()).nullable(false)
             }
 
-            CastStringToDict { return_ty, .. } => {
+            CastStringToMap { return_ty, .. } => {
                 ScalarType::Map(Box::new(return_ty.clone())).nullable(false)
             }
 
@@ -2896,7 +2895,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToDecimal(_) => f.write_str("strtodec"),
             UnaryFunc::CastStringToDate => f.write_str("strtodate"),
             UnaryFunc::CastStringToList { .. } => f.write_str("strtolist"),
-            UnaryFunc::CastStringToDict { .. } => f.write_str("strtodict"),
+            UnaryFunc::CastStringToMap { .. } => f.write_str("strtomap"),
             UnaryFunc::CastStringToTime => f.write_str("strtotime"),
             UnaryFunc::CastStringToTimestamp => f.write_str("strtots"),
             UnaryFunc::CastStringToTimestampTz => f.write_str("strtotstz"),

@@ -2342,7 +2342,8 @@ impl Parser {
     fn parse_map(&mut self) -> Result<DataType, ParserError> {
         self.expect_token(&Token::LBracket)?;
         if self.parse_data_type()? != DataType::Text {
-            return self.expected(self.peek_range(), "TEXT", self.peek_token());
+            self.prev_token();
+            return self.expected(self.peek_prev_range(), "TEXT", self.peek_token());
         }
         self.expect_token(&Token::Arrow)?;
         let typ = self.parse_data_type()?;

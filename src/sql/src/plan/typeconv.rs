@@ -583,7 +583,7 @@ pub fn plan_cast_to_map(
     assert!(matches!(to, ScalarType::Map(_)));
 
     if let ScalarExpr::CallUnary {
-        func: UnaryFunc::CastStringToDict { .. },
+        func: UnaryFunc::CastStringToMap { .. },
         ..
     } = expr
     {
@@ -638,11 +638,11 @@ pub fn plan_cast_to_map(
     ));
 
     Ok(expr.call_unary(match from {
-        ScalarType::String => UnaryFunc::CastStringToDict {
+        ScalarType::String => UnaryFunc::CastStringToMap {
             return_ty,
             cast_expr,
         },
-        _ => unreachable!("already prevented match on incompatible types in plan_cast_to_list"),
+        _ => unreachable!("already prevented match on incompatible types in plan_cast"),
     }))
 }
 

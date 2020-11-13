@@ -485,20 +485,18 @@ where
 
 pub fn parse_map<'a, V, E>(
     s: &'a str,
-    make_null: impl FnMut() -> V,
     gen_key: impl FnMut(Cow<'a, str>) -> String,
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<HashMap<String, V>, ParseError>
 where
     E: fmt::Display,
 {
-    parse_map_inner(s, make_null, gen_key, gen_elem)
+    parse_map_inner(s, gen_key, gen_elem)
         .map_err(|details| ParseError::new("map", s).with_details(details))
 }
 
 pub fn parse_map_inner<'a, V, E>(
     s: &'a str,
-    _make_null: impl FnMut() -> V,
     mut gen_key: impl FnMut(Cow<'a, str>) -> String,
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<HashMap<String, V>, String>
@@ -512,14 +510,15 @@ where
     let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
 
     loop {
+        // Get key.
         buf.take_while(|ch| ch.is_ascii_whitespace());
-
-        // Get elements.
         let key = match buf.peek() {
             Some(_) => map_lex_unquoted_element(buf)?,
             None => bail!("unexpected end of input"),
         };
         let key = gen_key(key.unwrap());
+
+        // Assert mapping arrow (=>) is present.
         buf.take_while(|ch| ch.is_ascii_whitespace());
         if !buf.consume('=') {
             bail!("expected =")
@@ -527,6 +526,8 @@ where
         if !buf.consume('>') {
             bail!("expected >")
         }
+
+        // Get value.
         buf.take_while(|ch| ch.is_ascii_whitespace());
         let value = match buf.peek() {
             Some(_) => map_lex_unquoted_element(buf)?,
@@ -544,7 +545,7 @@ where
                 buf.prev();
             }
             Some(',') => {}
-            Some(c) => bail!("expected ',' or '}}', got '{}'", c),
+            Some(c) => bail!("expected ',' or end of input, got '{}'", c),
             None => break,
         }
     }
@@ -687,44 +688,6 @@ fn list_lex_embedded_list<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, Stri
     Ok(Cow::Borrowed(s))
 }
 
-fn map_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, str>>, String> {
-    let mut s = String::new();
-    let mut trimmed_len = s.len();
-
-    loop {
-        let elem = buf.next();
-        match elem {
-            Some('=') if buf.peek() == Some('>') => {
-                if s.is_empty() {
-                    bail!("malformed map literal; missing key")
-                }
-                buf.prev();
-                break;
-            }
-            Some(',') => {
-                if s.is_empty() {
-                    bail!("malformed map literal; missing value")
-                }
-                buf.prev();
-                break;
-            }
-            Some(c) => {
-                s.push(c);
-                if !c.is_ascii_whitespace() {
-                    trimmed_len = s.len();
-                }
-            }
-            None => break,
-        }
-    }
-    s.truncate(trimmed_len);
-    Ok(if s.to_uppercase() == "NULL" {
-        None
-    } else {
-        Some(Cow::Owned(s))
-    })
-}
-
 // Result of `None` indicates element is NULL.
 fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, str>>, String> {
     // first char is guaranteed to be non-whitespace
@@ -798,9 +761,47 @@ fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, 
     })
 }
 
+fn map_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, str>>, String> {
+    let mut s = String::new();
+    let mut trimmed_len = s.len();
+
+    loop {
+        let elem = buf.next();
+        match elem {
+            Some('=') if buf.peek() == Some('>') => {
+                if s.is_empty() {
+                    bail!("malformed map literal; missing key")
+                }
+                buf.prev();
+                break;
+            }
+            Some(',') => {
+                if s.is_empty() {
+                    bail!("malformed map literal; missing value")
+                }
+                buf.prev();
+                break;
+            }
+            Some(c) => {
+                s.push(c);
+                if !c.is_ascii_whitespace() {
+                    trimmed_len = s.len();
+                }
+            }
+            None => break,
+        }
+    }
+    s.truncate(trimmed_len);
+    Ok(if s.to_uppercase() == "NULL" {
+        None
+    } else {
+        Some(Cow::Owned(s))
+    })
+}
+
 pub fn format_map<F, T>(
     buf: &mut F,
-    elems: &HashMap<String, T>,
+    elems: Vec<(&String, T)>,
     mut format_elem: impl FnMut(MapElementWriter<F>, &T) -> Nestable,
 ) -> Nestable
 where
@@ -809,7 +810,7 @@ where
     buf.write_char('{');
     let mut elems = elems.iter().peekable();
     while let Some((key, value)) = elems.next() {
-        buf.write_str(&key);
+        buf.write_str(key);
         buf.write_str("=>");
         format_elem(MapElementWriter(buf), value);
         if elems.peek().is_some() {

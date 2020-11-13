@@ -84,7 +84,7 @@ impl Token {
             Token::Colon => "colon",
             Token::DoubleColon => "double colon",
             Token::Semicolon => "semicolon",
-            Token::Arrow => "arrow",
+            Token::Arrow => "=>",
         }
     }
 }
