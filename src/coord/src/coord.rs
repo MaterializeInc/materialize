@@ -2840,11 +2840,13 @@ where
                     // If Materialize has caching enabled, check to see if the source has any
                     // already cached data that can be reused, and if so, augment the source
                     // connector to use that data before importing it into the dataflow.
-                    let connector = if let Some(path) = self.catalog.cache_directory() {
+                    let connector = if let Some(path) =
+                        self.catalog.config().cache_directory.as_deref()
+                    {
                         match crate::cache::augment_connector(
                             source.connector.clone(),
-                            path,
-                            self.catalog.cluster_id(),
+                            &path,
+                            self.catalog.config().cluster_id,
                             *id,
                         ) {
                             Ok(Some(connector)) => Some(connector),
@@ -3062,7 +3064,10 @@ where
             if connector.caching_enabled() {
                 if let Some(cache_tx) = &mut self.cache_tx {
                     cache_tx
-                        .send(CacheMessage::AddSource(self.catalog.cluster_id(), id))
+                        .send(CacheMessage::AddSource(
+                            self.catalog.config().cluster_id,
+                            id,
+                        ))
                         .await
                         .expect("failed to send CREATE SOURCE notification to caching thread");
                 } else {
@@ -3171,7 +3176,7 @@ where
             enable_logging: logging.is_some(),
             cache_directory: cache_config.map(|c| c.path),
         })?;
-        let cluster_id = catalog.cluster_id();
+        let cluster_id = catalog.config().cluster_id;
 
         let mut coord = Coordinator {
             broadcast_tx: switchboard.broadcast_tx(dataflow::BroadcastToken),

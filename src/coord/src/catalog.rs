@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
@@ -19,7 +19,6 @@ use log::{info, trace};
 use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
@@ -80,13 +79,8 @@ pub struct Catalog {
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     storage: Arc<Mutex<storage::Connection>>,
-    startup_time: SystemTime,
-    nonce: u64,
-    experimental_mode: bool,
-    cluster_id: Uuid,
-    /// Used to assign a PostgreSQL object ID (OID) to each object in the catalog.
     oid_counter: u32,
-    cache_directory: Option<PathBuf>,
+    config: sql::catalog::CatalogConfig,
 }
 
 #[derive(Debug)]
@@ -384,12 +378,14 @@ impl Catalog {
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
-            startup_time: SystemTime::now(),
-            nonce: rand::random(),
-            experimental_mode,
-            cluster_id,
             oid_counter: FIRST_USER_OID,
-            cache_directory: config.cache_directory,
+            config: sql::catalog::CatalogConfig {
+                startup_time: SystemTime::now(),
+                nonce: rand::random(),
+                experimental_mode,
+                cluster_id,
+                cache_directory: config.cache_directory,
+            },
         };
         let mut events = vec![];
 
@@ -1580,12 +1576,8 @@ impl Catalog {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
 
-    pub fn cache_directory(&self) -> Option<&Path> {
-        self.cache_directory.as_deref()
-    }
-
-    pub fn cluster_id(&self) -> Uuid {
-        self.cluster_id
+    pub fn config(&self) -> &sql::catalog::CatalogConfig {
+        &self.config
     }
 }
 
@@ -1727,18 +1719,6 @@ pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
 }
 
 impl sql::catalog::Catalog for ConnCatalog<'_> {
-    fn startup_time(&self) -> SystemTime {
-        self.catalog.startup_time
-    }
-
-    fn nonce(&self) -> u64 {
-        self.catalog.nonce
-    }
-
-    fn cluster_id(&self) -> Uuid {
-        self.catalog.cluster_id
-    }
-
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
         if include_system_schemas {
             self.search_path.to_vec()
@@ -1814,12 +1794,8 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.try_get(name, self.conn_id).is_some()
     }
 
-    fn experimental_mode(&self) -> bool {
-        self.catalog.experimental_mode
-    }
-
-    fn cache_directory(&self) -> Option<&Path> {
-        self.catalog.cache_directory()
+    fn config(&self) -> &sql::catalog::CatalogConfig {
+        &self.catalog.config
     }
 }
 
