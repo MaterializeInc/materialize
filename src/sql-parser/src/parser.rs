@@ -195,6 +195,7 @@ impl<'a> Parser<'a> {
                     }))
                 }
                 Token::Keyword(CREATE) => Ok(self.parse_create()?),
+                Token::Keyword(DISCARD) => Ok(self.parse_discard()?),
                 Token::Keyword(DROP) => Ok(self.parse_drop()?),
                 Token::Keyword(DELETE) => Ok(self.parse_delete()?),
                 Token::Keyword(INSERT) => Ok(self.parse_insert()?),
@@ -1691,6 +1692,17 @@ impl<'a> Parser<'a> {
         } else {
             Ok(false)
         }
+    }
+
+    fn parse_discard(&mut self) -> Result<Statement, ParserError> {
+        let target = match self.expect_one_of_keywords(&[ALL, PLANS, SEQUENCES, TEMP, TEMPORARY])? {
+            ALL => DiscardTarget::All,
+            PLANS => DiscardTarget::Plans,
+            SEQUENCES => DiscardTarget::Sequences,
+            TEMP | TEMPORARY => DiscardTarget::Temp,
+            _ => unreachable!(),
+        };
+        Ok(Statement::Discard(DiscardStatement { target }))
     }
 
     fn parse_drop(&mut self) -> Result<Statement, ParserError> {

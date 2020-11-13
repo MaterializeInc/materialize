@@ -129,6 +129,10 @@ pub enum ExecuteResponse {
     CreatedType,
     /// The specified number of rows were deleted from the requested table.
     Deleted(usize),
+    /// The temporary objects associated with the session have been discarded.
+    DiscardedTemp,
+    /// All state associated with the session has been discarded.
+    DiscardedAll,
     /// The requested database was dropped.
     DroppedDatabase,
     /// The requested schema was dropped.

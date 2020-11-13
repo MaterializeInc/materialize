@@ -40,10 +40,10 @@ use sql_parser::ast::{
     ColumnOption, Connector, CopyDirection, CopyRelation, CopyStatement, CopyTarget,
     CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement, CreateSchemaStatement,
     CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
-    DropDatabaseStatement, DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr,
-    Format, Ident, IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query,
-    SelectStatement, SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption,
-    Statement, TailStatement, Value, WithOption, WithOptionValue,
+    DiscardStatement, DiscardTarget, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
+    ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement,
+    ObjectName, ObjectType, Query, SelectStatement, SetVariableStatement, SetVariableValue,
+    ShowVariableStatement, SqlOption, Statement, TailStatement, Value, WithOption, WithOptionValue,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -135,6 +135,7 @@ pub fn describe_statement(
         | Statement::DropDatabase(_)
         | Statement::DropObjects(_)
         | Statement::SetVariable(_)
+        | Statement::Discard(_)
         | Statement::StartTransaction(_)
         | Statement::Rollback(_)
         | Statement::Commit(_)
@@ -311,6 +312,7 @@ pub fn handle_statement(
 
         Statement::SetVariable(stmt) => handle_set_variable(scx, stmt),
         Statement::ShowVariable(stmt) => handle_show_variable(scx, stmt),
+        Statement::Discard(stmt) => handle_discard(scx, stmt),
 
         Statement::Explain(stmt) => handle_explain(scx, stmt, params),
         Statement::Select(stmt) => handle_select(scx, stmt, params, None),
@@ -358,6 +360,18 @@ fn handle_show_variable(
         Ok(Plan::ShowAllVariables)
     } else {
         Ok(Plan::ShowVariable(variable.to_string()))
+    }
+}
+
+fn handle_discard(
+    _: &StatementContext,
+    DiscardStatement { target }: DiscardStatement,
+) -> Result<Plan, anyhow::Error> {
+    match target {
+        DiscardTarget::All => Ok(Plan::DiscardAll),
+        DiscardTarget::Temp => Ok(Plan::DiscardTemp),
+        DiscardTarget::Sequences => unsupported!("DISCARD SEQUENCES"),
+        DiscardTarget::Plans => unsupported!("DISCARD PLANS"),
     }
 }
 

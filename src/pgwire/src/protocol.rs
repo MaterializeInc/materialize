@@ -502,8 +502,8 @@ where
             None => {
                 return self
                     .error(ErrorResponse::error(
-                        SqlState::INVALID_SQL_STATEMENT_NAME,
-                        "portal does not exist",
+                        SqlState::INVALID_CURSOR_NAME,
+                        format!("portal \"{}\" does not exist", portal_name),
                     ))
                     .await;
             }
@@ -575,8 +575,8 @@ where
             }
             None => {
                 self.error(ErrorResponse::error(
-                    SqlState::INVALID_SQL_STATEMENT_NAME,
-                    "portal does not exist",
+                    SqlState::INVALID_CURSOR_NAME,
+                    format!("portal \"{}\" does not exist", name),
                 ))
                 .await
             }
@@ -662,6 +662,8 @@ where
             }
             ExecuteResponse::CreatedType => command_complete!("CREATE TYPE"),
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
+            ExecuteResponse::DiscardedTemp => command_complete!("DISCARD TEMP"),
+            ExecuteResponse::DiscardedAll => command_complete!("DISCARD ALL"),
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),

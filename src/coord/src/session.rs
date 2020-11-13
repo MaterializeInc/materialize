@@ -172,6 +172,14 @@ impl Session {
         self.portals.get_mut(portal_name)
     }
 
+    /// Resets the session to its initial state.
+    pub fn reset(&mut self) {
+        self.end_transaction();
+        self.prepared_statements.clear();
+        self.portals.clear();
+        self.vars = Vars::default();
+    }
+
     /// Returns a reference to the variables in this session.
     pub fn vars(&self) -> &Vars {
         &self.vars

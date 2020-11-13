@@ -60,6 +60,8 @@ Wrap your release notes at the 80 character mark.
   supplied at startup. {{ gh 4777 }}
 - The systemd package configured by our apt package now writes all logs to
   the systemd journal, instead of a file in the mzdata directory. {{ gh 4781 }}
+- Support the [`DISCARD`](/sql/discard) SQL statement.
+
 
 {{% version-header v0.5.1 %}}
 

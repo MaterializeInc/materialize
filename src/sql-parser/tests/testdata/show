@@ -362,3 +362,45 @@ SET a =
 error: Expected variable value, found EOF
 SET a =
        ^
+
+parse-statement
+DISCARD ALL
+----
+DISCARD ALL
+=>
+Discard(DiscardStatement { target: All })
+
+parse-statement
+DISCARD PLANS
+----
+DISCARD PLANS
+=>
+Discard(DiscardStatement { target: Plans })
+
+parse-statement
+DISCARD SEQUENCES
+----
+DISCARD SEQUENCES
+=>
+Discard(DiscardStatement { target: Sequences })
+
+parse-statement
+DISCARD TEMP
+----
+DISCARD TEMP
+=>
+Discard(DiscardStatement { target: Temp })
+
+parse-statement
+DISCARD TEMPORARY
+----
+DISCARD TEMP
+=>
+Discard(DiscardStatement { target: Temp })
+
+parse-statement
+DISCARD BAD
+----
+error: Expected one of ALL or PLANS or SEQUENCES or TEMP or TEMPORARY, found identifier
+DISCARD BAD
+        ^
