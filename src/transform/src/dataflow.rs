@@ -62,7 +62,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             // Determine if any exports directly reference this view.
             let mut occurs_in_export = false;
             for (_gid, sink_desc) in dataflow.sink_exports.iter() {
-                if sink_desc.from.0 == global_id {
+                if sink_desc.from == global_id {
                     occurs_in_export = true;
                 }
             }
@@ -175,7 +175,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
 
     // Demand all columns of inputs to sinks.
     for (_id, sink) in dataflow.sink_exports.iter() {
-        let input_id = sink.from.0;
+        let input_id = sink.from;
         demand
             .entry(Id::Global(input_id))
             .or_insert_with(HashSet::new)
@@ -263,7 +263,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
 /// Analysis to identify monotonic collections, especially TopK inputs.
 pub mod monotonic {
 
-    use dataflow_types::{DataflowDesc, Envelope, SourceConnector};
+    use dataflow_types::{DataflowDesc, SourceConnector, SourceEnvelope};
     use expr::RelationExpr;
     use expr::{GlobalId, Id};
     use std::collections::HashSet;
@@ -337,7 +337,7 @@ pub mod monotonic {
         let mut monotonic = std::collections::HashSet::new();
         for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
             if let SourceConnector::External {
-                envelope: Envelope::None,
+                envelope: SourceEnvelope::None,
                 ..
             } = source_desc.connector
             {

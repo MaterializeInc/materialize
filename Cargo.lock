@@ -1616,6 +1616,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smallvec",
+ "timely",
  "url",
  "uuid",
 ]

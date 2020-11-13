@@ -21,6 +21,7 @@ use std::time::Duration;
 use anyhow::Context;
 use log::warn;
 use regex::Regex;
+use repr::CustomTypesInfo;
 use rusoto_core::Region;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -186,12 +187,19 @@ impl DataflowDesc {
         from_id: GlobalId,
         from_desc: RelationDesc,
         connector: SinkConnector,
+        envelope: SinkEnvelope,
     ) {
+        let key_desc = connector.get_key_desc().cloned();
+        let value_desc = connector.get_value_desc().clone();
         self.sink_exports.push((
             id,
             SinkDesc {
-                from: (from_id, from_desc),
+                from: from_id,
+                from_desc,
+                key_desc,
+                value_desc,
                 connector,
+                envelope,
             },
         ));
     }
@@ -236,7 +244,7 @@ impl DataflowDesc {
             result.extend(self.get_imports(&desc.on_id))
         }
         for (_, sink) in &self.sink_exports {
-            result.extend(self.get_imports(&sink.from.0))
+            result.extend(self.get_imports(&sink.from))
         }
         result
     }
@@ -296,11 +304,11 @@ pub enum DataEncoding {
 impl DataEncoding {
     /// Computes the [`RelationDesc`] for the relation specified by the this
     /// data encoding and envelope.s
-    pub fn desc(&self, envelope: &Envelope) -> Result<RelationDesc, anyhow::Error> {
+    pub fn desc(&self, envelope: &SourceEnvelope) -> Result<RelationDesc, anyhow::Error> {
         // Add columns for the key, if using the upsert envelope.
         let key_desc = match envelope {
-            Envelope::Upsert(key_encoding) => {
-                let key_desc = key_encoding.desc(&Envelope::None)?;
+            SourceEnvelope::Upsert(key_encoding) => {
+                let key_desc = key_encoding.desc(&SourceEnvelope::None)?;
 
                 // It doesn't make sense for the key to have keys.
                 assert!(key_desc.typ().keys.is_empty());
@@ -455,25 +463,36 @@ impl SourceDesc {
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SinkDesc {
-    pub from: (GlobalId, RelationDesc),
+    pub from: GlobalId,
+    pub from_desc: RelationDesc,
+    pub value_desc: RelationDesc,
+    pub key_desc: Option<RelationDesc>,
     pub connector: SinkConnector,
+    pub envelope: SinkEnvelope,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SinkEnvelope {
+    Debezium,
+    Upsert,
+    Tail { emit_progress: bool },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Envelope {
+pub enum SourceEnvelope {
     None,
     Debezium(DebeziumDeduplicationStrategy),
     Upsert(DataEncoding),
     CdcV2,
 }
 
-impl Envelope {
+impl SourceEnvelope {
     pub fn get_avro_envelope_type(&self) -> avro::EnvelopeType {
         match self {
-            Envelope::None => avro::EnvelopeType::None,
-            Envelope::Debezium { .. } => avro::EnvelopeType::Debezium,
-            Envelope::Upsert(_) => avro::EnvelopeType::Upsert,
-            Envelope::CdcV2 => avro::EnvelopeType::CdcV2,
+            SourceEnvelope::None => avro::EnvelopeType::None,
+            SourceEnvelope::Debezium { .. } => avro::EnvelopeType::Debezium,
+            SourceEnvelope::Upsert(_) => avro::EnvelopeType::Upsert,
+            SourceEnvelope::CdcV2 => avro::EnvelopeType::CdcV2,
         }
     }
 }
@@ -483,7 +502,7 @@ pub enum SourceConnector {
     External {
         connector: ExternalSourceConnector,
         encoding: DataEncoding,
-        envelope: Envelope,
+        envelope: SourceEnvelope,
         consistency: Consistency,
         ts_frequency: Duration,
     },
@@ -643,6 +662,8 @@ pub struct KafkaSinkConsistencyConnector {
 pub struct KafkaSinkConnector {
     pub addrs: KafkaAddrs,
     pub topic: String,
+    pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    pub value_desc: RelationDesc,
     pub key_schema_id: Option<i32>,
     pub value_schema_id: i32,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
@@ -652,14 +673,16 @@ pub struct KafkaSinkConnector {
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
     pub config_options: BTreeMap<String, String>,
-    pub key_indices: Option<Vec<usize>>,
+    pub custom_types_info: CustomTypesInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AvroOcfSinkConnector {
+    pub value_desc: RelationDesc,
     pub path: PathBuf,
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
+    pub custom_types_info: CustomTypesInfo,
 }
 
 impl SinkConnector {
@@ -668,6 +691,33 @@ impl SinkConnector {
             SinkConnector::AvroOcf(avro) => avro.frontier.clone(),
             SinkConnector::Kafka(kafka) => kafka.frontier.clone(),
             SinkConnector::Tail(tail) => tail.frontier.clone(),
+        }
+    }
+
+    pub fn get_key_desc(&self) -> Option<&RelationDesc> {
+        match self {
+            SinkConnector::Kafka(k) => k.key_desc_and_indices.as_ref().map(|(desc, _indices)| desc),
+            SinkConnector::Tail(_) => None,
+            SinkConnector::AvroOcf(_) => None,
+        }
+    }
+
+    pub fn get_key_indices(&self) -> Option<&[usize]> {
+        match self {
+            SinkConnector::Kafka(k) => k
+                .key_desc_and_indices
+                .as_ref()
+                .map(|(_desc, indices)| indices.as_slice()),
+            SinkConnector::Tail(_) => None,
+            SinkConnector::AvroOcf(_) => None,
+        }
+    }
+
+    pub fn get_value_desc(&self) -> &RelationDesc {
+        match self {
+            SinkConnector::Kafka(k) => &k.value_desc,
+            SinkConnector::Tail(t) => &t.value_desc,
+            SinkConnector::AvroOcf(a) => &a.value_desc,
         }
     }
 }
@@ -679,6 +729,7 @@ pub struct TailSinkConnector {
     pub strict: bool,
     pub emit_progress: bool,
     pub object_columns: usize,
+    pub value_desc: RelationDesc,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -691,13 +742,18 @@ pub enum SinkConnectorBuilder {
 pub struct AvroOcfSinkConnectorBuilder {
     pub path: PathBuf,
     pub file_name_suffix: String,
+    pub value_desc: RelationDesc,
+    pub custom_types_info: CustomTypesInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectorBuilder {
     pub broker_addrs: KafkaAddrs,
     pub schema_registry_url: Url,
+    pub key_schema: Option<String>,
     pub value_schema: String,
+    pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    pub value_desc: RelationDesc,
     pub topic_prefix: String,
     pub topic_suffix: String,
     pub replication_factor: u32,
@@ -705,8 +761,7 @@ pub struct KafkaSinkConnectorBuilder {
     pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
-    pub key_indices: Option<Vec<usize>>,
-    pub key_schema: Option<String>,
+    pub custom_types_info: CustomTypesInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

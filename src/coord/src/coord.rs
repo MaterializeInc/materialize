@@ -27,6 +27,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, bail, Context};
+use dataflow_types::SinkEnvelope;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
@@ -944,6 +945,7 @@ where
             id,
             sink.from,
             connector,
+            sink.envelope,
         ))
         .await
     }
@@ -1449,6 +1451,7 @@ where
                 copy_to,
                 emit_progress,
                 object_columns,
+                desc,
             } => tx.send(
                 self.sequence_tail(
                     &session,
@@ -1458,6 +1461,7 @@ where
                     copy_to,
                     emit_progress,
                     object_columns,
+                    desc,
                 )
                 .await,
                 session,
@@ -1759,6 +1763,7 @@ where
                 plan_cx: pcx,
                 from: sink.from,
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
+                envelope: sink.envelope,
                 with_snapshot,
                 as_of,
             }),
@@ -2170,6 +2175,7 @@ where
         copy_to: Option<CopyFormat>,
         emit_progress: bool,
         object_columns: usize,
+        desc: RelationDesc,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
@@ -2195,7 +2201,9 @@ where
                 strict: !with_snapshot,
                 emit_progress,
                 object_columns,
+                value_desc: desc,
             }),
+            SinkEnvelope::Tail { emit_progress },
         ))
         .await;
 
