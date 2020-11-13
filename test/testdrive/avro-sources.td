@@ -513,3 +513,105 @@ a b
 ---
 1 1
 2 3
+
+# Test that SQL Server-style sources can be ingested.
+$ set ms-dbz-schema={
+    "connect.name": "com.materialize.test.Envelope",
+    "fields": [
+      {
+        "default": null,
+        "name": "before",
+        "type": [
+          "null",
+          {
+            "connect.name": "com.materialize.test.Value",
+            "fields": [
+              {
+                "name": "a",
+                "type": "int"
+              },
+              {
+                "name": "b",
+                "type": "int"
+              }
+            ],
+            "name": "Value",
+            "type": "record"
+          }
+        ]
+      },
+      {
+        "default": null,
+        "name": "after",
+        "type": [
+          "null",
+          "Value"
+        ]
+      },
+      {
+        "name": "source",
+        "type": {
+          "connect.name": "io.debezium.connector.sqlserver.Source",
+          "fields": [
+            {
+              "default": "false",
+              "name": "snapshot",
+              "type": [
+                {
+                  "connect.default": "false",
+                  "connect.name": "io.debezium.data.Enum",
+                  "connect.parameters": {
+                    "allowed": "true,last,false"
+                  },
+                  "connect.version": 1,
+                  "type": "string"
+                },
+                "null"
+              ]
+            },
+            {
+              "default": null,
+              "name": "change_lsn",
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            {
+              "default": null,
+              "name": "event_serial_no",
+              "type": [
+                "null",
+                "long"
+              ]
+            }
+          ],
+          "name": "Source",
+          "namespace": "io.debezium.connector.sqlserver",
+          "type": "record"
+        }
+      }
+    ],
+    "name": "Envelope",
+    "namespace": "com.materialize.test",
+    "type": "record"
+  }
+
+$ kafka-create-topic topic=ms-dbz-data
+
+# The third record will be skipped, since `lsn` has gone backwards.
+$ kafka-ingest format=avro topic=ms-dbz-data schema=${ms-dbz-schema} timestamp=1
+{"before": null, "after": {"Value":{"a": 1, "b": 1}}, "source": {"change_lsn": {"string": "00000025:00000728:001b"}, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"Value":{"a": 2, "b": 3}}, "source": {"change_lsn": {"string": "00000025:00000728:001c"}, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"Value":{"a": -1, "b": 7}}, "source": {"change_lsn": {"string": "00000025:00000728:001a"}, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
+
+> CREATE MATERIALIZED SOURCE ms_dbz
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM ms_dbz
+a b
+---
+1 1
+2 3
