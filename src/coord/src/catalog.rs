@@ -1810,15 +1810,6 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn is_queryable(&self, id: GlobalId) -> bool {
-        let (_, complete) = self.catalog.nearest_indexes(&[id]);
-        complete
-    }
-
-    fn is_materialized(&self, id: GlobalId) -> bool {
-        !self.catalog.indexes[&id].is_empty()
-    }
-
     fn type_exists(&self, name: &FullName) -> bool {
         self.catalog.try_get(name, self.conn_id).is_some()
     }
@@ -1894,5 +1885,3 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         self.used_by()
     }
 }
-
-impl sql::catalog::Type for Type {}
