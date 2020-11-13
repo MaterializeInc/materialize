@@ -16,18 +16,19 @@ use serde::{Deserialize, Serialize};
 
 use ore::retry::RetryBuilder;
 
-use crate::VERSION;
+use crate::BUILD_INFO;
 
 // Runs fetch_latest_version in a backoff loop until it succeeds once, prints a
 // warning if there is a newer version, then returns.
 pub async fn check_version_loop(telemetry_url: String, cluster_id: String) {
-    let current_version = Version::parse(VERSION).expect("crate version is not valid semver");
+    let current_version =
+        Version::parse(BUILD_INFO.version).expect("crate version is not valid semver");
 
     let latest_version = RetryBuilder::new()
         .max_sleep(None)
         .initial_backoff(Duration::from_secs(1))
         .build()
-        .retry(|_state| fetch_latest_version(&telemetry_url, &cluster_id, &VERSION))
+        .retry(|_state| fetch_latest_version(&telemetry_url, &cluster_id, &BUILD_INFO.version))
         .await
         .expect("retry loop never terminates");
 

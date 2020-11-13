@@ -16,6 +16,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{GlobalId, ScalarExpr};
 use repr::RelationDesc;
 use uuid::Uuid;
@@ -139,6 +140,8 @@ pub struct CatalogConfig {
     /// The path in which source caching data is stored, if source caching is
     /// enabled.
     pub cache_directory: Option<PathBuf>,
+    /// Information about this build of Materialize.
+    pub build_info: &'static BuildInfo,
 }
 
 /// An item in a [`Catalog`].
@@ -267,6 +270,7 @@ const DUMMY_CONFIG: CatalogConfig = CatalogConfig {
     cluster_id: Uuid::from_u128(0),
     experimental_mode: false,
     cache_directory: None,
+    build_info: &DUMMY_BUILD_INFO,
 };
 
 impl Catalog for DummyCatalog {

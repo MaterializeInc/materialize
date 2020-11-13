@@ -1,0 +1,6 @@
+[package]
+name = "build-info"
+description = "Metadata about a Materialize build."
+version = "0.1.0"
+edition = "2018"
+publish = false

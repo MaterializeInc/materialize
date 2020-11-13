@@ -23,6 +23,7 @@ use prometheus::{
 };
 
 use crate::http::{util, Server};
+use crate::BUILD_INFO;
 
 lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(
@@ -32,9 +33,9 @@ lazy_static! {
     )
     .expect("can build mz_server_metadata");
     static ref SERVER_METADATA: Gauge = SERVER_METADATA_RAW.with_label_values(&[
-        crate::BUILD_TIME,
-        crate::VERSION,
-        crate::BUILD_SHA,
+        BUILD_INFO.time,
+        BUILD_INFO.version,
+        BUILD_INFO.sha,
     ]);
     pub static ref WORKER_COUNT: IntGaugeVec = register_int_gauge_vec!(
         "mz_server_metadata_timely_worker_threads",
@@ -153,7 +154,7 @@ impl Server {
             .unwrap_or(0);
 
         future::ok(util::template_response(StatusTemplate {
-            version: crate::VERSION,
+            version: BUILD_INFO.version,
             query_count,
             start_time: self.start_time,
             metrics: metrics.values().collect(),

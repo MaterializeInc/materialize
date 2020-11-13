@@ -1229,6 +1229,16 @@ lazy_static! {
             "to_timestamp" => Scalar {
                 params!(Float64) => UnaryFunc::ToTimestamp
             },
+            "version" => Scalar {
+                params!() => Operation::nullary(|ecx| {
+                    let build_info = ecx.catalog().config().build_info;
+                    let version = format!(
+                        "PostgreSQL 9.6 on {} (materialized {})",
+                        build_info.target_triple, build_info.version,
+                    );
+                    Ok(ScalarExpr::literal(Datum::String(&version), ScalarType::String))
+                })
+            },
 
             // Aggregates.
             "array_agg" => Aggregate {
@@ -1447,11 +1457,17 @@ lazy_static! {
             "list_prepend" => Scalar {
                 vec![ListElementAny, ListAny] => BinaryFunc::ElementListConcat
             },
+            "mz_cluster_id" => Scalar {
+                params!() => Operation::nullary(mz_cluster_id)
+            },
             "mz_logical_timestamp" => Scalar {
                 params!() => NullaryFunc::MzLogicalTimestamp
             },
-            "mz_cluster_id" => Scalar {
-                params!() => Operation::nullary(mz_cluster_id)
+            "mz_version" => Scalar {
+                params!() => Operation::nullary(|ecx| {
+                    let version = ecx.catalog().config().build_info.human_version();
+                    Ok(ScalarExpr::literal(Datum::String(&version), ScalarType::String))
+                })
             },
             "regexp_extract" => Table {
                 params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
