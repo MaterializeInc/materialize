@@ -53,6 +53,7 @@ Wrap your release notes at the 80 character mark.
 - [`TAIL`](/sql/tail) is now guaranteed to produce output ordered by timestamp.
 - Syntax for [`TAIL`](/sql/tail) has changed. `WITH SNAPSHOT` is now
   `WITH (SNAPSHOT)`. `WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
+- Add the `PROGRESSED` option to `TAIL`(/sql/tail).
 - Report an error without crashing when a query contains unexpected UTF-8
   characters, e.g., `SELECT ’1’` {{% gh 4755 %}}.
 - [`TAIL`](/sql/tail) now supports timestamp progress.
