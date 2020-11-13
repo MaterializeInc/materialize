@@ -91,7 +91,7 @@ $ kafka-ingest format=avro topic=data-consistency timestamp=1 schema=${trxschema
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.snk1
-{"before": null, "after": {"row": {"num": 3, "name": "three"}}}
+{"before": null, "after": {"com.materialize.sink.record1": {"num": {"long": 3}, "name": {"string": "three"}}}}
 
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=2
 {"before": {"row": {"num": 3, "name": "three"}}, "after": {"row": {"num": 4, "name": "four"}}}

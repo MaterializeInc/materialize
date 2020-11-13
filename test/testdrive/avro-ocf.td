@@ -189,8 +189,8 @@ mz_obj_no   false     int8
   INTO AVRO OCF '${testdrive.temp-dir}/basic-sink.ocf'
 
 $ avro-ocf-verify sink=materialize.public.basic_sink_${testdrive.seed}
-{"before": null, "after": {"row": {"a": 1, "b": 2, "mz_obj_no": 1}}}
-{"before": null, "after": {"row": {"a": 3, "b": 4, "mz_obj_no": 2}}}
+{"before": null, "after": {"com.materialize.sink.record1": {"a": {"long": 1}, "b": {"int": 2}, "mz_obj_no": {"long": 1}}}}
+{"before": null, "after": {"com.materialize.sink.record1": {"a": {"long": 3}, "b": {"int": 4}, "mz_obj_no": {"long": 2}}}}
 
 > CREATE VIEW dateish AS
   SELECT d FROM timestamp_source
@@ -199,5 +199,5 @@ $ avro-ocf-verify sink=materialize.public.basic_sink_${testdrive.seed}
   INTO AVRO OCF '${testdrive.temp-dir}/date-sink.ocf'
 
 $ avro-ocf-verify sink=materialize.public.date_sink_${testdrive.seed}
-{"before": null, "after": {"row": {"d": 10988}}}
-{"before": null, "after": {"row": {"d": 10957}}}
+{"before": null, "after": {"com.materialize.sink.record1": {"d": {"int": 10988}}}}
+{"before": null, "after": {"com.materialize.sink.record1": {"d": {"int": 10957}}}}

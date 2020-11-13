@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::operators::arrange::ShutdownButton;
+use differential_dataflow::{operators::arrange::ShutdownButton, Collection};
 use lazy_static::lazy_static;
 use log::error;
 use prometheus::{
@@ -28,14 +28,14 @@ use rdkafka::config::ClientConfig;
 use rdkafka::error::{KafkaError, RDKafkaError};
 use rdkafka::message::Message;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
-use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::FrontieredInputHandle;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Scope;
 use timely::progress::frontier::MutableAntichain;
 
 use dataflow_types::KafkaSinkConnector;
 use expr::GlobalId;
-use interchange::avro::{self, DiffPair, Encoder};
+use interchange::avro::{self, Encoder};
 use repr::{Diff, RelationDesc, Row, Timestamp};
 
 use super::util::sink_reschedule;
@@ -197,10 +197,11 @@ impl SinkConsistencyInfo {
 
 // TODO@jldlaughlin: What guarantees does this sink support? #1728
 pub fn kafka<G>(
-    stream: &Stream<G, (Row, Timestamp, Diff)>,
+    collection: Collection<G, (Option<Row>, Option<Row>)>,
     id: GlobalId,
-    mut connector: KafkaSinkConnector,
-    desc: RelationDesc,
+    connector: KafkaSinkConnector,
+    key_desc: Option<RelationDesc>,
+    value_desc: RelationDesc,
 ) -> ShutdownButton<ThreadedProducer<SinkProducerContext>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -209,7 +210,7 @@ where
     // achieve that by using an Exchange channel before the sink and mapping
     // all records for the sink to the sink's hash, which has the neat property
     // of also distributing sinks amongst workers
-    let sink_hash = id.hashed();
+    let _sink_hash = id.hashed();
 
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.addrs.to_string());
@@ -237,6 +238,7 @@ where
         config.set(k, v);
     }
 
+    let stream = collection.inner;
     let sink_metrics = SinkMetrics::new(
         &connector.topic,
         &id.to_string(),
@@ -252,8 +254,8 @@ where
             ))
             .expect("creating kafka producer for kafka sinks failed"),
     )));
-    let mut queue: VecDeque<(Row, Timestamp, Diff)> = VecDeque::new();
-    let mut vector = Vec::new();
+    let mut queue: VecDeque<((Option<Row>, Option<Row>), Timestamp)> = VecDeque::new();
+    let mut vector: Vec<((Option<Row>, Option<Row>), Timestamp, Diff)> = vec![];
     let mut encoded_buffer = None;
 
     let mut consistency = if let Some(consistency) = &connector.consistency {
@@ -265,205 +267,114 @@ where
         None
     };
 
-    let encoder = Encoder::new(desc, consistency.is_some(), connector.key_indices.take());
+    let encoder = Encoder::new(key_desc, value_desc, consistency.is_some());
     let name = format!("kafka-{}", id);
-    sink_reschedule(
-        &stream,
-        Exchange::new(move |_| sink_hash),
-        name.clone(),
-        |info| {
-            // Setup activator and shutdown buttons for this operator
-            let activator = stream.scope().activator_for(&info.address[..]);
-            let shutdown_button = ShutdownButton::new(
-                producer.clone(),
-                stream.scope().activator_for(&info.address[..]),
-            );
+    sink_reschedule(&stream, Pipeline, name.clone(), |info| {
+        // Setup activator and shutdown buttons for this operator
+        let activator = stream.scope().activator_for(&info.address[..]);
+        let shutdown_button = ShutdownButton::new(
+            producer.clone(),
+            stream.scope().activator_for(&info.address[..]),
+        );
 
-            let ret = move |input: &mut FrontieredInputHandle<_, (Row, Timestamp, Diff), _>| {
-                if shutdown.load(Ordering::SeqCst) {
-                    error!(
-                        "encountered irrecoverable error. shutting down sink: {}",
-                        name
-                    );
-                    *producer.borrow_mut() = None;
-                    return false;
-                }
+        let ret = move |input: &mut FrontieredInputHandle<
+            _,
+            ((Option<Row>, Option<Row>), u64, isize),
+            _,
+        >| {
+            if shutdown.load(Ordering::SeqCst) {
+                error!(
+                    "encountered irrecoverable error. shutting down sink: {}",
+                    name
+                );
+                *producer.borrow_mut() = None;
+                return false;
+            }
 
-                let producer = &*producer.borrow();
+            let producer = &*producer.borrow();
 
-                let producer = match producer {
-                    Some(producer) => producer,
-                    None => return false,
-                };
+            let producer = match producer {
+                Some(producer) => producer,
+                None => return false,
+            };
 
-                // Grab all of the available Rows and put them in a queue before we
-                // send it over to Kafka. Even though we want to do bounded work
-                // per sink invocation, we still need to remember all inputs as we
-                // receive them.
-                input.for_each(|_, rows| {
-                    rows.swap(&mut vector);
+            // Grab all of the available Rows and put them in a queue before we
+            // send it over to Kafka. Even though we want to do bounded work
+            // per sink invocation, we still need to remember all inputs as we
+            // receive them.
+            input.for_each(|_, rows| {
+                rows.swap(&mut vector);
 
-                    for (row, time, diff) in vector.drain(..) {
-                        let should_emit = if connector.strict {
-                            connector.frontier.less_than(&time)
+                for ((mut k, mut v), time, diff) in vector.drain(..) {
+                    assert!(diff >= 0, "can't sink negative multiplicities");
+                    for i in 0..diff {
+                        let (k, v) = if i == (diff - 1) {
+                            (k.take(), v.take())
                         } else {
-                            connector.frontier.less_equal(&time)
+                            (k.clone(), v.clone())
                         };
-
-                        if !should_emit {
-                            continue;
-                        }
-
-                        queue.push_back((row, time, diff));
-                        if let Some(consistency) = &mut consistency {
-                            // Note that since a single differential message
-                            // turns into |diff| messages we need to increment
-                            // message counts by |diff| instead of just 1 for
-                            // the consistency topic
-                            let insert =
-                                consistency.update_timestamp_count(time, diff.abs() as i64);
-
-                            if insert {
-                                // Send a BEGIN message for a timestamp the first
-                                // time we encounter it
-                                consistency.queue.push_back((
-                                    SinkConsistencyState::Begin,
-                                    time,
-                                    None,
-                                ));
-                            }
-                        }
+                        queue.push_back(((k, v), time));
                     }
-                });
-
-                if let Some(consistency) = &mut consistency {
-                    // Find the timestamps that are now complete (meaning all
-                    // timestamps t !<= input_frontier. For each closed timestamp
-                    // send a END message in the consistency topic
-                    consistency
-                        .get_complete_timestamps(input.frontier())
-                        .iter()
-                        .for_each(|(k, v)| {
+                    if let Some(consistency) = &mut consistency {
+                        let insert = consistency.update_timestamp_count(time, diff as i64);
+                        if insert {
                             consistency
                                 .queue
-                                .push_back((SinkConsistencyState::End, *k, Some(*v)));
-                        });
-
-                    // Send a bounded number of queued consistency messages to
-                    // the consistency topic
-                    for _ in 0..connector.fuel {
-                        let (encoded, state, time, count) =
-                            if let Some((state, time, count)) = consistency.queue.pop_front() {
-                                let state_str = match state {
-                                    SinkConsistencyState::Begin => "BEGIN",
-                                    SinkConsistencyState::End => "END",
-                                };
-
-                                let transaction_id = time.to_string();
-                                (
-                                    avro::encode_debezium_transaction_unchecked(
-                                        consistency.schema_id,
-                                        &transaction_id,
-                                        state_str,
-                                        count,
-                                    ),
-                                    state,
-                                    time,
-                                    count,
-                                )
-                            } else {
-                                // Nothing more to do here
-                                break;
-                            };
-
-                        let record =
-                            BaseRecord::<&Vec<u8>, _>::to(&consistency.topic).payload(&encoded);
-                        if let Err((e, _)) = producer.send(record) {
-                            error!("unable to produce consistency message in {}: {}", name, e);
-
-                            if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
-                                // Repopulate the queue with the data we just took
-                                // out so we can retry later
-                                consistency.queue.push_front((state, time, count));
-                                activator.activate_after(Duration::from_secs(60));
-                                return true;
-                            } else {
-                                // We've received an error that is not transient
-                                shutdown.store(true, Ordering::SeqCst);
-                                return false;
-                            }
+                                .push_back((SinkConsistencyState::Begin, time, None));
                         }
                     }
                 }
+            });
 
-                // Send a bounded number of records to Kafka from the queue. This
-                // loop has explicitly been designed so that each iteration sends
-                // at most one record to Kafka
+            if let Some(consistency) = &mut consistency {
+                // Find the timestamps that are now complete (meaning all
+                // timestamps t !<= input_frontier. For each closed timestamp
+                // send a END message in the consistency topic
+                consistency
+                    .get_complete_timestamps(input.frontier())
+                    .iter()
+                    .for_each(|(k, v)| {
+                        consistency
+                            .queue
+                            .push_back((SinkConsistencyState::End, *k, Some(*v)));
+                    });
+
+                // Send a bounded number of queued consistency messages to
+                // the consistency topic
                 for _ in 0..connector.fuel {
-                    let ((encoded_key, encoded_val), count) =
-                        if let Some((encoded, count)) = encoded_buffer.take() {
-                            // We still need to send more copies of this record.
-                            (encoded, count)
-                        } else if let Some((row, time, diff)) = queue.pop_front() {
-                            // Convert a previously queued (Row, Diff) to a Avro diff
-                            // envelope record
-                            if diff == 0 {
-                                // Explicitly refuse to send no-op records
-                                continue;
+                    let (encoded, state, time, count) =
+                        if let Some((state, time, count)) = consistency.queue.pop_front() {
+                            let state_str = match state {
+                                SinkConsistencyState::Begin => "BEGIN",
+                                SinkConsistencyState::End => "END",
                             };
 
-                            let time = match consistency {
-                                Some(_) => Some(time.to_string()),
-                                None => None,
-                            };
-
-                            let diff_pair = if diff < 0 {
-                                DiffPair {
-                                    before: Some(&row),
-                                    after: None,
-                                }
-                            } else {
-                                DiffPair {
-                                    before: None,
-                                    after: Some(&row),
-                                }
-                            };
-
-                            let bufs = encoder.encode_unchecked(
-                                connector.key_schema_id,
-                                connector.value_schema_id,
-                                diff_pair,
+                            let transaction_id = time.to_string();
+                            (
+                                avro::encode_debezium_transaction_unchecked(
+                                    consistency.schema_id,
+                                    &transaction_id,
+                                    state_str,
+                                    count,
+                                ),
+                                state,
                                 time,
-                            );
-                            // For diffs other than +/- 1, we send repeated copies of the
-                            // Avro record [diff] times. Since the format and envelope
-                            // capture the "polarity" of the update, we need to remember
-                            // how many times to send the data.
-                            (bufs, diff.abs())
+                                count,
+                            )
                         } else {
-                            // Nothing left for us to do
+                            // Nothing more to do here
                             break;
                         };
 
                     let record =
-                        BaseRecord::<Vec<u8>, _>::to(&connector.topic).payload(&encoded_val);
-                    let record = if encoded_key.is_some() {
-                        record.key(encoded_key.as_ref().unwrap())
-                    } else {
-                        record
-                    };
+                        BaseRecord::<&Vec<u8>, _>::to(&consistency.topic).payload(&encoded);
                     if let Err((e, _)) = producer.send(record) {
-                        sink_metrics.message_send_errors_counter.inc();
-                        error!("unable to produce in {}: {}", name, e);
+                        error!("unable to produce consistency message in {}: {}", name, e);
+
                         if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
-                            // We are overloading Kafka by sending too many records
-                            // retry sending this record at a later time.
-                            // Note that any other error will result in dropped
-                            // data as we will not attempt to resend it.
-                            // https://github.com/edenhill/librdkafka/blob/master/examples/producer.c#L188-L208
-                            // only retries on QueueFull so we will keep that
-                            // convention here.
-                            encoded_buffer = Some(((encoded_key, encoded_val), count));
+                            // Repopulate the queue with the data we just took
+                            // out so we can retry later
+                            consistency.queue.push_front((state, time, count));
                             activator.activate_after(Duration::from_secs(60));
                             return true;
                         } else {
@@ -471,49 +382,107 @@ where
                             shutdown.store(true, Ordering::SeqCst);
                             return false;
                         }
-                    } else {
-                        sink_metrics.messages_sent_counter.inc();
-                    }
-
-                    // Cache the Avro encoded data if we need to send again and
-                    // remember how many more times we need to send it
-                    if count > 1 {
-                        encoded_buffer = Some(((encoded_key, encoded_val), count - 1));
                     }
                 }
+            }
 
-                let in_flight = producer.in_flight_count();
+            // Send a bounded number of records to Kafka from the queue. This
+            // loop has explicitly been designed so that each iteration sends
+            // at most one record to Kafka
+            for _ in 0..connector.fuel {
+                let ((encoded_key, encoded_val), count) = if let Some((encoded, count)) =
+                    encoded_buffer.take()
+                {
+                    // We still need to send more copies of this record.
+                    (encoded, count)
+                } else if let Some(((k, v), time)) = queue.pop_front() {
+                    let should_emit = if connector.strict {
+                        connector.frontier.less_than(&time)
+                    } else {
+                        connector.frontier.less_equal(&time)
+                    };
+                    if !should_emit {
+                        continue;
+                    }
+                    let k = k
+                        .map(|k| encoder.encode_key_unchecked(connector.key_schema_id.unwrap(), k));
+                    let v = v.map(|v| encoder.encode_value_unchecked(connector.value_schema_id, v));
+                    ((k, v), 1)
+                } else {
+                    // Nothing left for us to do
+                    break;
+                };
 
-                sink_metrics.rows_queued.set(queue.len() as u64);
-                sink_metrics.messages_in_flight.set(in_flight as u64);
-                if encoded_buffer.is_some() || !queue.is_empty() {
-                    // We need timely to reschedule this operator as we have pending
-                    // items that we need to send to Kafka
+                let record = BaseRecord::<Vec<u8>, _>::to(&connector.topic);
+                let record = match &encoded_val {
+                    Some(encoded_val) => record.payload(encoded_val),
+                    None => record,
+                };
+                let record = match &encoded_key {
+                    Some(encoded_key) => record.key(encoded_key),
+                    None => record,
+                };
+                if let Err((e, _)) = producer.send(record) {
+                    sink_metrics.message_send_errors_counter.inc();
+                    error!("unable to produce in {}: {}", name, e);
+                    if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
+                        // We are overloading Kafka by sending too many records
+                        // retry sending this record at a later time.
+                        // Note that any other error will result in dropped
+                        // data as we will not attempt to resend it.
+                        // https://github.com/edenhill/librdkafka/blob/master/examples/producer.c#L188-L208
+                        // only retries on QueueFull so we will keep that
+                        // convention here.
+                        encoded_buffer = Some(((encoded_key, encoded_val), count));
+                        activator.activate_after(Duration::from_secs(60));
+                        return true;
+                    } else {
+                        // We've received an error that is not transient
+                        shutdown.store(true, Ordering::SeqCst);
+                        return false;
+                    }
+                } else {
+                    sink_metrics.messages_sent_counter.inc();
+                }
+
+                // Cache the Avro encoded data if we need to send again and
+                // remember how many more times we need to send it
+                if count > 1 {
+                    encoded_buffer = Some(((encoded_key, encoded_val), count - 1));
+                }
+            }
+
+            let in_flight = producer.in_flight_count();
+
+            sink_metrics.rows_queued.set(queue.len() as u64);
+            sink_metrics.messages_in_flight.set(in_flight as u64);
+            if encoded_buffer.is_some() || !queue.is_empty() {
+                // We need timely to reschedule this operator as we have pending
+                // items that we need to send to Kafka
+                activator.activate();
+                return true;
+            }
+
+            if let Some(consistency) = &consistency {
+                if !consistency.queue.is_empty() {
+                    // We still have pending consistency messages to send to
+                    // Kafka and need to reschedule this operator
                     activator.activate();
                     return true;
                 }
+            }
 
-                if let Some(consistency) = &consistency {
-                    if !consistency.queue.is_empty() {
-                        // We still have pending consistency messages to send to
-                        // Kafka and need to reschedule this operator
-                        activator.activate();
-                        return true;
-                    }
-                }
+            if in_flight > 0 {
+                // We still have messages that need to be flushed out to Kafka
+                // Let's make sure to keep the sink operator around until
+                // we flush them out
+                activator.activate_after(Duration::from_secs(5));
+                return true;
+            }
 
-                if in_flight > 0 {
-                    // We still have messages that need to be flushed out to Kafka
-                    // Let's make sure to keep the sink operator around until
-                    // we flush them out
-                    activator.activate_after(Duration::from_secs(5));
-                    return true;
-                }
+            false
+        };
 
-                false
-            };
-
-            (ret, shutdown_button)
-        },
-    )
+        (ret, shutdown_button)
+    })
 }
