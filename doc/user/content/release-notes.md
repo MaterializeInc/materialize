@@ -58,6 +58,7 @@ Wrap your release notes at the 80 character mark.
 - [`TAIL`](/sql/tail) now supports timestamp progress.
 - Log messages are no longer emitted to stderr if an explicit `--log-file` is
   supplied at startup. {{ gh 4777 }}
+- Support the [`DISCARD`](/sql/discard) SQL statement.
 
 {{% version-header v0.5.1 %}}
 

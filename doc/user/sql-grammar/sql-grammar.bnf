@@ -137,6 +137,8 @@ create_table ::=
 insert ::=
   'INSERT' 'INTO' table_name 'VALUES'
   ( ('(' (col_value) ( ( ',' col_value ) )* ')') ( ( ',' ('(' (col_value) ( ( ',' col_value ) )* ')') )* ) )
+discard ::=
+  'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name
 drop_index ::=

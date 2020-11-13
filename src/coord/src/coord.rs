@@ -812,20 +812,26 @@ where
         }
     }
 
-    /// Terminate any temporary objects created by the specified session.
+    /// Handle termination of a client session.
+    ///
+    // This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
         if let Some(name) = self.active_tails.remove(&session.conn_id()) {
             self.drop_sinks(vec![name]).await;
         }
-
-        // Remove all temporary items created by the session.
-        let ops = self.catalog.drop_temp_item_ops(session.conn_id());
-        self.catalog_transact(ops)
-            .await
-            .expect("unable to drop temporary items for conn_id");
+        self.drop_temp_items(session.conn_id()).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
+    }
+
+    // Removes all temporary items created by the specified connection, though
+    // not the temporary schema itself.
+    async fn drop_temp_items(&mut self, conn_id: u32) {
+        let ops = self.catalog.drop_temp_item_ops(conn_id);
+        self.catalog_transact(ops)
+            .await
+            .expect("unable to drop temporary items for conn_id");
     }
 
     async fn handle_sink_connector_ready(
@@ -1431,6 +1437,17 @@ where
                 self.sequence_alter_index_logical_compaction_window(alter_index),
                 session,
             ),
+
+            Plan::DiscardTemp => {
+                self.drop_temp_items(session.conn_id()).await;
+                tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
+            }
+
+            Plan::DiscardAll => {
+                self.drop_temp_items(session.conn_id()).await;
+                session.reset();
+                tx.send(Ok(ExecuteResponse::DiscardedAll), session);
+            }
         }
     }
 
