@@ -279,10 +279,10 @@ a {
   margin-top: 3rem;
   max-width: 40%;
   padding-top: .5rem;
+  text-align: center;
 
   table {
     table-layout: fixed;
-    text-align: center;
     width: 100%;
   }
   tr {
@@ -295,5 +295,8 @@ a {
     font-weight: bold;
     padding: .7rem 0;
     width:100%;
+  }
+  #got-feedback {
+    display: none;
   }
 }
