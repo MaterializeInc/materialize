@@ -34,6 +34,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle;
 use uuid::Uuid;
 
+use build_info::BuildInfo;
 use dataflow::source::cache::CacheSender;
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
@@ -123,6 +124,7 @@ where
     pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
+    pub build_info: &'static BuildInfo,
 }
 
 /// Glues the external world to the Timely workers.
@@ -3108,6 +3110,7 @@ pub async fn serve<C>(
         cache: cache_config,
         logical_compaction_window,
         experimental_mode,
+        build_info,
     }: Config<'_, C>,
 ) -> Result<(JoinHandle<()>, Uuid), anyhow::Error>
 where
@@ -3175,6 +3178,7 @@ where
             experimental_mode: Some(experimental_mode),
             enable_logging: logging.is_some(),
             cache_directory: cache_config.map(|c| c.path),
+            build_info,
         })?;
         let cluster_id = catalog.config().cluster_id;
 

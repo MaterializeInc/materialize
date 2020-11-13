@@ -20,6 +20,7 @@ use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::RelationDesc;
@@ -385,6 +386,7 @@ impl Catalog {
                 experimental_mode,
                 cluster_id,
                 cache_directory: config.cache_directory,
+                build_info: config.build_info,
             },
         };
         let mut events = vec![];
@@ -1714,6 +1716,7 @@ pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
         enable_logging: true,
         experimental_mode: None,
         cache_directory: None,
+        build_info: &DUMMY_BUILD_INFO,
     })?;
     Ok(catalog.dump())
 }

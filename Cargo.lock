@@ -320,6 +320,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "build-info"
+version = "0.1.0"
+
+[[package]]
 name = "build_const"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -503,6 +507,7 @@ dependencies = [
  "aws-util",
  "backtrace",
  "bincode",
+ "build-info",
  "byteorder",
  "ccsr",
  "chrono",
@@ -1879,6 +1884,7 @@ dependencies = [
  "assert_cmd",
  "async-trait",
  "backtrace",
+ "build-info",
  "cfg-if 1.0.0",
  "chrono",
  "comm",
@@ -3753,6 +3759,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aws-arn",
+ "build-info",
  "ccsr",
  "chrono",
  "dataflow-types",
@@ -3805,6 +3812,7 @@ name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "build-info",
  "bytes",
  "chrono",
  "comm",
