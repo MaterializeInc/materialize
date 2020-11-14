@@ -18,6 +18,7 @@ ccsr = { path = "../ccsr" }
 chrono = "0.4"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3"
+hex = "0.4"
 lazy_static = "1.4.0"
 log = "0.4.11"
 num-traits = "0.2.14" # don't want to upgrade to autocfg 1.0 until more things use it

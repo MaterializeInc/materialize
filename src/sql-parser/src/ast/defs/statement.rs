@@ -42,6 +42,7 @@ pub enum Statement {
     CreateMapType(CreateMapTypeStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndexOptions(AlterIndexOptionsStatement),
+    Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropObjects(DropObjectsStatement),
     SetVariable(SetVariableStatement),
@@ -81,6 +82,7 @@ impl AstDisplay for Statement {
             Statement::CreateMapType(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndexOptions(stmt) => f.write_node(stmt),
+            Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
@@ -634,6 +636,39 @@ impl AstDisplay for AlterIndexOptionsStatement {
 }
 
 impl_display!(AlterIndexOptionsStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DiscardStatement {
+    pub target: DiscardTarget,
+}
+
+impl AstDisplay for DiscardStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("DISCARD ");
+        f.write_node(&self.target);
+    }
+}
+impl_display!(DiscardStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DiscardTarget {
+    Plans,
+    Sequences,
+    Temp,
+    All,
+}
+
+impl AstDisplay for DiscardTarget {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            DiscardTarget::Plans => f.write_str("PLANS"),
+            DiscardTarget::Sequences => f.write_str("SEQUENCES"),
+            DiscardTarget::Temp => f.write_str("TEMP"),
+            DiscardTarget::All => f.write_str("ALL"),
+        }
+    }
+}
+impl_display!(DiscardTarget);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropDatabaseStatement {

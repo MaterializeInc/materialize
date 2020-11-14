@@ -191,11 +191,16 @@ pub struct Index {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Type {
-    Builtin,
+pub struct Type {
+    pub create_sql: String,
+    pub plan_cx: PlanContext,
+    pub inner: TypeInner,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TypeInner {
+    Base,
     Map {
-        create_sql: String,
-        plan_cx: PlanContext,
         key_id: GlobalId,
         value_id: GlobalId,
     },
@@ -234,11 +239,9 @@ impl CatalogItem {
             CatalogItem::Sink(sink) => vec![sink.from],
             CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
             CatalogItem::Index(idx) => vec![idx.on],
-            CatalogItem::Type(typ) => match typ {
-                Type::Builtin { .. } => vec![],
-                Type::Map {
-                    key_id, value_id, ..
-                } => vec![*key_id, *value_id],
+            CatalogItem::Type(typ) => match &typ.inner {
+                TypeInner::Base { .. } => vec![],
+                TypeInner::Map { key_id, value_id } => vec![*key_id, *value_id],
             },
         }
     }
@@ -552,7 +555,11 @@ impl Catalog {
                             schema: PG_CATALOG_SCHEMA.into(),
                             item: typ.name.to_owned(),
                         },
-                        CatalogItem::Type(Type::Builtin),
+                        CatalogItem::Type(Type {
+                            create_sql: format!("CREATE TYPE {}", typ.name),
+                            plan_cx: PlanContext::default(),
+                            inner: TypeInner::Base,
+                        }),
                     ));
                 }
 
@@ -1092,7 +1099,11 @@ impl Catalog {
                                 )));
                             }
                         };
-                        if let CatalogItem::Type(Type::Builtin { .. }) = item {
+                        if let CatalogItem::Type(Type {
+                            inner: TypeInner::Base { .. },
+                            ..
+                        }) = item
+                        {
                             return Err(Error::new(ErrorKind::ReadOnlyItem(name.item)));
                         }
 
@@ -1400,16 +1411,9 @@ impl Catalog {
                 create_sql: sink.create_sql.clone(),
                 eval_env: Some(sink.plan_cx.clone().into()),
             },
-            CatalogItem::Type(typ) => match typ {
-                Type::Builtin { .. } => unreachable!("builtin types are not stored"),
-                Type::Map {
-                    create_sql,
-                    plan_cx,
-                    ..
-                } => SerializedCatalogItem::V1 {
-                    create_sql: create_sql.clone(),
-                    eval_env: Some(plan_cx.clone().into()),
-                },
+            CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
+                create_sql: typ.create_sql.clone(),
+                eval_env: Some(typ.plan_cx.clone().into()),
             },
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
@@ -1480,11 +1484,14 @@ impl Catalog {
                 with_snapshot,
                 as_of,
             }),
-            Plan::CreateType { typ, .. } => CatalogItem::Type(Type::Map {
+            Plan::CreateType { typ, .. } => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
                 plan_cx: pcx,
-                key_id: typ.key_id,
-                value_id: typ.value_id,
+                inner: match typ.inner {
+                    sql::plan::TypeInner::Map { key_id, value_id } => {
+                        TypeInner::Map { key_id, value_id }
+                    }
+                },
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })
@@ -1848,8 +1855,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
             CatalogItem::View(View { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
-            CatalogItem::Type(Type::Map { create_sql, .. }) => create_sql,
-            CatalogItem::Type(Type::Builtin { .. }) => unimplemented!(),
+            CatalogItem::Type(Type { create_sql, .. }) => create_sql,
         }
     }
 
@@ -1860,8 +1866,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Sink(Sink { plan_cx, .. }) => plan_cx,
             CatalogItem::View(View { plan_cx, .. }) => plan_cx,
             CatalogItem::Index(Index { plan_cx, .. }) => plan_cx,
-            CatalogItem::Type(Type::Map { plan_cx, .. }) => plan_cx,
-            CatalogItem::Type(Type::Builtin { .. }) => unimplemented!(),
+            CatalogItem::Type(Type { plan_cx, .. }) => plan_cx,
         }
     }
 

@@ -114,10 +114,28 @@ pub enum EnvelopeType {
     CdcV2,
 }
 
+// See https://rusanu.com/2012/01/17/what-is-an-lsn-log-sequence-number/
 #[derive(Debug, Copy, Clone)]
-pub enum RowCoordinates {
-    MySql { pos: usize, row: usize },
-    Postgres { lsn: usize },
+struct MSSqlLsn {
+    file_seq_num: u32,
+    log_block_offset: u32,
+    slot_num: u16,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum RowCoordinates {
+    MySql {
+        pos: usize,
+        row: usize,
+    },
+    Postgres {
+        lsn: usize,
+    },
+    MSSql {
+        change_lsn: MSSqlLsn,
+        event_serial_no: usize,
+    },
+    Unknown,
 }
 
 #[derive(Debug)]
@@ -226,6 +244,25 @@ impl AvroDecode for AvroDbzSnapshotDecoder {
     }
 }
 
+fn decode_change_lsn(input: &str) -> Option<MSSqlLsn> {
+    // SQL Server change LSNs are 10-byte integers. Debezium
+    // encodes them as hex, in the following format: xxxxxxxx:xxxxxxxx:xxxx
+    if input.len() != 22 {
+        return None;
+    }
+    if input.as_bytes()[8] != b':' || input.as_bytes()[17] != b':' {
+        return None;
+    }
+    let file_seq_num = u32::from_str_radix(&input[0..8], 16).ok()?;
+    let log_block_offset = u32::from_str_radix(&input[9..17], 16).ok()?;
+    let slot_num = u16::from_str_radix(&input[18..22], 16).ok()?;
+
+    Some(MSSqlLsn {
+        file_seq_num,
+        log_block_offset,
+        slot_num,
+    })
+}
 impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
     type Out = DebeziumSourceCoordinates;
     fn record<R: AvroRead, A: AvroRecordAccess<R>>(
@@ -238,6 +275,11 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
         let mut row = None;
         // "log sequence number" - monotonically increasing log offset in Postgres
         let mut lsn = None;
+        // SQL Server lsn - 10-byte, hex-encoded value.
+        // and "event_serial_no" - serial number of the event, when there is more than one per LSN.
+        let mut change_lsn = None;
+        let mut event_serial_no = None;
+
         let mut has_file = false;
         while let Some((name, _, field)) = a.next_field()? {
             match name {
@@ -249,6 +291,7 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                         Some(DbzSnapshot::True) | Some(DbzSnapshot::Last) => true,
                     };
                 }
+                // MySQL
                 "pos" => {
                     let next = ValueDecoder;
                     let val = field.decode_field(next)?;
@@ -270,6 +313,7 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                     field.decode_field(d)?;
                     has_file = true;
                 }
+                // Postgres
                 "lsn" => {
                     let next = ValueDecoder;
                     let val = field.decode_field(next)?;
@@ -281,6 +325,52 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                         DecodeError::Custom("\"lsn\" is not an integer".to_string())
                     })?);
                 }
+                // SQL Server
+                "change_lsn" => {
+                    let next = ValueDecoder;
+                    let val = field.decode_field(next)?;
+                    let val = match val {
+                        Value::Union { inner, .. } => *inner,
+                        val => val,
+                    };
+                    match val {
+                        Value::Null => {}
+                        Value::String(s) => {
+                            if let Some(i) = decode_change_lsn(&s) {
+                                change_lsn = Some(i);
+                            } else {
+                                return Err(AvroError::Decode(DecodeError::Custom(format!(
+                                    "Couldn't decode MS SQL LSN: {}",
+                                    s
+                                ))));
+                            }
+                        }
+                        _ => {
+                            return Err(AvroError::Decode(DecodeError::Custom(
+                                "\"change_lsn\" is not a string".to_string(),
+                            )))
+                        }
+                    }
+                }
+                "event_serial_no" => {
+                    let next = ValueDecoder;
+                    let val = field.decode_field(next)?;
+                    let val = match val {
+                        Value::Union { inner, .. } => *inner,
+                        val => val,
+                    };
+                    event_serial_no = match val {
+                        Value::Null => None,
+                        Value::Int(i) => Some(i.into()),
+                        Value::Long(i) => Some(i),
+                        val => {
+                            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                                "\"event_serial_no\" is not an integer: {:?}",
+                                val
+                            ))))
+                        }
+                    };
+                }
                 _ => {
                     field.decode_field(TrivialDecoder)?;
                 }
@@ -288,20 +378,33 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
         }
         let mysql_any = pos.is_some() || row.is_some() || has_file;
         let pg_any = lsn.is_some();
+        let mssql_any = change_lsn.is_some() || event_serial_no.is_some();
+        if (mysql_any as usize) + (pg_any as usize) + (mssql_any as usize) > 1 {
+            return Err(DecodeError::Custom(
+            "Found source coordinate information for multiple databases - we don't know how to interpret this.".to_string()).into());
+        }
         let row = if mysql_any {
-            if pg_any {
-                return Err(DecodeError::Custom(
-                "Found both MySQL (file/pos/row) and Postgres (LSN) source coordinates! We don't know how to interpret this.".to_string()).into());
-            }
             let pos = pos.ok_or_else(|| DecodeError::Custom("no pos".to_string()))? as usize;
             let row = row.ok_or_else(|| DecodeError::Custom("no row".to_string()))? as usize;
             if !has_file {
                 return Err(DecodeError::Custom("no file".to_string()).into());
             }
             RowCoordinates::MySql { pos, row }
-        } else {
+        } else if pg_any {
             let lsn = lsn.ok_or_else(|| DecodeError::Custom("no lsn".to_string()))? as usize;
             RowCoordinates::Postgres { lsn }
+        } else if mssql_any {
+            let change_lsn =
+                change_lsn.ok_or_else(|| DecodeError::Custom("no change_lsn".to_string()))?;
+            let event_serial_no = event_serial_no
+                .ok_or_else(|| DecodeError::Custom("no event_serial_no".to_string()))?
+                as usize;
+            RowCoordinates::MSSql {
+                change_lsn,
+                event_serial_no,
+            }
+        } else {
+            RowCoordinates::Unknown
         };
         Ok(DebeziumSourceCoordinates { snapshot, row })
     }
@@ -1201,9 +1304,11 @@ struct DebeziumDeduplicationState {
     ///
     /// [`DebeziumDeduplicationstrategy`] determines whether messages that are not ahead
     /// of the last recorded pos/row will be skipped.
-    binlog_offsets: HashMap<String, (usize, usize, Option<i64>)>,
+    binlog_offsets: HashMap<Vec<u8>, (usize, usize, Option<i64>)>,
     /// Whether or not to track every message we've ever seen
     full: Option<TrackFull>,
+    /// Whether we have printed a warning due to seeing unknown source coordinates
+    warned_on_unknown: bool,
 }
 
 /// If we need to deal with debezium possibly going back after it hasn't seen things.
@@ -1213,8 +1318,8 @@ struct DebeziumDeduplicationState {
 #[derive(Debug)]
 struct TrackFull {
     /// binlog filename to (offset to (timestamp that this binlog entry was first seen))
-    seen_offsets: HashMap<String, HashMap<(usize, usize), i64>>,
-    seen_snapshot_keys: HashMap<String, HashSet<Row>>,
+    seen_offsets: HashMap<Box<[u8]>, HashMap<(usize, usize), i64>>,
+    seen_snapshot_keys: HashMap<Box<[u8]>, HashSet<Row>>,
     /// The highest-ever seen timestamp, used in logging to let us know how far backwards time might go
     max_seen_time: i64,
     key_indices: Option<Vec<usize>>,
@@ -1316,6 +1421,7 @@ impl DebeziumDeduplicationState {
         DebeziumDeduplicationState {
             binlog_offsets: Default::default(),
             full,
+            warned_on_unknown: false,
         }
     }
 
@@ -1323,7 +1429,7 @@ impl DebeziumDeduplicationState {
     #[allow(clippy::too_many_arguments)]
     fn should_use_record(
         &mut self,
-        file: &str,
+        file: &[u8],
         row: RowCoordinates,
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
@@ -1335,6 +1441,22 @@ impl DebeziumDeduplicationState {
         let (pos, row) = match row {
             RowCoordinates::MySql { pos, row } => (pos, row),
             RowCoordinates::Postgres { lsn } => (lsn, 0),
+            RowCoordinates::MSSql {
+                change_lsn,
+                event_serial_no,
+            } => {
+                // Consider everything but the file ID to be the offset within the file.
+                let offset_in_file =
+                    ((change_lsn.log_block_offset as usize) << 16) | (change_lsn.slot_num as usize);
+                (offset_in_file, event_serial_no)
+            }
+            RowCoordinates::Unknown => {
+                if !self.warned_on_unknown {
+                    self.warned_on_unknown = true;
+                    log::warn!("Record with unrecognized source coordinates in {}. You might be using an unsupported upstream database.", debug_name);
+                }
+                return true;
+            }
         };
 
         // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
@@ -1425,7 +1547,7 @@ impl DebeziumDeduplicationState {
                     } else {
                         let mut hs = HashSet::new();
                         hs.insert(key);
-                        seen_snapshot_keys.insert(file.to_owned(), hs);
+                        seen_snapshot_keys.insert(file.into(), hs);
                         true
                     }
                 } else {
@@ -1472,7 +1594,7 @@ impl DebeziumDeduplicationState {
                     } else {
                         let mut hs = HashMap::new();
                         hs.insert((pos, row), upstream_time_millis.unwrap_or(0));
-                        seen_offsets.insert(file.to_owned(), hs);
+                        seen_offsets.insert(file.into(), hs);
                         true
                     }
                 }
@@ -1500,7 +1622,7 @@ struct SkipInfo<'a> {
 
 #[allow(clippy::too_many_arguments)]
 fn log_duplication_info(
-    file: &str,
+    file: &[u8],
     pos: usize,
     row: usize,
     coord: Option<i64>,
@@ -1512,6 +1634,14 @@ fn log_duplication_info(
     original_time: &mut i64,
     max_seen_time: &mut i64,
 ) {
+    let file_name_holder;
+    let file_name = match std::str::from_utf8(file) {
+        Ok(s) => s,
+        Err(_) => {
+            file_name_holder = hex::encode(file);
+            &file_name_holder
+        }
+    };
     match (is_new, should_skip) {
         // new item that correctly is past the highest item we've ever seen
         (true, None) => {}
@@ -1525,7 +1655,7 @@ fn log_duplication_info(
                  message_time={} message_first_seen={} max_seen_time={}",
                 debug_name,
                 worker_idx,
-                file,
+                file_name,
                 pos,
                 row,
                 coord.unwrap_or(-1),
@@ -1543,7 +1673,7 @@ fn log_duplication_info(
                  kafka_offset={} message_time={} message_first_seen={} max_seen_time={}",
                 debug_name,
                 worker_idx,
-                file,
+                file_name,
                 pos,
                 row,
                 skipinfo.old_max_pos,
@@ -1563,7 +1693,7 @@ fn log_duplication_info(
                 "We surprisingly are seeing a duplicate record that \
                     is beyond the highest record we've ever seen. {}:{}:{} kafka_offset={} \
                     message_time={} message_first_seen={} max_seen_time={}",
-                file,
+                file_name,
                 pos,
                 row,
                 coord.unwrap_or(-1),
@@ -1721,7 +1851,7 @@ impl DebeziumDecodeState {
                         // TODO(btv) Add LSN handling here too (OCF code path).
                         // Better yet, just delete this and make it go through the same code path as Kafka
                         if !self.dedup.should_use_record(
-                            &file_val,
+                            file_val.as_bytes(),
                             RowCoordinates::MySql { pos, row },
                             coord,
                             upstream_time_millis,
@@ -1904,13 +2034,18 @@ impl Decoder {
             let dedup = self.debezium_dedup.as_mut().unwrap();
             let (diff, coords) = dsr.deserialize(&mut bytes, dec)?;
             let should_use = if let Some(source) = coords {
-                // This would have ideally been `Option<&str>`,
-                // but that can't be used to lookup in a `HashMap` of `Option<String>` without cloning.
+                let mssql_fsn_buf;
+                // This would have ideally been `Option<&[u8]>`,
+                // but that can't be used to lookup in a `HashMap` of `Option<Vec<u8>>` without cloning.
                 // So, just use `""` to represent lack of a filename.
                 let file = match source.row {
-                    // TODO - avoid the unnecessary utf8 check here.
-                    RowCoordinates::MySql { .. } => std::str::from_utf8(&self.buf2)?,
-                    RowCoordinates::Postgres { .. } => "",
+                    RowCoordinates::MySql { .. } => &self.buf2,
+                    RowCoordinates::MSSql { change_lsn, .. } => {
+                        mssql_fsn_buf = change_lsn.file_seq_num.to_ne_bytes();
+                        &mssql_fsn_buf[..]
+                    }
+                    RowCoordinates::Postgres { .. } => &b""[..],
+                    RowCoordinates::Unknown { .. } => &b""[..],
                 };
                 dedup.should_use_record(
                     file,

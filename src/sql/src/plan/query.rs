@@ -32,7 +32,7 @@ use ore::iter::IteratorExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
-    JoinOperator, ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator,
+    JoinOperator, Limit, ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator,
     TableAlias, TableFactor, TableWithJoins, Value, Values,
 };
 
@@ -194,7 +194,6 @@ pub fn plan_insert_query(
                     order_by,
                     limit: None,
                     offset: None,
-                    fetch: None,
                 } if ctes.is_empty() && order_by.is_empty() => {
                     let col_types = &desc.typ().column_types;
                     let type_hints = ordering
@@ -405,8 +404,18 @@ fn plan_query(
     }
     let limit = match &q.limit {
         None => None,
-        Some(Expr::Value(Value::Number(x))) => Some(x.parse()?),
-        _ => bail!("LIMIT must be an integer constant"),
+        Some(Limit {
+            quantity: Expr::Value(Value::Number(x)),
+            with_ties: false,
+        }) => Some(x.parse()?),
+        Some(Limit {
+            quantity: _,
+            with_ties: true,
+        }) => unsupported!("FETCH ... WITH TIES"),
+        Some(Limit {
+            quantity: _,
+            with_ties: _,
+        }) => bail!("LIMIT must be an integer constant"),
     };
     let offset = match &q.offset {
         None => 0,

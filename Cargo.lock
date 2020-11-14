@@ -1576,6 +1576,7 @@ dependencies = [
  "criterion",
  "differential-dataflow",
  "futures",
+ "hex",
  "itertools",
  "lazy_static",
  "log",

@@ -16,7 +16,7 @@ Type=exec
 User=_Materialize
 Group=_Materialize
 
-ExecStart=/usr/bin/materialized -D /var/lib/materialize/mzdata
+ExecStart=/usr/bin/materialized --data-directory /var/lib/materialize/mzdata --log-file=stderr
 
 [Install]
 WantedBy=multi-user.target

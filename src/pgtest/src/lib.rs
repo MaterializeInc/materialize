@@ -201,6 +201,7 @@ impl PgTest {
                             parameters: body.parameters().collect().unwrap(),
                         })?,
                     ),
+                    Message::ParameterStatus(_) => continue,
                     Message::NoData => ("NoData", "".to_string()),
                     _ => ("UNKNOWN", format!("'{}'", ch)),
                 };

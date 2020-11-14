@@ -62,6 +62,9 @@ services:
       --kafka-host kafka
       --schema-registry-url http://schema-registry:8081
       --csv-file-name /share/billing-demo/data/prices.csv
+      --create-topic
+      --replication-factor 1
+      --partitions 1
     depends_on: [kafka, schema-registry, materialized]
   dashboard:
     mzbuild: dashboard
@@ -84,6 +87,13 @@ volumes:
 
 mzconduct:
   workflows:
+    local:
+      steps:
+      - step: workflow
+        workflow: start-everything
+      - step: run
+        service: billing-demo
+        daemon: false
     ci:
       env:
         MZ_PORT: 6875

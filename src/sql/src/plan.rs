@@ -105,6 +105,8 @@ pub enum Plan {
         name: FullName,
         typ: Type,
     },
+    DiscardTemp,
+    DiscardAll,
     DropDatabase {
         name: String,
     },
@@ -204,8 +206,15 @@ pub struct Index {
 #[derive(Clone, Debug)]
 pub struct Type {
     pub create_sql: String,
-    pub key_id: GlobalId,
-    pub value_id: GlobalId,
+    pub inner: TypeInner,
+}
+
+#[derive(Clone, Debug)]
+pub enum TypeInner {
+    Map {
+        key_id: GlobalId,
+        value_id: GlobalId,
+    },
 }
 
 /// Specifies when a `Peek` should occur.
