@@ -903,6 +903,74 @@ class DropKafkaTopicsStep(WorkflowStep):
             say(f"INFO: error purging topics: {e}")
 
 
+@Steps.register("create-kafka-topics")
+class CreateKafkaTopicsStep(WorkflowStep):
+    def __init__(self, *, kafka_container: str, topics: List[str]) -> None:
+        self._container = kafka_container
+        self._topics = topics
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        try:
+            for topic in self._topics:
+                say(f"creating kafka topic {topic}")
+                spawn.runv(
+                    [
+                        "docker",
+                        "exec",
+                        "-t",
+                        self._container,
+                        "kafka-topics",
+                        "--create",
+                        "--bootstrap-server",
+                        "localhost:9092",
+                        "--partitions",
+                        "1",
+                        "--replication-factor",
+                        "1",
+                        "--topic",
+                        topic,
+                    ]
+                )
+        except subprocess.CalledProcessError as e:
+            say(f"INFO: error creating topic: {e}")
+            raise
+
+@Steps.register("populate-kafka-topics")
+class PopulateKafkaTopicsStep(WorkflowStep):
+    def __init__(self, *, kafkacat_image: str, topics: List[str], topic_data_directory: str) -> None:
+        self._image = kafkacat_image
+        self._topics = topics
+        self._topic_data_directory = topic_data_directory
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        try:
+            for topic in self._topics:
+                say(f"populating kafka topic {topic}")
+                spawn.runv(
+                    [
+                        "docker",
+                        "run",
+                        "--network=host",
+                        "-v",
+                        f"{self._topic_data_directory}:/data/topics:ro",
+                        "-t",
+                        self._image,
+                        "kafkacat",
+                        "-P",
+                        "-b",
+                        "localhost:9092",
+                        "-t",
+                        topic,
+                        "-e",
+                        "-l",
+                        f"/data/topics/{topic}.snap"
+                    ]
+                )
+        except subprocess.CalledProcessError as e:
+            say(f"INFO: error populating topics: {e}")
+            raise
+
+
 @Steps.register("random-chaos")
 class RandomChaos(WorkflowStep):
     """

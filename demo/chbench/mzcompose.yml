@@ -358,6 +358,59 @@ mzconduct:
         container: dashboard
         seconds: 1
 
+    ingest-benchmark:
+      steps:
+      - step: start-services
+        services: [zookeeper, kafka, schema-registry]
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
+      - step: wait-for-tcp
+        host: kafka
+        port: 9092
+      - step: drop-kafka-topics
+        kafka-container: chbench_kafka_1
+        topic_pattern: debezium.tpcch.*
+      # This is where we should start a service to pipe topics into Kafka
+      # This step would block until complete
+      - step: create-kafka-topics
+        kafka-container: chbench_kafka_1
+        topics: [debezium.inventory.customers, debezium.inventory.geom,
+                 debezium.inventory.orders, debezium.inventory.products_on_hand,
+                 debezium.inventory.products, debezium.inventory.spatial_ref_sys,
+                 debezium.tpcch.warehouse, debezium.tpcch.district, debezium.tpcch.customer,
+                 debezium.tpcch.history, debezium.tpcch.neworder, debezium.tpcch.order,
+                 debezium.tpcch.orderline, debezium.tpcch.item, debezium.tpcch.stock,
+                 debezium.tpcch.nation, debezium.tpcch.supplier, debezium.tpcch.region,
+                 debezium.transaction
+                ]
+      - step: populate-kafka-topics
+        kafkacat-image: edenhill/kafkacat:1.6.0
+        topics: [debezium.inventory.customers, debezium.inventory.geom,
+                 debezium.inventory.orders, debezium.inventory.products_on_hand,
+                 debezium.inventory.products, debezium.inventory.spatial_ref_sys,
+                 debezium.tpcch.warehouse, debezium.tpcch.district, debezium.tpcch.customer,
+                 debezium.tpcch.history, debezium.tpcch.neworder, debezium.tpcch.order,
+                 debezium.tpcch.orderline, debezium.tpcch.item, debezium.tpcch.stock,
+                 debezium.tpcch.nation, debezium.tpcch.supplier, debezium.tpcch.region,
+                 debezium.transaction
+                ]
+        topic-data-directory: ${TOPIC_DATA_DIRECTORY}
+      - step: start-services
+        services: [dashboard, materialized]
+      - step: wait-for-tcp
+        host: dashboard
+        port: 3000
+      - step: run
+        service: peeker
+        daemon: true
+        command: --queries ${PEEKER_QUERIES:-loadtest}
+      - step: ensure-stays-up
+        container: peeker
+        seconds: 10
+      - step: ensure-stays-up
+        container: dashboard
+        seconds: 1
 
     consistency-test:
       steps:

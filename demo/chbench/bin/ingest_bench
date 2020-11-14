@@ -4,5 +4,7 @@ export MZ_THREADS=8
 export NUM_WAREHOUSES=10
 export OLAP_THREADS=1
 export OLTP_THREADS=64
+export TOPIC_DATA_DIRECTORY=/dataz/topics/3
 
-./bin/mzconduct run chbench -w load-test-postgres
+# ./bin/mzconduct run chbench -w load-test-postgres
+./bin/mzconduct run chbench -w ingest-benchmark

@@ -25,3 +25,19 @@ for topic in $topics; do
     fi
     echo "Saved ${topic} to file ${snapfile}"
 done
+
+jq_filter=".schema"
+for topic in $topics; do
+    schemafile="${topic}.schema"
+    if ! subject=$(curl -s 127.0.0.1:8081/subjects/${topic}-value/versions/latest); then
+        echo "Failed to query subject ${topic}"
+        exit 1
+    fi
+       
+    if ! jq -r "${jq_filter}" <<< "${subject}" > "${schemafile}"; then
+        echo "Failed to parse schema for topic ${topic}"
+        exit 1
+    fi
+
+    echo "Saved ${topic} schema to file ${schemafile}"
+done
