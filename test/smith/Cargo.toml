@@ -19,4 +19,4 @@ structopt = "0.3.20"
 test-util = { path = "../test-util" }
 tokio = { version = "0.2.22", features = ["full"] }
 tokio-postgres = "0.5.5"
-url = "2.1.1"
+url = "2.2.0"
