@@ -3737,6 +3737,7 @@ dependencies = [
  "aws-arn",
  "ccsr",
  "chrono",
+ "coord",
  "dataflow-types",
  "expr",
  "futures",
