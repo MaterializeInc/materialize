@@ -155,6 +155,13 @@ def confirm_version_is_next(version: str) -> None:
             and latest_tag.prerelease is not None
         ):
             say("Congratulations on the successful release!")
+        elif (
+            this_tag.minor == latest_tag.minor
+            and this_tag.patch == latest_tag.patch + 1
+            and this_tag.prerelease == "dev"
+        ):
+            # prepare next
+            pass
         else:
             say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
             sys.exit(1)
