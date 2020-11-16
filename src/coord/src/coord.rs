@@ -399,21 +399,11 @@ where
                     session,
                     tx,
                 }) => {
-                    let result = session
-                        .get_portal(&portal_name)
-                        .ok_or_else(|| anyhow::format_err!("portal does not exist {:?}", portal_name))
-                        .and_then(|portal| {
-                            session
-                                .get_prepared_statement(&portal.statement_name)
-                                .ok_or_else(|| anyhow::format_err!(
-                                    "statement for portal does not exist portal={:?} statement={:?}",
-                                    portal_name,
-                                    portal.statement_name
-                                ))
-                                .map(|ps| (portal, ps))
-                        });
-                    let (portal, prepared) = match result {
-                        Ok((portal, prepared)) => (portal, prepared),
+                    let result = session.get_portal(&portal_name).ok_or_else(|| {
+                        anyhow::format_err!("portal does not exist {:?}", portal_name)
+                    });
+                    let portal = match result {
+                        Ok(portal) => portal,
                         Err(e) => {
                             let _ = tx.send(Response {
                                 result: Err(e),
@@ -422,7 +412,7 @@ where
                             return;
                         }
                     };
-                    match prepared.sql() {
+                    match &portal.stmt {
                         Some(stmt) => {
                             let mut internal_cmd_tx = internal_cmd_tx.clone();
                             let stmt = stmt.clone();
