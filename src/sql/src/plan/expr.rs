@@ -34,6 +34,8 @@ use repr::adt::array::ArrayDimension;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Just like expr::RelationExpr, except where otherwise noted below.
+///
+/// - There is no equivalent to `expr::RelationExpr::Let`.
 pub enum RelationExpr {
     Constant {
         rows: Vec<Row>,
@@ -43,12 +45,6 @@ pub enum RelationExpr {
         id: expr::Id,
         typ: RelationType,
     },
-    // only needed for CTEs
-    // Let {
-    //     name: Name,
-    //     value: Box<RelationExpr>,
-    //     body: Box<RelationExpr>,
-    // },
     Project {
         input: Box<RelationExpr>,
         outputs: Vec<usize>,

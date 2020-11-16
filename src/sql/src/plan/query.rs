@@ -70,8 +70,8 @@ pub fn plan_root_query(
     lifetime: QueryLifetime,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
     transform_ast::transform_query(scx, &mut query)?;
-    let qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing) = plan_query(&qcx, &query)?;
+    let mut qcx = QueryContext::root(scx, lifetime);
+    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -130,7 +130,7 @@ pub fn plan_insert_query(
     columns: Vec<Ident>,
     source: InsertSource,
 ) -> Result<(GlobalId, RelationExpr), anyhow::Error> {
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let name = scx.resolve_item(table_name)?;
     let table = scx.catalog.get_item(&name);
     let desc = table.desc()?;
@@ -204,7 +204,7 @@ pub fn plan_insert_query(
                     expr
                 }
                 _ => {
-                    let (expr, _scope) = plan_subquery(&qcx, &query)?;
+                    let (expr, _scope) = plan_subquery(&mut qcx, &query)?;
                     expr
                 }
             }
@@ -396,11 +396,33 @@ fn check_col_index(name: &str, e: &Expr, max: usize) -> Result<Option<usize>, an
 }
 
 fn plan_query(
-    qcx: &QueryContext,
+    qcx: &mut QueryContext,
     q: &Query,
 ) -> Result<(RelationExpr, Scope, RowSetFinishing), anyhow::Error> {
-    if !q.ctes.is_empty() {
-        unsupported!(2617, "CTEs");
+    for cte in &q.ctes {
+        let cte_name = normalize::ident(cte.alias.name.clone());
+        if qcx.ctes.get(&cte_name).is_some() {
+            bail!("WITH query name \"{}\" specified more than once", cte_name)
+        }
+
+        // Plan CTE.
+        let (val, scope) = plan_subquery(qcx, &cte.query)?;
+        let typ = qcx.relation_type(&val);
+        let mut val_desc = RelationDesc::new(typ, scope.column_names());
+        val_desc = crate::plan::statement::maybe_rename_columns(
+            format!("CTE {}", cte.alias.name),
+            val_desc,
+            &cte.alias.columns,
+        )?;
+
+        qcx.ctes.insert(
+            cte_name,
+            CteDesc {
+                val,
+                val_desc,
+                original_scope_depth: qcx.outer_scope.depth(),
+            },
+        );
     }
     let limit = match &q.limit {
         None => None,
@@ -422,6 +444,7 @@ fn plan_query(
         Some(Expr::Value(Value::Number(x))) => x.parse()?,
         _ => bail!("OFFSET must be an integer constant"),
     };
+
     match &q.body {
         SetExpr::Select(s) => {
             let plan = plan_view_select(qcx, s, &q.order_by)?;
@@ -455,7 +478,10 @@ fn plan_query(
     }
 }
 
-fn plan_subquery(qcx: &QueryContext, q: &Query) -> Result<(RelationExpr, Scope), anyhow::Error> {
+fn plan_subquery(
+    qcx: &mut QueryContext,
+    q: &Query,
+) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let (mut expr, scope, finishing) = plan_query(qcx, q)?;
     if finishing.limit.is_some() || finishing.offset > 0 {
         expr = RelationExpr::TopK {
@@ -469,7 +495,10 @@ fn plan_subquery(qcx: &QueryContext, q: &Query) -> Result<(RelationExpr, Scope),
     Ok((expr.project(finishing.project), scope))
 }
 
-fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope), anyhow::Error> {
+fn plan_set_expr(
+    qcx: &mut QueryContext,
+    q: &SetExpr,
+) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match q {
         SetExpr::Select(select) => {
             let order_by_exprs = &[];
@@ -1178,22 +1207,21 @@ fn plan_table_factor(
     );
 
     let qcx = if lateral {
-        Cow::Owned(left_qcx.derived_context(left_scope.clone(), &left_qcx.relation_type(&left)))
+        Cow::Owned(left_qcx.derived_context(
+            left_scope.clone(),
+            &left_qcx.relation_type(&left),
+            left_qcx.ctes.clone(),
+        ))
     } else {
         Cow::Borrowed(left_qcx)
     };
 
     let (expr, scope) = match table_factor {
         TableFactor::Table { name, alias } => {
-            let name = qcx.scx.resolve_item(name.clone())?;
-            let item = qcx.scx.catalog.get_item(&name);
-            let expr = RelationExpr::Get {
-                id: Id::Global(item.id()),
-                typ: item.desc()?.typ().clone(),
-            };
+            let (name, expr, desc) = qcx.resolve_table_expression(name.clone())?;
             let scope = Scope::from_source(
-                Some(name.into()),
-                item.desc()?.iter_names().map(|n| n.cloned()),
+                Some(name),
+                desc.iter_names().map(|n| n.cloned()),
                 Some(qcx.outer_scope.clone()),
             );
             let scope = plan_table_alias(scope, alias.as_ref())?;
@@ -1217,7 +1245,8 @@ fn plan_table_factor(
             subquery,
             alias,
         } => {
-            let (expr, scope) = plan_subquery(&qcx, &subquery)?;
+            let mut qcx = (*qcx).clone();
+            let (expr, scope) = plan_subquery(&mut qcx, &subquery)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
             (expr, scope)
         }
@@ -1366,7 +1395,7 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
             // A bit silly to have to plan the query here just to get its column
             // name, since we throw away the planned expression, but fixing this
             // requires a separate semantic analysis phase.
-            let (_expr, scope) = plan_subquery(&ecx.derived_query_context(), query).ok()?;
+            let (_expr, scope) = plan_subquery(&mut ecx.derived_query_context(), query).ok()?;
             scope
                 .items
                 .first()
@@ -2020,16 +2049,16 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             if !ecx.allow_subqueries {
                 bail!("{} does not allow subqueries", ecx.name)
             }
-            let qcx = ecx.derived_query_context();
-            let (expr, _scope) = plan_subquery(&qcx, query)?;
+            let mut qcx = ecx.derived_query_context();
+            let (expr, _scope) = plan_subquery(&mut qcx, query)?;
             expr.exists().into()
         }
         Expr::Subquery(query) => {
             if !ecx.allow_subqueries {
                 bail!("{} does not allow subqueries", ecx.name)
             }
-            let qcx = ecx.derived_query_context();
-            let (expr, _scope) = plan_subquery(&qcx, query)?;
+            let mut qcx = ecx.derived_query_context();
+            let (expr, _scope) = plan_subquery(&mut qcx, query)?;
             let column_types = qcx.relation_type(&expr).column_types;
             if column_types.len() != 1 {
                 bail!(
@@ -2654,6 +2683,23 @@ pub enum QueryLifetime {
     Static,
 }
 
+/// Stores planned CTEs for later use.
+#[derive(Debug, Clone)]
+pub struct CteDesc {
+    /// The CTE's expression.
+    val: RelationExpr,
+    val_desc: RelationDesc,
+    /// Store the original scope depth where the user defined the CTE. Use this
+    /// value to determine how much to offset `ColumnRef` levels when
+    /// referencing CTEs.
+    ///
+    /// This occurs because we must evaluate CTEs where they're defined and not
+    /// at each reference (i.e. it's like a pointer, not a macro). Because
+    /// column references are relative to the current level, they must be offset
+    /// to retain their original references.
+    original_scope_depth: usize,
+}
+
 /// The state required when planning a `Query`.
 #[derive(Debug, Clone)]
 pub struct QueryContext<'a> {
@@ -2665,6 +2711,8 @@ pub struct QueryContext<'a> {
     pub outer_scope: Scope,
     /// The type of the outer relation expressions.
     pub outer_relation_types: Vec<RelationType>,
+    /// CTEs for this query.
+    pub ctes: HashMap<String, CteDesc>,
 }
 
 impl<'a> QueryContext<'a> {
@@ -2674,6 +2722,7 @@ impl<'a> QueryContext<'a> {
             lifetime,
             outer_scope: Scope::empty(None),
             outer_relation_types: vec![],
+            ctes: HashMap::new(),
         }
     }
 
@@ -2681,7 +2730,14 @@ impl<'a> QueryContext<'a> {
         expr.typ(&self.outer_relation_types, &self.scx.param_types.borrow())
     }
 
-    fn derived_context(&self, scope: Scope, relation_type: &RelationType) -> QueryContext<'a> {
+    /// Generate a new `QueryContext` appropriate to be used in subqueries of
+    /// `self`.
+    fn derived_context(
+        &self,
+        scope: Scope,
+        relation_type: &RelationType,
+        ctes: HashMap<String, CteDesc>,
+    ) -> QueryContext<'a> {
         QueryContext {
             scx: self.scx,
             lifetime: self.lifetime,
@@ -2692,7 +2748,43 @@ impl<'a> QueryContext<'a> {
                 .chain(std::iter::once(relation_type))
                 .cloned()
                 .collect(),
+            ctes,
         }
+    }
+
+    /// Resolves `name` to a table expr, i.e. getting a catalog table or
+    /// inlining a CTE.
+    pub fn resolve_table_expression(
+        &self,
+        name: ObjectName,
+    ) -> Result<(PartialName, RelationExpr, RelationDesc), PlanError> {
+        // Check if unqualified name refers to a CTE.
+        if name.0.len() == 1 {
+            let norm_name = normalize::ident(name.0[0].clone());
+            if let Some(cte) = self.ctes.get(&norm_name) {
+                let depth_adj = self.outer_scope.depth() - cte.original_scope_depth;
+                let mut val = cte.val.clone();
+                // Adjust column references to the correct depth; `depth_adj` >
+                // 0 iff you've entered entered subqueries.
+                val.visit_columns(depth_adj, &mut |depth, col| col.level += depth);
+
+                // Inline `val` where its name was referenced. In an ideal
+                // world, multiple instances of this expression would be
+                // de-duplicated.
+                return Ok((name.into(), val, cte.val_desc.clone()));
+            }
+        }
+
+        // Non-CTE table names must be retrieved from the catalog.
+        let name = self.scx.resolve_item(name)?;
+        let item = self.scx.catalog.get_item(&name);
+        let desc = item.desc()?.clone();
+        let expr = RelationExpr::Get {
+            id: Id::Global(item.id()),
+            typ: desc.typ().clone(),
+        };
+
+        Ok((name.into(), expr, desc))
     }
 }
 
@@ -2740,8 +2832,11 @@ impl<'a> ExprContext<'a> {
     }
 
     fn derived_query_context(&self) -> QueryContext {
-        self.qcx
-            .derived_context(self.scope.clone(), self.relation_type)
+        self.qcx.derived_context(
+            self.scope.clone(),
+            self.relation_type,
+            self.qcx.ctes.clone(),
+        )
     }
 
     pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {

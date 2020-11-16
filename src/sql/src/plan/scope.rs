@@ -301,4 +301,11 @@ impl Scope {
             outer_scope: self.outer_scope.clone(),
         }
     }
+
+    pub fn depth(&self) -> usize {
+        match &self.outer_scope {
+            Some(outer_scope) => outer_scope.depth() + 1,
+            None => 0,
+        }
+    }
 }
