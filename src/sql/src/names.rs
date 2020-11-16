@@ -128,3 +128,15 @@ impl From<FullName> for PartialName {
         }
     }
 }
+
+impl From<ObjectName> for PartialName {
+    fn from(o: ObjectName) -> PartialName {
+        let mut parts = o.0;
+        PartialName {
+            // Object name must have item.
+            item: parts.pop().unwrap().to_string(),
+            schema: parts.pop().map(|s| s.to_string()),
+            database: parts.pop().map(|d| d.to_string()),
+        }
+    }
+}
