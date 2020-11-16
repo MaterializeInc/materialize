@@ -6,7 +6,7 @@ publish = false
 version = "0.1.0"
 
 [dependencies]
-anyhow = "1.0.33"
+anyhow = "1.0.34"
 backtrace = "0.3"
 jemalloc-ctl = { version = "0.3", features = ["use_std"], optional = true }
 lazy_static = "1.4.0"
