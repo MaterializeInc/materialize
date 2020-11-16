@@ -54,7 +54,7 @@ use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
 use crate::render::{self, RenderState};
 use crate::server::metrics::Metrics;
-use crate::source::persistence::WorkerPersistenceData;
+use crate::source::cache::WorkerCacheData;
 
 mod metrics;
 
@@ -141,8 +141,8 @@ pub enum SequencedCommand {
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
-    /// Request that persistence data is streamed to the provided channel.
-    EnablePersistence(comm::mpsc::Sender<PersistenceMessage>),
+    /// Request that cache data is streamed to the provided channel.
+    EnableCaching(comm::mpsc::Sender<CacheMessage>),
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
@@ -160,16 +160,16 @@ pub struct WorkerFeedbackWithMeta {
 }
 
 /// All data and metadata messages that can be sent by dataflow workers or coordinator
-/// to the persister thread.
+/// to the cacher thread.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum PersistenceMessage {
-    /// Data to be persisted (sent from dataflow workers)
-    Data(WorkerPersistenceData),
-    /// Add source to persist
+pub enum CacheMessage {
+    /// Data to be cached (sent from dataflow workers)
+    Data(WorkerCacheData),
+    /// Add source to cache.
     AddSource(Uuid, GlobalId),
-    /// Drop source to persist
+    /// Drop source from cache.
     DropSource(GlobalId),
-    /// Shut down persistence thread
+    /// Shut down caching thread
     Shutdown,
 }
 
@@ -237,7 +237,7 @@ where
                     ts_histories: Default::default(),
                     ts_source_updates: Default::default(),
                     dataflow_tokens: HashMap::new(),
-                    persistence_tx: None,
+                    caching_tx: None,
                 },
                 materialized_logger: None,
                 command_rx,
@@ -726,8 +726,8 @@ where
             SequencedCommand::EnableLogging(config) => {
                 self.initialize_logging(&config);
             }
-            SequencedCommand::EnablePersistence(tx) => {
-                self.render_state.persistence_tx = Some(tx);
+            SequencedCommand::EnableCaching(tx) => {
+                self.render_state.caching_tx = Some(tx);
             }
             SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually

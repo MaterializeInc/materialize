@@ -149,10 +149,10 @@ pub trait Catalog: fmt::Debug {
     /// Expresses whether or not the catalog allows experimental mode features.
     fn experimental_mode(&self) -> bool;
 
-    /// Reports the top level directory where source persistence information is stored.
+    /// Reports the top level directory where source caching information is stored.
     ///
-    /// If set to `None`, indicates that source persistence is disabled.
-    fn persistence_directory(&self) -> Option<&Path>;
+    /// If set to `None`, indicates that source caching is disabled.
+    fn cache_directory(&self) -> Option<&Path>;
 }
 
 /// An item in a [`Catalog`].
@@ -347,7 +347,7 @@ impl Catalog for DummyCatalog {
         false
     }
 
-    fn persistence_directory(&self) -> Option<&Path> {
+    fn cache_directory(&self) -> Option<&Path> {
         None
     }
 }

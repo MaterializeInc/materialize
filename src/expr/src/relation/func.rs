@@ -23,8 +23,7 @@ use ore::cast::CastFrom;
 use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{
-    ColumnType, Datum, Diff, PersistedRecordIter, RelationType, Row, RowArena, RowPacker,
-    ScalarType,
+    CachedRecordIter, ColumnType, Datum, Diff, RelationType, Row, RowArena, RowPacker, ScalarType,
 };
 
 use crate::id::GlobalId;
@@ -725,9 +724,9 @@ pub enum TableFunc {
     GenerateSeriesInt64,
     // TODO(justin): should also possibly have GenerateSeriesTimestamp{,Tz}.
     Repeat,
-    ReadPersistedData {
+    ReadCachedData {
         source: GlobalId,
-        persistence_directory: PathBuf,
+        cache_directory: PathBuf,
     },
     UnnestList {
         el_typ: ScalarType,
@@ -756,15 +755,15 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => generate_series_int32(datums[0], datums[1]),
             TableFunc::GenerateSeriesInt64 => generate_series_int64(datums[0], datums[1]),
             TableFunc::Repeat => repeat(datums[0]),
-            TableFunc::ReadPersistedData {
+            TableFunc::ReadCachedData {
                 source,
-                persistence_directory,
+                cache_directory,
             } => {
                 let mut row_packer = RowPacker::new();
-                files_for_source(*source, persistence_directory)
+                files_for_source(*source, cache_directory)
                     .iter()
                     .flat_map(|e| {
-                        PersistedRecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
+                        CachedRecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
                     })
                     .map(|(e, r)| {
                         (
@@ -810,7 +809,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => vec![ScalarType::Int32.nullable(false)],
             TableFunc::GenerateSeriesInt64 => vec![ScalarType::Int64.nullable(false)],
             TableFunc::Repeat => vec![],
-            TableFunc::ReadPersistedData { .. } => vec![
+            TableFunc::ReadCachedData { .. } => vec![
                 ScalarType::String.nullable(true),
                 ScalarType::Int64.nullable(false),
                 ScalarType::Bytes.nullable(false),
@@ -830,7 +829,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => 1,
             TableFunc::GenerateSeriesInt64 => 1,
             TableFunc::Repeat => 0,
-            TableFunc::ReadPersistedData { .. } => 4,
+            TableFunc::ReadCachedData { .. } => 4,
             TableFunc::UnnestList { .. } => 1,
         }
     }
@@ -845,7 +844,7 @@ impl TableFunc {
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
-            | TableFunc::ReadPersistedData { .. }
+            | TableFunc::ReadCachedData { .. }
             | TableFunc::UnnestList { .. } => true,
         }
     }
@@ -862,8 +861,8 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
             TableFunc::Repeat => f.write_str("repeat"),
-            TableFunc::ReadPersistedData { source, .. } => {
-                write!(f, "internal_read_persisted_data({})", source)
+            TableFunc::ReadCachedData { source, .. } => {
+                write!(f, "internal_read_cached_data({})", source)
             }
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
         }

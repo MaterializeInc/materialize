@@ -111,8 +111,8 @@ struct CommandsProcessedMetrics {
     enable_feedback: IntCounter,
     enable_logging_int: i32,
     enable_logging: IntCounter,
-    enable_persistence_int: i32,
-    enable_persistence: IntCounter,
+    enable_caching_int: i32,
+    enable_caching: IntCounter,
     shutdown_int: i32,
     shutdown: IntCounter,
     advance_all_local_inputs_int: i32,
@@ -152,9 +152,8 @@ impl CommandsProcessedMetrics {
             enable_feedback: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_feedback"]),
             enable_logging_int: 0,
             enable_logging: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_logging"]),
-            enable_persistence_int: 0,
-            enable_persistence: COMMANDS_PROCESSED_RAW
-                .with_label_values(&[worker, "enable_persistence"]),
+            enable_caching_int: 0,
+            enable_caching: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_caching"]),
             shutdown_int: 0,
             shutdown: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "shutdown"]),
             advance_all_local_inputs_int: 0,
@@ -177,7 +176,7 @@ impl CommandsProcessedMetrics {
                 self.advance_source_timestamp_int += 1
             }
             SequencedCommand::EnableFeedback(..) => self.enable_feedback_int += 1,
-            SequencedCommand::EnablePersistence(..) => self.enable_persistence_int += 1,
+            SequencedCommand::EnableCaching(..) => self.enable_caching_int += 1,
             SequencedCommand::EnableLogging(_) => self.enable_logging_int += 1,
             SequencedCommand::Shutdown { .. } => self.shutdown_int += 1,
             SequencedCommand::AdvanceAllLocalInputs { .. } => {
@@ -230,10 +229,9 @@ impl CommandsProcessedMetrics {
             self.enable_feedback.inc_by(self.enable_feedback_int as i64);
             self.enable_feedback_int = 0;
         }
-        if self.enable_persistence_int > 0 {
-            self.enable_persistence
-                .inc_by(self.enable_persistence_int as i64);
-            self.enable_persistence_int = 0;
+        if self.enable_caching_int > 0 {
+            self.enable_caching.inc_by(self.enable_caching_int as i64);
+            self.enable_caching_int = 0;
         }
         if self.shutdown_int > 0 {
             self.shutdown.inc_by(self.shutdown_int as i64);

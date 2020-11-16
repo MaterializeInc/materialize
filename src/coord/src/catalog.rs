@@ -86,7 +86,7 @@ pub struct Catalog {
     cluster_id: Uuid,
     /// Used to assign a PostgreSQL object ID (OID) to each object in the catalog.
     oid_counter: u32,
-    persistence_directory: Option<PathBuf>,
+    cache_directory: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -389,7 +389,7 @@ impl Catalog {
             experimental_mode,
             cluster_id,
             oid_counter: FIRST_USER_OID,
-            persistence_directory: config.persistence_directory,
+            cache_directory: config.cache_directory,
         };
         let mut events = vec![];
 
@@ -1580,8 +1580,8 @@ impl Catalog {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
 
-    pub fn persistence_directory(&self) -> Option<&Path> {
-        self.persistence_directory.as_deref()
+    pub fn cache_directory(&self) -> Option<&Path> {
+        self.cache_directory.as_deref()
     }
 
     pub fn cluster_id(&self) -> Uuid {
@@ -1724,7 +1724,7 @@ pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
         path: Some(path),
         enable_logging: true,
         experimental_mode: None,
-        persistence_directory: None,
+        cache_directory: None,
     })?;
     Ok(catalog.dump())
 }
@@ -1830,8 +1830,8 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.experimental_mode
     }
 
-    fn persistence_directory(&self) -> Option<&Path> {
-        self.catalog.persistence_directory()
+    fn cache_directory(&self) -> Option<&Path> {
+        self.catalog.cache_directory()
     }
 }
 

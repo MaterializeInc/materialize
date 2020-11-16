@@ -1172,13 +1172,13 @@ fn handle_create_source(
                 bail!("`start_offset` is not yet implemented for BYO consistency sources.")
             }
 
-            let enable_persistence = match with_options.remove("cache") {
+            let enable_caching = match with_options.remove("cache") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
                 Some(_) => bail!("cache must be a bool!"),
             };
 
-            if enable_persistence && consistency != Consistency::RealTime {
+            if enable_caching && consistency != Consistency::RealTime {
                 unsupported!("BYO source caching")
             }
 
@@ -1191,8 +1191,8 @@ fn handle_create_source(
                 config_options,
                 start_offsets,
                 group_id_prefix,
-                enable_persistence,
-                persisted_files: None,
+                enable_caching,
+                cached_files: None,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
