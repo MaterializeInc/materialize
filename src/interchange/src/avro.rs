@@ -1540,6 +1540,7 @@ impl DebeziumDeduplicationState {
                 started_padding,
                 started,
             }) => {
+                *max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
                 if is_snapshot {
                     let key_indices = match key_indices.as_ref() {
                         None => {
@@ -1590,7 +1591,6 @@ impl DebeziumDeduplicationState {
                         true
                     }
                 } else {
-                    *max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
                     if let Some(seen_offsets) = seen_offsets.get_mut(file) {
                         // first check if we are in a special case of range-bounded track full
                         if let Some(range) = range {
@@ -1644,6 +1644,8 @@ impl DebeziumDeduplicationState {
                                     // don't abort early, but we will clean up after this validation
                                     delete_full = true;
                                 }
+                            } else {
+                                warn!("message has no creation time")
                             }
                         }
 
