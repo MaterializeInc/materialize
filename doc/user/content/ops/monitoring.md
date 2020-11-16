@@ -152,6 +152,12 @@ The `mz_catalog` SQL interface provides a variety of ways to introspect Material
 introduction to this catalog is available as part of our [SQL
 documentation](/sql/system-catalog).
 
+A user guide for debugging a running `materialized` using the system catalog is available
+as part of our developer documentation, in the form of a walkthrough of useful [diagnostic
+queries][].
+
+[diagnostic queries]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/diagnostic-queries.md
+
 ## Grafana
 
 Materialize provides a [recommended dashboard][dashboard-json] that you can [import into
