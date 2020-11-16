@@ -38,7 +38,6 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
-use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
@@ -54,7 +53,7 @@ use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
 use crate::render::{self, RenderState};
 use crate::server::metrics::Metrics;
-use crate::source::cache::WorkerCacheData;
+use crate::source::cache::{CacheAddSource, WorkerCacheData};
 
 mod metrics;
 
@@ -166,7 +165,7 @@ pub enum CacheMessage {
     /// Data to be cached (sent from dataflow workers)
     Data(WorkerCacheData),
     /// Add source to cache.
-    AddSource(Uuid, GlobalId),
+    AddSource(CacheAddSource),
     /// Drop source from cache.
     DropSource(GlobalId),
     /// Shut down caching thread

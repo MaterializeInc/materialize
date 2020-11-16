@@ -18,7 +18,7 @@ use futures::stream::StreamExt;
 use log::{error, info, trace};
 use uuid::Uuid;
 
-use dataflow::source::cache::RecordFileMetadata;
+use dataflow::source::cache::{CacheAddSource, RecordFileMetadata};
 use dataflow::CacheMessage;
 use dataflow_types::{ExternalSourceConnector, SourceConnector};
 use expr::GlobalId;
@@ -275,7 +275,11 @@ impl Cacher {
                     source.insert_record(data.partition_id, data.record)?;
                 }
             }
-            CacheMessage::AddSource(cluster_id, source_id) => {
+            CacheMessage::AddSource(CacheAddSource {
+                source_id,
+                cluster_id,
+                start_offsets: _,
+            }) => {
                 // Check if we already have a source
                 if self.sources.contains_key(&source_id) {
                     error!(

@@ -34,7 +34,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle;
 use uuid::Uuid;
 
-use dataflow::source::cache::CacheSender;
+use dataflow::source::cache::{CacheAddSource, CacheSender};
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
@@ -3031,7 +3031,11 @@ where
             if connector.caching_enabled() {
                 if let Some(cache_tx) = &mut self.cache_tx {
                     cache_tx
-                        .send(CacheMessage::AddSource(self.catalog.cluster_id(), id))
+                        .send(CacheMessage::AddSource(CacheAddSource {
+                            source_id: id,
+                            cluster_id: self.catalog.cluster_id(),
+                            start_offsets: None,
+                        }))
                         .await
                         .expect("failed to send CREATE SOURCE notification to caching thread");
                 } else {

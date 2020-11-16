@@ -12,6 +12,7 @@
 // TODO: currently everything is fairly Kafka-centric and we should probably
 // not directly usable for some other source types.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::pin::Pin;
 
@@ -152,4 +153,15 @@ pub struct WorkerCacheData {
     pub partition_id: i32,
     /// The record itself.
     pub record: CachedRecord,
+}
+
+/// Metadata needed when we add a source to the cache.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CacheAddSource {
+    /// Global Id of the source being added.
+    pub source_id: GlobalId,
+    /// Cluster id of the source being added.
+    pub cluster_id: Uuid,
+    /// Optional set of offsets indicating where to start caching records from.
+    pub start_offsets: Option<HashMap<i32, i64>>,
 }
