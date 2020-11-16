@@ -13,8 +13,8 @@ If you have specific questions, feel free to [file a GitHub
 issue](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md)._
 
 Materialize supports integration with monitoring tools using both the
-[Prometheus](#prometheus) format and via [database views](#system-status-views) that
-provide more information about internal state.
+[Prometheus](#prometheus) format and via [SQL interface](#system-catalog-sql-interface)
+that provide more information about internal state.
 
 This page provides an overview of the tools available to diagnose a running materialized
 instance. You can use the same features that are used by these tools to integrate
@@ -146,16 +146,11 @@ Materialize broadly publishes the following types of data there:
   averaged over 10 second windows.
 - Standard process metrics with a `process_*` prefix. For exmple, `process_cpu`.
 
-## System Status Views
+## System Catalog SQL Interface
 
-{{< warning >}}
-The `mz_catalog` views are not part of Materialize's stable interface.
-Backwards-incompatible changes to the exposed views may be made at any time.
-{{< /warning >}}
-
-The views in `mz_catalog` provide a variety of ways to introspect materialize. An introduction to this catalog is available at our [Diagnostic Queries][] document.
-
-[Diagnostic Queries]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/diagnostic-queries.md
+The `mz_catalog` SQL interface provides a variety of ways to introspect Materialize. An
+introduction to this catalog is available as part of our [SQL
+documentation](/sql/system-catalog).
 
 ## Grafana
 
