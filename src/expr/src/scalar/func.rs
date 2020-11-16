@@ -372,6 +372,40 @@ fn cast_string_to_list<'a>(
     Ok(temp_storage.make_datum(|packer| packer.push_list(parsed_datums)))
 }
 
+fn cast_string_to_map<'a>(
+    a: Datum<'a>,
+    cast_expr: &'a ScalarExpr,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let parsed_map = strconv::parse_map(
+        a.unwrap_str(),
+        |key_text| -> String {
+            match key_text {
+                Cow::Owned(s) => s,
+                Cow::Borrowed(s) => s.to_owned(),
+            }
+        },
+        |value_text| -> Result<Datum, EvalError> {
+            let value_text = match value_text {
+                Cow::Owned(s) => temp_storage.push_string(s),
+                Cow::Borrowed(s) => s,
+            };
+            cast_expr.eval(&[Datum::String(value_text)], temp_storage)
+        },
+    )?;
+    let mut pairs: Vec<(String, Datum)> = parsed_map.into_iter().map(|(k, v)| (k, v)).collect();
+    pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
+    pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
+    Ok(temp_storage.make_datum(|packer| {
+        packer.push_dict_with(|packer| {
+            for (k, v) in pairs {
+                packer.push(Datum::String(&k));
+                packer.push(v);
+            }
+        })
+    }))
+}
+
 fn cast_string_to_time<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     strconv::parse_time(a.unwrap_str())
         .map(Datum::Time)
@@ -2394,6 +2428,13 @@ pub enum UnaryFunc {
         // elements' type
         cast_expr: Box<ScalarExpr>,
     },
+    CastStringToMap {
+        // Target map's value type
+        return_ty: ScalarType,
+        // The expression used to cast the discovered values to the map's
+        // values' type
+        cast_expr: Box<ScalarExpr>,
+    },
     CastStringToTime,
     CastStringToTimestamp,
     CastStringToTimestampTz,
@@ -2534,6 +2575,9 @@ impl UnaryFunc {
                 cast_expr,
                 return_ty,
             } => cast_string_to_list(a, return_ty, &*cast_expr, temp_storage),
+            UnaryFunc::CastStringToMap { cast_expr, .. } => {
+                cast_string_to_map(a, &*cast_expr, temp_storage)
+            }
             UnaryFunc::CastStringToTime => cast_string_to_time(a),
             UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
             UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
@@ -2717,6 +2761,10 @@ impl UnaryFunc {
                 (return_ty.clone()).nullable(false)
             }
 
+            CastStringToMap { return_ty, .. } => {
+                ScalarType::Map { value_type: Box::new(return_ty.clone()) }.nullable(false)
+            }
+
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),
             CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) | SqrtDec(scale) => {
@@ -2847,6 +2895,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToDecimal(_) => f.write_str("strtodec"),
             UnaryFunc::CastStringToDate => f.write_str("strtodate"),
             UnaryFunc::CastStringToList { .. } => f.write_str("strtolist"),
+            UnaryFunc::CastStringToMap { .. } => f.write_str("strtomap"),
             UnaryFunc::CastStringToTime => f.write_str("strtotime"),
             UnaryFunc::CastStringToTimestamp => f.write_str("strtots"),
             UnaryFunc::CastStringToTimestampTz => f.write_str("strtotstz"),

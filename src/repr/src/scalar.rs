@@ -407,6 +407,9 @@ impl<'a> Datum<'a> {
                         .zip_eq(fields)
                         .all(|(e, (_, t))| e.is_null() || is_instance_of_scalar(e, t)),
                     (Datum::List(_), _) => false,
+                    (Datum::Map(map), ScalarType::Map { value_type }) => map
+                        .iter()
+                        .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, value_type)),
                     (Datum::Map(_), _) => false,
                     (Datum::JsonNull, _) => false,
                 }
@@ -755,6 +758,18 @@ impl<'a> ScalarType {
         match self {
             ScalarType::Array(s) => &**s,
             _ => panic!("ScalarType::unwrap_array_element_type called on {:?}", self),
+        }
+    }
+
+    /// Returns the [`ScalarType`] of values in a [`ScalarType::Map`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Map`].
+    pub fn unwrap_map_element_type(&self) -> &ScalarType {
+        match self {
+            ScalarType::Map { value_type } => &**value_type,
+            _ => panic!("ScalarType::unwrap_map_element_type called on {:?}", self),
         }
     }
 

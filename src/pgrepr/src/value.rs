@@ -131,6 +131,11 @@ impl Value {
                     .map(|(e, (_name, ty))| Value::from_datum(e, ty))
                     .collect(),
             )),
+            (Datum::Map(dict), ScalarType::Map { value_type }) => Some(Value::Map(
+                dict.iter()
+                    .map(|(k, v)| (k.to_owned(), Value::from_datum(v, value_type)))
+                    .collect(),
+            )),
             _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
