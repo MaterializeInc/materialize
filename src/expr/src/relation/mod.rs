@@ -155,6 +155,8 @@ pub enum RelationExpr {
         aggregates: Vec<AggregateExpr>,
         /// True iff the input is known to monotonically increase (only addition of records).
         monotonic: bool,
+        /// User hint: expected number of values per group key. Used to optimize physical rendering.
+        expected_group_size: Option<usize>,
     },
     /// Groups and orders within each group, limiting output.
     ///
@@ -361,7 +363,7 @@ impl RelationExpr {
                 input,
                 group_key,
                 aggregates,
-                monotonic: _,
+                ..
             } => {
                 let input_typ = input.typ();
                 let mut column_types = group_key
@@ -595,6 +597,7 @@ impl RelationExpr {
             group_key: group_key.into_iter().map(ScalarExpr::Column).collect(),
             aggregates,
             monotonic: false,
+            expected_group_size: None,
         }
     }
 
@@ -942,8 +945,7 @@ impl RelationExpr {
             RelationExpr::Reduce {
                 group_key,
                 aggregates,
-                input: _,
-                monotonic: _,
+                ..
             } => {
                 for s in group_key {
                     f(s)?;
