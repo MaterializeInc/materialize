@@ -60,15 +60,34 @@ struct Source {
 }
 
 impl Source {
-    fn new(id: GlobalId, cluster_id: Uuid, path: PathBuf, max_pending_records: usize) -> Self {
-        Source {
+    fn new(
+        id: GlobalId,
+        cluster_id: Uuid,
+        path: PathBuf,
+        max_pending_records: usize,
+        start_offsets: Option<HashMap<i32, i64>>,
+    ) -> Self {
+        let mut source = Source {
             id,
             cluster_id,
             path,
             pending_records: 0,
             max_pending_records,
             partitions: BTreeMap::new(),
+        };
+
+        if let Some(start_offsets) = start_offsets {
+            for (pid, offset) in start_offsets.iter() {
+                source.partitions.insert(
+                    *pid,
+                    Partition {
+                        last_cached_offset: Some(*offset),
+                        pending: Vec::new(),
+                    },
+                );
+            }
         }
+        source
     }
 
     fn insert_record(
@@ -278,7 +297,7 @@ impl Cacher {
             CacheMessage::AddSource(CacheAddSource {
                 source_id,
                 cluster_id,
-                start_offsets: _,
+                start_offsets,
             }) => {
                 // Check if we already have a source
                 if self.sources.contains_key(&source_id) {
@@ -309,6 +328,7 @@ impl Cacher {
                     cluster_id,
                     source_path,
                     self.config.max_pending_records,
+                    start_offsets,
                 );
                 self.sources.insert(source_id, source);
                 info!("Enabled caching for source: {}", source_id);
@@ -374,86 +394,89 @@ pub fn augment_connector(
                 // This connector has no caching, so do nothing.
                 Ok(None)
             } else {
-                augment_connector_inner(connector, cache_directory, cluster_id, source_id)?;
-                Ok(Some(source_connector))
+                match connector {
+                    ExternalSourceConnector::Kafka(k) => {
+                        if let Some((paths, start_offsets)) =
+                            get_cache_info(cache_directory, cluster_id, source_id)?
+                        {
+                            k.cached_files = Some(paths);
+                            k.start_offsets = start_offsets;
+                            Ok(Some(source_connector))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => Ok(None),
+                }
             }
         }
         SourceConnector::Local => Ok(None),
     }
 }
 
-fn augment_connector_inner(
-    connector: &mut ExternalSourceConnector,
+pub fn get_cache_info(
     cache_directory: &Path,
     cluster_id: Uuid,
     source_id: GlobalId,
-) -> Result<(), anyhow::Error> {
-    match connector {
-        ExternalSourceConnector::Kafka(k) => {
-            let mut read_offsets: HashMap<i32, i64> = HashMap::new();
-            let mut paths = Vec::new();
+) -> Result<Option<(Vec<(i32, PathBuf)>, HashMap<i32, i64>)>, anyhow::Error> {
+    let mut read_offsets: HashMap<i32, i64> = HashMap::new();
+    let mut paths = Vec::new();
 
-            let source_path = cache_directory.join(source_id.to_string());
+    let source_path = cache_directory.join(source_id.to_string());
 
-            // Not safe to assume that the directory we are trying to read will be there
-            // so if its not lets just early exit.
-            let entries = match std::fs::read_dir(&source_path) {
-                Ok(entries) => entries,
-                Err(e) => {
-                    error!(
-                        "Failed to read from cached source data from {}: {}",
-                        source_path.display(),
-                        e
-                    );
-                    return Ok(());
-                }
-            };
+    // Not safe to assume that the directory we are trying to read will be there
+    // so if its not lets just early exit.
+    let entries = match std::fs::read_dir(&source_path) {
+        Ok(entries) => entries,
+        Err(e) => {
+            error!(
+                "Failed to read from cached source data from {}: {}",
+                source_path.display(),
+                e
+            );
+            return Ok(None);
+        }
+    };
 
-            for entry in entries {
-                if let Ok(file) = entry {
-                    let path = file.path();
-                    if let Some(metadata) = RecordFileMetadata::from_path(&path)? {
-                        if metadata.source_id != source_id {
-                            error!("Ignoring cache file with invalid source id. Received: {} expected: {} path: {}",
+    for entry in entries {
+        if let Ok(file) = entry {
+            let path = file.path();
+            if let Some(metadata) = RecordFileMetadata::from_path(&path)? {
+                if metadata.source_id != source_id {
+                    error!("Ignoring cache file with invalid source id. Received: {} expected: {} path: {}",
                                    metadata.source_id,
                                    source_id,
                                    path.display());
-                            continue;
-                        }
+                    continue;
+                }
 
-                        if metadata.cluster_id != cluster_id {
-                            error!("Ignoring cache file with invalid cluster id. Received: {} expected: {} path: {}",
+                if metadata.cluster_id != cluster_id {
+                    error!("Ignoring cache file with invalid cluster id. Received: {} expected: {} path: {}",
                             metadata.cluster_id,
                             cluster_id,
                             path.display());
-                            continue;
-                        }
-
-                        paths.push((metadata.partition_id, path));
-
-                        // TODO: we need to be more careful here to handle the case where we are for
-                        // some reason missing some values here.
-                        match read_offsets.get(&metadata.partition_id) {
-                            None => {
-                                read_offsets.insert(metadata.partition_id, metadata.end_offset);
-                            }
-                            Some(o) => {
-                                if metadata.end_offset > *o {
-                                    read_offsets.insert(metadata.partition_id, metadata.end_offset);
-                                }
-                            }
-                        };
-                    }
+                    continue;
                 }
-            }
 
-            k.start_offsets = read_offsets;
-            k.cached_files = Some(paths);
+                paths.push((metadata.partition_id, path));
+
+                // TODO: we need to be more careful here to handle the case where we are for
+                // some reason missing some values here.
+                match read_offsets.get(&metadata.partition_id) {
+                    None => {
+                        read_offsets.insert(metadata.partition_id, metadata.end_offset);
+                    }
+                    Some(o) => {
+                        if metadata.end_offset > *o {
+                            read_offsets.insert(metadata.partition_id, metadata.end_offset);
+                        }
+                    }
+                };
+            }
         }
-        _ => bail!("caching only enabled for Kafka sources at this time"),
     }
 
-    Ok(())
+    Ok(Some((paths, read_offsets)))
 }
 
 // Given the input records, extract a prefix of records that are "dense," meaning they contain all

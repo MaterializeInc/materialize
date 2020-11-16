@@ -238,7 +238,25 @@ where
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    self.maybe_begin_caching(*id, &source.connector).await;
+                    let start_offsets = if let Some(path) = self.catalog.cache_directory() {
+                        if let Some((_, start_offsets)) =
+                            crate::cache::get_cache_info(path, self.catalog.cluster_id(), *id)?
+                        {
+                            Some(start_offsets)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    let add_source = CacheAddSource {
+                        source_id: *id,
+                        cluster_id: self.catalog.cluster_id(),
+                        start_offsets,
+                    };
+                    self.maybe_begin_caching(add_source, &source.connector)
+                        .await;
                 }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == *id) {
@@ -1588,7 +1606,13 @@ where
                         .await;
                 }
 
-                self.maybe_begin_caching(source_id, &source.connector).await;
+                let add_source = CacheAddSource {
+                    source_id,
+                    cluster_id: self.catalog.cluster_id(),
+                    start_offsets: None,
+                };
+                self.maybe_begin_caching(add_source, &source.connector)
+                    .await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
@@ -3026,22 +3050,22 @@ where
     // has caching enabled and Materialize has caching enabled.
     // This function is a no-op if the cacher has already started caching
     // this source.
-    async fn maybe_begin_caching(&mut self, id: GlobalId, source_connector: &SourceConnector) {
+    async fn maybe_begin_caching(
+        &mut self,
+        source: CacheAddSource,
+        source_connector: &SourceConnector,
+    ) {
         if let SourceConnector::External { connector, .. } = source_connector {
             if connector.caching_enabled() {
                 if let Some(cache_tx) = &mut self.cache_tx {
                     cache_tx
-                        .send(CacheMessage::AddSource(CacheAddSource {
-                            source_id: id,
-                            cluster_id: self.catalog.cluster_id(),
-                            start_offsets: None,
-                        }))
+                        .send(CacheMessage::AddSource(source))
                         .await
                         .expect("failed to send CREATE SOURCE notification to caching thread");
                 } else {
                     log::error!(
                         "trying to create a cached source ({}) but caching is disabled.",
-                        id
+                        source.source_id
                     );
                 }
             }
