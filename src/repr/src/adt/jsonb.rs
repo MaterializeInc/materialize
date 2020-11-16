@@ -506,7 +506,7 @@ impl Serialize for JsonbDatum<'_> {
                 }
                 seq.end()
             }
-            Datum::Dict(dict) => {
+            Datum::Map(dict) => {
                 let mut map = serializer.serialize_map(None)?;
                 for (k, v) in dict.iter() {
                     map.serialize_entry(k, &JsonbDatum(v))?;
