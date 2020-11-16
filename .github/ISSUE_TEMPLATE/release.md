@@ -51,12 +51,23 @@ production readiness.
 
 - [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
 
-  Without switching to `main`, perform:
+  Without checking out main to `main`, perform:
 
   ```shell
   next=v<NEXT_VERSION>-dev
   bin/mkrelease --no-tag -b prepare-$next $next
   ```
+
+  > **NOTE:** `NEXT_VERSION` should always be a patch-level change, even if the next release is
+  > anticipated to be a minor or major version bump.
+  >
+  > For example, if the version being released is `v0.5.9`, `<NEXT_VERSION>` should always be
+  > `0.5.10`, not `0.6.0`, even if we expect that to be the true next version.
+  >
+  > The rationale is that minor (and major) versions are feature releases and may slip. If folks
+  > are using a development release we expect that they will be less surprised to go from
+  > `v0.5.10-dev` -> `v0.6.0` when they upgrade than upgrading and going from `v0.6.0-dev` ->
+  > `v0.5.10`.
 
   - [ ] Open a PR with this change, and land it.
 
