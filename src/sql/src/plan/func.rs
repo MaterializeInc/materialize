@@ -104,6 +104,7 @@ impl TypeCategory {
             ScalarType::List(..) => Self::List,
             ScalarType::String => Self::String,
             ScalarType::Record { .. } => Self::Pseudo,
+            ScalarType::Map { .. } => Self::Pseudo,
         }
     }
 
