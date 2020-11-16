@@ -49,6 +49,7 @@ Chain
 Char
 Character
 Check
+Close
 Coalesce
 Collate
 Columns
@@ -61,6 +62,7 @@ Create
 Cross
 Csv
 Current
+Cursor
 Database
 Databases
 Date
@@ -69,6 +71,7 @@ Days
 Debezium
 Dec
 Decimal
+Declare
 Decorrelated
 Default
 Delete
@@ -99,6 +102,7 @@ Following
 For
 Foreign
 Format
+Forward
 From
 Full
 Group
@@ -106,6 +110,7 @@ Groups
 Having
 Header
 Headers
+Hold
 Hour
 Hours
 If

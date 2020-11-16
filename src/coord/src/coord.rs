@@ -51,7 +51,7 @@ use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timest
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
-    ObjectType, Statement,
+    FetchStatement, ObjectType, Statement,
 };
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
@@ -447,7 +447,7 @@ where
                     let res = async {
                         let stmt = sql::pure::purify(stmt).await?;
                         let catalog = self.catalog.for_system_session();
-                        let desc = sql::plan::describe(&catalog, stmt.clone(), &[])?;
+                        let desc = describe(&catalog, stmt.clone(), &[], None)?;
                         let pcx = PlanContext::default();
                         let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
                         // At time of writing this comment, Peeks use the connection id only for
@@ -524,6 +524,17 @@ where
                         tx.send(Err(e), session);
                     }
                 },
+
+                Message::Command(Command::Declare {
+                    name,
+                    stmt,
+                    param_types,
+                    mut session,
+                    tx,
+                }) => {
+                    let result = self.handle_declare(&mut session, name, stmt, param_types);
+                    let _ = tx.send(Response { result, session });
+                }
 
                 Message::Command(Command::Describe {
                     name,
@@ -747,6 +758,27 @@ where
         }
     }
 
+    fn handle_declare(
+        &self,
+        session: &mut Session,
+        name: String,
+        stmt: Statement,
+        param_types: Vec<Option<pgrepr::Type>>,
+    ) -> Result<(), anyhow::Error> {
+        // handle_describe cares about symbiosis mode here. Declared cursors are
+        // perhaps rare enough we can ignore that worry and just error instead.
+        let desc = describe(
+            &self.catalog.for_session(session),
+            stmt.clone(),
+            &param_types,
+            Some(session),
+        )?;
+        let params = vec![];
+        let result_formats = vec![pgrepr::Format::Text; desc.arity()];
+        session.set_portal(name, desc, Some(stmt), params, result_formats)?;
+        Ok(())
+    }
+
     fn handle_describe(
         &self,
         session: &mut Session,
@@ -755,10 +787,11 @@ where
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         let desc = if let Some(stmt) = stmt.clone() {
-            match sql::plan::describe(
+            match describe(
                 &self.catalog.for_session(session),
                 stmt.clone(),
                 &param_types,
+                Some(session),
             ) {
                 Ok(desc) => desc,
                 // Describing the query failed. If we're running in symbiosis with
@@ -3268,5 +3301,34 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
         Timestamp::min_value()
     } else {
         millis as Timestamp
+    }
+}
+
+/// Creates a description of the statement `stmt`.
+///
+/// This function is identical to sql::plan::describe except this is also
+/// supports describing FETCH statements which need access to bound portals
+/// through the session.
+pub fn describe(
+    catalog: &dyn sql::catalog::Catalog,
+    stmt: Statement,
+    param_types: &[Option<pgrepr::Type>],
+    session: Option<&Session>,
+) -> Result<StatementDesc, anyhow::Error> {
+    match stmt {
+        // FETCH's description depends on the current session, which describe_statement
+        // doesn't (and shouldn't?) have access to, so intercept it here.
+        Statement::Fetch(FetchStatement { ref name, .. }) => {
+            match session
+                .map(|session| session.get_portal(name.as_str()).map(|p| p.desc.clone()))
+                .flatten()
+            {
+                Some(desc) => Ok(desc),
+                // TODO(mjibson): return a correct error code here (34000) once our error
+                // system supports it.
+                None => bail!("cursor {} does not exist", name.to_ast_string_stable()),
+            }
+        }
+        _ => sql::plan::describe(catalog, stmt, param_types),
     }
 }

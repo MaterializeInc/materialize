@@ -15,6 +15,7 @@ use std::mem;
 use std::time::Instant;
 
 use byteorder::{ByteOrder, NetworkEndian};
+use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
@@ -24,12 +25,13 @@ use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
 
-use coord::session::{RowBatchStream, TransactionStatus};
+use coord::session::{Portal, PortalState, RowBatchStream, TransactionStatus};
 use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
-use sql::ast::Statement;
+use sql::ast::display::AstDisplay;
+use sql::ast::{Ident, Statement};
 use sql::plan::{CopyFormat, StatementDesc};
 
 use crate::codec::FramedConn;
@@ -149,15 +151,16 @@ where
                 max_rows,
             }) => {
                 let max_rows = match usize::try_from(max_rows) {
-                    Ok(0) | Err(_) => usize::MAX, // If `max_rows < 0`, no limit.
-                    Ok(n) => n,
+                    Ok(0) | Err(_) => ExecuteCount::All, // If `max_rows < 0`, no limit.
+                    Ok(n) => ExecuteCount::Count(n),
                 };
-                self.execute(portal_name, max_rows).await?
+                self.execute(portal_name, max_rows, portal_exec_message, None)
+                    .await?
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
                 self.describe_statement(name).await?
             }
-            Some(FrontendMessage::DescribePortal { name }) => self.describe_portal(name).await?,
+            Some(FrontendMessage::DescribePortal { name }) => self.describe_portal(&name).await?,
             Some(FrontendMessage::CloseStatement { name }) => self.close_statement(name).await?,
             Some(FrontendMessage::ClosePortal { name }) => self.close_portal(name).await?,
             Some(FrontendMessage::Flush) => self.flush().await?,
@@ -253,11 +256,13 @@ where
     }
 
     async fn one_query(&mut self, stmt: Statement) -> Result<State, comm::Error> {
-        let stmt_name = String::from("");
+        // Bind the portal. Note that this does not set the empty string prepared
+        // statement.
         let param_types = vec![];
+        const EMPTY_PORTAL: &str = "";
         if let Err(e) = self
             .coord_client
-            .describe(stmt_name.clone(), Some(stmt), param_types)
+            .declare(EMPTY_PORTAL.to_string(), stmt.clone(), param_types)
             .await
         {
             return self
@@ -268,12 +273,12 @@ where
                 .await;
         }
 
-        let prep_stmt = self
+        let stmt_desc = self
             .coord_client
             .session()
-            .get_prepared_statement(&stmt_name)
-            .unwrap();
-        let stmt_desc = prep_stmt.desc().clone();
+            .get_portal(EMPTY_PORTAL)
+            .map(|portal| portal.desc.clone())
+            .expect("unnamed portal should be present");
         if !stmt_desc.param_types.is_empty() {
             return self
                 .error(ErrorResponse::error(
@@ -282,22 +287,6 @@ where
                 ))
                 .await;
         }
-
-        // Bind.
-        let portal_name = String::from("");
-        let params = vec![];
-        let result_formats = vec![pgrepr::Format::Text; stmt_desc.arity()];
-        let stmt = prep_stmt.sql().cloned();
-        self.coord_client
-            .session()
-            .set_portal(
-                portal_name.clone(),
-                stmt_desc.clone(),
-                stmt,
-                params,
-                result_formats,
-            )
-            .expect("unnamed statement to be present during simple query flow");
 
         // Maybe send row description.
         if let Some(relation_desc) = &stmt_desc.relation_desc {
@@ -311,20 +300,73 @@ where
             }
         }
 
-        // Execute.
-        match self.coord_client.execute(portal_name.clone()).await {
-            Ok(response) => {
-                let max_rows = usize::MAX;
-                self.send_execute_response(response, stmt_desc.relation_desc, portal_name, max_rows)
-                    .await
+        let result = match self.handle_cursors(EMPTY_PORTAL, ExecuteCount::All).await {
+            Some(result) => result,
+            None => {
+                // Not a cursor, Execute.
+                match self.coord_client.execute(EMPTY_PORTAL.to_string()).await {
+                    Ok(response) => {
+                        self.send_execute_response(
+                            response,
+                            stmt_desc.relation_desc,
+                            EMPTY_PORTAL.to_string(),
+                            ExecuteCount::All,
+                            portal_exec_message,
+                            None,
+                        )
+                        .await
+                    }
+                    Err(e) => {
+                        self.error(ErrorResponse::error(
+                            SqlState::INTERNAL_ERROR,
+                            format!("{:#}", e),
+                        ))
+                        .await
+                    }
+                }
             }
-            Err(e) => {
-                self.error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
-                .await
+        };
+
+        // Destroy the portal.
+        self.coord_client.session().remove_portal(EMPTY_PORTAL);
+
+        result
+    }
+
+    async fn handle_cursors(
+        &mut self,
+        portal_name: &str,
+        max_rows: ExecuteCount,
+    ) -> Option<Result<State, comm::Error>> {
+        let portal = self
+            .coord_client
+            .session()
+            .get_portal_mut(portal_name)
+            .expect("portal should exist");
+
+        // Some statements are equivalent to session control messages and should be
+        // intercepted instead of being passed on to the coordinator.
+        match &portal.stmt {
+            Some(Statement::Declare(stmt)) => {
+                portal.state = PortalState::Completed(None);
+                let name = stmt.name.to_string();
+                let stmt = *stmt.stmt.clone();
+                Some(self.declare(name, stmt).await)
             }
+            Some(Statement::Fetch(stmt)) => {
+                let name = stmt.name.clone();
+                let count = stmt.count;
+                Some(
+                    self.fetch(name, count, max_rows, Some(portal_name.to_string()))
+                        .await,
+                )
+            }
+            Some(Statement::Close(stmt)) => {
+                portal.state = PortalState::Completed(None);
+                let name = stmt.name.clone();
+                Some(self.close_cursor(name).await)
+            }
+            _ => None,
         }
     }
 
@@ -527,50 +569,97 @@ where
         Ok(State::Ready)
     }
 
-    async fn execute(
+    fn execute(
         &mut self,
         portal_name: String,
-        max_rows: usize,
-    ) -> Result<State, comm::Error> {
-        let session = self.coord_client.session();
-        let row_desc = session
-            .get_portal(&portal_name)
-            .and_then(|portal| portal.desc.relation_desc.clone());
-        let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
-            Some(portal) => portal,
-            None => {
-                return self
-                    .error(ErrorResponse::error(
-                        SqlState::INVALID_CURSOR_NAME,
-                        format!("portal \"{}\" does not exist", portal_name),
-                    ))
-                    .await;
-            }
-        };
-        if let Some(rows) = portal.remaining_rows.take() {
-            return self
-                .send_rows(
-                    row_desc.expect("portal missing row desc on resumption"),
-                    portal_name,
-                    rows,
-                    max_rows,
-                )
-                .await;
-        }
+        max_rows: ExecuteCount,
+        get_response: GetResponse,
+        fetch_portal_name: Option<String>,
+    ) -> BoxFuture<'_, Result<State, comm::Error>> {
+        async move {
+            // Check if the portal has been started and can be continued.
+            let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
+                //  let portal = match session.get_portal_mut(&portal_name) {
+                Some(portal) => portal,
+                None => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::INVALID_CURSOR_NAME,
+                            format!("portal \"{}\" does not exist", portal_name),
+                        ))
+                        .await;
+                }
+            };
+            let row_desc = portal.desc.relation_desc.clone();
 
-        match self.coord_client.execute(portal_name.clone()).await {
-            Ok(response) => {
-                self.send_execute_response(response, row_desc, portal_name, max_rows)
+            match &mut portal.state {
+                PortalState::NotStarted => {
+                    if portal.stmt.is_some() {
+                        if let Some(result) = self.handle_cursors(&portal_name, max_rows).await {
+                            return result;
+                        }
+                    }
+
+                    match self.coord_client.execute(portal_name.clone()).await {
+                        Ok(response) => {
+                            self.send_execute_response(
+                                response,
+                                row_desc,
+                                portal_name,
+                                max_rows,
+                                get_response,
+                                fetch_portal_name,
+                            )
+                            .await
+                        }
+                        Err(e) => {
+                            self.error(ErrorResponse::error(
+                                SqlState::INTERNAL_ERROR,
+                                format!("{:#}", e),
+                            ))
+                            .await
+                        }
+                    }
+                }
+                PortalState::InProgress(rows) => {
+                    let rows = rows.take().expect("InProgress rows must be populated");
+                    self.send_rows(
+                        row_desc.expect("portal missing row desc on resumption"),
+                        portal_name,
+                        rows,
+                        max_rows,
+                        get_response,
+                        fetch_portal_name,
+                    )
                     .await
-            }
-            Err(e) => {
-                self.error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
-                .await
+                }
+                // FETCH is an awkward command for our current architecture. In Postgres it
+                // will extract <count> rows from the target portal, cache them, and return
+                // them to the user as requested. Its command tag is always FETCH <num rows
+                // extracted>. In Materialize, since we have chosen to not fully support FETCH,
+                // we must remember the number of rows that were returned. Use this tag to
+                // remember that information and return it.
+                PortalState::Completed(Some(tag)) => {
+                    self.conn
+                        .send(BackendMessage::CommandComplete {
+                            tag: tag.to_string(),
+                        })
+                        .await?;
+                    Ok(State::Ready)
+                }
+                PortalState::Completed(None) => {
+                    self.error(ErrorResponse::error(
+                        SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                        format!(
+                            "portal {} cannot be run",
+                            Ident::new(portal_name).to_ast_string_stable()
+                        ),
+                    ))
+                    .await
+                }
             }
         }
+        .boxed()
     }
 
     async fn describe_statement(&mut self, name: String) -> Result<State, comm::Error> {
@@ -599,10 +688,10 @@ where
         }
     }
 
-    async fn describe_portal(&mut self, name: String) -> Result<State, comm::Error> {
+    async fn describe_portal(&mut self, name: &str) -> Result<State, comm::Error> {
         let session = self.coord_client.session();
         let row_desc = session
-            .get_portal(&name)
+            .get_portal(name)
             .map(|portal| describe_rows(&portal.desc, &portal.result_formats));
         match row_desc {
             Some(row_desc) => {
@@ -631,6 +720,82 @@ where
         Ok(State::Ready)
     }
 
+    async fn fetch(
+        &mut self,
+        name: Ident,
+        count: Option<u64>,
+        max_rows: ExecuteCount,
+        fetch_portal_name: Option<String>,
+    ) -> Result<State, comm::Error> {
+        // Unlike Execute, no count specified in FETCH returns 1 row, and 0 means 0
+        // instead of All.
+        let count = usize::cast_from(count.unwrap_or(1));
+
+        // In Postgres, Fetch will cache <count> rows from the target portal and
+        // return those as requested (if, say, an Execute message was sent with a
+        // max_rows < the Fetch's count). We expect that case to be incredibly rare and
+        // so have chosen to not support it until users request it. This eases
+        // implementation difficulty since we don't have to be able to "send" rows to
+        // a buffer.
+        // TODO(mjibson): Test this somehow? Need to divide up the pgtest files in
+        // order to have some that are not Postgres compatible.
+        match max_rows {
+            ExecuteCount::Count(max_rows) if max_rows < count => {
+                return self
+                    .error(ErrorResponse::error(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "Execute with max_rows < a FETCH's count is not supported",
+                    ))
+                    .await;
+            }
+            _ => {}
+        }
+        let cursor_name = name.to_string();
+        self.execute(
+            cursor_name,
+            ExecuteCount::Count(count),
+            fetch_message,
+            fetch_portal_name,
+        )
+        .await
+    }
+
+    async fn declare(&mut self, name: String, stmt: Statement) -> Result<State, comm::Error> {
+        let param_types = vec![];
+        if let Err(e) = self.coord_client.declare(name, stmt, param_types).await {
+            return self
+                .error(ErrorResponse::error(
+                    SqlState::INTERNAL_ERROR,
+                    format!("{:#}", e),
+                ))
+                .await;
+        }
+        self.conn
+            .send(BackendMessage::CommandComplete {
+                tag: "DECLARE CURSOR".to_string(),
+            })
+            .await?;
+        Ok(State::Ready)
+    }
+
+    async fn close_cursor(&mut self, name: Ident) -> Result<State, comm::Error> {
+        let cursor_name = name.to_string();
+        if !self.coord_client.session().remove_portal(&cursor_name) {
+            return self
+                .error(ErrorResponse::error(
+                    SqlState::INVALID_CURSOR_NAME,
+                    format!("cursor {} does not exist", name.to_ast_string_stable()),
+                ))
+                .await;
+        }
+        self.conn
+            .send(BackendMessage::CommandComplete {
+                tag: "CLOSE CURSOR".to_string(),
+            })
+            .await?;
+        Ok(State::Ready)
+    }
+
     async fn flush(&mut self) -> Result<State, comm::Error> {
         self.conn.flush().await?;
         Ok(State::Ready)
@@ -649,7 +814,9 @@ where
         response: ExecuteResponse,
         row_desc: Option<RelationDesc>,
         portal_name: String,
-        max_rows: usize,
+        max_rows: ExecuteCount,
+        get_response: GetResponse,
+        fetch_portal_name: Option<String>,
     ) -> Result<State, comm::Error> {
         macro_rules! command_complete {
             ($($arg:tt)*) => {{
@@ -743,6 +910,8 @@ where
                             portal_name,
                             Box::new(stream::iter(vec![Ok(rows)])),
                             max_rows,
+                            get_response,
+                            fetch_portal_name,
                         )
                         .await
                     }
@@ -786,8 +955,15 @@ where
             ExecuteResponse::Tailing { rx } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::Tailing");
-                self.send_rows(row_desc, portal_name, Box::new(rx), max_rows)
-                    .await
+                self.send_rows(
+                    row_desc,
+                    portal_name,
+                    Box::new(rx),
+                    max_rows,
+                    get_response,
+                    fetch_portal_name,
+                )
+                .await
             }
             ExecuteResponse::CopyTo { format, resp } => {
                 let row_desc =
@@ -833,7 +1009,9 @@ where
         row_desc: RelationDesc,
         portal_name: String,
         mut rows: RowBatchStream,
-        max_rows: usize,
+        max_rows: ExecuteCount,
+        get_response: GetResponse,
+        fetch_portal_name: Option<String>,
     ) -> Result<State, comm::Error> {
         let portal = self
             .coord_client
@@ -884,7 +1062,10 @@ where
 
         let mut total_sent_rows = 0;
         // want_rows is the maximum number of rows the client wants.
-        let mut want_rows = if max_rows == 0 { usize::MAX } else { max_rows };
+        let mut want_rows = match max_rows {
+            ExecuteCount::All => usize::MAX,
+            ExecuteCount::Count(count) => count,
+        };
 
         // Send rows while the client still wants them and there are still rows to send.
         while let Some(batch_rows) = batch {
@@ -911,26 +1092,17 @@ where
         ROWS_RETURNED.inc_by(u64::cast_from(total_sent_rows));
 
         // Always return rows back, even if it's empty. This prevents an unclosed
-        // portal from re-executing after it has been emptied. into_inner unwraps the
-        // Take.
-        portal.set_remaining_rows(Box::new(rows));
+        // portal from re-executing after it has been emptied.
+        portal.state = PortalState::InProgress(Some(Box::new(rows)));
 
-        // If max_rows is not specified, we will always send back a CommandComplete. If
-        // max_rows is specified, we only send CommandComplete if there were more rows
-        // requested than were remaining. That is, if max_rows == number of rows that
-        // were remaining before sending (not that are remaining after sending), then
-        // we still send a PortalSuspended. The number of remaining rows after the rows
-        // have been sent doesn't matter. This matches postgres.
-        if max_rows == 0 || max_rows > total_sent_rows {
-            self.conn
-                .send(BackendMessage::CommandComplete {
-                    tag: format!("SELECT {}", total_sent_rows),
-                })
-                .await?;
-        } else {
-            self.conn.send(BackendMessage::PortalSuspended).await?;
-        }
-
+        let fetch_portal = fetch_portal_name.map(|name| {
+            self.coord_client
+                .session()
+                .get_portal_mut(&name)
+                .expect("valid fetch portal")
+        });
+        let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
+        self.conn.send(response_message).await?;
         Ok(State::Ready)
     }
 
@@ -1093,4 +1265,52 @@ fn parse_sql(sql: &str) -> Result<Vec<Statement>, ErrorResponse> {
         let pos = sql[..e.pos].chars().count() + 1;
         ErrorResponse::error(SqlState::SYNTAX_ERROR, e.message).with_position(pos)
     })
+}
+
+type GetResponse = fn(
+    max_rows: ExecuteCount,
+    total_sent_rows: usize,
+    fetch_portal: Option<&mut Portal>,
+) -> BackendMessage;
+
+// A GetResponse used by send_rows during execute messages on portals or for
+// simple query messages.
+fn portal_exec_message(
+    max_rows: ExecuteCount,
+    total_sent_rows: usize,
+    _fetch_portal: Option<&mut Portal>,
+) -> BackendMessage {
+    // If max_rows is not specified, we will always send back a CommandComplete. If
+    // max_rows is specified, we only send CommandComplete if there were more rows
+    // requested than were remaining. That is, if max_rows == number of rows that
+    // were remaining before sending (not that are remaining after sending), then
+    // we still send a PortalSuspended. The number of remaining rows after the rows
+    // have been sent doesn't matter. This matches postgres.
+    match max_rows {
+        ExecuteCount::Count(max_rows) if max_rows <= total_sent_rows => {
+            BackendMessage::PortalSuspended
+        }
+        _ => BackendMessage::CommandComplete {
+            tag: format!("SELECT {}", total_sent_rows),
+        },
+    }
+}
+
+// A GetResponse used by send_rows during FETCH queries.
+fn fetch_message(
+    _max_rows: ExecuteCount,
+    total_sent_rows: usize,
+    fetch_portal: Option<&mut Portal>,
+) -> BackendMessage {
+    let tag = format!("FETCH {}", total_sent_rows);
+    if let Some(portal) = fetch_portal {
+        portal.state = PortalState::Completed(Some(tag.clone()));
+    }
+    BackendMessage::CommandComplete { tag }
+}
+
+#[derive(Debug, Copy, Clone)]
+enum ExecuteCount {
+    All,
+    Count(usize),
 }
