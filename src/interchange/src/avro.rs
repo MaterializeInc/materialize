@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::cmp::max;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -1645,7 +1646,13 @@ impl DebeziumDeduplicationState {
                                     delete_full = true;
                                 }
                             } else {
-                                warn!("message has no creation time")
+                                warn!(
+                                    "message has no creation time file_position={}:{}:{}",
+                                    file_name_repr(file),
+                                    pos,
+                                    row,
+                                );
+                                seen_offsets.insert((pos, row), 0);
                             }
                         }
 
@@ -1713,14 +1720,7 @@ fn log_duplication_info(
     original_time: &mut i64,
     max_seen_time: &mut i64,
 ) {
-    let file_name_holder;
-    let file_name = match std::str::from_utf8(file) {
-        Ok(s) => s,
-        Err(_) => {
-            file_name_holder = hex::encode(file);
-            &file_name_holder
-        }
-    };
+    let file_name = file_name_repr(file);
     match (is_new, should_skip) {
         // new item that correctly is past the highest item we've ever seen
         (true, None) => {}
@@ -1781,6 +1781,17 @@ fn log_duplication_info(
                 fmt_timestamp(*max_seen_time),
             );
         }
+    }
+}
+
+/// Try to deocde a file name, otherwise use its hex-encoded repr
+///
+/// We map the top portion of MSSQL LSNs to the file-name part of other
+/// system's LSNs.
+fn file_name_repr<'a>(file: &'a [u8]) -> Cow<'a, str> {
+    match std::str::from_utf8(file) {
+        Ok(s) => Cow::from(s),
+        Err(_) => Cow::from(hex::encode(file)),
     }
 }
 
