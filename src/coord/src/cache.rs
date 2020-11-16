@@ -419,7 +419,7 @@ pub fn get_cache_info(
     cluster_id: Uuid,
     source_id: GlobalId,
 ) -> Result<Option<(Vec<(i32, PathBuf)>, HashMap<i32, i64>)>, anyhow::Error> {
-    let mut read_offsets: HashMap<i32, i64> = HashMap::new();
+    let mut file_offsets = HashMap::new();
     let mut paths = Vec::new();
 
     let source_path = cache_directory.join(source_id.to_string());
@@ -460,23 +460,49 @@ pub fn get_cache_info(
 
                 paths.push((metadata.partition_id, path));
 
-                // TODO: we need to be more careful here to handle the case where we are for
-                // some reason missing some values here.
-                match read_offsets.get(&metadata.partition_id) {
+                match file_offsets.get_mut(&metadata.partition_id) {
                     None => {
-                        read_offsets.insert(metadata.partition_id, metadata.end_offset);
+                        file_offsets.insert(
+                            metadata.partition_id,
+                            vec![(metadata.start_offset, metadata.end_offset, metadata.first)],
+                        );
                     }
                     Some(o) => {
-                        if metadata.end_offset > *o {
-                            read_offsets.insert(metadata.partition_id, metadata.end_offset);
-                        }
+                        o.push((metadata.start_offset, metadata.end_offset, metadata.first));
                     }
                 };
             }
         }
     }
 
-    Ok(Some((paths, read_offsets)))
+    let mut start_offsets = HashMap::new();
+
+    for (pid, files) in file_offsets.iter_mut() {
+        files.sort();
+
+        let first = files[0];
+        if !first.2 {
+            continue;
+        }
+
+        let mut end_offset = first.1;
+
+        for (file_start, file_end, first) in files.iter().skip(1) {
+            if *first || *file_start != end_offset {
+                error!(
+                    "missing some cached files for source: {}. Ignoring all cached data.",
+                    source_id
+                );
+                return Ok(None);
+            }
+
+            end_offset = *file_end;
+        }
+
+        start_offsets.insert(*pid, end_offset);
+    }
+
+    Ok(Some((paths, start_offsets)))
 }
 
 // Given the input records, extract a prefix of records that are "dense," meaning they contain all
