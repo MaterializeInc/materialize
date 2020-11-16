@@ -143,6 +143,7 @@ impl Source {
                     *partition_id,
                     prefix_start_offset,
                     prefix_end_offset,
+                    partition.last_cached_offset.is_none(),
                 );
 
                 // We'll write down the data to a file with a `-tmp` prefix to

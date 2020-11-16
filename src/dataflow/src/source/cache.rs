@@ -44,6 +44,8 @@ pub struct RecordFileMetadata {
     pub start_offset: i64,
     /// The exclusive upper bound of offsets provided by this file.
     pub end_offset: i64,
+    /// Whether this file was the first cached file for this offset.
+    pub first: bool,
 }
 
 impl RecordFileMetadata {
@@ -77,11 +79,21 @@ impl RecordFileMetadata {
 
         let parts: Vec<_> = file_name.split('-').collect();
 
-        if parts.len() != 6 {
+        if parts.len() != 6 && parts.len() != 7 {
             // File is either partially written, or entirely irrelevant.
             error!("Found invalid cache file name: {}. Ignoring", file_name);
             return Ok(None);
         }
+
+        if parts.len() == 7 && parts[6] != "first" {
+            // We got a invalid filename.
+            error!(
+                "Found invalid persistence file name: {}. Ignoring",
+                file_name
+            );
+            return Ok(None);
+        }
+
         Ok(Some(Self {
             cluster_id: Uuid::parse_str(parts[1])?,
             source_id: parts[2].parse()?,
@@ -90,6 +102,7 @@ impl RecordFileMetadata {
             // offset in `generate_file_name`.
             start_offset: parts[4].parse::<i64>()? + 1,
             end_offset: parts[5].parse()?,
+            first: parts.len() == 7,
         }))
     }
 
@@ -100,6 +113,7 @@ impl RecordFileMetadata {
         partition_id: i32,
         start_offset: i64,
         end_offset: i64,
+        first: bool,
     ) -> String {
         // We get start and end offsets as 1-indexed MzOffsets that denote the set of
         // offsets [start, end] (in 1-indexed offsets). Unfortunately, Kafka offsets are
@@ -111,7 +125,7 @@ impl RecordFileMetadata {
             start_offset > 0,
             "start offset has to be a valid 1-indexed offset"
         );
-        format!(
+        let base = format!(
             "{}-{}-{}-{}-{}-{}",
             RECORD_FILE_PREFIX,
             cluster_id.to_simple(),
@@ -119,7 +133,13 @@ impl RecordFileMetadata {
             partition_id,
             start_offset - 1,
             end_offset
-        )
+        );
+
+        if first == true {
+            format!("{}-first", base)
+        } else {
+            base
+        }
     }
 }
 
