@@ -28,7 +28,7 @@ say = ui.speaker("")
 @click.command()
 @click.argument("version")
 @click.option(
-    "-b", "--create-branch", default=None, help="Create a branch and check it out",
+    "-b", "--create-branch", default=None, help="Create a branch and check it out"
 )
 @click.option("-c", "--checkout", default=None, help="Commit or branch to check out")
 @click.option("--tag/--no-tag", default=True, help="")
