@@ -33,7 +33,7 @@ use kafka_util::KafkaAddrs;
 use log::{debug, error, info, log_enabled, warn};
 use repr::{CachedRecord, CachedRecordIter, Timestamp};
 
-use crate::source::cache::{CacheSender, RecordFileMetadata, WorkerCacheData};
+use crate::source::cache::{CacheSender, WorkerCacheData};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
@@ -460,35 +460,19 @@ impl KafkaSourceInfo {
             .map(|files| {
                 let mut filtered = files
                     .iter()
-                    .map(|f| {
-                        let metadata = RecordFileMetadata::from_path(f);
-                        (f, metadata)
-                    })
-                    .filter(|(f, metadata)| {
+                    .filter(|(pid, _)| {
                         // We partition the given partitions up amongst workers, so we need to be
                         // careful not to process a partition that this worker was not allocated (or
                         // else we would process files multiple times).
-                        match metadata {
-                            Ok(Some(meta)) => {
-                                assert_eq!(source_id.source_id, meta.source_id);
-                                has_partition(worker_id, worker_count, meta.partition_id)
-                            }
-                            _ => {
-                                error!("Failed to parse path: {}", f.display());
-                                false
-                            }
-                        }
+                        has_partition(worker_id, worker_count, *pid)
                     })
+                    .map(|(_, f)| (*f).clone())
                     .collect::<Vec<_>>();
 
                 // Sort the list in reverse order so we can pop items off of it in
                 // order of increasing `start_offset`
-                filtered.sort_by_key(|(_, metadata)| match metadata {
-                    Ok(Some(meta)) => -meta.start_offset,
-                    _ => unreachable!(),
-                });
-
-                filtered.iter().map(|(f, _)| (*f).clone()).collect()
+                filtered.sort_by(|a, b| b.cmp(a));
+                filtered
             })
             .unwrap_or_default();
 

@@ -480,7 +480,7 @@ pub enum SourceConnector {
     Local,
 }
 
-pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
+pub fn cached_files(e: &ExternalSourceConnector) -> Vec<(i32, PathBuf)> {
     match e {
         ExternalSourceConnector::Kafka(KafkaSourceConnector { cached_files, .. }) => {
             cached_files.clone().unwrap_or_else(Vec::new)
@@ -598,7 +598,7 @@ pub struct KafkaSourceConnector {
     pub enable_caching: bool,
     // This field gets set after the initial construction of this struct, so this is None if it has
     // not yet been set.
-    pub cached_files: Option<Vec<PathBuf>>,
+    pub cached_files: Option<Vec<(i32, PathBuf)>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -424,7 +424,7 @@ fn augment_connector_inner(
                             continue;
                         }
 
-                        paths.push(path);
+                        paths.push((metadata.partition_id, path));
 
                         // TODO: we need to be more careful here to handle the case where we are for
                         // some reason missing some values here.
