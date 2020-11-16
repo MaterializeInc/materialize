@@ -478,7 +478,7 @@ pub fn get_cache_info(
     let mut start_offsets = HashMap::new();
 
     for (pid, files) in file_offsets.iter_mut() {
-        files.sort();
+        files.sort_unstable();
 
         let first = files[0];
         if !first.2 {

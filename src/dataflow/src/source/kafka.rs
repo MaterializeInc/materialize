@@ -471,7 +471,8 @@ impl KafkaSourceInfo {
 
                 // Sort the list in reverse order so we can pop items off of it in
                 // order of increasing `start_offset`
-                filtered.sort_by(|a, b| b.cmp(a));
+                filtered.sort_unstable();
+                filtered.reverse();
                 filtered
             })
             .unwrap_or_default();

@@ -136,7 +136,7 @@ impl RecordFileMetadata {
             end_offset
         );
 
-        if first == true {
+        if first {
             format!("{}-first", base)
         } else {
             base
