@@ -51,16 +51,28 @@ pub enum Type {
     Uuid,
     /// An object identifier.
     Oid,
+    /// A map with text keys and homogeneous values.
+    Map(Box<Type>),
 }
 
 lazy_static! {
     pub static ref LIST: postgres_types::Type = postgres_types::Type::new(
         "LIST".to_owned(),
-        // OID chosen to be in the first OID not considered stable by
+        // OID chosen to be the first OID not considered stable by
         // PostgreSQL. See the "OID Assignment" section of the PostgreSQL
         // documentation for details:
         // https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
         16_384,
+        postgres_types::Kind::Pseudo,
+        "mz_catalog".to_owned(),
+    );
+}
+
+lazy_static! {
+    pub static ref MAP: postgres_types::Type = postgres_types::Type::new(
+        "MAP".to_owned(),
+        // OID chosen to follow our "LIST" type.
+        16_385,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );
@@ -126,10 +138,12 @@ impl Type {
                 Type::List(_) | Type::Array(_) => unreachable!(),
                 Type::Record(_) => &postgres_types::Type::RECORD_ARRAY,
                 Type::Oid => &postgres_types::Type::OID_ARRAY,
+                Type::Map(_) => unreachable!(),
             },
             Type::List(_) => &LIST,
             Type::Record(_) => &postgres_types::Type::RECORD,
             Type::Oid => &postgres_types::Type::OID,
+            Type::Map(_) => &MAP,
         }
     }
 
@@ -168,6 +182,7 @@ impl Type {
             Type::List(_) => -1,
             Type::Record(_) => -1,
             Type::Oid => 4,
+            Type::Map(_) => -1,
         }
     }
 }
@@ -196,6 +211,7 @@ impl From<&ScalarType> for Type {
                 Type::Record(fields.iter().map(|(_name, ty)| Type::from(ty)).collect())
             }
             ScalarType::Oid => Type::Oid,
+            ScalarType::Map(t) => Type::Map(Box::new(From::from(&**t))),
         }
     }
 }

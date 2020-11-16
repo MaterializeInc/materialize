@@ -696,6 +696,12 @@ pub enum ScalarType {
     },
     /// A PostgreSQL object identifier.
     Oid,
+    /// The type of [`Datum::Dict`]
+    ///
+    /// Keys within the map are always of type [`ScalarType::String`].
+    /// Values within the map are of the specified type. Values may always
+    /// be [`Datum::Null`].
+    Map(Box<ScalarType>),
 }
 
 impl<'a> ScalarType {
@@ -809,6 +815,7 @@ impl PartialEq for ScalarType {
 
             (List(a), List(b)) | (Array(a), Array(b)) => a.eq(b),
             (Record { fields: fields_a }, Record { fields: fields_b }) => fields_a.eq(fields_b),
+            (Map(a), Map(b)) => a.eq(b),
 
             (Bool, _)
             | (Int32, _)
@@ -828,7 +835,8 @@ impl PartialEq for ScalarType {
             | (Array(_), _)
             | (List(_), _)
             | (Record { .. }, _)
-            | (Oid, _) => false,
+            | (Oid, _)
+            | (Map(_), _) => false,
         }
     }
 }
@@ -870,6 +878,10 @@ impl Hash for ScalarType {
             }
             Uuid => state.write_u8(16),
             Oid => state.write_u8(17),
+            Map(t) => {
+                state.write_u8(18);
+                t.hash(state);
+            }
         }
     }
 }
@@ -906,6 +918,7 @@ impl fmt::Display for ScalarType {
                 f.write_str(")")
             }
             Oid => f.write_str("oid"),
+            Map(t) => write!(f, "map(text=>{})", t),
         }
     }
 }
