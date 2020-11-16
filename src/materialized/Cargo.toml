@@ -10,7 +10,7 @@ authors = ["Materialize, Inc."]
 license = "proprietary"
 
 [dependencies]
-anyhow = "1.0.33"
+anyhow = "1.0.34"
 askama = { version = "0.10.3", features = ["serde-json"] }
 async-trait = "0.1.41"
 backtrace = { version = "0.3.54" }
