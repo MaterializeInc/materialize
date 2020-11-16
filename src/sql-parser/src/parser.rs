@@ -2132,6 +2132,20 @@ impl Parser {
                     DataType::Decimal(precision, scale)
                 }
                 JSON | JSONB => DataType::Jsonb,
+                MAP => {
+                    let value_type = self.parse_map()?;
+                    if let DataType::Map { .. } = value_type {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_range(),
+                            "nested map types not yet supported"
+                        );
+                    }
+
+                    DataType::Map {
+                        value_type: Box::new(value_type),
+                    }
+                }
                 _ => self.expected(
                     self.peek_prev_range(),
                     "a known data type",
@@ -2333,6 +2347,18 @@ impl Parser {
         } else {
             Ok((None, None))
         }
+    }
+
+    fn parse_map(&mut self) -> Result<DataType, ParserError> {
+        self.expect_token(&Token::LBracket)?;
+        if self.parse_data_type()? != DataType::Text {
+            self.prev_token();
+            return self.expected(self.peek_prev_range(), "TEXT", self.peek_token());
+        }
+        self.expect_token(&Token::Op("=>".to_owned()))?;
+        let typ = self.parse_data_type()?;
+        self.expect_token(&Token::RBracket)?;
+        Ok(typ)
     }
 
     fn parse_delete(&mut self) -> Result<Statement, ParserError> {

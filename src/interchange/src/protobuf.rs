@@ -727,7 +727,7 @@ mod tests {
             .unwrap();
         let datums = row.iter().collect::<Vec<_>>();
         let d = datums[0];
-        if let Datum::Dict(d) = d {
+        if let Datum::Map(d) = d {
             let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
             assert_eq!(
                 datumdict,
@@ -767,7 +767,7 @@ mod tests {
         let datums = row2.iter().collect::<Vec<_>>();
 
         let d = datums[1];
-        if let Datum::Dict(d) = d {
+        if let Datum::Map(d) = d {
             let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
 
             for (name, datum) in datumdict.iter() {
@@ -825,7 +825,7 @@ mod tests {
             let datumlist = d.iter().collect::<Vec<Datum>>();
 
             for datum in datumlist {
-                if let Datum::Dict(d) = datum {
+                if let Datum::Map(d) = datum {
                     let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
                     assert_eq!(
                         datumdict,

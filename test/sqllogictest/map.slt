@@ -20,3 +20,66 @@ CREATE TYPE custom AS MAP (key_type=text, value_type='bool', extra_type=customth
 
 query error CREATE TYPE not yet supported
 CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
+
+query error expected '\{', found a: "a=>1"
+SELECT 'a=>1'::map[text=>int]
+
+query T
+SELECT '{a=>1}'::map[text=>int]
+----
+{a=>1}
+
+query T
+SELECT '{  c  =>3, a=>     2, a => 1 }'::map[text=>int]
+----
+{a=>1,c=>3}
+
+query error Expected TEXT, found INT
+SELECT '{1=>true}'::map[int=>bool]
+
+query T
+SELECT '{1=>true}'::map[text=>bool]
+----
+{1=>t}
+
+query error malformed literal; missing element
+SELECT '{}'::map[text=>int]
+
+query error invalid input syntax for bool: "2.0"
+SELECT '{a=>1, b=>false, c=>2.0}'::map[text=>bool]
+
+query T
+SELECT '{a\=\>=>2}'::map[text=>int]
+----
+{"a=>"=>2}
+
+query T
+SELECT '{13=>hello \[\=\>     value\], 31=>  normal  }'::map[text=>text]
+----
+{13=>"hello [=>     value]",31=>normal}
+
+query T
+SELECT '{"a"=>"hello there!", b=>"129387123"}'::map[text=>text]
+----
+{a=>"hello there!",b=>129387123}
+
+query T
+SELECT '{key=>"here is a string => with a map operator in it"}'::map[text=>text]
+----
+{key=>"here is a string => with a map operator in it"}
+
+query T
+SELECT '{31=> normal \ }'::map[text=>text]
+----
+{31=>"normal  "}
+
+query T
+SELECT '{31=> \ normal }'::map[text=>text]
+----
+{31=>" normal"}
+
+query error unterminated quoted string
+SELECT '{"a"=>"hello there!}'::map[text=>text]
+
+query error nested map types not yet supported
+SELECT '{a=>{b=>c}}'::map[text=>map[text=>text]]

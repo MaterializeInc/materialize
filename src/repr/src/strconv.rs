@@ -24,6 +24,7 @@
 //! should be considered a bug.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
@@ -522,6 +523,8 @@ where
 
     // Simplifies calls to `gen_elem` by handling errors
     let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
+    let is_end_of_literal = |c| matches!(c, ',' | '}');
 
     // Consume elements.
     loop {
@@ -542,7 +545,7 @@ where
         buf.take_while(|ch| ch.is_ascii_whitespace());
         // Get elements.
         let elem = match buf.peek() {
-            Some('"') => gen(list_lex_quoted_element(buf)?)?,
+            Some('"') => gen(lex_quoted_element(buf)?)?,
             Some('{') => {
                 if !is_element_type_list {
                     bail!(
@@ -552,7 +555,7 @@ where
                 }
                 gen(list_lex_embedded_list(buf)?)?
             }
-            Some(_) => match list_lex_unquoted_element(buf)? {
+            Some(_) => match lex_unquoted_element(buf, is_special_char, is_end_of_literal)? {
                 Some(elem) => gen(elem)?,
                 None => make_null(),
             },
@@ -572,7 +575,7 @@ where
     Ok(elems)
 }
 
-fn list_lex_quoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, String> {
+fn lex_quoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, String> {
     assert!(buf.consume('"'));
     let s = buf.take_while(|ch| !matches!(ch, '"' | '\\'));
 
@@ -619,13 +622,13 @@ fn list_lex_embedded_list<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, Stri
 }
 
 // Result of `None` indicates element is NULL.
-fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, str>>, String> {
+fn lex_unquoted_element<'a>(
+    buf: &mut LexBuf<'a>,
+    is_special_char: impl Fn(char) -> bool,
+    is_end_of_literal: impl Fn(char) -> bool,
+) -> Result<Option<Cow<'a, str>>, String> {
     // first char is guaranteed to be non-whitespace
     assert!(!buf.peek().unwrap().is_ascii_whitespace());
-
-    fn is_special_char(c: char) -> bool {
-        matches!(c, '{' | '}' | ',' | '\\' | '"')
-    }
 
     let s = buf.take_while(|ch| !is_special_char(ch) && !ch.is_ascii_whitespace());
 
@@ -660,20 +663,18 @@ fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, 
                 }
                 None => return Err("unterminated element".into()),
             },
-            // End of element/list
-            Some(',') | Some('}') => {
-                // Commas or closing brackets as first character indicates
-                // missing element definition.
+            Some(c) if is_end_of_literal(c) => {
+                // End of literal characters as the first character indicates
+                // a missing element definition.
                 if s.is_empty() {
-                    bail!("malformed list literal; missing element")
+                    bail!("malformed literal; missing element")
                 }
                 buf.prev();
                 break;
             }
-            Some(c) if is_special_char(c) => bail!(
-                "malformed list literal; must escape special character '{}'",
-                c
-            ),
+            Some(c) if is_special_char(c) => {
+                bail!("malformed literal; must escape special character '{}'", c)
+            }
             Some(c) => {
                 s.push(c);
                 if !c.is_ascii_whitespace() {
@@ -689,6 +690,124 @@ fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, 
     } else {
         Some(Cow::Owned(s))
     })
+}
+
+pub fn parse_map<'a, V, E>(
+    s: &'a str,
+    gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+) -> Result<BTreeMap<String, V>, ParseError>
+where
+    E: fmt::Display,
+{
+    parse_map_inner(s, gen_elem).map_err(|details| ParseError::new("map", s).with_details(details))
+}
+
+pub fn parse_map_inner<'a, V, E>(
+    s: &'a str,
+    mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+) -> Result<BTreeMap<String, V>, String>
+where
+    E: fmt::Display,
+{
+    let mut map = BTreeMap::new();
+    let buf = &mut LexBuf::new(s);
+
+    // Consume opening paren.
+    if !buf.consume('{') {
+        bail!(
+            "expected '{{', found {}",
+            match buf.next() {
+                Some(c) => format!("{}", c),
+                None => "empty string".to_string(),
+            }
+        )
+    }
+
+    // Simplifies calls to generators by handling errors
+    let gen_key = |key: Option<Cow<'a, str>>| -> Result<String, String> {
+        match key {
+            Some(Cow::Owned(s)) => Ok(s),
+            Some(Cow::Borrowed(s)) => Ok(s.to_owned()),
+            None => Err("expected key".to_owned()),
+        }
+    };
+    let mut gen_value = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let is_special_char = |c| matches!(c, '{' | '}' | ',' | '"' | '=' | '>' | '\\');
+    let is_end_of_literal = |c| matches!(c, ',' | '}' | '=');
+
+    loop {
+        // Get key.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        let key = match buf.peek() {
+            Some('"') => Some(lex_quoted_element(buf)?),
+            Some(_) => lex_unquoted_element(buf, is_special_char, is_end_of_literal)?,
+            None => bail!("unexpected end of input"),
+        };
+        let key = gen_key(key)?;
+
+        // Assert mapping arrow (=>) is present.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        if !buf.consume('=') || !buf.consume('>') {
+            bail!("expected =>")
+        }
+
+        // Get value.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        let value = match buf.peek() {
+            Some('"') => Some(lex_quoted_element(buf)?),
+            Some(_) => lex_unquoted_element(buf, is_special_char, is_end_of_literal)?,
+            None => bail!("unexpected end of input"),
+        };
+        let value = gen_value(value.unwrap())?;
+
+        // Insert elements.
+        map.insert(key, value);
+
+        // Check for terminals.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        match buf.next() {
+            _ if map.len() == 0 => {
+                buf.prev();
+            }
+            Some('}') => break,
+            Some(',') => {}
+            Some(c) => bail!("expected ',' or end of input, got '{}'", c),
+            None => bail!("unexpected end of input"),
+        }
+    }
+    Ok(map)
+}
+
+pub fn format_map<F, T>(
+    buf: &mut F,
+    elems: impl IntoIterator<Item = (impl AsRef<str>, T)>,
+    mut format_elem: impl FnMut(MapValueWriter<F>, T) -> Nestable,
+) -> Nestable
+where
+    F: FormatBuffer,
+{
+    buf.write_char('{');
+    let mut elems = elems.into_iter().peekable();
+    while let Some((key, value)) = elems.next() {
+        // Map key values are always Strings, which always evaluate to
+        // Nestable::MayNeedEscaping.
+        let key_start = buf.len();
+        buf.write_str(key.as_ref());
+        escape_elem::<_, MapElementEscaper>(buf, key_start);
+
+        buf.write_str("=>");
+
+        let value_start = buf.len();
+        if let Nestable::MayNeedEscaping = format_elem(MapValueWriter(buf), value) {
+            escape_elem::<_, MapElementEscaper>(buf, value_start);
+        }
+
+        if elems.peek().is_some() {
+            buf.write_char(',');
+        }
+    }
+    buf.write_char('}');
+    Nestable::Yes
 }
 
 pub fn format_array<F, T>(
@@ -774,6 +893,23 @@ impl ElementEscaper for ListElementEscaper {
     }
 }
 
+struct MapElementEscaper;
+
+impl ElementEscaper for MapElementEscaper {
+    fn needs_escaping(elem: &[u8]) -> bool {
+        elem.is_empty()
+            || elem == b"NULL"
+            || elem.iter().any(|c| {
+                matches!(c, b'{' | b'}' | b',' | b'"' | b'=' | b'>' | b'\\')
+                    || c.is_ascii_whitespace()
+            })
+    }
+
+    fn escape_char(_: u8) -> u8 {
+        b'\\'
+    }
+}
+
 struct RecordElementEscaper;
 
 impl ElementEscaper for RecordElementEscaper {
@@ -793,7 +929,7 @@ impl ElementEscaper for RecordElementEscaper {
     }
 }
 
-/// Escapes a list or record element in place.
+/// Escapes a list, record, or map element in place.
 ///
 /// The element must start at `start` and extend to the end of the buffer. The
 /// buffer will be resized if escaping is necessary to account for the
@@ -860,6 +996,27 @@ where
     F: FormatBuffer,
 {
     /// Marks this list element as null.
+    pub fn write_null(self) -> Nestable {
+        self.0.write_str("NULL");
+        Nestable::Yes
+    }
+
+    /// Returns a [`FormatBuffer`] into which a non-null element can be
+    /// written.
+    pub fn nonnull_buffer(self) -> &'a mut F {
+        self.0
+    }
+}
+
+/// A helper for `format_map` that formats a single map value.
+#[derive(Debug)]
+pub struct MapValueWriter<'a, F>(&'a mut F);
+
+impl<'a, F> MapValueWriter<'a, F>
+where
+    F: FormatBuffer,
+{
+    /// Marks this value element as null.
     pub fn write_null(self) -> Nestable {
         self.0.write_str("NULL");
         Nestable::Yes

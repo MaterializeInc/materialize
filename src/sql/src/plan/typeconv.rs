@@ -572,6 +572,77 @@ pub fn plan_cast_to_list(
     }))
 }
 
+/// Plans a cast between from a [`ScalarType::String`] to [`ScalarType::Map`].
+pub fn plan_cast_to_map(
+    ecx: &ExprContext,
+    ccx: CastContext,
+    expr: ScalarExpr,
+    from: &ScalarType,
+    to: &ScalarType,
+) -> Result<ScalarExpr, anyhow::Error> {
+    assert!(matches!(to, ScalarType::Map { .. }));
+
+    if let ScalarExpr::CallUnary {
+        func: UnaryFunc::CastStringToMap { .. },
+        ..
+    } = expr
+    {
+        return Ok(expr);
+    }
+
+    let from_element_typ = match from {
+        ScalarType::String => ScalarType::String,
+        _ => bail!("invalid cast from {} to map", from),
+    };
+
+    let to_value_type = to.unwrap_map_value_type();
+
+    // Reconstruct an expression context where the expression is evaluated on
+    // the "first column" of some imaginary row.
+    let mut scx = ecx.qcx.scx.clone();
+    scx.param_types = Rc::new(RefCell::new(BTreeMap::new()));
+    let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
+    let relation_type = RelationType {
+        column_types: vec![ColumnType {
+            nullable: true,
+            scalar_type: from_element_typ,
+        }],
+        keys: vec![vec![0]],
+    };
+    let ecx = ExprContext {
+        qcx: &qcx,
+        name: "plan_cast_to_map",
+        scope: &Scope::empty(None),
+        relation_type: &relation_type,
+        allow_aggregates: false,
+        allow_subqueries: true,
+    };
+
+    let col_expr = ScalarExpr::Column(ColumnRef {
+        level: 0,
+        column: 0,
+    });
+
+    // Determine the `ScalarExpr` required to cast our column to the target
+    // element type. We'll need to call this on each value of the original
+    // map to perform the cast.
+    let cast_expr = plan_cast("plan_cast_to_map", &ecx, ccx, col_expr, to_value_type)?;
+
+    let return_ty = match to {
+        ScalarType::Map { value_type } => *value_type.clone(),
+        _ => bail!("invalid map cast, trying to cast to {}", to),
+    };
+    let cast_expr = Box::new(cast_expr.lower_uncorrelated().expect(
+        "lower_uncorrelated should not fail given that there is no correlation \
+        in the input col_expr",
+    ));
+
+    Ok(expr.call_unary(UnaryFunc::CastStringToMap {
+        return_ty,
+        cast_expr,
+    }))
+}
+
 /// Plans a cast between [`ScalarType`]s, specifying which types of casts are
 /// permitted using [`CastTo`].
 ///
@@ -606,16 +677,27 @@ where
         )
     };
 
-    if let ScalarType::List(..) = cast_to {
-        match plan_cast_to_list(ecx, ccx, expr, &from_typ, &cast_to) {
+    match cast_to {
+        ScalarType::List(..) => match plan_cast_to_list(ecx, ccx, expr, &from_typ, &cast_to) {
             Ok(e) => Ok(e),
             Err(_) => cast_bail(),
+        },
+        ScalarType::Map { value_type } => {
+            ecx.require_experimental_mode("maps")?;
+            if let ScalarType::Map { .. } = **value_type {
+                unsupported!("nested map types");
+            }
+            match plan_cast_to_map(ecx, ccx, expr, &from_typ, &cast_to) {
+                Ok(e) => Ok(e),
+                Err(_) => cast_bail(),
+            }
         }
-    } else {
-        let cast_op = match get_cast(ccx, &from_typ, cast_to) {
-            Some(cast_op) => cast_op,
-            None => return cast_bail(),
-        };
-        (cast_op.0)(ecx, expr, cast_to)
+        _ => {
+            let cast_op = match get_cast(ccx, &from_typ, cast_to) {
+                Some(cast_op) => cast_op,
+                None => return cast_bail(),
+            };
+            (cast_op.0)(ecx, expr, cast_to)
+        }
     }
 }

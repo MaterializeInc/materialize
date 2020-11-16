@@ -173,7 +173,7 @@ impl PartialOrd for DatumList<'_> {
 
 /// A mapping from string keys to Datums
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct DatumDict<'a> {
+pub struct DatumMap<'a> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],
 }
@@ -363,7 +363,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
         Tag::Dict => {
             let bytes = read_untagged_bytes(data, offset);
-            Datum::Dict(DatumDict { data: bytes })
+            Datum::Map(DatumMap { data: bytes })
         }
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
@@ -489,7 +489,7 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
             data.push(Tag::List as u8);
             push_untagged_bytes(data, &list.data);
         }
-        Datum::Dict(dict) => {
+        Datum::Map(dict) => {
             data.push(Tag::Dict as u8);
             push_untagged_bytes(data, &dict.data);
         }
@@ -523,7 +523,7 @@ pub fn datum_size(datum: &Datum) -> usize {
             1 + size_of::<u8>() + array.dims.data.len() + array.elements.data.len()
         }
         Datum::List(list) => 1 + size_of::<usize>() + list.data.len(),
-        Datum::Dict(dict) => 1 + size_of::<usize>() + dict.data.len(),
+        Datum::Map(dict) => 1 + size_of::<usize>() + dict.data.len(),
         Datum::JsonNull => 1,
         Datum::Dummy => 1,
     }
@@ -679,9 +679,9 @@ impl<'a> Iterator for DatumListIter<'a> {
     }
 }
 
-impl<'a> DatumDict<'a> {
-    pub fn empty() -> DatumDict<'static> {
-        DatumDict { data: &[] }
+impl<'a> DatumMap<'a> {
+    pub fn empty() -> DatumMap<'static> {
+        DatumMap { data: &[] }
     }
 
     pub fn iter(&self) -> DatumDictIter<'a> {
@@ -698,7 +698,7 @@ impl<'a> DatumDict<'a> {
     }
 }
 
-impl<'a> IntoIterator for &'a DatumDict<'a> {
+impl<'a> IntoIterator for &'a DatumMap<'a> {
     type Item = (&'a str, Datum<'a>);
     type IntoIter = DatumDictIter<'a>;
     fn into_iter(self) -> DatumDictIter<'a> {
@@ -910,7 +910,7 @@ impl RowPacker {
     /// let row = packer.finish();
     ///
     /// assert_eq!(
-    ///     row.unpack_first().unwrap_dict().iter().collect::<Vec<_>>(),
+    ///     row.unpack_first().unwrap_map().iter().collect::<Vec<_>>(),
     ///     vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))]
     /// );
     /// ```
@@ -1380,7 +1380,7 @@ mod tests {
         });
         let row = packer.finish();
 
-        let mut iter = row.unpack_first().unwrap_dict().iter();
+        let mut iter = row.unpack_first().unwrap_map().iter();
 
         let (k, v) = iter.next().unwrap();
         assert_eq!(k, "favourites");
@@ -1417,7 +1417,7 @@ mod tests {
         assert_eq!(pack(false), Err("fail"));
 
         let row = pack(true)?;
-        let mut dict = row.unpack_first().unwrap_dict().iter();
+        let mut dict = row.unpack_first().unwrap_map().iter();
         assert_eq!(dict.next(), Some(("key", Datum::Int32(42))));
         assert_eq!(dict.next(), None);
 

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::error::Error;
 use std::fmt;
@@ -76,6 +77,8 @@ pub enum Value {
     Text(String),
     /// A universally unique identifier.
     Uuid(Uuid),
+    /// A map of string keys and homogeneous values.
+    Map(BTreeMap<String, Option<Value>>),
 }
 
 impl Value {
@@ -125,6 +128,11 @@ impl Value {
                     .iter()
                     .zip(fields)
                     .map(|(e, (_name, ty))| Value::from_datum(e, ty))
+                    .collect(),
+            )),
+            (Datum::Map(dict), ScalarType::Map { value_type }) => Some(Value::Map(
+                dict.iter()
+                    .map(|(k, v)| (k.to_owned(), Value::from_datum(v, value_type)))
                     .collect(),
             )),
             _ => panic!("can't serialize {}::{}", datum, typ),
@@ -189,6 +197,29 @@ impl Value {
                 // wind up here it's a programming error.
                 unreachable!("into_datum cannot be called on Value::Record");
             }
+            Value::Map(map) => {
+                let elem_pg_type = match typ {
+                    Type::Map { value_type } => &*value_type,
+                    _ => panic!("Value::Map should have type Type::Map. Found {:?}", typ),
+                };
+                let (_, elem_type) = null_datum(&elem_pg_type);
+                let mut packer = RowPacker::new();
+                packer.push_dict_with(|packer| {
+                    for (k, v) in map {
+                        packer.push(Datum::String(&k));
+                        packer.push(match v {
+                            Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
+                            None => Datum::Null,
+                        });
+                    }
+                });
+                (
+                    buf.push_unary_row(packer.finish()),
+                    ScalarType::Map {
+                        value_type: Box::new(elem_type),
+                    },
+                )
+            }
         }
     }
 
@@ -228,6 +259,7 @@ impl Value {
             Value::Array { dims, elements } => encode_array(buf, dims, elements),
             Value::List(elems) => encode_list(buf, elems),
             Value::Record(elems) => encode_record(buf, elems),
+            Value::Map(map) => encode_map(buf, map),
         }
     }
 
@@ -287,6 +319,11 @@ impl Value {
                 }
                 Ok(postgres_types::IsNull::No)
             }
+            Value::Map(_) => {
+                // for now just use text encoding
+                self.encode_text(buf);
+                Ok(postgres_types::IsNull::No)
+            }
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -339,6 +376,7 @@ impl Value {
                     "input of anonymous composite types is not implemented",
                 )))
             }
+            Type::Map { value_type } => Value::Map(decode_map(&value_type, raw)?),
         })
     }
 
@@ -371,6 +409,10 @@ impl Value {
             Type::Record(_) => Err(Box::new(DecodeError::new(
                 "input of anonymous composite types is not implemented",
             ))),
+            Type::Map { .. } => {
+                // just using the text encoding for now
+                Value::decode_text(ty, raw)
+            }
         }
     }
 }
@@ -425,6 +467,25 @@ fn decode_list(
         || None,
         |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
     )?)
+}
+
+fn encode_map<F>(buf: &mut F, elems: &BTreeMap<String, Option<Value>>) -> Nestable
+where
+    F: FormatBuffer,
+{
+    strconv::format_map(buf, elems, |buf, value| match value {
+        None => buf.write_null(),
+        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+    })
+}
+
+fn decode_map(
+    val_type: &Type,
+    raw: &str,
+) -> Result<BTreeMap<String, Option<Value>>, Box<dyn Error + Sync + Send>> {
+    Ok(strconv::parse_map(raw, |elem_text| {
+        Value::decode_text(val_type, elem_text.as_bytes()).map(Some)
+    })?)
 }
 
 fn encode_record<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
@@ -497,6 +558,12 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
                 })
                 .collect(),
         },
+        Type::Map { value_type } => {
+            let (_, value_type) = null_datum(value_type);
+            ScalarType::Map {
+                value_type: Box::new(value_type),
+            }
+        }
     };
     (Datum::Null, ty)
 }
