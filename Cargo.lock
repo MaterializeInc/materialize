@@ -210,7 +210,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_sts",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -244,7 +244,7 @@ name = "billing-demo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "csv",
  "env_logger",
@@ -261,8 +261,8 @@ dependencies = [
  "rand_distr",
  "structopt",
  "test-util",
- "tokio",
- "tokio-postgres",
+ "tokio 0.2.22",
+ "tokio-postgres 0.6.0",
  "uuid",
 ]
 
@@ -339,6 +339,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e4cec68f03f32e44924783795810fa50a7035d8c8ebe78580ad7e6c703fba38"
 
 [[package]]
+name = "bytes"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0dcbc35f504eb6fc275a6d20e4ebcda18cf50d40ba6fabff8c711fa16cb3b16"
+
+[[package]]
 name = "cast"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -366,7 +372,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
  "url",
 ]
 
@@ -395,7 +401,7 @@ dependencies = [
  "rand",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -452,7 +458,7 @@ dependencies = [
  "assert_cmd",
  "backtrace",
  "bincode",
- "bytes",
+ "bytes 0.5.6",
  "futures",
  "getopts",
  "log",
@@ -461,9 +467,9 @@ dependencies = [
  "predicates",
  "rand",
  "serde",
- "tokio",
+ "tokio 0.2.22",
  "tokio-serde",
- "tokio-util",
+ "tokio-util 0.3.1",
  "uuid",
 ]
 
@@ -521,7 +527,7 @@ dependencies = [
  "sql",
  "symbiosis",
  "timely",
- "tokio",
+ "tokio 0.2.22",
  "transform",
  "unicase",
  "url",
@@ -750,8 +756,8 @@ dependencies = [
  "serde",
  "serde_json",
  "timely",
- "tokio",
- "tokio-util",
+ "tokio 0.2.22",
+ "tokio-util 0.3.1",
  "url",
  "uuid",
 ]
@@ -1289,7 +1295,7 @@ dependencies = [
  "rand",
  "sqllogictest",
  "testdrive",
- "tokio",
+ "tokio 0.2.22",
  "walkdir",
 ]
 
@@ -1341,7 +1347,7 @@ version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "377038bf3c89d18d6ca1431e7a5027194fbd724ca10592b9487ede5e8e144f42"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "fnv",
  "futures-core",
  "futures-sink",
@@ -1350,8 +1356,8 @@ dependencies = [
  "indexmap",
  "log",
  "slab",
- "tokio",
- "tokio-util",
+ "tokio 0.2.22",
+ "tokio-util 0.3.1",
 ]
 
 [[package]]
@@ -1418,7 +1424,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b708cc7f06493459026f53b9a61a7a121a5d1ec6238dee58ea4941132b30156b"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "fnv",
  "itoa",
 ]
@@ -1429,7 +1435,7 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13d5ff830006f7646652e057693569bfe0d51760c0085a071769d142a205111b"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "http",
 ]
 
@@ -1463,7 +1469,7 @@ version = "0.13.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6ad767baac13b44d4529fcf58ba2cd0995e36e7b435bc5b039de6f47e880dbf"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "futures-channel",
  "futures-core",
  "futures-util",
@@ -1475,7 +1481,7 @@ dependencies = [
  "itoa",
  "pin-project 1.0.1",
  "socket2",
- "tokio",
+ "tokio 0.2.22",
  "tower-service",
  "tracing",
  "want",
@@ -1489,7 +1495,7 @@ checksum = "ab58a31960b2f78c5c24cf255216789863754438a1e48849a956846f899e762e"
 dependencies = [
  "hyper",
  "native-tls",
- "tokio",
+ "tokio 0.2.22",
  "tokio-tls",
 ]
 
@@ -1698,7 +1704,7 @@ dependencies = [
  "rdkafka",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
  "url",
 ]
 
@@ -1892,9 +1898,9 @@ dependencies = [
  "sysctl",
  "sysinfo",
  "tempfile",
- "tokio",
+ "tokio 0.2.22",
  "tokio-openssl",
- "tokio-postgres",
+ "tokio-postgres 0.6.0",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -1922,7 +1928,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -1984,8 +1990,8 @@ dependencies = [
  "log",
  "metabase",
  "ore",
- "tokio",
- "tokio-postgres",
+ "tokio 0.2.22",
+ "tokio-postgres 0.6.0",
 ]
 
 [[package]]
@@ -2036,6 +2042,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8962c171f57fcfffa53f4df1bb15ec4c8cf26a7569459c9ceb62d94aab0d9584"
+dependencies = [
+ "libc",
+ "log",
+ "miow 0.3.3",
+ "ntapi",
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "mio-extras"
 version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2043,7 +2062,7 @@ checksum = "52403fe290012ce777c4626790c8951324a2b9e3316b3143779c72b029742f19"
 dependencies = [
  "lazycell",
  "log",
- "mio",
+ "mio 0.6.21",
  "slab",
 ]
 
@@ -2054,7 +2073,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5e374eff525ce1c5b7687c4cef63943e7686524a387933ad27ca7ec43779cb3"
 dependencies = [
  "log",
- "mio",
+ "mio 0.6.21",
  "miow 0.3.3",
  "winapi 0.3.8",
 ]
@@ -2067,7 +2086,7 @@ checksum = "966257a94e196b11bb43aca423754d87429960a768de9414f3691d6957abf125"
 dependencies = [
  "iovec",
  "libc",
- "mio",
+ "mio 0.6.21",
 ]
 
 [[package]]
@@ -2196,7 +2215,7 @@ dependencies = [
  "fsevent-sys",
  "inotify",
  "libc",
- "mio",
+ "mio 0.6.21",
  "mio-extras",
  "walkdir",
  "winapi 0.3.8",
@@ -2402,7 +2421,7 @@ dependencies = [
 name = "ore"
 version = "0.1.0"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "crossbeam-utils",
  "fallible-iterator",
  "futures",
@@ -2411,7 +2430,7 @@ dependencies = [
  "log",
  "phf_shared",
  "smallvec",
- "tokio",
+ "tokio 0.2.22",
  "tracing-subscriber",
 ]
 
@@ -2513,7 +2532,7 @@ dependencies = [
  "prometheus",
  "regex",
  "serde",
- "tokio",
+ "tokio 0.2.22",
  "toml",
 ]
 
@@ -2529,7 +2548,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aws-util",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "env_logger",
  "futures",
@@ -2542,8 +2561,8 @@ dependencies = [
  "rusoto_kinesis",
  "structopt",
  "test-util",
- "tokio",
- "tokio-postgres",
+ "tokio 0.2.22",
+ "tokio-postgres 0.6.0",
 ]
 
 [[package]]
@@ -2551,7 +2570,7 @@ name = "perf-upsert"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "env_logger",
  "futures",
@@ -2563,8 +2582,8 @@ dependencies = [
  "rand_distr",
  "structopt",
  "test-util",
- "tokio",
- "tokio-postgres",
+ "tokio 0.2.22",
+ "tokio-postgres 0.6.0",
 ]
 
 [[package]]
@@ -2572,7 +2591,7 @@ name = "pgrepr"
 version = "0.1.0"
 dependencies = [
  "byteorder",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "lazy_static",
  "ore",
@@ -2586,7 +2605,7 @@ name = "pgtest"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytes",
+ "bytes 0.5.6",
  "datadriven",
  "fallible-iterator",
  "getopts",
@@ -2602,7 +2621,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "byteorder",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "comm",
  "coord",
@@ -2621,9 +2640,9 @@ dependencies = [
  "rand",
  "repr",
  "sql",
- "tokio",
+ "tokio 0.2.22",
  "tokio-openssl",
- "tokio-util",
+ "tokio-util 0.3.1",
 ]
 
 [[package]]
@@ -2741,12 +2760,12 @@ version = "0.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14d864cf6c2eabf1323afe4145ff273aad1898e4f2a3bcb30347715df8624a07"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "fallible-iterator",
  "futures",
  "log",
- "tokio",
- "tokio-postgres",
+ "tokio 0.2.22",
+ "tokio-postgres 0.5.5",
 ]
 
 [[package]]
@@ -2755,12 +2774,12 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f10ea2d77c744e1846d03b58362679e51c6647acf0e6a65a1f1e5f0d5e99387"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "futures",
  "openssl",
- "tokio",
+ "tokio 0.2.22",
  "tokio-openssl",
- "tokio-postgres",
+ "tokio-postgres 0.5.5",
 ]
 
 [[package]]
@@ -2771,7 +2790,7 @@ checksum = "81c5b25980f9a9b5ad36e9cdc855530575396d8a57f67e14691a2440ed0d9a90"
 dependencies = [
  "base64",
  "byteorder",
- "bytes",
+ "bytes 0.5.6",
  "fallible-iterator",
  "hmac",
  "md5",
@@ -2787,7 +2806,7 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d14b0a4f433b0e0b565bb0fbc0ac9fc3d79ca338ba265ad0e7eef0f3bcc5e94"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "fallible-iterator",
  "postgres-protocol",
@@ -2802,7 +2821,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e45e166dedb061744a082a6009459840c038660382f1b6ab82bf7a4cdfc7e42a"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "fallible-iterator",
  "postgres-protocol",
  "postgres-types",
@@ -2945,7 +2964,7 @@ dependencies = [
  "lazy_static",
  "pprof",
  "tempfile",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -3130,7 +3149,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -3232,7 +3251,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9eaa17ac5d7b838b7503d118fa16ad88f440498bf9ffe5424e621f93190d61e"
 dependencies = [
  "base64",
- "bytes",
+ "bytes 0.5.6",
  "encoding_rs",
  "futures-core",
  "futures-util",
@@ -3252,7 +3271,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "tokio",
+ "tokio 0.2.22",
  "tokio-tls",
  "url",
  "wasm-bindgen",
@@ -3284,7 +3303,7 @@ checksum = "e977941ee0658df96fca7291ecc6fc9a754600b21ad84b959eb1dbbc9d5abcc7"
 dependencies = [
  "async-trait",
  "base64",
- "bytes",
+ "bytes 0.5.6",
  "crc32fast",
  "futures",
  "http",
@@ -3300,7 +3319,7 @@ dependencies = [
  "rustc_version",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
  "xml-rs",
 ]
 
@@ -3320,7 +3339,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
- "tokio",
+ "tokio 0.2.22",
  "zeroize",
 ]
 
@@ -3331,7 +3350,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb8a3baabc67851ca472d25c9fe848b229969a1412cbc50ad00ce3af00e9aeae"
 dependencies = [
  "async-trait",
- "bytes",
+ "bytes 0.5.6",
  "futures",
  "rusoto_core",
  "serde",
@@ -3345,7 +3364,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97a740a88dde8ded81b6f2cff9cd5e054a5a2e38a38397260f7acdd2c85d17dd"
 dependencies = [
  "base64",
- "bytes",
+ "bytes 0.5.6",
  "futures",
  "hex",
  "hmac",
@@ -3360,7 +3379,7 @@ dependencies = [
  "serde",
  "sha2",
  "time 0.2.16",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -3370,7 +3389,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3815b8c0fc1c50caf9e87603f23daadfedb18d854de287b361c69f68dc9d49e0"
 dependencies = [
  "async-trait",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "futures",
  "rusoto_core",
@@ -3683,8 +3702,8 @@ dependencies = [
  "serde_json",
  "structopt",
  "test-util",
- "tokio",
- "tokio-postgres",
+ "tokio 0.2.22",
+ "tokio-postgres 0.6.0",
  "url",
 ]
 
@@ -3733,7 +3752,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sql-parser",
- "tokio",
+ "tokio 0.2.22",
  "unicase",
  "url",
  "uuid",
@@ -3764,7 +3783,7 @@ name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "comm",
  "coord",
@@ -3782,7 +3801,7 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
- "tokio",
+ "tokio 0.2.22",
  "walkdir",
 ]
 
@@ -3920,8 +3939,8 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
- "tokio",
- "tokio-postgres",
+ "tokio 0.2.22",
+ "tokio-postgres 0.6.0",
  "uuid",
  "whoami",
 ]
@@ -4055,8 +4074,8 @@ dependencies = [
  "prometheus",
  "regex",
  "serde",
- "tokio",
- "tokio-postgres",
+ "tokio 0.2.22",
+ "tokio-postgres 0.6.0",
  "toml",
 ]
 
@@ -4071,8 +4090,8 @@ dependencies = [
  "ore",
  "rand",
  "rdkafka",
- "tokio",
- "tokio-postgres",
+ "tokio 0.2.22",
+ "tokio-postgres 0.6.0",
 ]
 
 [[package]]
@@ -4084,7 +4103,7 @@ dependencies = [
  "atty",
  "aws-util",
  "byteorder",
- "bytes",
+ "bytes 0.5.6",
  "ccsr",
  "chrono",
  "coord",
@@ -4119,8 +4138,8 @@ dependencies = [
  "sql-parser",
  "tempfile",
  "termcolor",
- "tokio",
- "tokio-postgres",
+ "tokio 0.2.22",
+ "tokio-postgres 0.6.0",
  "url",
  "uuid",
 ]
@@ -4273,14 +4292,14 @@ version = "0.2.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d34ca54d84bf2b5b4d7d31e901a8464f7b60ac145a284fba25ceb801f2ddccd"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "fnv",
  "futures-core",
  "iovec",
  "lazy_static",
  "libc",
  "memchr",
- "mio",
+ "mio 0.6.21",
  "mio-named-pipes",
  "mio-uds",
  "num_cpus",
@@ -4289,6 +4308,22 @@ dependencies = [
  "slab",
  "tokio-macros",
  "winapi 0.3.8",
+]
+
+[[package]]
+name = "tokio"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5ca08accbcb46f11fd8d2d1c6158c348b7888009a1f39260bcad66f6a454250"
+dependencies = [
+ "autocfg",
+ "bytes 0.6.0",
+ "futures-core",
+ "lazy_static",
+ "libc",
+ "memchr",
+ "mio 0.7.5",
+ "pin-project-lite",
 ]
 
 [[package]]
@@ -4309,7 +4344,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c4b08c5f4208e699ede3df2520aca2e82401b2de33f45e96696a074480be594"
 dependencies = [
  "openssl",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -4320,7 +4355,7 @@ checksum = "55a2482c9fe4dd481723cf5c0616f34afc710e55dcda0944e12e7b3316117892"
 dependencies = [
  "async-trait",
  "byteorder",
- "bytes",
+ "bytes 0.5.6",
  "fallible-iterator",
  "futures",
  "log",
@@ -4330,8 +4365,30 @@ dependencies = [
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",
- "tokio",
- "tokio-util",
+ "tokio 0.2.22",
+ "tokio-util 0.3.1",
+]
+
+[[package]]
+name = "tokio-postgres"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "150d9be163b0df6dc185b8ee33bcb9a74865f0cad754495847f2e06e2051a345"
+dependencies = [
+ "async-trait",
+ "byteorder",
+ "bytes 0.5.6",
+ "fallible-iterator",
+ "futures",
+ "log",
+ "parking_lot",
+ "percent-encoding",
+ "phf",
+ "pin-project-lite",
+ "postgres-protocol",
+ "postgres-types",
+ "tokio 0.3.3",
+ "tokio-util 0.4.0",
 ]
 
 [[package]]
@@ -4341,7 +4398,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebdd897b01021779294eb09bb3b52b6e11b0747f9f7e333a84bef532b656de99"
 dependencies = [
  "bincode",
- "bytes",
+ "bytes 0.5.6",
  "derivative",
  "futures",
  "pin-project 0.4.22",
@@ -4355,7 +4412,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bde02a3a5291395f59b06ec6945a3077602fac2b07eeeaf0dee2122f3619828"
 dependencies = [
  "native-tls",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -4364,12 +4421,26 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be8242891f2b6cbef26a2d7e8605133c2c554cd35b3e4948ea892d6d68436499"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "futures-core",
  "futures-sink",
  "log",
  "pin-project-lite",
- "tokio",
+ "tokio 0.2.22",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24793699f4665ba0416ed287dc794fe6b11a4aa5e4e95b58624f45f6c46b97d4"
+dependencies = [
+ "bytes 0.5.6",
+ "futures-core",
+ "futures-sink",
+ "log",
+ "pin-project-lite",
+ "tokio 0.3.3",
 ]
 
 [[package]]

@@ -25,5 +25,5 @@ prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", de
 regex = "1.4.1"
 serde = { version = "1.0.117", features = ["derive"] }
 tokio = { version = "0.2.22", features = ["rt-threaded"] }
-tokio-postgres = "0.5.5"
+tokio-postgres = "0.6.0"
 toml = "0.5.7"

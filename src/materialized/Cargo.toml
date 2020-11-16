@@ -72,7 +72,7 @@ predicates = "1.0.5"
 repr = { path = "../repr" }
 reqwest = { version = "0.10.8", features = ["blocking"] }
 serde_json = "1"
-tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4"] }
+tokio-postgres = { version = "0.6.0", features = ["with-chrono-0_4"] }
 
 [features]
 # When enabled, static assets for the web UI are loaded from disk on every HTTP
