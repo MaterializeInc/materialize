@@ -17,19 +17,23 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-# not supported yet
-halt
-
 mode cockroach
 
-query error unsupported multiple use of CTE clause "a"
-WITH a AS (SELECT 1) SELECT * FROM a CROSS JOIN a
+# https://github.com/MaterializeInc/materialize/issues/4756
+# query error unsupported multiple use of CTE clause "a"
+# WITH a AS (SELECT 1) SELECT * FROM a CROSS JOIN a
 
 statement ok
-CREATE TABLE x(a) AS SELECT generate_series(1, 3)
+CREATE TABLE x (a int)
 
 statement ok
-CREATE TABLE y(a) AS SELECT generate_series(2, 4)
+INSERT INTO x VALUES (1), (2), (3)
+
+statement ok
+CREATE TABLE y (a int)
+
+statement ok
+INSERT INTO y VALUES (2), (3), (4)
 
 query I rowsort
 WITH t AS (SELECT a FROM y WHERE a < 3)
@@ -78,17 +82,17 @@ WITH t(b, a) AS (SELECT true a, false b)
 ----
 false  true
 
-statement error WITH query name t specified more than once
+statement error WITH query name "t" specified more than once
 WITH
     t AS (SELECT true),
     t AS (SELECT false)
 SELECT * FROM t
 
-query error source "t" has 1 columns available but 2 columns specified
+query error CTE t definition names 2 columns, but CTE t has 1 column
 WITH t(b, c) AS (SELECT a FROM x) SELECT b, t.b FROM t
 
 # Ensure you can't reference the original table name
-query error no data source matches prefix: x
+query error column "x.t" does not exist
 WITH t AS (SELECT a FROM x) SELECT a, x.t FROM t
 
 # Nested WITH, name shadowing
@@ -96,6 +100,9 @@ query I
 WITH t(x) AS (WITH t(x) AS (SELECT 1) SELECT x * 10 FROM t) SELECT x + 2 FROM t
 ----
 12
+
+# not supported yet
+halt
 
 # CTEs with DMLs
 
