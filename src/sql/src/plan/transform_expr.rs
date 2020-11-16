@@ -210,6 +210,7 @@ pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
                         group_key,
                         aggregates,
                         input,
+                        expected_group_size: _,
                     } if group_key.is_empty() && aggregates.len() == 1 => {
                         let agg = &mut aggregates[0];
                         (&agg.func, &mut agg.expr, input)

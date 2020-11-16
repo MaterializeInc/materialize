@@ -39,6 +39,7 @@ where
             group_key,
             aggregates,
             monotonic,
+            expected_group_size: _,
         } = relation_expr
         {
             // The reduce operator may have multiple aggregation functions, some of

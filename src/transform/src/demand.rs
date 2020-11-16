@@ -200,6 +200,7 @@ impl Demand {
                 group_key,
                 aggregates,
                 monotonic: _,
+                expected_group_size: _,
             } => {
                 let mut new_columns = HashSet::new();
                 // Group keys determine aggregation granularity and are

@@ -591,13 +591,18 @@ impl RelationExpr {
     /// The `group_key` argument indicates columns in the input collection that should
     /// be grouped, and `aggregates` lists aggregation functions each of which produces
     /// one output column in addition to the keys.
-    pub fn reduce(self, group_key: Vec<usize>, aggregates: Vec<AggregateExpr>) -> Self {
+    pub fn reduce(
+        self,
+        group_key: Vec<usize>,
+        aggregates: Vec<AggregateExpr>,
+        expected_group_size: Option<usize>,
+    ) -> Self {
         RelationExpr::Reduce {
             input: Box::new(self),
             group_key: group_key.into_iter().map(ScalarExpr::Column).collect(),
             aggregates,
             monotonic: false,
-            expected_group_size: None,
+            expected_group_size,
         }
     }
 
@@ -640,7 +645,7 @@ impl RelationExpr {
     /// Removes all but the first occurrence of each key. Columns not included
     /// in the `group_key` are discarded.
     pub fn distinct_by(self, group_key: Vec<usize>) -> Self {
-        self.reduce(group_key, vec![])
+        self.reduce(group_key, vec![], None)
     }
 
     /// Discards rows with a negative frequency.

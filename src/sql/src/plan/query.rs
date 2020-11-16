@@ -817,7 +817,9 @@ fn plan_view_select(
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || having.is_some() {
             // apply GROUP BY / aggregates
-            relation_expr = relation_expr.map(group_exprs).reduce(group_key, agg_exprs);
+            relation_expr = relation_expr
+                .map(group_exprs)
+                .reduce(group_key, agg_exprs, None);
             (group_scope, select_all_mapping)
         } else {
             // if no GROUP BY, aggregates or having then all columns remain in scope
