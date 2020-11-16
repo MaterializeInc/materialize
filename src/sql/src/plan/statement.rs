@@ -1549,7 +1549,7 @@ fn handle_create_table(
 ///
 /// Returns an error if the length of `column_names` is not either zero or the
 /// arity of `desc`.
-fn maybe_rename_columns(
+pub fn maybe_rename_columns(
     context: impl fmt::Display,
     desc: RelationDesc,
     column_names: &[Ident],
@@ -1560,10 +1560,16 @@ fn maybe_rename_columns(
 
     if column_names.len() != desc.typ().column_types.len() {
         bail!(
-            "{0} definition names {1} columns, but {0} has {2} columns",
+            "{0} definition names {1} column{2}, but {0} has {3} column{4}",
             context,
             column_names.len(),
-            desc.typ().column_types.len()
+            if column_names.len() == 1 { "" } else { "s" },
+            desc.typ().column_types.len(),
+            if desc.typ().column_types.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
         )
     }
 
