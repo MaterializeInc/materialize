@@ -42,6 +42,8 @@ fn main() -> Result<()> {
         .target(Target::Stdout)
         .init();
 
+    mz_process_collector::register_default_process_collector()?;
+
     let config = Args::from_cli()?;
     info!("startup {}", Utc::now());
 
