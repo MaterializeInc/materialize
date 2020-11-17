@@ -1,19 +1,28 @@
 ---
 title: "TAIL"
-description: "`TAIL` continually reports updates that occur to a source or view."
+description: "`TAIL` streams updates from a relation as they occur."
 menu:
-    main:
-        parent: "sql"
+  main:
+    parent: "sql"
 ---
 
-`TAIL` continually reports updates that occur to a source or view.
-For materialized sources or views this data only represents updates that occur after running the `TAIL` command.
-For non-materialized sources or views, all updates are presented.
+`TAIL` streams updates from a source, table, or view as they occur.
 
-Tail will continue to run until cancelled, or until all updates the tailed item could undergo have been presented. The latter case may happen with static views (e.g. `SELECT true`), files without the `tail = true` modifier, or other settings in which a collection can cease to experience updates.
+## Conceptual framework
 
-In order for a tail to be possible, all involved sources must be valid to read from at the chosen timestamp.
-A tail at a given timestamp might not be possible if data it would report has already been compacted by Materialize.
+The `TAIL` statement is a more general form of a [`SELECT`](/sql/select)
+statement. While a `SELECT` statement computes a relation at a moment in time, a
+tail operation computes how a relation *changes* over time.
+
+Fundamentally, `TAIL` produces a sequence of updates. An update describes either
+the insertion or deletion of a row to the relation at a specific time. Taken
+together, the updates describes the complete set of changes to a relation, in
+order, while the `TAIL` is active.
+
+Clients can use `TAIL` to:
+
+  - Power event processors that react to every change to a relation.
+  - Replicate the complete history of a relation while the `TAIL` is active.
 
 ## Syntax
 
@@ -21,28 +30,89 @@ A tail at a given timestamp might not be possible if data it would report has al
 
 Field | Use
 ------|-----
-_object&lowbar;name_ | The item you want to tail
-_timestamp&lowbar;expression_ | The logical time to tail from onwards (either a number of milliseconds since the Unix epoch, or a `TIMESTAMP` or `TIMESTAMPTZ`).
+_object&lowbar;name_ | The name of the source, table, or view that you want to tail.
+_timestamp&lowbar;expression_ | The logical time to tail from onwards as a [`bigint`] representing milliseconds since the Unix epoch.
 
-Supported `option` values:
+Supported `WITH` option values:
 
-Name | Type
------|-------
-`SNAPSHOT` | `bool`, see [SNAPSHOT](#snapshot)
-`PROGRESS` | `bool`, see [PROGRESS](#progress)
+Option name | Value type | Default | Describes
+------------|------------|---------|----------
+`SNAPSHOT`  | `bool`     | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot) below.
+`PROGRESS`  | `bool`     | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress) below.
 
 ## Details
 
 ### Output
 
-`TAIL`'s output is the item's columns prepended with `timestamp` and `diff` columns.
+`TAIL` emits a sequence of updates. Each row contains all of the columns of
+the tailed relation, prepended with several additional columns that describe
+the nature of the update:
 
-Field         | Type        | Represents
---------------|-------------|-----------
-`timestamp`   | [`numeric`] | Materialize's internal logical timestamp. This is guaranteed to never decrease from any previous timestamp.
-`progressed   | [`bool`]    | Only present if the `PROGRESS` option is present. See [PROGRESS](#progress).
-`diff`        | [`bigint`]  | Whether the record is an insert (`1`), delete (`-1`), or update (delete for old value, followed by insert of new value).
-column values | The row's columns' values, each as its own column.
+<table>
+<thead>
+  <tr>
+    <th>Column</th>
+    <th>Type</th>
+    <th>Represents</th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td><code>timestamp</code></td>
+    <td><code>numeric</code></td>
+    <td>
+      Materialize's internal logical timestamp. This will never be less than any
+      timestamp previously emitted by the same <code>TAIL</code> operation.
+    </td>
+  </tr>
+  <tr>
+    <td><code>progressed</code></td>
+    <td><code>boolean</code></td>
+    <td>
+      <p>
+        <em>
+          This column is only present if the
+          <a href="#progress"><code>PROGRESS</code></a> option is specified.
+        </em>
+      </p>
+      If <code>true</code>, indicates that the <code>TAIL</code> will not emit
+      additional records at times strictly less than <code>timestamp</code>. See
+      <a href="#progress"><code>PROGRESS</code></a> below.
+    </td>
+  </tr>
+  <tr>
+    <td><code>diff</code></td>
+    <td><code>bigint</code></td>
+    <td>
+      The change in frequency of the row. A positive number indicates that
+      <code>diff</code> copies of the row were inserted, while a negative
+      number indicates that <code>|diff|</code> copies of the row were deleted.
+    </td>
+  </tr>
+  <tr>
+    <td>Column 1</td>
+    <td>Varies</td>
+    <td rowspan="3" style="vertical-align: middle; border-left: 1px solid #ccc">
+        The columns from the tailed relation, each as its own column,
+        representing the data that was inserted into or deleted from the
+        relation.
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" style="text-align: center">...</td>
+  </tr>
+  <tr>
+    <td>Column <em>N</em></td>
+    <td>Varies</td>
+  </tr>
+</tbody>
+</table>
+
+`TAIL` will continue to run until cancelled, or until all updates the tailed
+item could undergo have been presented. The latter case typically occurs when
+tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
+[file sources](/sql/create-source/text-file) that were created in non-tailing
+mode (`tail = false`).
 
 {{< version-changed v0.5.1 >}}
 The timestamp and diff information moved to leading, well-typed columns.
@@ -66,33 +136,66 @@ Syntax has changed. `WITH SNAPSHOT` is now `WITH (SNAPSHOT)`.
 {{</ version-changed >}}
 
 {{< version-changed v0.5.2 >}}
-The `TIMESTAMPS` option has been added.
+The [`PROGRESS`](#progress) option has been added.
 {{</ version-changed >}}
 
-### AS OF
+### `AS OF`
 
-`AS OF` is the specific point in time to start reporting all events for a given `TAIL`. If you don't
-use `AS OF`, Materialize will pick a timestamp itself.
+The `AS OF` clause specifies a point in time to start reporting all events for
+a given `TAIL` operation. If you don't use `AS OF`, Materialize will pick a
+timestamp automatically:
 
-### SNAPSHOT
+  - If the tailed relation is [materialized](/overview/api-components/#indexes),
+    Materialize picks the latest time for which results are computed.
+  - If the tailed relation is not materialized, Materialize picks time `0`.
 
-By default, each TAIL is created with a `SNAPSHOT` which contains the results of the query at its `AS OF` timestamp.
-Any further updates to these results are produced at the time when they occur. To only see results after the
-`AS OF` timestamp, specify `WITH (SNAPSHOT = false)`.
+A given timestamp will be rejected if data it would report has already been
+compacted by Materialize. See the
+[`--logical-compaction-window`](/cli/#compaction-window) command-line option for
+details on Materialize's compaction policy.
 
-### PROGRESS
+### `SNAPSHOT`
 
-If the `PROGRESS` option is specified (`WITH (PROGRESS)`) an additional `progressed` column appears in the output.
+By default, each `TAIL` begins by emitting a snapshot of the tailed relation,
+which contains the contents of the relation at its [`AS OF`](#as-of) timestamp.
+Any further updates to these results are produced at the time when they occur.
+
+To only see results after the `AS OF` timestamp, specify `WITH (SNAPSHOT =
+false)`.
+
+### `PROGRESS`
+
+If the `PROGRESS` option is specified via `WITH (PROGRESS)`, an additional
+`progressed` column appears in the output.
 It is `false` if there may be more rows with the same timestamp.
-It is `true` if no more timestamps will appear less than the timestamp.
+It is `true` if no more timestamps will appear that are strictly less than the
+timestamp.
 All further columns after `progressed` will be `NULL` in the `true` case.
 
-Not all timestamps that appear will have a corresponding `done` message.
-For example timestamps `1`, `2`, and `3` may appear with only a single `done` message for `3`.
+Intuitively, progress messages communicate that no updates have occurred in a
+given time window. Without explicit progress messages, it is impossible to
+distinguish between a stall in Materialize and a legimate period of no updates.
+
+Not all timestamps that appear will have a corresponding `progressed` row.
+For example, the following is a valid sequence of updates:
+
+`timestamp` | `progressed` | `diff` | `column1`
+------------|--------------|--------|----------------
+1           | `false`      | 1      | data
+1           | `false`      | 1      | more data
+2           | `false`      | 1      | even more data
+4           | `true`       | `NULL` | `NULL`
+
+Notice how Materialize did not emit explicit progress messages for timestamps
+`1`, `2`, or `3`. The receipt of the update at timestamp `2` implies that there
+are no more updates for timestamp `1`, because timestamps are always presented
+in non-decreasing order. The receipt of the explicit progress message at
+timestamp `4` implies that there are no more updates for either timestamp
+`2` or `3`—but that there may be more data arriving at timestamp `4`.
 
 ## Example
 
-### Tailing to your terminal
+### Tailing via the `psql` command-line client
 
 In this example, we'll assume `some_materialized_view` has one `text` column.
 
@@ -114,13 +217,13 @@ This represents:
 - Inserting and then deleting `will_delete`.
 - Inserting `will_update_old`, and then updating it to `will_update_new`
 
-If we wanted to see the updates that had occurred in the last 30 seconds, we could run:
+If you want to see the updates that had occurred in the last 30 seconds, you could run:
 
 ```sql
 TAIL some_materialized_view AS OF now() - '30s'::INTERVAL
 ```
 
-If we wanted timestamp completion messages:
+If you want timestamp completion messages:
 
 ```sql
 COPY (TAIL some_materialized_view WITH (PROGRESS)) TO STDOUT
