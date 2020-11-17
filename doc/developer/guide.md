@@ -21,8 +21,6 @@ Note that local file sources are intended only for ad-hoc experimentation and
 analysis. Production use cases are expected to use Kafka sources, which have a
 better availability and durability story.
 
-[Rust]: https://www.rust-lang.org
-
 ## Installing
 
 ### C components
@@ -47,8 +45,6 @@ sudo apt install build-essential cmake
 
 On other platforms, you'll have to figure out how to get these tools yourself.
 
-[CMake]: https://cmake.org
-
 ### Rust
 
 Install Rust via [rustup]:
@@ -64,14 +60,17 @@ We recommend that you do _not_ install Rust via your system's package manager.
 We closely track the most recent version of Rust. The version of Rust in your
 package manager is likely too old to build Materialize.
 
-[rustup]: https://www.rust-lang.org/tools/install
-
 ### Confluent Platform
 
 The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with
 several non-free Confluent tools, like the [Confluent Schema Registry] and
 [Control Center]. For local development, the [Confluent CLI] allows easy
-management of these services
+management of these services.
+
+**Confluent Platform is only required if you need to test Kafka sources and
+sinks against a *local* Kafka installation.** If possible, we recommend that you
+avoid installing the Confluent Platform, as the installation is tricky and the
+stack is very memory hungry.
 
 #### macOS
 
@@ -107,25 +106,9 @@ On other Linux variants, you'll need to make your own way through [Confluent's
 installation instructions][confluent-install]. Note that, at the time of
 writing, only Java 8 and 11 are supported.
 
-On Linux, you might want to consider using [nix]. It is a purely functional
-package manager, which is appealing because bits and pieces of state usually
-are to blame when package management goes wrong. Plus, getting started is easy:
-
-```shell
-cd materialize
-nix-shell
-```
-
-This will start a new shell with all the necessary dependencies available and
-pinned to the correct version.
-
-[Homebrew]: https://brew.sh
-[confluent-install]: https://docs.confluent.io/current/installation/installing_cp/index.html
-[nix]: https://nixos.org/nix/
-
 ### Confluent CLI
 
-As of Feb 24, 2020 you can run:
+As of November 2020 you can run:
 
 ```shell
 curl -L --http1.1 https://cnfl.io/cli | sh -s -- -b /usr/local/bin
@@ -133,14 +116,6 @@ curl -L --http1.1 https://cnfl.io/cli | sh -s -- -b /usr/local/bin
 
 However, if this ever stops working, check out these great docs on the
 [Confluent CLI].
-
-
-[Apache ZooKeeper]: https://zookeeper.apache.org
-[Apache Kafka]: https://kafka.apache.org
-[Confluent Schema Registry]: https://www.confluent.io/confluent-schema-registry/
-[Confluent Platform]: https://www.confluent.io/product/confluent-platform/
-[Control Center]: https://www.confluent.io/confluent-control-center/
-[Confluent CLI]: https://docs.confluent.io/current/cli/installing.html#scripted-installation
 
 ## Building Materialize
 
@@ -156,16 +131,18 @@ Because the MaterializeInc organization requires two-factor authentication
 (2FA), you'll need to clone via SSH as indicated above, or [configure a personal
 access token for use with HTTPS][github-https].
 
-[MaterializeInc/sqlparser]: https://github.com/MaterializeInc/sqlparser.git
-[github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
-
 ## Prepping Confluent
 
-Like we mentioned above, you need to have a few Confluent services running to
-get Materialize to work. To prep what you need, run the following:
+As mentioned above, **Confluent Platform is only required need to test Kafka
+sources and sinks against a *local* Kafka installation.** If possible, we
+recommend that you don't run the Confluent Platform if you don't need it, as it
+is very memory hungry.
+
+If you do need the Confluent Platform running locally, execute the following
+commands:
 
 ```shell
-confluent local start kafka     # Also starts zookeeper
+confluent local start kafka     # Also starts Zookeeper.
 confluent local start schema-registry
 ```
 
@@ -257,9 +234,6 @@ Linter    | General formatting nits | `./bin/lint`
 See also the [style guide](style.md) for some additional soft
 recommendations.
 
-[Clippy]: https://github.com/rust-lang/rust-clippy
-[rustfmt]: https://github.com/rust-lang/rustfmt
-
 ## Submitting and reviewing changes
 
 See [Developer guide: submitting and reviewing changes](guide-changes.md).
@@ -273,8 +247,6 @@ makes it easier to integrate changes from upstream.
 
 Some notable repositories include:
 
-  * **[mtrlz-setup]**, containing automatic development environment setup
-    scripts;
   * **[rust-sasl]**, Cyrus SASL bindings for Rust
   * **[rust-krb5-src]**, Rust build system integration for libkrb5, MIT's
     Kerberos implementation.
@@ -283,8 +255,21 @@ As mentioned before, because the MaterializeInc organization requires two-factor
 authentication (2FA), to clone these repositories you'll need to use either SSH
 or [configure a personal access token for use with HTTPS][github-https].
 
+[Apache Kafka]: https://kafka.apache.org
+[Apache ZooKeeper]: https://zookeeper.apache.org
 [askama]: https://github.com/djc/askama
-[mtrlz-setup]: https://github.com/MaterializeInc/mtrlz-setup
-[rust-sasl]: https://github.com/MaterializeInc/rust-sasl
+[Clippy]: https://github.com/rust-lang/rust-clippy
+[CMake]: https://cmake.org
+[Confluent CLI]: https://docs.confluent.io/current/cli/installing.html#scripted-installation
+[Confluent Platform]: https://www.confluent.io/product/confluent-platform/
+[Confluent Schema Registry]: https://www.confluent.io/confluent-schema-registry/
+[confluent-install]: https://docs.confluent.io/current/installation/installing_cp/index.html
+[Control Center]: https://www.confluent.io/confluent-control-center/
+[github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
+[Homebrew]: https://brew.sh
 [rust-krb5-src]: https://github.com/MaterializeInc/rust-krb5-src
+[rust-sasl]: https://github.com/MaterializeInc/rust-sasl
+[Rust]: https://www.rust-lang.org
+[rustfmt]: https://github.com/rust-lang/rustfmt
+[rustup]: https://www.rust-lang.org/tools/install
 [sqlparser]: https://github.com/MaterializeInc/sqlparser
