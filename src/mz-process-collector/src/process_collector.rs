@@ -22,17 +22,14 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::counter::{Counter, CounterVec};
-use crate::desc::Desc;
-use crate::gauge::{Gauge, GaugeVec};
-use crate::metrics::{Collector, Opts};
-use crate::proto;
+use lazy_static::lazy_static;
+
+use prometheus::core::{Collector, Desc};
+use prometheus::proto;
+use prometheus::{Counter, CounterVec, Gauge, GaugeVec, Opts};
 
 /// The `pid_t` data type represents process IDs.
-pub use libc::pid_t;
-
-/// Six metrics per ProcessCollector.
-const METRICS_NUMBER: usize = 6;
+use libc::pid_t;
 
 /// A collector which exports the current state of
 /// process metrics including cpu, memory and file descriptor usage as well as
@@ -121,7 +118,7 @@ impl ProcessCollector {
                 "Start time of the process since unix epoch \
                  in seconds.",
             )
-            .namespace(namespace.clone()),
+            .namespace(namespace),
         )
         .unwrap();
         descs.extend(start_time.desc().into_iter().cloned());
@@ -293,7 +290,7 @@ impl Collector for ThreadsCollector {
                             // use entry instead of insert to get a reference to
                             // the newly inserted stats
                             .entry(name.clone())
-                            .or_insert(ThreadStats::new(total_cpu, thread_count))
+                            .or_insert_with(|| ThreadStats::new(total_cpu, thread_count))
                     }
                 };
                 stats.update(&thread);
@@ -381,21 +378,31 @@ lazy_static! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::Collector;
-    use crate::registry;
+    use prometheus::Registry;
 
     #[test]
     fn test_process_collector() {
+        let min_metrics_count = 6;
         let pc = ProcessCollector::for_self();
         {
             // Ensure that we have at least the right number of metrics
             let descs = pc.desc();
-            assert_eq!(descs.len(), super::METRICS_NUMBER);
+            assert!(
+                descs.len() >= min_metrics_count,
+                "{} >= {}",
+                descs.len(),
+                min_metrics_count
+            );
             let mfs = pc.collect();
-            assert_eq!(mfs.len(), super::METRICS_NUMBER);
+            assert!(
+                mfs.len() >= min_metrics_count,
+                "{} >= {}",
+                mfs.len(),
+                min_metrics_count
+            );
         }
 
-        let r = registry::Registry::new();
+        let r = Registry::new();
         let res = r.register(Box::new(pc));
         assert!(res.is_ok());
         r.gather();
