@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::cmp::{self, Ordering};
+use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
@@ -3361,8 +3362,13 @@ where
             }
         }),
         Map { value_type } => {
-            let dict: Vec<(&str, Datum)> = d.unwrap_dict().iter().map(|(k, v)| (k, v)).collect();
-            strconv::format_map(buf, dict, |buf, d| {
+            use std::string::String;
+            let elems: BTreeMap<String, Datum> = d
+                .unwrap_dict()
+                .iter()
+                .map(|(k, v)| (k.to_owned(), v))
+                .collect();
+            strconv::format_map(buf, &elems, |buf, d| {
                 if d.is_null() {
                     buf.write_null()
                 } else {

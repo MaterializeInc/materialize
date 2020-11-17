@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::error::Error;
 use std::fmt;
@@ -79,7 +79,7 @@ pub enum Value {
     /// A universally unique identifier.
     Uuid(Uuid),
     /// A map of string keys and homogeneous values.
-    Map(HashMap<String, Option<Value>>),
+    Map(BTreeMap<String, Option<Value>>),
 }
 
 impl Value {
@@ -470,15 +470,11 @@ fn decode_list(
     )?)
 }
 
-fn encode_map<F>(buf: &mut F, elems: &HashMap<String, Option<Value>>) -> Nestable
+fn encode_map<F>(buf: &mut F, elems: &BTreeMap<String, Option<Value>>) -> Nestable
 where
     F: FormatBuffer,
 {
-    let mut pairs: Vec<(&str, &Option<Value>)> =
-        elems.iter().map(|(k, v)| (k.as_ref(), v)).collect();
-    pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
-    pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
-    strconv::format_map(buf, pairs, |buf, elem| match elem {
+    strconv::format_map(buf, elems, |buf, value| match value {
         None => buf.write_null(),
         Some(elem) => elem.encode_text(buf.nonnull_buffer()),
     })
@@ -487,7 +483,7 @@ where
 fn decode_map(
     val_type: &Type,
     raw: &str,
-) -> Result<HashMap<String, Option<Value>>, Box<dyn Error + Sync + Send>> {
+) -> Result<BTreeMap<String, Option<Value>>, Box<dyn Error + Sync + Send>> {
     Ok(strconv::parse_map(
         raw,
         |key_text| -> String {

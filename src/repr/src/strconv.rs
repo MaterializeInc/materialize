@@ -24,7 +24,7 @@
 //! should be considered a bug.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
@@ -696,7 +696,7 @@ pub fn parse_map<'a, V, E>(
     s: &'a str,
     gen_key: impl FnMut(Cow<'a, str>) -> String,
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
-) -> Result<HashMap<String, V>, ParseError>
+) -> Result<BTreeMap<String, V>, ParseError>
 where
     E: fmt::Display,
 {
@@ -708,11 +708,11 @@ pub fn parse_map_inner<'a, V, E>(
     s: &'a str,
     mut gen_key: impl FnMut(Cow<'a, str>) -> String,
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
-) -> Result<HashMap<String, V>, String>
+) -> Result<BTreeMap<String, V>, String>
 where
     E: fmt::Display,
 {
-    let mut map = HashMap::new();
+    let mut map = BTreeMap::new();
     let buf = &mut LexBuf::new(s);
 
     // Consume opening paren.
@@ -864,18 +864,18 @@ fn map_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, s
     })
 }
 
-pub fn format_map<F, T>(
+pub fn format_map<'a, F, T>(
     buf: &mut F,
-    elems: Vec<(&str, T)>,
-    mut format_elem: impl FnMut(MapElementWriter<F>, &T) -> Nestable,
+    elems: impl IntoIterator<Item = (&'a String, T)>,
+    mut format_elem: impl FnMut(MapElementWriter<F>, T) -> Nestable,
 ) -> Nestable
 where
     F: FormatBuffer,
 {
     buf.write_char('{');
-    let mut elems = elems.iter().peekable();
+    let mut elems = elems.into_iter().peekable();
     while let Some((key, value)) = elems.next() {
-        buf.write_str(key);
+        buf.write_str(key.as_str());
         buf.write_str("=>");
         format_elem(MapElementWriter(buf), value);
         if elems.peek().is_some() {
