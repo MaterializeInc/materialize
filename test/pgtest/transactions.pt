@@ -1,0 +1,179 @@
+# Test implicit and explicit transaction semantics.
+# See "Multiple Statements in a Simple Query"
+# From https://www.postgresql.org/docs/current/protocol-flow.html
+
+# Note: all of the "SELECT 1/(SELECT 0)" things are here to produce a
+# query error. We do not use SELECT 1/0 because in Postgres that doesn't
+# send a RowDescription message while the former does. This is probably
+# due to Postgres constant folding rules that run before its execution
+# phase. This isn't important to the protocol, and both (sending or not
+# sending RowDescription) are valid. Because we send a RowDescription
+# on SELECT 1/0, we use the more complicated form to force Postgres to
+# also send one, unifying the responses here.
+
+# "When a simple Query message contains more than one SQL statement
+# (separated by semicolons), those statements are executed as a single
+# transaction, unless explicit transaction control commands are included
+# to force a different behavior."
+send
+Query {"query": "SELECT 1; SELECT 1/(SELECT 0); SELECT 2;"}
+----
+
+# Our error codes differ, so only extract the message.
+until err_field_typs=M
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+RowDescription {"fields":[{"name":"?column?"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+
+# There are two transactions here, the first (explicit) succeeds and
+# the second (implicitly started after the COMMIT) fails.
+send
+Query {"query": "BEGIN; SELECT 1; COMMIT; SELECT 1/(SELECT 0); SELECT 2"}
+----
+
+until err_field_typs=M
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+CommandComplete {"tag":"COMMIT"}
+RowDescription {"fields":[{"name":"?column?"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+
+# The transaction fails, so statements after it should not be executed,
+# thus the ROLLBACK should not be executed in the first Query.
+send
+Query {"query": "BEGIN; SELECT 1/(SELECT 0); ROLLBACK;"}
+Query {"query": "ROLLBACK"}
+----
+
+until err_field_typs=M
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+RowDescription {"fields":[{"name":"?column?"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+# The entire query is parsed at once, preventing any of it from running if that fails.
+send
+Query {"query": "BEGIN; SELECT 1; COMMIT; SELCT 1/(SELECT 0);"}
+----
+
+until err_field_typs=C
+ErrorResponse
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"42601"}]}
+ReadyForQuery {"status":"I"}
+
+# "If the BEGIN follows some statements that were executed as an implicit
+# transaction block, those statements are not immediately committed;
+# in effect, they are retroactively included into the new regular
+# transaction block."
+send
+Query {"query": "SELECT 1; BEGIN; SELECT 2;"}
+Query {"query": "COMMIT"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+CommandComplete {"tag":"BEGIN"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+# "If the session is already in a transaction block, as a result of a
+# BEGIN in some previous message, then the Query message simply continues
+# that transaction block, whether the message contains one statement or
+# several. However, if the Query message contains a COMMIT or ROLLBACK
+# closing the existing transaction block, then any following statements
+# are executed in an implicit transaction block."
+
+send
+Query {"query": "BEGIN; SELECT 1/(SELECT 0); SELECT 1;"}
+Query {"query": "SELECT 2; ROLLBACK; SELECT 3;"}
+Query {"query": "ROLLBACK; SELECT 4;"}
+----
+
+until err_field_typs=M
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+RowDescription {"fields":[{"name":"?column?"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"E"}
+ErrorResponse {"fields":[{"typ":"M","value":"current transaction is aborted, commands ignored until end of transaction block"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["4"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# "A COMMIT or ROLLBACK appearing in an implicit transaction block is
+# executed as normal, closing the implicit block; however, a warning
+# will be issued since a COMMIT or ROLLBACK without a previous BEGIN
+# might represent a mistake. If more statements follow, a new implicit
+# transaction block will be started for them."
+
+send
+Query {"query": "SELECT 1; COMMIT; SELECT 2"}
+Query {"query": "SELECT 3; ROLLBACK; SELECT 4"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+NoticeResponse {"fields":[{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
+CommandComplete {"tag":"COMMIT"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["3"]}
+CommandComplete {"tag":"SELECT 1"}
+NoticeResponse {"fields":[{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
+CommandComplete {"tag":"ROLLBACK"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["4"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# Test a failure, rollback, failure, rollback chain to verify that we never process after the first failure.
+send
+Query {"query": "SELECT 1/(SELECT 0); ROLLBACK; SELECT 2; SELECT 1/(SELECT 0); ROLLBACK;"}
+----
+
+until err_field_typs=M
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"?column?"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}

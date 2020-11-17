@@ -24,7 +24,8 @@ use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
 
-use coord::{session::RowBatchStream, ExecuteResponse, StartupMessage};
+use coord::session::{RowBatchStream, TransactionStatus};
+use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
@@ -327,7 +328,11 @@ where
         }
     }
 
+    // See "Multiple Statements in a Simple Query" which documents how implicit
+    // transactions are handled.
+    // From https://www.postgresql.org/docs/current/protocol-flow.html
     async fn query(&mut self, sql: String) -> Result<State, comm::Error> {
+        // Parse first before doing any transaction checking.
         let stmts = match parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
@@ -335,11 +340,43 @@ where
                 return self.sync().await;
             }
         };
+
+        // Compare with postgres' backend/tcop/postgres.c exec_simple_query.
         for stmt in stmts {
+            // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
+            let aborted_txn = matches!(
+                self.coord_client.session().transaction(),
+                TransactionStatus::Failed
+            );
+            let txn_exit_stmt = matches!(&stmt, Statement::Commit(_) | Statement::Rollback(_));
+            if aborted_txn && !txn_exit_stmt {
+                self.conn.send(BackendMessage::ErrorResponse(ErrorResponse::error(
+                        SqlState::IN_FAILED_SQL_TRANSACTION,
+                        "current transaction is aborted, commands ignored until end of transaction block",
+                    ))).await?;
+                break;
+            }
+
+            // Start an implicit transaction if we aren't in any transaction.
+            {
+                let session = self.coord_client.session();
+                if let TransactionStatus::Idle = session.transaction() {
+                    session.start_transaction_implicit();
+                }
+            }
+
             match self.one_query(stmt).await? {
                 State::Ready => (),
                 State::Drain => break,
                 State::Done => return Ok(State::Done),
+            }
+        }
+
+        // Implicit transactions are closed at the end of a Query message.
+        {
+            let session = self.coord_client.session();
+            if let TransactionStatus::InTransactionImplicit = session.transaction() {
+                session.end_transaction();
             }
         }
         self.sync().await
@@ -732,8 +769,20 @@ where
                 command_complete!("SET")
             }
             ExecuteResponse::StartedTransaction => command_complete!("BEGIN"),
-            ExecuteResponse::CommittedTransaction => command_complete!("COMMIT"),
-            ExecuteResponse::AbortedTransaction => command_complete!("ROLLBACK"),
+            ExecuteResponse::TransactionExited { tag, was_implicit } => {
+                // In Postgres, if a user sends a COMMIT or ROLLBACK in an implicit
+                // transaction, a notice is sent warning them. (The transaction is still closed
+                // and a new implicit transaction started, though.)
+                if was_implicit {
+                    let msg = ErrorResponse::notice(
+                        SqlState::NO_ACTIVE_SQL_TRANSACTION,
+                        "there is no transaction in progress",
+                    )
+                    .into_message();
+                    self.conn.send(msg).await?;
+                }
+                command_complete!("{}", tag)
+            }
             ExecuteResponse::Tailing { rx } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::Tailing");
@@ -1002,7 +1051,12 @@ where
         );
         let is_fatal = err.severity.is_fatal();
         self.conn.send(BackendMessage::ErrorResponse(err)).await?;
-        self.coord_client.session().fail_transaction();
+        let session = self.coord_client.session();
+        // Errors in implicit transactions move it back to idle, not failed.
+        match session.transaction() {
+            TransactionStatus::InTransactionImplicit => session.end_transaction(),
+            _ => session.fail_transaction(),
+        };
         if is_fatal {
             Ok(State::Done)
         } else {

@@ -181,6 +181,26 @@ impl PgTest {
                                 .unwrap(),
                         })?,
                     ),
+                    Message::NoticeResponse(body) => (
+                        "NoticeResponse",
+                        serde_json::to_string(&ErrorResponse {
+                            fields: body
+                                .fields()
+                                .filter_map(|f| {
+                                    let typ = f.type_() as char;
+                                    if err_field_typs.contains(&typ) {
+                                        Ok(Some(ErrorField {
+                                            typ,
+                                            value: f.value().to_string(),
+                                        }))
+                                    } else {
+                                        Ok(None)
+                                    }
+                                })
+                                .collect()
+                                .unwrap(),
+                        })?,
+                    ),
                     Message::CopyOutResponse(body) => (
                         "CopyOut",
                         serde_json::to_string(&CopyOut {

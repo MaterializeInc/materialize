@@ -73,7 +73,7 @@ use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
-use crate::session::{PreparedStatement, Session};
+use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::sink_connector;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -1339,14 +1339,22 @@ where
                 tx.send(Ok(ExecuteResponse::StartedTransaction), session)
             }
 
-            Plan::CommitTransaction => {
+            Plan::CommitTransaction | Plan::AbortTransaction => {
+                let was_implicit = matches!(
+                    session.transaction(),
+                    TransactionStatus::InTransactionImplicit
+                );
+                let tag = match plan {
+                    Plan::CommitTransaction => "COMMIT",
+                    Plan::AbortTransaction => "ROLLBACK",
+                    _ => unreachable!(),
+                }
+                .to_string();
                 session.end_transaction();
-                tx.send(Ok(ExecuteResponse::CommittedTransaction), session)
-            }
-
-            Plan::AbortTransaction => {
-                session.end_transaction();
-                tx.send(Ok(ExecuteResponse::AbortedTransaction), session)
+                tx.send(
+                    Ok(ExecuteResponse::TransactionExited { tag, was_implicit }),
+                    session,
+                )
             }
 
             Plan::Peek {

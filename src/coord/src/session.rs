@@ -71,6 +71,11 @@ impl Session {
         self.transaction = TransactionStatus::InTransaction;
     }
 
+    /// Starts an implicit transaction.
+    pub fn start_transaction_implicit(&mut self) {
+        self.transaction = TransactionStatus::InTransactionImplicit;
+    }
+
     /// Ends a transaction.
     pub fn end_transaction(&mut self) {
         self.transaction = TransactionStatus::Idle;
@@ -80,8 +85,14 @@ impl Session {
     ///
     /// If the session is not in a transaction, this method does nothing.
     pub fn fail_transaction(&mut self) {
-        if self.transaction == TransactionStatus::InTransaction {
-            self.transaction = TransactionStatus::Failed;
+        match self.transaction {
+            TransactionStatus::InTransaction => {
+                self.transaction = TransactionStatus::Failed;
+            }
+            TransactionStatus::InTransactionImplicit => {
+                self.transaction = TransactionStatus::Idle;
+            }
+            _ => {}
         }
     }
 
@@ -243,6 +254,8 @@ pub enum TransactionStatus {
     Idle,
     /// Currently in a transaction.
     InTransaction,
+    /// Currently in an implicit transaction.
+    InTransactionImplicit,
     /// Currently in a failed transaction.
     Failed,
 }
