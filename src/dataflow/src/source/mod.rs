@@ -43,14 +43,14 @@ use crate::operator::StreamExt;
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
-use crate::source::persistence::PersistenceSender;
+use crate::source::cache::CacheSender;
 
 mod file;
 mod kafka;
 mod kinesis;
 mod util;
 
-pub mod persistence;
+pub mod cache;
 
 use differential_dataflow::Hashable;
 pub use file::read_file_task;
@@ -86,8 +86,8 @@ pub struct SourceConfig<'a, G> {
     pub active: bool,
     /// Data encoding
     pub encoding: DataEncoding,
-    /// Channel to send persistence information to persister thread
-    pub persistence_tx: Option<PersistenceSender>,
+    /// Channel to send source caching information to cacher thread
+    pub caching_tx: Option<CacheSender>,
     /// Timely worker logger for source events
     pub logger: Option<Logger>,
 }
@@ -339,10 +339,10 @@ pub(crate) trait SourceInfo<Out> {
     /// Buffer a message that cannot get timestamped
     fn buffer_message(&mut self, message: SourceMessage<Out>);
 
-    /// Persist a message
-    fn persist_message(
+    /// Cache a message
+    fn cache_message(
         &self,
-        _persistence_tx: &mut Option<PersistenceSender>,
+        _caching_tx: &mut Option<CacheSender>,
         _message: &SourceMessage<Out>,
         _timestamp: Timestamp,
         _offset: Option<MzOffset>,
@@ -350,13 +350,13 @@ pub(crate) trait SourceInfo<Out> {
         // Default implementation is to do nothing
     }
 
-    /// Read back data from a previously persisted file.
+    /// Read back data from a previously cached file.
     /// Reads messages back from files in offset order, and returns None when there is
     /// no more data left to process
     /// TODO(rkhaitan): clean this up to return a proper type and potentially a iterator.
-    fn next_persisted_file(&mut self) -> Option<Vec<(Vec<u8>, Out, Timestamp, i64)>> {
+    fn next_cached_file(&mut self) -> Option<Vec<(Vec<u8>, Out, Timestamp, i64)>> {
         // Default implementation is to do nothing.
-        debug!("unimplemented: this source does not support reading persisted files");
+        debug!("unimplemented: this source does not support reading cached files");
         None
     }
 }
@@ -868,7 +868,7 @@ where
         timestamp_frequency,
         active,
         encoding,
-        mut persistence_tx,
+        mut caching_tx,
         logger,
         ..
     } = config;
@@ -910,7 +910,7 @@ where
             encoding,
         );
 
-        let mut read_persisted_files = false;
+        let mut read_cached_files = false;
         let mut predecessor = None;
 
         move |cap, output| {
@@ -927,18 +927,18 @@ where
                 return SourceStatus::Done;
             }
 
-            if !read_persisted_files {
-                // Downgrade capability (if possible) before reading next persisted file.
+            if !read_cached_files {
+                // Downgrade capability (if possible) before reading next cached file.
                 consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
 
-                if let Some(msgs) = source_info.next_persisted_file() {
+                if let Some(msgs) = source_info.next_cached_file() {
                     // TODO(rkhaitan) change this to properly re-use old timestamps.
                     // Currently this is hard to do because there can be arbitrary delays between
-                    // different workers being scheduled, and this means that all persisted state
+                    // different workers being scheduled, and this means that all cached state
                     // can potentially get pulled into memory without being able to close timestamps
                     // which causes the system to go out of memory.
-                    // For now, constrain we constrain persistence to RT sources, and we re-assign
-                    // timestamps to persisted messages on startup.
+                    // For now, constrain we constrain caching to RT sources, and we re-assign
+                    // timestamps to cached messages on startup.
                     let ts = consistency_info.find_matching_rt_timestamp();
                     let ts_cap = cap.delayed(&ts);
                     for m in msgs {
@@ -946,7 +946,7 @@ where
                             m.0,
                             m.1,
                             Some(m.3),
-                            None, // upstream timestamps are normalized before they are persisted
+                            None, // upstream timestamps are normalized before they are cached
                         )));
                     }
 
@@ -954,8 +954,8 @@ where
                     activator.activate_after(Duration::from_millis(10));
                     return SourceStatus::Alive;
                 } else {
-                    // We've finished reading all persistence data
-                    read_persisted_files = true;
+                    // We've finished reading all cache data
+                    read_cached_files = true;
                 }
             }
 
@@ -1020,8 +1020,8 @@ where
                                     metric_updates.insert(partition.clone(), (offset, ts));
                                 }
 
-                                source_info.persist_message(
-                                    &mut persistence_tx,
+                                source_info.cache_message(
+                                    &mut caching_tx,
                                     &message,
                                     ts,
                                     msg_predecessor,

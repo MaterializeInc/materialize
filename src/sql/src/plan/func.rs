@@ -1380,26 +1380,26 @@ lazy_static! {
                     })
                 })
             },
-            "internal_read_persisted_data" => Table {
+            "internal_read_cached_data" => Table {
                 params!(String) => Operation::unary(move |ecx, source| {
                     let source = match source.into_literal_string(){
                         Some(id) => id,
-                        None => bail!("source passed to internal_read_persisted_data must be literal string"),
+                        None => bail!("source passed to internal_read_cached_data must be literal string"),
                     };
                     let item = ecx.qcx.scx.resolve_item(ObjectName(vec![Ident::new(source.clone())]))?;
                     let entry = ecx.qcx.scx.catalog.get_item(&item);
                     match entry.item_type() {
                         CatalogItemType::Source => {},
-                        _ =>  bail!("{} is a {}, but internal_read_persisted_data requires a source", source, entry.item_type()),
+                        _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, entry.item_type()),
                     }
-                    let persistence_directory = ecx.qcx.scx.catalog.persistence_directory();
-                    if persistence_directory.is_none() {
-                        bail!("source persistence is currently disabled. Try rerunning Materialize with '--experimental'.");
+                    let cache_directory = ecx.qcx.scx.catalog.cache_directory();
+                    if cache_directory.is_none() {
+                        bail!("source caching is currently disabled. Try rerunning Materialize with '--experimental'.");
                     }
                     Ok(TableFuncPlan {
-                        func: TableFunc::ReadPersistedData {
+                        func: TableFunc::ReadCachedData {
                             source: entry.id(),
-                            persistence_directory: persistence_directory.expect("known to exist").to_path_buf(),
+                            cache_directory: cache_directory.expect("known to exist").to_path_buf(),
                         },
                         exprs: vec![],
                         column_names: vec!["filename", "offset", "key", "value"].iter().map(|c| Some(ColumnName::from(*c))).collect(),

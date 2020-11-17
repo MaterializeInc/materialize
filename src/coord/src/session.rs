@@ -13,7 +13,6 @@
 
 use std::collections::HashMap;
 
-use anyhow::bail;
 use derivative::Derivative;
 use futures::Stream;
 
@@ -123,23 +122,16 @@ impl Session {
     pub fn set_portal(
         &mut self,
         portal_name: String,
-        statement_name: String,
+        desc: StatementDesc,
+        stmt: Option<Statement>,
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<pgrepr::Format>,
     ) -> Result<(), anyhow::Error> {
-        if !self.prepared_statements.contains_key(&statement_name) {
-            bail!(
-                "statement does not exist for portal creation: \
-                 statement={:?} portal={:?}",
-                statement_name,
-                portal_name
-            );
-        }
-
         self.portals.insert(
             portal_name,
             Portal {
-                statement_name,
+                stmt,
+                desc,
                 parameters: Params {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
                     types: params.into_iter().map(|(_d, t)| t).collect(),
@@ -220,8 +212,10 @@ impl PreparedStatement {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Portal {
-    /// The name of the prepared statement that is bound to this portal.
-    pub statement_name: String,
+    /// The statement that is bound to this portal.
+    pub stmt: Option<Statement>,
+    /// The statement description.
+    pub desc: StatementDesc,
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.

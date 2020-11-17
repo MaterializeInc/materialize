@@ -22,7 +22,7 @@
 
 #![deny(missing_debug_implementations)]
 
-mod persistence;
+mod cache;
 mod relation;
 mod row;
 mod scalar;
@@ -30,7 +30,7 @@ mod scalar;
 pub mod adt;
 pub mod strconv;
 
-pub use persistence::{PersistedRecord, PersistedRecordIter};
+pub use cache::{CachedRecord, CachedRecordIter};
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{datum_size, DatumDict, DatumList, Row, RowArena, RowPacker};
 pub use scalar::{Datum, ScalarType};

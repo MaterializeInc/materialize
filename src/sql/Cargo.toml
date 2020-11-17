@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.33"
+anyhow = "1.0.34"
 aws-arn = "0.1.1"
 ccsr = { path = "../ccsr" }
 chrono = "0.4"
@@ -31,5 +31,5 @@ serde_json = "1"
 sql-parser = { path = "../sql-parser" }
 tokio = { version = "0.2.22", features = ["fs"] }
 unicase = "2.6.0"
-url = "2.1.1"
+url = "2.2.0"
 uuid = { version = "0.8", features = ["serde", "v4"] }

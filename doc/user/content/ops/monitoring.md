@@ -1,6 +1,6 @@
 ---
 title: "Monitoring"
-description: "Find details about running your Materialize instances"
+description: "Find details about your running Materialize instances"
 aliases:
   - /monitoring
 menu:
@@ -12,7 +12,13 @@ _This page is a work in progress and will have more detail in the coming months.
 If you have specific questions, feel free to [file a GitHub
 issue](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md)._
 
-Materialize supports integration with monitoring tools using HTTP endpoints.
+Materialize supports integration with monitoring tools using both the
+[Prometheus](#prometheus) format and via [SQL interface](#system-catalog-sql-interface)
+that provide more information about internal state.
+
+This page provides an overview of the tools available to diagnose a running materialized
+instance. You can use the same features that are used by these tools to integrate
+Materialize with other observability infrastructure.
 
 ## Quick monitoring dashboard
 
@@ -139,6 +145,15 @@ Materialize broadly publishes the following types of data there:
   `rate(mz_responses_sent_total[10s])` will show you the number of responses
   averaged over 10 second windows.
 - Standard process metrics with a `process_*` prefix. For exmple, `process_cpu`.
+
+## System Catalog SQL Interface
+
+The `mz_catalog` SQL interface provides a variety of ways to introspect Materialize. An
+introduction to this catalog is available as part of our [SQL
+documentation](/sql/system-catalog).
+
+A user guide for debugging a running `materialized` using the system catalog is available
+in the form of a walkthrough of useful [diagnostic queries](/ops/diagnosing-using-sql).
 
 ## Grafana
 

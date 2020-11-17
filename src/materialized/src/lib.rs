@@ -29,7 +29,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use comm::Switchboard;
-use coord::{LoggingConfig, PersistenceConfig};
+use coord::{CacheConfig, LoggingConfig};
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use ore::tokio::net::TcpStreamExt;
 
@@ -123,7 +123,7 @@ pub struct Config {
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: Option<PathBuf>,
-    pub persistence: Option<PersistenceConfig>,
+    pub cache: Option<CacheConfig>,
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
@@ -268,7 +268,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             timestamp: coord::TimestampConfig {
                 frequency: config.timestamp_frequency,
             },
-            persistence: config.persistence,
+            cache: config.cache,
             logical_compaction_window: config.logical_compaction_window,
             experimental_mode: config.experimental_mode,
         })

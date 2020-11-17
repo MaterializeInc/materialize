@@ -18,34 +18,34 @@ use futures::stream::StreamExt;
 use log::{error, info, trace};
 use uuid::Uuid;
 
-use dataflow::source::persistence::RecordFileMetadata;
-use dataflow::PersistenceMessage;
+use dataflow::source::cache::RecordFileMetadata;
+use dataflow::CacheMessage;
 use dataflow_types::{ExternalSourceConnector, SourceConnector};
 use expr::GlobalId;
-use repr::PersistedRecord;
+use repr::CachedRecord;
 
-// Interval at which Persister will try to flush out pending records
-static PERSISTENCE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
+// Interval at which Cacher will try to flush out pending records
+static CACHE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug)]
-pub struct PersistenceConfig {
+pub struct CacheConfig {
     /// Maximum number of records that are allowed to be pending for a source
     /// before we attempt to flush that source immediately.
     pub max_pending_records: usize,
-    /// Directory where all persistence information is stored.
+    /// Directory where all cache information is stored.
     pub path: PathBuf,
 }
 
 #[derive(Debug)]
 struct Partition {
-    last_persisted_offset: Option<i64>,
-    pending: Vec<PersistedRecord>,
+    last_cached_offset: Option<i64>,
+    pending: Vec<CachedRecord>,
 }
 
 #[derive(Debug)]
 struct Source {
     // Multiple source instances will send data to the same Source object
-    // but the data will be deduplicated before it is persisted.
+    // but the data will be deduplicated before it is cached.
     id: GlobalId,
     cluster_id: Uuid,
     path: PathBuf,
@@ -54,7 +54,7 @@ struct Source {
     // Maximum number of records that are allowed to be pending before we
     // attempt to write immediately.
     max_pending_records: usize,
-    // TODO: in a future where persistence supports more than just Kafka this
+    // TODO: in a future where caching supports more than just Kafka this
     // probably should be keyed on PartitionId
     partitions: BTreeMap<i32, Partition>,
 }
@@ -74,23 +74,28 @@ impl Source {
     fn insert_record(
         &mut self,
         partition_id: i32,
-        record: PersistedRecord,
+        record: CachedRecord,
     ) -> Result<(), anyhow::Error> {
         // Start tracking this partition id if we are not already
         self.partitions.entry(partition_id).or_insert(Partition {
-            last_persisted_offset: None,
+            last_cached_offset: None,
             pending: Vec::new(),
         });
 
         if let Some(partition) = self.partitions.get_mut(&partition_id) {
-            if let Some(last_persisted_offset) = partition.last_persisted_offset {
-                if record.offset <= last_persisted_offset {
-                    // The persister does not assume that dataflow workers will send data in
+            if let Some(last_cached_offset) = partition.last_cached_offset {
+                if record.offset <= last_cached_offset {
+                    // The cacher does not assume that dataflow workers will send data in
                     // any ordering. We can filter out the records that we have obviously do not
                     // need to think about here.
-                    trace!("Received an offset ({}) for source: {} partition: {} that was
-                           lower than the most recent offset flushed to persistent storage {}. Ignoring.",
-                           record.offset, self.id, partition_id, last_persisted_offset);
+                    trace!(
+                        "Received an offset ({}) for source: {} partition: {} that was
+                           lower than the most recent offset flushed to cache {}. Ignoring.",
+                        record.offset,
+                        self.id,
+                        partition_id,
+                        last_cached_offset
+                    );
                     return Ok(());
                 }
             }
@@ -105,16 +110,16 @@ impl Source {
     }
 
     /// Determine the longest contiguous prefix of offsets available per partition
-    // and if the prefix is sufficiently large, write it to disk.
+    // and if the prefix is sufficiently large, flush it to cache.
     fn maybe_flush(&mut self) -> Result<(), anyhow::Error> {
-        let mut persisted_records = 0;
+        let mut cached_records = 0;
         for (partition_id, partition) in self.partitions.iter_mut() {
             if partition.pending.is_empty() {
-                // No data to persist here
+                // No data to cache here
                 continue;
             }
 
-            let prefix = extract_prefix(partition.last_persisted_offset, &mut partition.pending);
+            let prefix = extract_prefix(partition.last_cached_offset, &mut partition.pending);
 
             let len = prefix.len();
 
@@ -148,19 +153,19 @@ impl Source {
 
                 std::fs::write(&tmp_path, buf)?;
                 std::fs::rename(tmp_path, path)?;
-                partition.last_persisted_offset = Some(prefix_end_offset);
-                persisted_records += len;
+                partition.last_cached_offset = Some(prefix_end_offset);
+                cached_records += len;
             }
         }
 
         assert!(
-            persisted_records <= self.pending_records,
-            "persisted {} records but only had {} pending",
-            persisted_records,
+            cached_records <= self.pending_records,
+            "cached {} records but only had {} pending",
+            cached_records,
             self.pending_records
         );
 
-        self.pending_records -= persisted_records;
+        self.pending_records -= cached_records;
 
         // TODO(rkhaitan): Reevaluate this. On the one hand, we need to have something like this to make sure
         // we don't get spammed into trying to write every time on a topic with a missing offset / extreme
@@ -179,16 +184,16 @@ impl Source {
     }
 }
 
-pub struct Persister {
-    rx: Option<comm::mpsc::Receiver<PersistenceMessage>>,
+pub struct Cacher {
+    rx: Option<comm::mpsc::Receiver<CacheMessage>>,
     sources: HashMap<GlobalId, Source>,
     disabled_sources: HashSet<GlobalId>,
-    pub config: PersistenceConfig,
+    pub config: CacheConfig,
 }
 
-impl Persister {
-    pub fn new(rx: comm::mpsc::Receiver<PersistenceMessage>, config: PersistenceConfig) -> Self {
-        Persister {
+impl Cacher {
+    pub fn new(rx: comm::mpsc::Receiver<CacheMessage>, config: CacheConfig) -> Self {
+        Cacher {
             rx: Some(rx),
             sources: HashMap::new(),
             disabled_sources: HashSet::new(),
@@ -196,7 +201,7 @@ impl Persister {
         }
     }
 
-    async fn persist(&mut self) -> Result<(), anyhow::Error> {
+    async fn cache(&mut self) -> Result<(), anyhow::Error> {
         // We need to bound the amount of time spent reading from the data channel to ensure we
         // don't neglect our other tasks of writing the data down.
         let mut rx_stream = self
@@ -205,16 +210,16 @@ impl Persister {
             .unwrap()
             .map(|m| match m {
                 Ok(m) => m,
-                Err(_) => panic!("persister thread failed to read from channel"),
+                Err(_) => panic!("cacher thread failed to read from channel"),
             })
             .fuse();
 
-        let mut interval = tokio::time::interval(PERSISTENCE_FLUSH_INTERVAL).fuse();
+        let mut interval = tokio::time::interval(CACHE_FLUSH_INTERVAL).fuse();
         loop {
             select! {
                 data = rx_stream.next() => {
                     let shutdown = if let Some(data) = data {
-                        self.handle_persistence_message(data)?
+                        self.handle_cache_message(data)?
                     } else {
                         // TODO not sure if this should be a stronger error
                         error!("Source caching thread receiver hung up. Shutting down caching.");
@@ -237,13 +242,10 @@ impl Persister {
         Ok(())
     }
 
-    /// Process a new PersistenceMessage and return true if we should halt processing.
-    fn handle_persistence_message(
-        &mut self,
-        data: PersistenceMessage,
-    ) -> Result<bool, anyhow::Error> {
+    /// Process a new CacheMessage and return true if we should halt processing.
+    fn handle_cache_message(&mut self, data: CacheMessage) -> Result<bool, anyhow::Error> {
         match data {
-            PersistenceMessage::Data(data) => {
+            CacheMessage::Data(data) => {
                 if !self.sources.contains_key(&data.source_id) {
                     if self.disabled_sources.contains(&data.source_id) {
                         // It's possible that there was a delay between when the coordinator
@@ -253,9 +255,9 @@ impl Persister {
                             data.source_id
                         );
                     } else {
-                        // We got data for a source that we don't currently track persistence data for
+                        // We got data for a source that we don't currently track cache data for
                         // and we've never deleted. This isn't possible in the current implementation,
-                        // as the coordinatr sends a CreateSource message to the persister before sending
+                        // as the coordinatr sends a CreateSource message to the cacher before sending
                         // anything to the dataflow workers, but this could become possible in the future.
 
                         self.disabled_sources.insert(data.source_id);
@@ -272,7 +274,7 @@ impl Persister {
                     source.insert_record(data.partition_id, data.record)?;
                 }
             }
-            PersistenceMessage::AddSource(cluster_id, source_id) => {
+            CacheMessage::AddSource(cluster_id, source_id) => {
                 // Check if we already have a source
                 if self.sources.contains_key(&source_id) {
                     error!(
@@ -291,7 +293,7 @@ impl Persister {
                 let source_path = self.config.path.join(source_id.to_string());
                 fs::create_dir_all(&source_path).with_context(|| {
                     anyhow!(
-                        "trying to create persistence directory: {:#?} for source: {}",
+                        "trying to create cache directory: {:#?} for source: {}",
                         source_path,
                         source_id
                     )
@@ -306,20 +308,23 @@ impl Persister {
                 self.sources.insert(source_id, source);
                 info!("Enabled caching for source: {}", source_id);
             }
-            PersistenceMessage::DropSource(id) => {
+            CacheMessage::DropSource(id) => {
                 if !self.sources.contains_key(&id) {
                     // This will actually happen fairly often because the
-                    // coordinator doesn't see which sources had persistence
-                    // enabled on delete, so notifies the persistence thread
+                    // coordinator doesn't see which sources had caching
+                    // enabled on delete, so notifies the cacher thread
                     // for all drops.
-                    trace!("Received signal to disable persistence for {} but it is not persisted. Ignoring.", id);
+                    trace!(
+                        "Received signal to disable caching for {} but it is not cached. Ignoring.",
+                        id
+                    );
                 } else {
                     self.sources.remove(&id);
                     self.disabled_sources.insert(id);
                     info!("Disabled caching for source: {}", id);
                 }
             }
-            PersistenceMessage::Shutdown => {
+            CacheMessage::Shutdown => {
                 return Ok(true);
             }
         };
@@ -333,8 +338,8 @@ impl Persister {
             self.config.max_pending_records,
             self.config.path.display()
         );
-        trace!("Persistence thread checking for updates.");
-        let ret = self.persist().await;
+        trace!("Caching thread checking for updates.");
+        let ret = self.cache().await;
 
         match ret {
             Ok(_) => (),
@@ -346,13 +351,13 @@ impl Persister {
     }
 }
 
-/// Check if there are any persisted files available for this source and if so,
+/// Check if there are any cached files available for this source and if so,
 /// use them, and start reading from the source at the appropriate offsets.
-/// Returns a newly constructed source connector if the source was persistence enabled
-/// which may or may not have new data around previously persisted files.
+/// Returns a newly constructed source connector if the source was caching enabled
+/// which may or may not have new data around previously cached files.
 pub fn augment_connector(
     mut source_connector: SourceConnector,
-    persistence_directory: &Path,
+    cache_directory: &Path,
     cluster_id: Uuid,
     source_id: GlobalId,
 ) -> Result<Option<SourceConnector>, anyhow::Error> {
@@ -360,11 +365,11 @@ pub fn augment_connector(
         SourceConnector::External {
             ref mut connector, ..
         } => {
-            if !connector.persistence_enabled() {
-                // This connector has no persistence, so do nothing.
+            if !connector.caching_enabled() {
+                // This connector has no caching, so do nothing.
                 Ok(None)
             } else {
-                augment_connector_inner(connector, persistence_directory, cluster_id, source_id)?;
+                augment_connector_inner(connector, cache_directory, cluster_id, source_id)?;
                 Ok(Some(source_connector))
             }
         }
@@ -374,7 +379,7 @@ pub fn augment_connector(
 
 fn augment_connector_inner(
     connector: &mut ExternalSourceConnector,
-    persistence_directory: &Path,
+    cache_directory: &Path,
     cluster_id: Uuid,
     source_id: GlobalId,
 ) -> Result<(), anyhow::Error> {
@@ -383,7 +388,7 @@ fn augment_connector_inner(
             let mut read_offsets: HashMap<i32, i64> = HashMap::new();
             let mut paths = Vec::new();
 
-            let source_path = persistence_directory.join(source_id.to_string());
+            let source_path = cache_directory.join(source_id.to_string());
 
             // Not safe to assume that the directory we are trying to read will be there
             // so if its not lets just early exit.
@@ -438,9 +443,9 @@ fn augment_connector_inner(
             }
 
             k.start_offsets = read_offsets;
-            k.persisted_files = Some(paths);
+            k.cached_files = Some(paths);
         }
-        _ => bail!("persistence only enabled for Kafka sources at this time"),
+        _ => bail!("caching only enabled for Kafka sources at this time"),
     }
 
     Ok(())
@@ -450,8 +455,8 @@ fn augment_connector_inner(
 // the data for that range.
 fn extract_prefix(
     starting_offset: Option<i64>,
-    records: &mut Vec<PersistedRecord>,
-) -> Vec<PersistedRecord> {
+    records: &mut Vec<CachedRecord>,
+) -> Vec<CachedRecord> {
     records.sort_by(|a, b| (a.offset, a.predecessor.map(|p| -p)).cmp(&(b.offset, b.predecessor)));
 
     // Keep only the minimum predecessor we received for every offset
@@ -480,8 +485,8 @@ fn extract_prefix(
 fn test_extract_prefix() {
     use repr::Timestamp;
 
-    fn record(offset: i64, predecessor: Option<i64>) -> PersistedRecord {
-        PersistedRecord {
+    fn record(offset: i64, predecessor: Option<i64>) -> CachedRecord {
+        CachedRecord {
             offset,
             predecessor,
             timestamp: Timestamp::default(),

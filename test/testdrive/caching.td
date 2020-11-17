@@ -19,7 +19,7 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
   WITH (cache=true) FORMAT BYTES
 
-> SELECT "offset", value FROM internal_read_persisted_data('data') ORDER BY "offset"
+> SELECT "offset", value FROM internal_read_cached_data('data') ORDER BY "offset"
  offset  value
 --------------------
 1  "\\xc2\\xa91"
@@ -28,7 +28,7 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
 > SELECT DISTINCT split_part(filename, '-', 4) AS partition,
   split_part(filename, '-', 5) AS start_offset,
   split_part(filename, '-', 6) AS end_offset
-  FROM internal_read_persisted_data('data')
+  FROM internal_read_cached_data('data')
 partition  start_offset  end_offset
 --------------------------------------
 0          0            2

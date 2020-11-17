@@ -31,16 +31,16 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{debug, error, info, log_enabled, warn};
-use repr::{PersistedRecord, PersistedRecordIter, Timestamp};
+use repr::{CachedRecord, CachedRecordIter, Timestamp};
 
-use crate::source::persistence::{PersistenceSender, RecordFileMetadata, WorkerPersistenceData};
+use crate::source::cache::{CacheSender, RecordFileMetadata, WorkerCacheData};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
 use crate::{
     logging::materialized::Logger,
     server::{
-        PersistenceMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
+        CacheMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
         TimestampMetadataUpdates,
     },
 };
@@ -67,7 +67,7 @@ pub struct KafkaSourceInfo {
     /// Worker Count
     worker_count: i32,
     /// Files to read on startup
-    persisted_files: Vec<PathBuf>,
+    cached_files: Vec<PathBuf>,
     /// Timely worker logger for source events
     logger: Option<Logger>,
 }
@@ -372,20 +372,16 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         self.buffered_metadata.insert(consumer.pid);
     }
 
-    fn next_persisted_file(&mut self) -> Option<Vec<(Vec<u8>, Vec<u8>, Timestamp, i64)>> {
-        if let Some(f) = &self.persisted_files.pop() {
-            debug!("reading persisted data from {}", f.display());
+    fn next_cached_file(&mut self) -> Option<Vec<(Vec<u8>, Vec<u8>, Timestamp, i64)>> {
+        if let Some(f) = &self.cached_files.pop() {
+            debug!("reading cached data from {}", f.display());
             let data = fs::read(f).unwrap_or_else(|e| {
-                error!(
-                    "failed to read source persistence file {}: {}",
-                    f.display(),
-                    e
-                );
+                error!("failed to read source cache file {}: {}", f.display(), e);
                 vec![]
             });
 
             Some(
-                PersistedRecordIter::new(data)
+                CachedRecordIter::new(data)
                     .map(|r| (r.key, r.value, r.timestamp, r.offset))
                     .collect(),
             )
@@ -394,15 +390,15 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         }
     }
 
-    fn persist_message(
+    fn cache_message(
         &self,
-        persistence_tx: &mut Option<PersistenceSender>,
+        caching_tx: &mut Option<CacheSender>,
         message: &SourceMessage<Vec<u8>>,
         timestamp: Timestamp,
         predecessor: Option<MzOffset>,
     ) {
-        // Send this record to be persisted
-        if let Some(persistence_tx) = persistence_tx {
+        // Send this record to be cached
+        if let Some(caching_tx) = caching_tx {
             let partition_id = match message.partition {
                 PartitionId::Kafka(p) => p,
                 _ => unreachable!(),
@@ -413,10 +409,10 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             let key = message.key.clone().unwrap_or_default();
             let value = message.payload.clone().unwrap_or_default();
 
-            let persistence_data = PersistenceMessage::Data(WorkerPersistenceData {
+            let cache_data = CacheMessage::Data(WorkerCacheData {
                 source_id: self.id.source_id,
                 partition_id,
-                record: PersistedRecord {
+                record: CachedRecord {
                     predecessor: predecessor.map(|p| p.offset),
                     offset: message.offset.offset,
                     timestamp,
@@ -425,11 +421,11 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 },
             });
 
-            let mut connector = persistence_tx.as_mut();
+            let mut connector = caching_tx.as_mut();
 
             // TODO(rkhaitan): revisit whether this architecture of blocking
             // within a dataflow operator makes sense.
-            block_on(connector.send(persistence_data)).unwrap();
+            block_on(connector.send(cache_data)).unwrap();
         }
     }
 }
@@ -459,8 +455,8 @@ impl KafkaSourceInfo {
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
-        let persisted_files = kc
-            .persisted_files
+        let cached_files = kc
+            .cached_files
             .map(|files| {
                 let mut filtered = files
                     .iter()
@@ -506,7 +502,7 @@ impl KafkaSourceInfo {
             consumer: Arc::new(consumer),
             worker_id,
             worker_count,
-            persisted_files,
+            cached_files,
             logger,
         }
     }

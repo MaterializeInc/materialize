@@ -254,8 +254,7 @@ fn run() -> Result<(), anyhow::Error> {
         None => Duration::from_millis(10),
         Some(d) => parse_duration::parse(&d)?,
     };
-    let persistence_max_pending_records =
-        popts.opt_get_default("cache-max-pending-records", 1000000)?;
+    let cache_max_pending_records = popts.opt_get_default("cache-max-pending-records", 1000000)?;
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
@@ -278,19 +277,19 @@ fn run() -> Result<(), anyhow::Error> {
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
 
-    // Configure source persistence.
-    let persistence = if experimental_mode {
-        let persistence_directory = data_directory.join("cache/");
-        fs::create_dir_all(&persistence_directory).with_context(|| {
+    // Configure source caching.
+    let cache = if experimental_mode {
+        let cache_directory = data_directory.join("cache/");
+        fs::create_dir_all(&cache_directory).with_context(|| {
             format!(
                 "creating source caching directory: {}",
-                persistence_directory.display()
+                cache_directory.display()
             )
         })?;
 
-        Some(coord::PersistenceConfig {
-            max_pending_records: persistence_max_pending_records,
-            path: persistence_directory,
+        Some(coord::CacheConfig {
+            max_pending_records: cache_max_pending_records,
+            path: cache_directory,
         })
     } else {
         None
@@ -445,7 +444,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
         logging,
         logical_compaction_window,
         timestamp_frequency,
-        persistence,
+        cache,
         listen_addr,
         tls,
         data_directory: Some(data_directory),

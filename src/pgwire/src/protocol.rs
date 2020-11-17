@@ -267,13 +267,12 @@ where
                 .await;
         }
 
-        let stmt_desc = self
+        let prep_stmt = self
             .coord_client
             .session()
             .get_prepared_statement(&stmt_name)
-            .unwrap()
-            .desc()
-            .clone();
+            .unwrap();
+        let stmt_desc = prep_stmt.desc().clone();
         if !stmt_desc.param_types.is_empty() {
             return self
                 .error(ErrorResponse::error(
@@ -287,11 +286,13 @@ where
         let portal_name = String::from("");
         let params = vec![];
         let result_formats = vec![pgrepr::Format::Text; stmt_desc.arity()];
+        let stmt = prep_stmt.sql().cloned();
         self.coord_client
             .session()
             .set_portal(
                 portal_name.clone(),
-                stmt_name.clone(),
+                stmt_desc.clone(),
+                stmt,
                 params,
                 result_formats,
             )
@@ -478,9 +479,11 @@ where
             }
         };
 
+        let desc = stmt.desc().clone();
+        let stmt = stmt.sql().cloned();
         self.coord_client
             .session()
-            .set_portal(portal_name, statement_name, params, result_formats)
+            .set_portal(portal_name, desc, stmt, params, result_formats)
             .unwrap();
 
         self.conn.send(BackendMessage::BindComplete).await?;
@@ -495,8 +498,7 @@ where
         let session = self.coord_client.session();
         let row_desc = session
             .get_portal(&portal_name)
-            .and_then(|portal| session.get_prepared_statement(&portal.statement_name))
-            .and_then(|stmt| stmt.desc().relation_desc.clone());
+            .and_then(|portal| portal.desc.relation_desc.clone());
         let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
             Some(portal) => portal,
             None => {
@@ -562,12 +564,9 @@ where
 
     async fn describe_portal(&mut self, name: String) -> Result<State, comm::Error> {
         let session = self.coord_client.session();
-        let row_desc = session.get_portal(&name).map(|portal| {
-            let stmt = session
-                .get_prepared_statement(&portal.statement_name)
-                .expect("statement name known to be valid");
-            describe_rows(stmt.desc(), &portal.result_formats)
-        });
+        let row_desc = session
+            .get_portal(&name)
+            .map(|portal| describe_rows(&portal.desc, &portal.result_formats));
         match row_desc {
             Some(row_desc) => {
                 self.conn.send(row_desc).await?;

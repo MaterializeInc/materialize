@@ -20,20 +20,20 @@
 //! [`pgwire`](../pgwire/index.html) produces, though they can, in theory, be
 //! provided by something other than a pgwire server.
 
+mod cache;
 mod catalog;
 mod client;
 mod command;
 mod coord;
-mod persistence;
 mod sink_connector;
 mod timestamp;
 mod util;
 
 pub mod session;
 
+pub use crate::cache::CacheConfig;
 pub use crate::catalog::dump as dump_catalog;
 pub use crate::client::{Client, SessionClient};
 pub use crate::command::{ExecuteResponse, NoSessionExecuteResponse, StartupMessage};
 pub use crate::coord::{serve, Config, LoggingConfig};
-pub use crate::persistence::PersistenceConfig;
 pub use crate::timestamp::TimestampConfig;

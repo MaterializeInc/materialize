@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::{Datum, Row, Timestamp};
 
 /// A single record from a source and partition that can be written to disk by
-/// the persister thread, and read back in and sent to the ingest pipeline later.
+/// the cacher thread, and read back in and sent to the ingest pipeline later.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct PersistedRecord {
+pub struct CachedRecord {
     /// Offset of record in a partition.
     pub offset: i64,
     /// Timestamp of record.
@@ -29,7 +29,7 @@ pub struct PersistedRecord {
     pub value: Vec<u8>,
 }
 
-impl PersistedRecord {
+impl CachedRecord {
     /// Encode the record as a length-prefixed Row, and then append that Row to the buffer.
     /// This function will throw an error if the row is larger than 4 GB.
     /// TODO: could this be made more efficient with a RowArena?
@@ -80,7 +80,7 @@ impl PersistedRecord {
         let value = row[3].unwrap_bytes();
 
         Some((
-            PersistedRecord {
+            CachedRecord {
                 predecessor: None,
                 offset: source_offset,
                 timestamp,
@@ -92,20 +92,20 @@ impl PersistedRecord {
     }
 }
 
-/// Iterator through a persisted set of records.
+/// Iterator through a cached set of records.
 #[derive(Debug)]
-pub struct PersistedRecordIter {
+pub struct CachedRecordIter {
     /// Underlying data from which we read the records.
     pub data: Vec<u8>,
     /// Offset into the data.
     pub offset: usize,
 }
 
-impl Iterator for PersistedRecordIter {
-    type Item = PersistedRecord;
+impl Iterator for CachedRecordIter {
+    type Item = CachedRecord;
 
-    fn next(&mut self) -> Option<PersistedRecord> {
-        if let Some((record, next_offset)) = PersistedRecord::read_record(&self.data, self.offset) {
+    fn next(&mut self) -> Option<CachedRecord> {
+        if let Some((record, next_offset)) = CachedRecord::read_record(&self.data, self.offset) {
             self.offset = next_offset;
             Some(record)
         } else {
@@ -114,9 +114,9 @@ impl Iterator for PersistedRecordIter {
     }
 }
 
-impl PersistedRecordIter {
+impl CachedRecordIter {
     pub fn new(data: Vec<u8>) -> Self {
-        PersistedRecordIter { data, offset: 0 }
+        CachedRecordIter { data, offset: 0 }
     }
 }
 
