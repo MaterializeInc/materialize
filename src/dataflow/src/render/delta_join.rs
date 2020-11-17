@@ -91,7 +91,7 @@ where
                                 let (update_stream, errs) = self
                                     .collection(&inputs[relation])
                                     .expect("Failed to render update stream");
-                                let update_stream = update_stream.enter(inner).enter(region);
+                                let update_stream = update_stream.enter(inner).enter_region(region);
                                 scope_errs.push(errs);
 
                                 // We track the sources of each column in our update stream.
@@ -174,7 +174,7 @@ where
                                                         |_, _, t| AltNeu::alt(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
-                                                    .enter(region);
+                                                    .enter_region(region);
                                                 build_lookup(update_stream, oks, prev_key)
                                             } else {
                                                 let oks = oks
@@ -183,7 +183,7 @@ where
                                                         |_, _, t| AltNeu::neu(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
-                                                    .enter(region);
+                                                    .enter_region(region);
                                                 build_lookup(update_stream, oks, prev_key)
                                             }
                                         }
@@ -198,7 +198,7 @@ where
                                                         |_, _, t| AltNeu::alt(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
-                                                    .enter(region);
+                                                    .enter_region(region);
                                                 build_lookup(update_stream, oks, prev_key)
                                             } else {
                                                 let oks = oks
@@ -207,7 +207,7 @@ where
                                                         |_, _, t| AltNeu::neu(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
-                                                    .enter(region);
+                                                    .enter_region(region);
                                                 build_lookup(update_stream, oks, prev_key)
                                             }
                                         }
