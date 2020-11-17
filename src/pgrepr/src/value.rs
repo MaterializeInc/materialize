@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::error::Error;
@@ -484,16 +483,9 @@ fn decode_map(
     val_type: &Type,
     raw: &str,
 ) -> Result<BTreeMap<String, Option<Value>>, Box<dyn Error + Sync + Send>> {
-    Ok(strconv::parse_map(
-        raw,
-        |key_text| -> String {
-            match key_text {
-                Cow::Owned(s) => s,
-                Cow::Borrowed(s) => s.to_owned(),
-            }
-        },
-        |elem_text| Value::decode_text(val_type, elem_text.as_bytes()).map(Some),
-    )?)
+    Ok(strconv::parse_map(raw, |elem_text| {
+        Value::decode_text(val_type, elem_text.as_bytes()).map(Some)
+    })?)
 }
 
 fn encode_record<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable

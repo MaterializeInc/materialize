@@ -2347,7 +2347,7 @@ impl Parser {
             self.prev_token();
             return self.expected(self.peek_prev_range(), "TEXT", self.peek_token());
         }
-        self.expect_token(&Token::Arrow)?;
+        self.expect_token(&Token::Op("=>".to_owned()))?;
         let typ = self.parse_data_type()?;
         self.expect_token(&Token::RBracket)?;
         Ok(typ)

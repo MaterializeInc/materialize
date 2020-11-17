@@ -694,19 +694,16 @@ fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, 
 
 pub fn parse_map<'a, V, E>(
     s: &'a str,
-    gen_key: impl FnMut(Cow<'a, str>) -> String,
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, ParseError>
 where
     E: fmt::Display,
 {
-    parse_map_inner(s, gen_key, gen_elem)
-        .map_err(|details| ParseError::new("map", s).with_details(details))
+    parse_map_inner(s, gen_elem).map_err(|details| ParseError::new("map", s).with_details(details))
 }
 
 pub fn parse_map_inner<'a, V, E>(
     s: &'a str,
-    mut gen_key: impl FnMut(Cow<'a, str>) -> String,
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, String>
 where
@@ -726,7 +723,14 @@ where
         )
     }
 
-    // Simplifies calls to `gen_elem` by handling errors
+    // Simplifies calls to generators by handling errors
+    let gen_key = |key: Option<Cow<'a, str>>| -> Result<String, String> {
+        match key {
+            Some(Cow::Owned(s)) => Ok(s),
+            Some(Cow::Borrowed(s)) => Ok(s.to_owned()),
+            None => Err("expected key".to_owned()),
+        }
+    };
     let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
 
     loop {
@@ -737,15 +741,12 @@ where
             Some(_) => map_lex_unquoted_element(buf)?,
             None => bail!("unexpected end of input"),
         };
-        let key = gen_key(key.unwrap());
+        let key = gen_key(key)?;
 
         // Assert mapping arrow (=>) is present.
         buf.take_while(|ch| ch.is_ascii_whitespace());
-        if !buf.consume('=') {
-            bail!("expected =")
-        }
-        if !buf.consume('>') {
-            bail!("expected >")
+        if !buf.consume('=') || !buf.consume('>') {
+            bail!("expected =>")
         }
 
         // Get value.
@@ -867,7 +868,7 @@ fn map_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, s
 pub fn format_map<'a, F, T>(
     buf: &mut F,
     elems: impl IntoIterator<Item = (&'a String, T)>,
-    mut format_elem: impl FnMut(MapElementWriter<F>, T) -> Nestable,
+    mut format_elem: impl FnMut(MapValueWriter<F>, T) -> Nestable,
 ) -> Nestable
 where
     F: FormatBuffer,
@@ -877,7 +878,7 @@ where
     while let Some((key, value)) = elems.next() {
         buf.write_str(key.as_str());
         buf.write_str("=>");
-        format_elem(MapElementWriter(buf), value);
+        format_elem(MapValueWriter(buf), value);
         if elems.peek().is_some() {
             buf.write_char(',');
         }
@@ -1067,11 +1068,11 @@ where
     }
 }
 
-/// A helper for `format_map` that formats a single map key, value pair.
+/// A helper for `format_map` that formats a single map value.
 #[derive(Debug)]
-pub struct MapElementWriter<'a, F>(&'a mut F);
+pub struct MapValueWriter<'a, F>(&'a mut F);
 
-impl<'a, F> MapElementWriter<'a, F>
+impl<'a, F> MapValueWriter<'a, F>
 where
     F: FormatBuffer,
 {
