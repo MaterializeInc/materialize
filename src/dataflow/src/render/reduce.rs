@@ -628,7 +628,8 @@ where
     let mut shifts = vec![];
     let mut current = 4u64;
 
-    let limit = expected_group_size.unwrap_or(1_000_000);
+    // We'll plan for an expected 4B records / key in the absense of hints.
+    let limit = expected_group_size.unwrap_or(4_000_000_000);
 
     while (1 << current) < limit {
         shifts.push(current);
