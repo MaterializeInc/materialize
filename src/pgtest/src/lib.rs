@@ -19,6 +19,9 @@
 //! - `until`: Waits until input messages have been received from the
 //! server. Additional messages are accumulated and returned as well.
 //!
+//! During debugging, set the environment variable `PGTEST_VERBOSE=1` to see
+//! messages sent and received.
+//!
 //! Supported `send` types:
 //! - [`Query`](struct.Query.html)
 //! - [`Parse`](struct.Parse.html)
@@ -71,6 +74,7 @@ pub struct PgTest {
     recv_buf: BytesMut,
     send_buf: BytesMut,
     timeout: Duration,
+    verbose: bool,
 }
 
 impl PgTest {
@@ -80,7 +84,9 @@ impl PgTest {
             recv_buf: BytesMut::new(),
             send_buf: BytesMut::new(),
             timeout,
+            verbose: std::env::var_os("PGTEST_VERBOSE").is_some(),
         };
+        pgtest.stream.set_read_timeout(Some(timeout))?;
         pgtest.send(|buf| frontend::startup_message(vec![("user", user)], buf).unwrap())?;
         match pgtest.recv()?.1 {
             Message::AuthenticationOk => {}
@@ -105,7 +111,7 @@ impl PgTest {
             loop {
                 let (ch, msg) = match self.recv() {
                     Ok((ch, msg)) => (ch, msg),
-                    Err(err) => bail!("{}: waiting for {}, saw {:?}", err, expect, msgs),
+                    Err(err) => bail!("{}: waiting for {}, saw {:#?}", err, expect, msgs),
                 };
                 let (typ, args) = match msg {
                     Message::ReadyForQuery(body) => (
@@ -205,6 +211,9 @@ impl PgTest {
                     Message::NoData => ("NoData", "".to_string()),
                     _ => ("UNKNOWN", format!("'{}'", ch)),
                 };
+                if self.verbose {
+                    println!("RECV {}: {:?}", ch, typ);
+                }
                 let mut s = typ.to_string();
                 if !args.is_empty() {
                     s.push(' ');
@@ -316,15 +325,14 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
         match tc.directive.as_str() {
             "send" => {
                 for line in lines {
+                    if pgt.verbose {
+                        println!("SEND {}", line);
+                    }
                     let mut line = line.splitn(2, ' ');
                     let typ = line.next().unwrap_or("");
                     let args = line.next().unwrap_or("{}");
                     pgt.send(|buf| match typ {
                         "Query" => {
-                            let v: Query = serde_json::from_str(args).unwrap();
-                            frontend::query(&v.query, buf).unwrap();
-                        }
-                        "ReadyForQuery" => {
                             let v: Query = serde_json::from_str(args).unwrap();
                             frontend::query(&v.query, buf).unwrap();
                         }
