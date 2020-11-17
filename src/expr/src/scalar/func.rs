@@ -2762,9 +2762,10 @@ impl UnaryFunc {
                 (return_ty.clone()).nullable(false)
             }
 
-            CastStringToMap { return_ty, .. } => {
-                ScalarType::Map { value_type: Box::new(return_ty.clone()) }.nullable(false)
+            CastStringToMap { return_ty, .. } => ScalarType::Map {
+                value_type: Box::new(return_ty.clone()),
             }
+            .nullable(false),
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),

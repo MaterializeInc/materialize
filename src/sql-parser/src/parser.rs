@@ -2134,7 +2134,9 @@ impl Parser {
                 JSON | JSONB => DataType::Jsonb,
                 MAP => {
                     let typ = self.parse_map()?;
-                    DataType::Map { value_type: Box::new(typ) }
+                    DataType::Map {
+                        value_type: Box::new(typ),
+                    }
                 }
                 _ => self.expected(
                     self.peek_prev_range(),

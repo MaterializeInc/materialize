@@ -595,7 +595,7 @@ pub fn plan_cast_to_map(
         _ => bail!("invalid cast from {} to map", from),
     };
 
-    let to_element_typ = to.unwrap_map_element_type();
+    let to_element_typ = to.unwrap_map_value_type();
 
     // Reconstruct an expression context where the expression is evaluated on
     // the "first column" of some imaginary row.

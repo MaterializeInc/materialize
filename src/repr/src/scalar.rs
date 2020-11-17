@@ -766,10 +766,10 @@ impl<'a> ScalarType {
     /// # Panics
     ///
     /// Panics if called on anything other than a [`ScalarType::Map`].
-    pub fn unwrap_map_element_type(&self) -> &ScalarType {
+    pub fn unwrap_map_value_type(&self) -> &ScalarType {
         match self {
             ScalarType::Map { value_type } => &**value_type,
-            _ => panic!("ScalarType::unwrap_map_element_type called on {:?}", self),
+            _ => panic!("ScalarType::unwrap_map_value_type called on {:?}", self),
         }
     }
 
