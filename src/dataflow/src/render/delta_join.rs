@@ -207,7 +207,7 @@ where
                                                         |_, _, t| AltNeu::neu(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
-                                                    .enter(region);
+                                                    .enter_region(region);
                                                 build_lookup(update_stream, oks, prev_key)
                                             }
                                         }
