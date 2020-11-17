@@ -39,7 +39,7 @@ where
             group_key,
             aggregates,
             monotonic,
-            expected_group_size: _,
+            expected_group_size,
         } = relation_expr
         {
             // The reduce operator may have multiple aggregation functions, some of
@@ -186,7 +186,14 @@ where
                     build_accumulables(ok_input, accumulable, true)
                 } else if remaining.len() == 1 && accumulable.is_empty() {
                     // If we have a single non-accumulable aggregation, it can be arranged and returned.
-                    build_aggregate_stage(ok_input, 0, &aggregates[0], true, *monotonic)
+                    build_aggregate_stage(
+                        ok_input,
+                        0,
+                        &aggregates[0],
+                        true,
+                        *monotonic,
+                        *expected_group_size,
+                    )
                 } else {
                     // Otherwise we need to stitch things together.
                     let mut to_collect = Vec::new();
@@ -203,6 +210,7 @@ where
                             &aggr,
                             false,
                             *monotonic,
+                            *expected_group_size,
                         );
                         to_collect.push(collection.as_collection(move |key, val| {
                             (key.clone(), (Some(index), val.clone()))
@@ -270,6 +278,7 @@ fn build_aggregate_stage<G>(
     aggr: &AggregateExpr,
     prepend_key: bool,
     monotonic: bool,
+    expected_group_size: Option<usize>,
 ) -> Arrangement<G, Row>
 where
     G: Scope<Timestamp = repr::Timestamp>,
@@ -351,7 +360,7 @@ where
                     .map(|(key, max)| (key, max.value));
             }
         } else {
-            partial = build_hierarchical(partial, &func)
+            partial = build_hierarchical(partial, &func, expected_group_size)
         }
     }
 
@@ -610,14 +619,27 @@ where
 fn build_hierarchical<G>(
     collection: Collection<G, (Row, Row)>,
     aggr: &AggregateFunc,
+    expected_group_size: Option<usize>,
 ) -> Collection<G, (Row, Row)>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
+    let mut shifts = vec![];
+    let mut current = 4u64;
+
+    let limit = expected_group_size.unwrap_or(1_000_000);
+
+    while (1 << current) < limit {
+        shifts.push(current);
+        current += 4;
+    }
+
+    shifts.reverse();
+
     // Repeatedly apply hierarchical reduction with a progressively coarser key.
     let mut stage = collection.map(move |(key, row)| ((key, row.hashed()), row));
-    for log_modulus in [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4u64].iter() {
+    for log_modulus in shifts.iter() {
         stage = build_hierarchical_stage(stage, aggr.clone(), 1u64 << log_modulus);
     }
 
