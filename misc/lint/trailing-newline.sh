@@ -13,6 +13,9 @@
 
 set -euo pipefail
 
+# shellcheck source=misc/shlib/shlib.bash
+. "$(dirname "$0")/../shlib/shlib.bash"
+
 if [[ $# -lt 1 ]]; then
     echo "usage: $0 <file>" >&2
     exit 1
@@ -20,13 +23,13 @@ fi
 
 for file in "$@"; do
     if [[ ! -f "$file" ]]; then
-        echo "lint: trailing-newline: internal error: $file is not a file" >&2
+        echo "lint: $(red error:) trailing-newline: internal error: $file is not a file" >&2
         exit 1
     fi
 
     last_byte=$(tail -c1 "$file")
     if [[ "$last_byte" != $'\n' && "$last_byte" != "" ]] &> /dev/null; then
-        echo "lint: trailing-newline: $file is missing a trailing newline" >&2
+        echo "lint: $(red error:) trailing-newline: $file is missing a trailing newline" >&2
         exit 1
     fi
 done
