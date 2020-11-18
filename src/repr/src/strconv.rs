@@ -523,6 +523,8 @@ where
 
     // Simplifies calls to `gen_elem` by handling errors
     let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
+    let is_end_of_literal = |c| matches!(c, ',' | '}');
 
     // Consume elements.
     loop {
@@ -553,7 +555,7 @@ where
                 }
                 gen(list_lex_embedded_list(buf)?)?
             }
-            Some(_) => match list_lex_unquoted_element(buf)? {
+            Some(_) => match lex_unquoted_element(buf, is_special_char, is_end_of_literal)? {
                 Some(elem) => gen(elem)?,
                 None => make_null(),
             },
@@ -620,13 +622,13 @@ fn list_lex_embedded_list<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, Stri
 }
 
 // Result of `None` indicates element is NULL.
-fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, str>>, String> {
+fn lex_unquoted_element<'a>(
+    buf: &mut LexBuf<'a>,
+    is_special_char: impl Fn(char) -> bool,
+    is_end_of_literal: impl Fn(char) -> bool,
+) -> Result<Option<Cow<'a, str>>, String> {
     // first char is guaranteed to be non-whitespace
     assert!(!buf.peek().unwrap().is_ascii_whitespace());
-
-    fn is_special_char(c: char) -> bool {
-        matches!(c, '{' | '}' | ',' | '\\' | '"')
-    }
 
     let s = buf.take_while(|ch| !is_special_char(ch) && !ch.is_ascii_whitespace());
 
@@ -661,20 +663,18 @@ fn list_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, 
                 }
                 None => return Err("unterminated element".into()),
             },
-            // End of element/list
-            Some(',') | Some('}') => {
-                // Commas or closing brackets as first character indicates
-                // missing element definition.
+            Some(c) if is_end_of_literal(c) => {
+                // End of literal characters as the first character indicates
+                // a missing element definition.
                 if s.is_empty() {
-                    bail!("malformed list literal; missing element")
+                    bail!("malformed literal; missing element")
                 }
                 buf.prev();
                 break;
             }
-            Some(c) if is_special_char(c) => bail!(
-                "malformed list literal; must escape special character '{}'",
-                c
-            ),
+            Some(c) if is_special_char(c) => {
+                bail!("malformed literal; must escape special character '{}'", c)
+            }
             Some(c) => {
                 s.push(c);
                 if !c.is_ascii_whitespace() {
@@ -731,14 +731,16 @@ where
             None => Err("expected key".to_owned()),
         }
     };
-    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let mut gen_value = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let is_special_char = |c| matches!(c, '{' | '}' | ',' | '=' | '>' | '\\');
+    let is_end_of_literal = |c| matches!(c, ',' | '}' | '=');
 
     loop {
         // Get key.
         buf.take_while(|ch| ch.is_ascii_whitespace());
         let key = match buf.peek() {
             Some('"') => Some(lex_quoted_element(buf)?),
-            Some(_) => map_lex_unquoted_element(buf)?,
+            Some(_) => lex_unquoted_element(buf, is_special_char, is_end_of_literal)?,
             None => bail!("unexpected end of input"),
         };
         let key = gen_key(key)?;
@@ -753,10 +755,10 @@ where
         buf.take_while(|ch| ch.is_ascii_whitespace());
         let value = match buf.peek() {
             Some('"') => Some(lex_quoted_element(buf)?),
-            Some(_) => map_lex_unquoted_element(buf)?,
+            Some(_) => lex_unquoted_element(buf, is_special_char, is_end_of_literal)?,
             None => bail!("unexpected end of input"),
         };
-        let value = gen(value.unwrap())?;
+        let value = gen_value(value.unwrap())?;
 
         // Insert elements.
         map.insert(key, value);
@@ -774,95 +776,6 @@ where
         }
     }
     Ok(map)
-}
-
-fn map_lex_unquoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Option<Cow<'a, str>>, String> {
-    // first char is guaranteed to be non-whitespace
-    assert!(!buf.peek().unwrap().is_ascii_whitespace());
-
-    fn is_special_char(c: char) -> bool {
-        matches!(c, '{' | '}' | ',' | '=' | '>' | '\\')
-    }
-
-    let s = buf.take_while(|ch| !is_special_char(ch) && !ch.is_ascii_whitespace());
-
-    // `Cow::Borrowed` optimization for elements without special characters.
-    match buf.peek() {
-        Some(',') | Some('}') if !s.is_empty() => {
-            return Ok(if s.to_uppercase() == "NULL" {
-                None
-            } else {
-                Some(s.into())
-            });
-        }
-        _ => {}
-    }
-
-    // Track whether there are any escaped characters to determine if the string
-    // "NULL" should be treated as a NULL, or if it had any escaped characters
-    // and should be treated as the string "NULL".
-    let mut escaped_char = false;
-
-    let mut s = s.to_string();
-    // As we go, we keep track of where to truncate to in order to remove any
-    // trailing whitespace.
-    let mut trimmed_len = s.len();
-
-    loop {
-        match buf.next() {
-            Some('\\') => match buf.next() {
-                Some('=') if buf.peek() == Some('>') => {
-                    escaped_char = true;
-                    s.push('=');
-                    s.push('>');
-                    buf.next();
-                    trimmed_len = s.len();
-                }
-                Some(c) => {
-                    escaped_char = true;
-                    s.push(c);
-                    trimmed_len = s.len();
-                }
-                None => return Err("unterminated element".into()),
-            },
-            // End of element/map literal.
-            Some('=') if buf.peek() == Some('>') => {
-                // An arrow indicates as the first characters indicates missing
-                // key information.
-                if s.is_empty() {
-                    bail!("malformed map literal; missing key element")
-                }
-                buf.prev();
-                break;
-            }
-            Some(',') | Some('}') => {
-                // An comma or closing bracket as the first character
-                // indicates missing element information.
-                if s.is_empty() {
-                    bail!("malformed map literal; missing element")
-                }
-                buf.prev();
-                break;
-            }
-            Some(c) if is_special_char(c) => bail!(
-                "malformed map literal; must escape special character '{}'",
-                c
-            ),
-            Some(c) => {
-                s.push(c);
-                if !c.is_ascii_whitespace() {
-                    trimmed_len = s.len();
-                }
-            }
-            None => bail!("unterminated element"),
-        }
-    }
-    s.truncate(trimmed_len);
-    Ok(if s.to_uppercase() == "NULL" && !escaped_char {
-        None
-    } else {
-        Some(Cow::Owned(s))
-    })
 }
 
 pub fn format_map<'a, F, T>(

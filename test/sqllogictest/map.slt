@@ -42,19 +42,19 @@ SELECT '{1=>true}'::map[text=>bool]
 ----
 {1=>t}
 
-query error malformed map literal; missing element
+query error malformed literal; missing element
 SELECT '{}'::map[text=>int]
 
 query error invalid input syntax for bool: "2.0"
 SELECT '{a=>1, b=>false, c=>2.0}'::map[text=>bool]
 
 query T
-SELECT '{a\=>=>2}'::map[text=>int]
+SELECT '{a\=\>=>2}'::map[text=>int]
 ----
 {a=>=>2}
 
 query T
-SELECT '{13=>hello \[\=>     value\], 31=>  normal  }'::map[text=>text]
+SELECT '{13=>hello \[\=\>     value\], 31=>  normal  }'::map[text=>text]
 ----
 {13=>hello [=>     value],31=>normal}
 
