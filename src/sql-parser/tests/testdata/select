@@ -232,27 +232,6 @@ SELECT foo.* FROM foo
 =>
 Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: QualifiedWildcard([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None }, as_of: None })
 
-parse-statement
-SELECT (x).a, (x).a.b.c
-----
-SELECT (x).a, (x).a.b.c
-=>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, alias: None }, Expr { expr: FieldAccess { expr: FieldAccess { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, field: Ident("b") }, field: Ident("c") }, alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None }, as_of: None })
-
-parse-statement
-SELECT (1.a)
-----
-error: Expected right parenthesis, found identifier
-SELECT (1.a)
-          ^
-
-parse-statement
-SELECT (x).*.*
-----
-error: Expected end of statement, found dot
-SELECT (x).*.*
-            ^
-
 parse-statement roundtrip
 SELECT count(employee.*) FROM "order" JOIN employee ON "order".employee = employee.id
 ----

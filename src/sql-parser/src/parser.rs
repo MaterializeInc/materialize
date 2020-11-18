@@ -336,29 +336,8 @@ impl<'a> Parser<'a> {
             }
             Token::Parameter(n) => Ok(Expr::Parameter(n)),
             Token::LParen => {
-                let mut expr = self.parse_parenthesized_expr()?;
+                let expr = self.parse_parenthesized_expr()?;
                 self.expect_token(&Token::RParen)?;
-                while self.consume_token(&Token::Dot) {
-                    match self.next_token() {
-                        Some(Token::Ident(id)) => {
-                            expr = Expr::FieldAccess {
-                                expr: Box::new(expr),
-                                field: Ident::new(id),
-                            };
-                        }
-                        Some(Token::Star) => {
-                            expr = Expr::WildcardAccess(Box::new(expr));
-                            break;
-                        }
-                        unexpected => {
-                            return self.expected(
-                                self.peek_prev_pos(),
-                                "an identifier or a '*' after '.'",
-                                unexpected,
-                            );
-                        }
-                    }
-                }
                 Ok(expr)
             }
             unexpected => self.expected(self.peek_prev_pos(), "an expression", Some(unexpected)),
@@ -920,6 +899,19 @@ impl<'a> Parser<'a> {
             self.parse_pg_cast(expr)
         } else if Token::LBracket == tok {
             self.parse_subscript(expr)
+        } else if Token::Dot == tok {
+            match self.next_token() {
+                Some(Token::Ident(id)) => Ok(Expr::FieldAccess {
+                    expr: Box::new(expr),
+                    field: Ident::new(id),
+                }),
+                Some(Token::Star) => Ok(Expr::WildcardAccess(Box::new(expr))),
+                unexpected => self.expected(
+                    self.peek_prev_pos(),
+                    "an identifier or a '*' after '.'",
+                    unexpected,
+                ),
+            }
         } else {
             // Can only happen if `get_next_precedence` got out of sync with this function
             panic!("No infix parser for token {:?}", tok)
@@ -1057,7 +1049,7 @@ impl<'a> Parser<'a> {
                 Token::Eq => Precedence::Cmp,
                 Token::Star => Precedence::Times,
                 Token::DoubleColon => Precedence::DoubleColon,
-                Token::LBracket => Precedence::Subscript,
+                Token::LBracket | Token::Dot => Precedence::Subscript,
                 _ => Precedence::Zero,
             }
         } else {

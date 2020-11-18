@@ -445,3 +445,50 @@ parse-scalar
 1</*embedded comment*/2
 ----
 Op { op: "<", expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+
+parse-scalar
+(x).a
+----
+FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }
+
+parse-scalar
+(x).a.b.c
+----
+FieldAccess { expr: FieldAccess { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, field: Ident("b") }, field: Ident("c") }
+
+parse-scalar
+((x).a.b.c)
+----
+Nested(FieldAccess { expr: FieldAccess { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, field: Ident("b") }, field: Ident("c") })
+
+parse-scalar
+(((x).a.b).c)
+----
+Nested(FieldAccess { expr: Nested(FieldAccess { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, field: Ident("b") }), field: Ident("c") })
+
+parse-scalar
+(((x).a.b)[1].c)
+----
+Nested(FieldAccess { expr: SubscriptIndex { expr: Nested(FieldAccess { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, field: Ident("b") }), subscript: Value(Number("1")) }, field: Ident("c") })
+
+parse-scalar roundtrip
+(((x).a.b)[1].c)
+----
+(((x).a.b)[1].c)
+
+parse-scalar
+(1.a)
+----
+error: Expected right parenthesis, found identifier
+(1.a)
+   ^
+
+parse-scalar
+(x).*.*
+----
+WildcardAccess(WildcardAccess(Nested(Identifier([Ident("x")]))))
+
+parse-scalar
+((x).*.*)
+----
+Nested(WildcardAccess(WildcardAccess(Nested(Identifier([Ident("x")])))))
