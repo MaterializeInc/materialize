@@ -31,7 +31,7 @@ Clients can use `TAIL` to:
 Field | Use
 ------|-----
 _object&lowbar;name_ | The name of the source, table, or view that you want to tail.
-_timestamp&lowbar;expression_ | The logical time to tail from onwards as a [`bigint`] representing milliseconds since the Unix epoch.
+_timestamp&lowbar;expression_ | The logical time at which the `TAIL` begins as a [`bigint`] representing milliseconds since the Unix epoch. See [`AS OF`](#as-of) below.
 
 Supported `WITH` option values:
 
@@ -141,9 +141,11 @@ The [`PROGRESS`](#progress) option has been added.
 
 ### `AS OF`
 
-The `AS OF` clause specifies a point in time to start reporting all events for
-a given `TAIL` operation. If you don't use `AS OF`, Materialize will pick a
-timestamp automatically:
+The `AS OF` clause specifies the time at which a `TAIL` operation begins.
+See [`SNAPSHOT`](#snapshot) below for details on what this means.
+
+If you don't specify `AS OF` explicitly, Materialize will pick a timestamp
+automatically:
 
   - If the tailed relation is [materialized](/overview/api-components/#indexes),
     Materialize picks the latest time for which results are computed.
@@ -156,11 +158,16 @@ details on Materialize's compaction policy.
 
 ### `SNAPSHOT`
 
-By default, each `TAIL` begins by emitting a snapshot of the tailed relation,
-which contains the contents of the relation at its [`AS OF`](#as-of) timestamp.
-Any further updates to these results are produced at the time when they occur.
+By default, a `TAIL` begins by emitting a snapshot of the tailed relation, which
+consists of a series of updates describing the contents of the relation at its
+[`AS OF`](#as-of) timestamp. After the snapshot, `TAIL` emits further updates as
+they occur.
 
-To only see results after the `AS OF` timestamp, specify `WITH (SNAPSHOT =
+For updates in the snapshot, the `timestamp` field will be fast-forwarded to the
+`AS OF` timestamp. For example, `TAIL ... AS OF 21` would present an insert that
+occured at time 15 as if it occurred at time 21.
+
+To see only updates after the `AS OF` timestamp, specify `WITH (SNAPSHOT =
 false)`.
 
 ### `PROGRESS`
