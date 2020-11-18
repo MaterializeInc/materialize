@@ -17,9 +17,7 @@ compatibility views in the [system catalog](/sql/system-tables/) must expose
 array types. Unfortunately, PostgreSQL arrays have odd semantics and do not
 interoperate well with modern data formats like JSON and Avro.
 
-A forthcoming release will introduce a new
-[list type](https://github.com/MaterializeInc/materialize/issues/2997)
-that interoperates better with JSON and Avro.
+Use the [`list` type](/sql/types/list) instead.
 {{< /warning >}}
 
 ## Details
