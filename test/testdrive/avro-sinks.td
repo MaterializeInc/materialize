@@ -170,8 +170,8 @@ $ kafka-verify format=avro sink=materialize.public.input_sink
 
 $ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezium
 {"id": "1", "status": "BEGIN", "event_count": null}
-{"id": "2", "status": "BEGIN", "event_count": null}
 {"id": "1", "status": "END", "event_count": {"long": 2}}
+{"id": "2", "status": "BEGIN", "event_count": null}
 {"id": "2", "status": "END", "event_count": {"long": 2}}
 
 ! CREATE SINK bad_sink FROM input
