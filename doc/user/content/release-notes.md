@@ -46,6 +46,8 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.5.3 %}}
+
 {{% version-header v0.5.2 %}}
 
 - Support the [`pg_typeof` function](/sql/functions#postgresql-compatibility-func).
