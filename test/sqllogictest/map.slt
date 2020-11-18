@@ -56,12 +56,12 @@ SELECT '{a\=\>=>2}'::map[text=>int]
 query T
 SELECT '{13=>hello \[\=\>     value\], 31=>  normal  }'::map[text=>text]
 ----
-{13=>hello [=>     value],31=>normal}
+{13=>"hello [=>     value]",31=>normal}
 
 query T
 SELECT '{"a"=>"hello there!", b=>"129387123"}'::map[text=>text]
 ----
-{a=>hello there!,b=>129387123}
+{a=>"hello there!",b=>129387123}
 
 query error unterminated quoted string
 SELECT '{"a"=>"hello there!}'::map[text=>text]

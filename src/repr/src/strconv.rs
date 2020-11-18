@@ -732,7 +732,7 @@ where
         }
     };
     let mut gen_value = |elem| gen_elem(elem).map_err(|e| e.to_string());
-    let is_special_char = |c| matches!(c, '{' | '}' | ',' | '=' | '>' | '\\');
+    let is_special_char = |c| matches!(c, '{' | '}' | ',' | '"' | '=' | '>' | '\\');
     let is_end_of_literal = |c| matches!(c, ',' | '}' | '=');
 
     loop {
@@ -791,7 +791,10 @@ where
     while let Some((key, value)) = elems.next() {
         buf.write_str(key.as_str());
         buf.write_str("=>");
-        format_elem(MapValueWriter(buf), value);
+        let start = buf.len();
+        if let Nestable::MayNeedEscaping = format_elem(MapValueWriter(buf), value) {
+            escape_elem::<_, MapElementEscaper>(buf, start);
+        }
         if elems.peek().is_some() {
             buf.write_char(',');
         }
@@ -876,6 +879,23 @@ impl ElementEscaper for ListElementEscaper {
             || elem
                 .iter()
                 .any(|c| matches!(c, b'{' | b'}' | b',' | b'"' | b'\\') || c.is_ascii_whitespace())
+    }
+
+    fn escape_char(_: u8) -> u8 {
+        b'\\'
+    }
+}
+
+struct MapElementEscaper;
+
+impl ElementEscaper for MapElementEscaper {
+    fn needs_escaping(elem: &[u8]) -> bool {
+        elem.is_empty()
+            || elem == b"NULL"
+            || elem.iter().any(|c| {
+                matches!(c, b'{' | b'}' | b',' | b'"' | b'=' | b'>' | b'\\')
+                    || c.is_ascii_whitespace()
+            })
     }
 
     fn escape_char(_: u8) -> u8 {
