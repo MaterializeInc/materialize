@@ -141,12 +141,11 @@ ENV LC_CTYPE=C.UTF-8
 # Step 2e. Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 
-COPY requirements.txt requirements-dev.txt requirements-ci.txt /workdir/
+COPY requirements.txt requirements-dev.txt /workdir/
 
 RUN pip3 install \
     -r /workdir/requirements.txt \
     -r /workdir/requirements-dev.txt \
-    -r /workdir/requirements-ci.txt \
     && rm /workdir/requirements*.txt
 
 # Step 2f. Install docs site dependencies. These are towards the end for the
