@@ -84,14 +84,15 @@ pub enum StartupMessage {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum ExecuteResponse {
-    /// The active transaction was rolled back.
-    AbortedTransaction,
+    /// The active transaction was exited.
+    TransactionExited {
+        was_implicit: bool,
+        tag: String,
+    },
     // The requested object was altered.
     AlteredObject(ObjectType),
     // The index was altered.
     AlteredIndexLogicalCompaction,
-    /// The active transaction was committed.
-    CommittedTransaction,
     CopyTo {
         format: sql::plan::CopyFormat,
         #[derivative(Debug = "ignore")]

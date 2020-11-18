@@ -244,6 +244,7 @@ impl From<CoordTransactionStatus> for TransactionStatus {
         match status {
             CoordTransactionStatus::Idle => TransactionStatus::Idle,
             CoordTransactionStatus::InTransaction => TransactionStatus::InTransaction,
+            CoordTransactionStatus::InTransactionImplicit => TransactionStatus::InTransaction,
             CoordTransactionStatus::Failed => TransactionStatus::Failed,
         }
     }
