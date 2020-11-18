@@ -12,9 +12,10 @@ getopts = "0.2"
 hyper = "0.13"
 lazy_static = "1.4"
 log = "0.4.11"
+mz-process-collector = { path = "../mz-process-collector" }
 ore = { path = "../ore" }
 postgres = "0.17.5"
-prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
+prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.4.1"
 serde = { version = "1.0.117", features = ["derive"] }
 tokio = { version = "0.2.22", features = ["rt-threaded"] }

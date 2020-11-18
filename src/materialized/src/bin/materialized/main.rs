@@ -380,6 +380,9 @@ fn run() -> Result<(), anyhow::Error> {
         }
     }
 
+    // configure prometheus process metrics
+    mz_process_collector::register_default_process_collector()?;
+
     // Print system information as the very first thing in the logs. The goal is
     // to increase the probability that we can reproduce a reported bug if all
     // we get is the log file.

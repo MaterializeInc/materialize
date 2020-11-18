@@ -1,0 +1,13 @@
+[package]
+name = "mz-process-collector"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
+libc = "0.2.79"
+lazy_static = "1.4.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = "0.8.0"
