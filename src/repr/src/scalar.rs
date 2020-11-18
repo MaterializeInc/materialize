@@ -323,13 +323,13 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Unwraps the dict value within this datum.
+    /// Unwraps the map value within this datum.
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::Dict`].
+    /// Panics if the datum is not [`Datum::Map`].
     #[track_caller]
-    pub fn unwrap_dict(&self) -> DatumMap<'a> {
+    pub fn unwrap_map(&self) -> DatumMap<'a> {
         match self {
             Datum::Map(dict) => *dict,
             _ => panic!("Datum::unwrap_dict called on {:?}", self),

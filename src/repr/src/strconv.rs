@@ -778,9 +778,9 @@ where
     Ok(map)
 }
 
-pub fn format_map<'a, F, T>(
+pub fn format_map<F, T>(
     buf: &mut F,
-    elems: impl IntoIterator<Item = (&'a String, T)>,
+    elems: impl IntoIterator<Item = (impl AsRef<str>, T)>,
     mut format_elem: impl FnMut(MapValueWriter<F>, T) -> Nestable,
 ) -> Nestable
 where
@@ -789,12 +789,19 @@ where
     buf.write_char('{');
     let mut elems = elems.into_iter().peekable();
     while let Some((key, value)) = elems.next() {
-        buf.write_str(key.as_str());
+        // Map key values are always Strings, which always evaluate to
+        // Nestable::MayNeedEscaping.
+        let key_start = buf.len();
+        buf.write_str(key.as_ref());
+        escape_elem::<_, MapElementEscaper>(buf, key_start);
+
         buf.write_str("=>");
-        let start = buf.len();
+
+        let value_start = buf.len();
         if let Nestable::MayNeedEscaping = format_elem(MapValueWriter(buf), value) {
-            escape_elem::<_, MapElementEscaper>(buf, start);
+            escape_elem::<_, MapElementEscaper>(buf, value_start);
         }
+
         if elems.peek().is_some() {
             buf.write_char(',');
         }
@@ -922,7 +929,7 @@ impl ElementEscaper for RecordElementEscaper {
     }
 }
 
-/// Escapes a list or record element in place.
+/// Escapes a list, record, or map element in place.
 ///
 /// The element must start at `start` and extend to the end of the buffer. The
 /// buffer will be resized if escaping is necessary to account for the

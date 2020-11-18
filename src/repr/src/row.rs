@@ -910,7 +910,7 @@ impl RowPacker {
     /// let row = packer.finish();
     ///
     /// assert_eq!(
-    ///     row.unpack_first().unwrap_dict().iter().collect::<Vec<_>>(),
+    ///     row.unpack_first().unwrap_map().iter().collect::<Vec<_>>(),
     ///     vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))]
     /// );
     /// ```
@@ -1380,7 +1380,7 @@ mod tests {
         });
         let row = packer.finish();
 
-        let mut iter = row.unpack_first().unwrap_dict().iter();
+        let mut iter = row.unpack_first().unwrap_map().iter();
 
         let (k, v) = iter.next().unwrap();
         assert_eq!(k, "favourites");
@@ -1417,7 +1417,7 @@ mod tests {
         assert_eq!(pack(false), Err("fail"));
 
         let row = pack(true)?;
-        let mut dict = row.unpack_first().unwrap_dict().iter();
+        let mut dict = row.unpack_first().unwrap_map().iter();
         assert_eq!(dict.next(), Some(("key", Datum::Int32(42))));
         assert_eq!(dict.next(), None);
 

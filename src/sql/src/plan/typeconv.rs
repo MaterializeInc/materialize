@@ -595,7 +595,7 @@ pub fn plan_cast_to_map(
         _ => bail!("invalid cast from {} to map", from),
     };
 
-    let to_element_typ = to.unwrap_map_value_type();
+    let to_value_type = to.unwrap_map_value_type();
 
     // Reconstruct an expression context where the expression is evaluated on
     // the "first column" of some imaginary row.
@@ -624,9 +624,9 @@ pub fn plan_cast_to_map(
     });
 
     // Determine the `ScalarExpr` required to cast our column to the target
-    // element type. We'll need to call this on each element of the original
-    // list to perform the cast.
-    let cast_expr = plan_cast("plan_cast_to_map", &ecx, ccx, col_expr, to_element_typ)?;
+    // element type. We'll need to call this on each value of the original
+    // map to perform the cast.
+    let cast_expr = plan_cast("plan_cast_to_map", &ecx, ccx, col_expr, to_value_type)?;
 
     let return_ty = match to {
         ScalarType::Map { value_type } => *value_type.clone(),
@@ -637,12 +637,9 @@ pub fn plan_cast_to_map(
         in the input col_expr",
     ));
 
-    Ok(expr.call_unary(match from {
-        ScalarType::String => UnaryFunc::CastStringToMap {
-            return_ty,
-            cast_expr,
-        },
-        _ => unreachable!("already prevented match on incompatible types in plan_cast"),
+    Ok(expr.call_unary(UnaryFunc::CastStringToMap {
+        return_ty,
+        cast_expr,
     }))
 }
 

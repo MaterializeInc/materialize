@@ -559,9 +559,9 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
                 .collect(),
         },
         Type::Map { value_type } => {
-            let (_, elem_type) = null_datum(value_type);
+            let (_, value_type) = null_datum(value_type);
             ScalarType::Map {
-                value_type: Box::new(elem_type),
+                value_type: Box::new(value_type),
             }
         }
     };

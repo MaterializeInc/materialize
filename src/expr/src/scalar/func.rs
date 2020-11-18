@@ -9,7 +9,6 @@
 
 use std::borrow::Cow;
 use std::cmp::{self, Ordering};
-use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
@@ -3354,21 +3353,13 @@ where
                 stringify_datum(buf.nonnull_buffer(), d, elem_type)
             }
         }),
-        Map { value_type } => {
-            use std::string::String;
-            let elems: BTreeMap<String, Datum> = d
-                .unwrap_dict()
-                .iter()
-                .map(|(k, v)| (k.to_owned(), v))
-                .collect();
-            strconv::format_map(buf, &elems, |buf, d| {
-                if d.is_null() {
-                    buf.write_null()
-                } else {
-                    stringify_datum(buf.nonnull_buffer(), *d, value_type)
-                }
-            })
-        }
+        Map { value_type } => strconv::format_map(buf, &d.unwrap_map(), |buf, d| {
+            if d.is_null() {
+                buf.write_null()
+            } else {
+                stringify_datum(buf.nonnull_buffer(), d, value_type)
+            }
+        }),
     }
 }
 

@@ -2133,9 +2133,17 @@ impl Parser {
                 }
                 JSON | JSONB => DataType::Jsonb,
                 MAP => {
-                    let typ = self.parse_map()?;
+                    let value_type = self.parse_map()?;
+                    if let DataType::Map { .. } = value_type {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_range(),
+                            "nested map types not yet supported"
+                        );
+                    }
+
                     DataType::Map {
-                        value_type: Box::new(typ),
+                        value_type: Box::new(value_type),
                     }
                 }
                 _ => self.expected(
