@@ -48,6 +48,10 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.5.3 %}}
 
+- Fix a regression in the SQL parser, introduced in v0.5.2, in which nested
+  field accesses, e.g. `SELECT ((col).field1).field2`, would fail to parse
+  {{% gh 4827 %}}.
+
 {{% version-header v0.5.2 %}}
 
 - Provide the [`list`](/sql/types/list/) type, which is an ordered sequences of

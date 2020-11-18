@@ -249,9 +249,9 @@ SELECT (1.a)
 parse-statement
 SELECT (x).*.*
 ----
-error: Expected end of statement, found dot
 SELECT (x).*.*
-            ^
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: WildcardAccess(WildcardAccess(Nested(Identifier([Ident("x")])))), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement roundtrip
 SELECT count(employee.*) FROM "order" JOIN employee ON "order".employee = employee.id
