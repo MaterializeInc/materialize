@@ -50,18 +50,18 @@ Wrap your release notes at the 80 character mark.
 
 - Support the [`pg_typeof` function](/sql/functions#postgresql-compatibility-func).
 - [`COPY TO`](/sql/copy-to) now supports `FORMAT binary`.
+- Support the [`DISCARD`](/sql/discard) SQL statement.
 - [`TAIL`](/sql/tail) is now guaranteed to produce output ordered by timestamp.
+- [`TAIL`](/sql/tail) now supports timestamp progress.
 - Syntax for [`TAIL`](/sql/tail) has changed. `WITH SNAPSHOT` is now
   `WITH (SNAPSHOT)`. `WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
 - Add the `PROGRESSED` option to `TAIL`(/sql/tail).
 - Report an error without crashing when a query contains unexpected UTF-8
   characters, e.g., `SELECT ’1’` {{% gh 4755 %}}.
-- [`TAIL`](/sql/tail) now supports timestamp progress.
 - Log messages are no longer emitted to stderr if an explicit `--log-file` is
   supplied at startup. {{% gh 4777 %}}
 - The systemd package configured by our apt package now writes all logs to
   the systemd journal, instead of a file in the mzdata directory. {{% gh 4781 %}}
-- Support the [`DISCARD`](/sql/discard) SQL statement.
 
 
 {{% version-header v0.5.1 %}}
