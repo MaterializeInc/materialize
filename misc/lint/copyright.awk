@@ -9,13 +9,18 @@
 #
 # copyright.awk — checks file for missing copyright header.
 
+function err(s)
+{
+    print "lint: \033[31merror:\033[0m copyright: " s > "/dev/stderr"
+}
+
 function done()
 {
     if (!copyright) {
-        print "lint: copyright: " FILENAME " is missing copyright header" > "/dev/stderr"
+        err(FILENAME " is missing copyright header")
         exit 1
     } else if (copyright !~ /Copyright Materialize, Inc./) {
-        print "lint: copyright: " FILENAME " has malformatted copyright header" > "/dev/stderr"
+        err(FILENAME " has malformatted copyright header")
         exit 1
     }
     exit 0

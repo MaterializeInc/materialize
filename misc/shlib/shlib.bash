@@ -57,6 +57,58 @@ version_compat() {
     printf "%s\n" "$@" | sort --check=silent --version-sort
 }
 
+# git_empty_tree
+#
+# Outputs the 40-character SHA-1 hash of Git's empty tree object.
+git_empty_tree() {
+    git hash-object -t tree /dev/null
+}
+
+# git_files [PATTERNS...]
+#
+# Lists the files known to Git that match the PATTERNS, with the following
+# differences from `git ls-files`:
+#
+#     1. files matched by a gitignore rule are excluded,
+#     2. deleted but unstaged files are excluded,
+#     3. symlinks are excluded.
+#
+git_files() {
+    git diff --ignore-submodules=all --raw "$(git_empty_tree)" -- "$@" \
+        | awk '$2 != 120000 {print $6}'
+}
+
+# try COMMAND [ARGS...]
+#
+# Runs COMMAND with the specified ARGS without aborting the script if the
+# command fails. See also try_last_failed and try_finish.
+try() {
+    try_last_failed=false
+    if ! "$@"; then
+        try_failed=true
+        try_last_failed=true
+    fi
+}
+try_failed=false
+
+# try_last_failed
+#
+# Reports whether the last command executed with `try` succeeded or failed.
+try_last_failed() {
+    $try_last_failed
+}
+
+# try_finish
+#
+# Exits the script with a code that reflects whether all commands executed with
+# `try` were successful.
+try_finish() {
+    if $try_failed; then
+        exit 1
+    fi
+    exit 0
+}
+
 ci_init() {
     export RUST_BACKTRACE=full
 }

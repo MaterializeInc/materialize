@@ -9,48 +9,24 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# pycheck — an attempt to get something equivalent to cargo check for python
-#
-# * Compiles python in our officially support version of pyth
-# * Run mypy to check types
+# pycheck — `cargo check` for python.
 
 set -euo pipefail
 
-# work from the root of the repo, even if being executed from somewhere else
 cd "$(dirname "$0")/.."
-root=$(pwd)
 
-# shellcheck source=SCRIPTDIR/../misc/shlib/shlib.bash
-. "$root"/misc/shlib/shlib.bash
+. misc/shlib/shlib.bash
 
-failed=false
+py_files=$(git_files "ci/*.py" "misc/python/*.py")
 
-try() {
-    last_failed=false
-    if ! "$@"; then
-        failed=true
-        last_failed=true
-    fi
-}
-
-py_files=
-mapfile_shim py_files < <(git ls-files "ci/*.py" "misc/python/*.py")
-py_dirs=
-mapfile_shim py_dirs < <(echo "${py_files[@]}" | xargs -n 1 dirname | sort -u)
-
-try "$root"/bin/pyactivate --dev -m compileall -q -l "${py_dirs[@]}"
-if $last_failed; then
-    echo "$(uw Error): python syntax errors found"
-fi
-
-try "$root"/bin/pyactivate --dev -m mypy --pretty "${py_files[@]}"
-
-try "$root"/bin/pyactivate --dev -m \
-    pytest \
-        --quiet \
-        --doctest-modules \
-        misc/python
-
-if $failed; then
+# Bail out with a nice error message if we discover any syntax errors, so that
+# mypy and pytest don't spew nonsense.
+if ! bin/pyactivate --dev -m compileall -q -l -i - <<< "$py_files"; then
+    echo "pycheck: $(red error:) python syntax errors found"
     exit 1
 fi
+
+try xargs bin/pyactivate --dev -m mypy --pretty --no-error-summary <<< "$py_files"
+try bin/pyactivate --dev -m pytest -qq --doctest-modules misc/python
+
+try_finish
