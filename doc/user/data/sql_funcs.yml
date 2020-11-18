@@ -70,6 +70,28 @@
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
+- type: List
+  description: List functions take [`list`](../types/list) arguments, and are [polymorphic](../types/list/#polymorphism).
+  functions:
+    - signature: 'list_append(l: listany, e: listelementany) -> L'
+      description: Appends `e` to `l`.
+
+    - signature: 'list_cat(l1: listany, l2: listany) -> L'
+      description: Concatenates `l1` and `l2`.
+
+    - signature: 'list_ndims(l: listany) -> int'
+      description: '[Experimental](/cli/#experimental-mode)––Returns the number of dimensions on `l`.'
+
+    - signature: 'list_length(l: listany) -> int'
+      description: Return the number of elements in `l`.
+
+    - signature: 'list_length_max(l: listany, d: int) -> int'
+      description: '[Experimental](/cli/#experimental-mode)––Return the greatest length among all lists on dimension `d` of `l`.'
+
+    - signature: 'list_prepend(e: listelementany, l: listany) -> listany'
+      description: Prepends `e` to `l`.
+
+
 - type: Numbers
   description: Number functions take number-like arguments, e.g. [`int`](../types/int),
     [`float`](../types/float), [`numeric`](../types/numeric).

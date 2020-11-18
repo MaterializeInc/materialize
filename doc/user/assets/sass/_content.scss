@@ -22,6 +22,7 @@ a {
 
   h1 {
     font-weight: bold;
+    font-size: 2.2rem;
     margin: 16px 0;
 
     + h2 {
@@ -30,7 +31,7 @@ a {
   }
 
   h2 {
-    font-size: 22px;
+    font-size: 1.8rem;
     margin: 32px 0 8px;
 
     + h3 {
@@ -40,7 +41,8 @@ a {
 
   h3 {
     color: $off-black;
-    font-size: 18px;
+    font-size: 1.6rem;
+    font-weight: lighter;
     margin: 32px 0 8px;
 
     + h4 {
@@ -54,12 +56,19 @@ a {
 
   h4 {
     color: $grey-dark;
-    font-size: 16px;
+    font-size: 1.4rem;
     margin: 32px 0 8px;
 
     a {
       color: $grey-dark;
     }
+  }
+
+  h5 {
+    font-size: 1.2rem;
+    font-style: italic;
+    font-weight: lighter;
+    margin: 32px 0px 8px 0px;
   }
 
   p, ul > li:first-child > p:first-child {
