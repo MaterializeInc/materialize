@@ -125,6 +125,9 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
     * `materialized` should be `up` (although see #4753 for the current breakage)
     * `billing-demo` should be `Exited (0)`
+    * Note: it is not necessary to verify the graphs of this test if the above criteria are
+      met. The graph output is dissimilar to the other tests, and can only be compared to historical
+      runs posted in the #release Slack channel.
 
   - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
     have remained at 0ms or similar for the entirety of the run.
@@ -208,6 +211,8 @@ in the infrastructure repository. All of these tests can be run in parallel.
     * [Installation instructions](https://materialize.com/docs/install/)
     * [Documentation](https://materialize.com/docs/)
     ```
+    You do not need to manually add assets to the release, they will be included
+    by GitHub automatically.
 
 ### Update the main branch for the next version
 
@@ -227,6 +232,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
 - [ ] Update the current status at the top of this issue.
 - [ ] Create a slack alert for the next person to start the release (according to [the release
   schedule][schedule]) in the #release channel.
+- [ ] Ask the product manager to make the release announcement in our community Slack.
 - [ ] Close this issue.
 
 [`doc/user/config.toml`]: https://github.com/MaterializeInc/materialize/blob/main/doc/user/config.toml
