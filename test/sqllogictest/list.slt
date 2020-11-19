@@ -1440,10 +1440,10 @@ SELECT '{{a, "", "\""}, "{a, \"\", \"\\\"\"}"}'::text list list
 {{a,"","\""},{a,"","\""}}
 
 # Unquoted elements cannot have special characters interleaved within them
-query error invalid input syntax for list: malformed list literal; must escape special character '"': "\{a"b"\}"
+query error invalid input syntax for list: malformed literal; must escape special character '"': "\{a"b"\}"
 SELECT '{a"b"}'::text list
 
-query error invalid input syntax for list: malformed list literal; must escape special character '\{': "\{a\{b\}"
+query error invalid input syntax for list: malformed literal; must escape special character '\{': "\{a\{b\}"
 SELECT '{a{b}'::text list
 
 query error invalid input syntax for list: malformed array literal; contains 'b' after terminal '\}': "\{a\}b\}"
@@ -1667,10 +1667,10 @@ query error invalid input syntax for list: invalid input syntax for list: expect
 SELECT '{1}}'::int list list
 
 # Cannot have commas followed or preceded by empty elements
-query error invalid input syntax for list: malformed list literal; missing element: "\{a,  \}"
+query error invalid input syntax for list: malformed literal; missing element: "\{a,  \}"
 SELECT '{a,  }'::text list
 
-query error invalid input syntax for list: malformed list literal; missing element: "\{  ,a\}"
+query error invalid input syntax for list: malformed literal; missing element: "\{  ,a\}"
 SELECT '{  ,a}'::text list
 
 # 🔬 Built-in operations

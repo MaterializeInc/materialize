@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::adt::array::Array;
 use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
-use crate::{ColumnName, ColumnType, DatumDict, DatumList};
+use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 
 /// A single value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -65,7 +65,7 @@ pub enum Datum<'a> {
     /// Unlike [`Datum::Array`], lists are permitted to be ragged.
     List(DatumList<'a>),
     /// A mapping from string keys to `Datum`s.
-    Dict(DatumDict<'a>),
+    Map(DatumMap<'a>),
     /// An unknown value within a JSON-typed `Datum`.
     ///
     /// This variant is distinct from [`Datum::Null`] as a null datum is
@@ -323,15 +323,15 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Unwraps the dict value within this datum.
+    /// Unwraps the map value within this datum.
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::Dict`].
+    /// Panics if the datum is not [`Datum::Map`].
     #[track_caller]
-    pub fn unwrap_dict(&self) -> DatumDict<'a> {
+    pub fn unwrap_map(&self) -> DatumMap<'a> {
         match self {
-            Datum::Dict(dict) => *dict,
+            Datum::Map(dict) => *dict,
             _ => panic!("Datum::unwrap_dict called on {:?}", self),
         }
     }
@@ -350,7 +350,7 @@ impl<'a> Datum<'a> {
                     Datum::List(list) => list
                         .iter()
                         .all(|elem| is_instance_of_scalar(elem, scalar_type)),
-                    Datum::Dict(dict) => dict
+                    Datum::Map(dict) => dict
                         .iter()
                         .all(|(_key, val)| is_instance_of_scalar(val, scalar_type)),
                     _ => false,
@@ -407,7 +407,10 @@ impl<'a> Datum<'a> {
                         .zip_eq(fields)
                         .all(|(e, (_, t))| e.is_null() || is_instance_of_scalar(e, t)),
                     (Datum::List(_), _) => false,
-                    (Datum::Dict(_), _) => false,
+                    (Datum::Map(map), ScalarType::Map { value_type }) => map
+                        .iter()
+                        .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, value_type)),
+                    (Datum::Map(_), _) => false,
                     (Datum::JsonNull, _) => false,
                 }
             }
@@ -612,7 +615,7 @@ impl fmt::Display for Datum<'_> {
                 write_delimited(f, ", ", list, |f, e| write!(f, "{}", e))?;
                 f.write_str("]")
             }
-            Datum::Dict(dict) => {
+            Datum::Map(dict) => {
                 f.write_str("{")?;
                 write_delimited(f, ", ", dict, |f, (k, v)| write!(f, "{}: {}", k, v))?;
                 f.write_str("}")
@@ -696,6 +699,12 @@ pub enum ScalarType {
     },
     /// A PostgreSQL object identifier.
     Oid,
+    /// The type of [`Datum::Dict`]
+    ///
+    /// Keys within the map are always of type [`ScalarType::String`].
+    /// Values within the map are of the specified type. Values may always
+    /// be [`Datum::Null`].
+    Map { value_type: Box<ScalarType> },
 }
 
 impl<'a> ScalarType {
@@ -749,6 +758,18 @@ impl<'a> ScalarType {
         match self {
             ScalarType::Array(s) => &**s,
             _ => panic!("ScalarType::unwrap_array_element_type called on {:?}", self),
+        }
+    }
+
+    /// Returns the [`ScalarType`] of values in a [`ScalarType::Map`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Map`].
+    pub fn unwrap_map_value_type(&self) -> &ScalarType {
+        match self {
+            ScalarType::Map { value_type } => &**value_type,
+            _ => panic!("ScalarType::unwrap_map_value_type called on {:?}", self),
         }
     }
 
@@ -809,6 +830,14 @@ impl PartialEq for ScalarType {
 
             (List(a), List(b)) | (Array(a), Array(b)) => a.eq(b),
             (Record { fields: fields_a }, Record { fields: fields_b }) => fields_a.eq(fields_b),
+            (
+                Map {
+                    value_type: value_type_a,
+                },
+                Map {
+                    value_type: value_type_b,
+                },
+            ) => value_type_a.eq(value_type_b),
 
             (Bool, _)
             | (Int32, _)
@@ -828,7 +857,8 @@ impl PartialEq for ScalarType {
             | (Array(_), _)
             | (List(_), _)
             | (Record { .. }, _)
-            | (Oid, _) => false,
+            | (Oid, _)
+            | (Map { .. }, _) => false,
         }
     }
 }
@@ -870,6 +900,10 @@ impl Hash for ScalarType {
             }
             Uuid => state.write_u8(16),
             Oid => state.write_u8(17),
+            Map { value_type } => {
+                state.write_u8(18);
+                value_type.hash(state);
+            }
         }
     }
 }
@@ -906,6 +940,7 @@ impl fmt::Display for ScalarType {
                 f.write_str(")")
             }
             Oid => f.write_str("oid"),
+            Map { value_type } => write!(f, "map(text=>{})", value_type),
         }
     }
 }

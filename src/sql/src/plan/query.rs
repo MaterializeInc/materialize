@@ -2557,6 +2557,9 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::
         DataType::Array(elem_type) => ScalarType::Array(Box::new(scalar_type_from_sql(elem_type)?)),
         DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
         DataType::Oid => ScalarType::Oid,
+        DataType::Map { value_type } => ScalarType::Map {
+            value_type: Box::new(scalar_type_from_sql(value_type)?),
+        },
         DataType::Binary(..)
         | DataType::Blob(_)
         | DataType::Clob(_)
@@ -2590,6 +2593,9 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
             bail!("internal error: can't convert from pg record to materialize record")
         }
         pgrepr::Type::Oid => Ok(ScalarType::Oid),
+        pgrepr::Type::Map { value_type } => Ok(ScalarType::Map {
+            value_type: Box::new(scalar_type_from_pg(value_type)?),
+        }),
     }
 }
 
