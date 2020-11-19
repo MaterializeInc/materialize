@@ -2255,7 +2255,7 @@ impl<'a> Parser<'a> {
                     if let DataType::Map { .. } = value_type {
                         return parser_err!(
                             self,
-                            self.peek_prev_range(),
+                            self.peek_prev_pos(),
                             "nested map types not yet supported"
                         );
                     }
@@ -2471,7 +2471,7 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::LBracket)?;
         if self.parse_data_type()? != DataType::Text {
             self.prev_token();
-            return self.expected(self.peek_prev_range(), "TEXT", self.peek_token());
+            return self.expected(self.peek_prev_pos(), "TEXT", self.peek_token());
         }
         self.expect_token(&Token::Op("=>".to_owned()))?;
         let typ = self.parse_data_type()?;
