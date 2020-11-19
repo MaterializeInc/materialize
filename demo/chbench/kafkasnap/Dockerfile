@@ -11,7 +11,9 @@ FROM edenhill/kafkacat:1.6.0
 
 RUN apk add bash curl jq
 
-COPY ./dump_topics /usr/local/bin/dump_topics
-RUN chmod +x /usr/local/bin/dump_topics
+# We expect this directory to be mounted over by Docker with the volume
+# that will hold snapshot data *from this run*
+RUN mkdir -p /snapshot
 
-COPY ./topic_names.txt /etc/chbenchmark/topic_names.txt
+COPY ./snapshot_topics /usr/local/bin/snapshot_topics
+RUN chmod +x /usr/local/bin/snapshot_topics

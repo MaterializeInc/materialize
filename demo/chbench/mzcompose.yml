@@ -174,9 +174,11 @@ services:
     volumes:
       - chbench-gen:/gen
 
-  kafkacat:
-    build: kafkacat
+  kafkasnap:
+    build: kafkasnap
     depends_on: [schema-registry, kafka]
+    volumes:
+      - kafka-snapshot:/snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -254,6 +256,7 @@ services:
 volumes:
   chbench-gen:
   grafana:
+  kafka-snapshot:
 
 mzconduct:
   name: chbench
@@ -269,11 +272,6 @@ mzconduct:
         destroy_volumes: true
       - step: workflow
         workflow: bring-up-source-data-mysql
-      - step: start-services
-        services: [kafkacat]
-      - step: run
-        service: kafkacat
-        entrypoint: dump_topics
       - step: run
         service: chbench
         daemon: true
@@ -300,6 +298,54 @@ mzconduct:
         timeout_secs: 20
         expected: any  # TODO: do we want this to be [15], it seems like it usually is
         print_result: true
+      - step: down
+        destroy_volumes: true
+
+    # Verify that we can snapshot and restore Kafka topics without data loss
+    ci:
+      env:
+        MZ_PORT: 6875
+        KAFKA_PORT: 9092
+        MYSQL_PORT: 3306
+        CC_PORT: 9021
+      steps:
+      - step: down
+        destroy_volumes: true
+      - step: workflow
+        workflow: bring-up-source-data-mysql
+      - step: run
+        service: chbench
+        daemon: true
+        command: >-
+          run
+          --dsn=mysql --gen-dir=/var/lib/mysql-files
+          --analytic-threads=0
+          --transactional-threads=1
+          --run-seconds=500
+          -l /dev/stdout
+          --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
+          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+      - step: ensure-stays-up
+        container: chbench
+        seconds: 10
+      - step: run
+        service: peeker
+        command: --only-initialize --queries q01
+      - step: ensure-stays-up
+        container: chbench
+        seconds: 50
+      - step: wait-for-mz
+        query: 'select count(*) from q01'
+        timeout_secs: 20
+        expected: any  # TODO: do we want this to be [15], it seems like it usually is
+        print_result: true
+      - step: stop-services
+        services: [chbench, mysql]
+      - step: start-services
+        services: [kafkasnap]
+      - step: run
+        service: kafkasnap
+        entrypoint: snapshot_topics
       - step: down
         destroy_volumes: true
 
