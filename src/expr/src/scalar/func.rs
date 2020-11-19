@@ -1196,6 +1196,14 @@ fn jsonb_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
+fn map_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let k = b.unwrap_str();
+    match a {
+        Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
+        _ => false.into(),
+    }
+}
+
 // TODO(jamii) nested loops are possibly not the fastest way to do this
 fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
@@ -1822,6 +1830,7 @@ pub enum BinaryFunc {
     JsonbContainsJsonb,
     JsonbDeleteInt64,
     JsonbDeleteString,
+    MapContainsString,
     ConvertFrom,
     Trim,
     TrimLeading,
@@ -1941,6 +1950,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbContainsJsonb => Ok(eager!(jsonb_contains_jsonb)),
             BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
             BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
+            BinaryFunc::MapContainsString => Ok(eager!(map_contains_string)),
             BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Trim => Ok(eager!(trim)),
@@ -2082,7 +2092,9 @@ impl BinaryFunc {
             | JsonbDeleteInt64
             | JsonbDeleteString => ScalarType::Jsonb.nullable(true),
 
-            JsonbContainsString | JsonbContainsJsonb => ScalarType::Bool.nullable(in_nullable),
+            JsonbContainsString | JsonbContainsJsonb | MapContainsString => {
+                ScalarType::Bool.nullable(in_nullable)
+            }
 
             ListIndex => input1_type
                 .scalar_type
@@ -2231,6 +2243,7 @@ impl BinaryFunc {
             | JsonbContainsString
             | JsonbDeleteInt64
             | JsonbDeleteString
+            | MapContainsString
             | TextConcat
             | ListIndex
             | IsRegexpMatch { .. }
@@ -2332,7 +2345,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TextConcat => f.write_str("||"),
             BinaryFunc::JsonbGetInt64 { .. } => f.write_str("->"),
             BinaryFunc::JsonbGetString { .. } => f.write_str("->"),
-            BinaryFunc::JsonbContainsString => f.write_str("?"),
+            BinaryFunc::JsonbContainsString | BinaryFunc::MapContainsString => f.write_str("?"),
             BinaryFunc::JsonbConcat => f.write_str("||"),
             BinaryFunc::JsonbContainsJsonb => f.write_str("@>"),
             BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
