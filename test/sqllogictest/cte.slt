@@ -1,0 +1,173 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Additional tests in test/sqllogictest/cockroach/with.slt
+
+mode cockroach
+
+statement ok
+CREATE TABLE x (a int)
+
+statement ok
+INSERT INTO x VALUES (1), (2), (3)
+
+statement ok
+CREATE TABLE y (a int)
+
+statement ok
+INSERT INTO y VALUES (2), (3), (4)
+
+# Check that a CTE on the lhs of a join works
+query I
+WITH t AS (SELECT * FROM y WHERE a < 3)
+  SELECT * FROM t NATURAL JOIN x
+----
+2
+
+# Using a CTE inside a correlated subquery
+query I
+WITH t(x) AS (SELECT * FROM y WHERE a < 3)
+  SELECT * FROM x WHERE a IN (
+    SELECT a FROM t WHERE x.a = t.x
+  )
+----
+2
+
+# Using a correlated subquery inside a CTE
+query I
+SELECT * FROM x WHERE a IN
+  (WITH t AS (SELECT * FROM y WHERE y.a = x.a) SELECT * FROM t);
+----
+2
+3
+
+# Ensure trivial nesting doesn't crash
+query I rowsort
+WITH c AS (SELECT a + 1 FROM x) SELECT (SELECT * FROM c);
+----
+2
+3
+4
+
+statement ok
+CREATE TABLE squares (x int, y int);
+
+statement ok
+CREATE TABLE roots (x int, y int);
+
+statement ok
+CREATE TABLE cubes (x int, y int);
+
+statement ok
+INSERT INTO squares VALUES
+    (1, 1), (2, 4), (3, 9), (4, 16);
+
+statement ok
+INSERT INTO roots VALUES
+    (1, 1), (4, 2), (9, 3), (16, 4);
+
+statement ok
+INSERT INTO cubes VALUES
+    (1, 1), (2, 8), (3, 27), (4, 16);
+
+# Correlated expression––this should only return values where squares.y is
+# in roots.y and sqaures.x
+query II
+SELECT * FROM squares
+WHERE x IN (
+    SELECT y FROM roots
+    WHERE y IN (
+        SELECT squares.y
+    )
+);
+----
+1 1
+
+# Correlated CTE
+query II
+SELECT * FROM squares
+WHERE x IN (
+    WITH squares_y AS (
+        SELECT squares.y
+    )
+    SELECT y FROM roots
+    WHERE y IN (
+        SELECT y FROM squares_y
+    )
+);
+----
+1 1
+
+# Correlated CTE in different level than it was introduced. This is needlessly
+# convoluted but caused crashes in early iterations of CTE's development.
+query II
+SELECT * FROM squares
+WHERE x IN (
+    WITH squares_x AS (
+        SELECT squares.x
+    )
+    SELECT t0.x
+    FROM (
+        SELECT roots.x
+        FROM roots
+        JOIN (
+            SELECT t2.x FROM (
+                SELECT cubes.x FROM cubes
+                JOIN squares_x
+                ON squares_x.x = cubes.x
+                WHERE cubes.x IN (SELECT x FROM squares_x)
+            ) t2
+        ) AS t1
+        ON t1.x = roots.x
+    ) AS t0
+);
+----
+1 1
+4 16
+
+# Use same query at two levels. Obtusely check for quadratic powers.
+query I rowsort
+WITH squares_y AS (
+    SELECT y FROM squares
+  )
+SELECT * FROM squares_y WHERE y IN (
+  SELECT y * y FROM squares_y
+)
+----
+1
+16
+
+# PostgreSQL tests
+query TT
+WITH q AS (SELECT 'foo' AS x)
+SELECT x, pg_typeof(x)  FROM q;
+----
+foo text
+
+query I rowsort
+WITH outermost(x) AS (
+  SELECT 1
+  UNION (WITH innermost as (SELECT 2)
+         SELECT * FROM innermost
+         UNION SELECT 3)
+)
+SELECT * FROM outermost ORDER BY 1;
+----
+1
+2
+3
+
+query error unknown catalog item 'outermost'
+WITH outermost(x) AS (
+  SELECT 1
+  UNION (WITH innermost as (SELECT 2)
+         SELECT * FROM outermost  -- fail
+         UNION SELECT * FROM innermost)
+)
+SELECT * FROM outermost ORDER BY 1;
