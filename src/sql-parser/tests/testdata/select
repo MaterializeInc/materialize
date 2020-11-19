@@ -1037,3 +1037,18 @@ SELECT * FROM data AS OF now()
 SELECT * FROM data AS OF now()
 =>
 Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("data")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) })
+
+# Query hints
+parse-statement
+SELECT * FROM foo OPTION (bar = 7)
+----
+SELECT * FROM foo OPTION (bar = 7)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [Value { name: Ident("bar"), value: Number("7") }] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT a, b, min(c) FROM foo GROUP BY a, b OPTION (bar = 7)
+----
+SELECT a, b, min(c) FROM foo GROUP BY a, b OPTION (bar = 7)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("a")]), alias: None }, Expr { expr: Identifier([Ident("b")]), alias: None }, Expr { expr: Function(Function { name: ObjectName([Ident("min")]), args: Args([Identifier([Ident("c")])]), filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), alias: None }, joins: [] }], selection: None, group_by: [Identifier([Ident("a")]), Identifier([Ident("b")])], having: None, options: [Value { name: Ident("bar"), value: Number("7") }] }), order_by: [], limit: None, offset: None }, as_of: None })
