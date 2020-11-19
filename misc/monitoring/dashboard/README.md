@@ -9,6 +9,8 @@ production monitoring pointing at materialized.
 User documentation is at https://materialize.com/docs/monitoring/ (or
 [doc/user/content/monitoring/_index.md][doc] locally).
 
+If you would like to import our Grafana dashboard into your grafana instance, you should use the
+[`materialize-public.json`](./materialize-public.json) configuration in this directory.
 
 ## Updating the dashboard
 
