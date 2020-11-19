@@ -18,7 +18,7 @@ use std::io::BufReader;
 use std::io::SeekFrom;
 use std::{thread, time};
 
-use test_util::kafka;
+use test_util::kafka::kafka_client::KafkaClient;
 
 fn parse_entry(parsed_object: &mut json::JsonValue) -> (String, Option<String>) {
     assert!(parsed_object.is_object());
@@ -50,6 +50,35 @@ fn parse_line(line: &str) -> Result<Vec<(String, Option<String>)>, String> {
         }
     }
     Ok(results)
+}
+
+// if we receive a "event: reset", we need to retract all inserts that happened
+// since the previous "event: reset"
+fn delete_previous_entries(
+    reader: &mut BufReader<File>,
+    k_client: &KafkaClient,
+    topic_name: &str,
+    last_reset: u64,
+    new_reset: u64,
+) -> Result<(), anyhow::Error> {
+    reader.seek(SeekFrom::Start(last_reset)).unwrap();
+    let mut current_pos = last_reset;
+    let mut line = String::new();
+    // read from the last reset to the new reset
+    while current_pos < new_reset {
+        let len = reader.read_line(&mut line)?;
+        if let Ok(key_values) = parse_line(&line) {
+            for (key, value) in key_values {
+                if value.is_some() {
+                    // retract the value insertion
+                    k_client.send_key_value(&topic_name, key.as_bytes(), None)?;
+                }
+            }
+        }
+        current_pos += len as u64;
+        line.clear();
+    }
+    Ok(())
 }
 
 async fn run_stream() -> Result<(), anyhow::Error> {
@@ -223,7 +252,7 @@ async fn run_stream() -> Result<(), anyhow::Error> {
         .unwrap_or_else(|| "1".to_string());
     let replication = replication.parse::<i32>()?;
 
-    let k_client = kafka::kafka_client::KafkaClient::new(
+    let k_client = KafkaClient::new(
         &opts
             .opt_str("kafka-addr")
             .unwrap_or_else(|| "localhost:9092".to_string()),
@@ -265,67 +294,73 @@ async fn run_stream() -> Result<(), anyhow::Error> {
     for (filename, topic_name, _) in stream_configs {
         let f = File::open(filename)?;
         let reader = BufReader::new(f);
-        file_readers.push_back((reader, topic_name, 0, 0));
+        file_readers.push_back((reader, topic_name, 0, 0, 0));
     }
 
     let mut consecutive_ends = 0;
-    while let Some((mut reader, topic_name, mut pos, mut old_len)) = file_readers.pop_front() {
+    while let Some((mut reader, topic_name, mut pos, mut retries, mut last_reset)) =
+        file_readers.pop_front()
+    {
         let mut line = String::new();
-        let resp = reader.read_line(&mut line);
-        match resp {
-            Ok(len) => {
-                if len > 0 {
-                    consecutive_ends = 0;
-                    // try to parse the line into JSON objects
-                    match parse_line(&line) {
-                        Ok(key_values) => {
-                            for (key, value) in key_values {
-                                k_client.send_key_value(
-                                    &topic_name,
-                                    key.as_bytes(),
-                                    value.map(|v| v.as_bytes().to_owned()),
-                                )?;
-                            }
-                            old_len = 0;
+        let len = reader.read_line(&mut line)?;
+
+        if len > 0 {
+            consecutive_ends = 0;
+            if &line == "event: reset\n" {
+                // acknowledge the line as read, then retract entries inserts
+                // since the last reset
+                pos += len as u64;
+                if last_reset > 0 {
+                    delete_previous_entries(&mut reader, &k_client, &topic_name, last_reset, pos)?;
+                }
+                last_reset = pos;
+            } else {
+                // try to parse the line into JSON objects
+                match parse_line(&line) {
+                    Ok(key_values) => {
+                        for (key, value) in key_values {
+                            k_client.send_key_value(
+                                &topic_name,
+                                key.as_bytes(),
+                                value.map(|v| v.as_bytes().to_owned()),
+                            )?;
+                        }
+                        retries = 0;
+                        pos += len as u64;
+                    }
+                    Err(msg) => {
+                        // sometimes, the log parser is overly eager and reads a line before
+                        // it has finished writing.
+                        if retries > 10 {
+                            println!("{}", msg);
                             pos += len as u64;
+                            retries = 0;
+                        } else {
+                            retries += 1;
+                            reader.seek(SeekFrom::Start(pos)).unwrap();
+                            std::thread::sleep(time::Duration::from_millis(250));
                         }
-                        Err(msg) => {
-                            // sometimes, the log parser is overly eager and reads a line before
-                            // it has finished writing. so we want to retry reading the whole line
-                            // until number of bytes read from the line is no longer increasing
-                            if len <= old_len {
-                                println!("{}", msg);
-                                pos += len as u64;
-                                old_len = 0;
-                            } else {
-                                old_len = len;
-                                reader.seek(SeekFrom::Start(pos)).unwrap();
-                                std::thread::sleep(time::Duration::from_millis(250));
-                            }
-                        }
-                    }
-                    line.clear();
-                } else {
-                    // we have reached the end of the file
-                    if exit_at_end {
-                        // stop reading the file by not returning the reader to the queue
-                        continue;
-                    }
-                    consecutive_ends += 1;
-                    if consecutive_ends == file_readers.len() {
-                        // if in this round, we found that we reached the end of
-                        // every log, sleep before checking for updates again
-                        thread::sleep(heartbeat);
-                        consecutive_ends = 0;
                     }
                 }
             }
-            Err(err) => {
-                println!("{}", err);
+            line.clear();
+        } else {
+            // we have reached the end of the file
+            if exit_at_end {
+                // stop reading the file by not returning the reader to the queue
+                continue;
+            }
+            consecutive_ends += 1;
+            if consecutive_ends == file_readers.len() {
+                // if in this round, we found that we reached the end of
+                // every log, sleep before checking for updates again
+                thread::sleep(heartbeat);
+                consecutive_ends = 0;
             }
         }
+
         // schedule another read
-        file_readers.push_back((reader, topic_name, pos, old_len));
+        file_readers.push_back((reader, topic_name, pos, retries, last_reset));
     }
     Ok(())
 }
