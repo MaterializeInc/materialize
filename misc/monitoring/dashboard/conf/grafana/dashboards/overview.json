@@ -26,7 +26,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1605821758407,
+  "iteration": 1605829563062,
   "links": [],
   "panels": [
     {
@@ -1367,7 +1367,22 @@
             "align": false,
             "alignLevel": null
           }
-        },
+        }
+      ],
+      "title": "Ingest",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "id": 93,
+      "panels": [
         {
           "aliasColors": {},
           "bars": false,
@@ -1386,8 +1401,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
-            "y": 27
+            "x": 0,
+            "y": 12
           },
           "hiddenSeries": false,
           "id": 47,
@@ -1471,7 +1486,7 @@
           }
         }
       ],
-      "title": "Ingest",
+      "title": "Kinesis",
       "type": "row"
     },
     {
@@ -1481,7 +1496,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 11
+        "y": 12
       },
       "id": 89,
       "panels": [
@@ -1504,7 +1519,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 12
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 87,
@@ -1610,7 +1625,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 12
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 91,
@@ -1708,7 +1723,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 13
       },
       "id": 68,
       "panels": [
@@ -2120,7 +2135,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 14
       },
       "id": 30,
       "panels": [
@@ -2641,7 +2656,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 15
       },
       "id": 83,
       "panels": [
@@ -3322,7 +3337,7 @@
     ]
   },
   "time": {
-    "from": "now/d",
+    "from": "now-24h/d",
     "to": "now/d"
   },
   "timepicker": {
