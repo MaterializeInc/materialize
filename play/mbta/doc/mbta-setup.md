@@ -70,13 +70,14 @@ https://api-v3.mbta.com/docs/swagger/index.html
 
 ### Automatic Archiving
 
-The Docker container comes with the ability to automatically archive the files
-containing the data pulled from the MBTA streams at shutdown in case you want to
-replay the data or give the data to someone else so they can replay the stream.
-By default, Docker waits 10 seconds for the container to stop before killing it.
-If you need more time to ensure that archiving completes, find the
+If you run the `start-live-data` workflow with the environment variable
+`ARCHIVE_AT_SHUTDOWN=1`, the Docker container will automatically archive the
+files containing the data pulled from the MBTA streams at shutdown in case you
+want to replay the data or give the data to someone else so they can replay the
+stream. By default, Docker waits 10 seconds for the container to stop before
+killing it. If you need more time to ensure that archiving completes, find the
 `mbtaupsert_mbta-demo` Docker container with `docker ps | grep mbtaupsert_mbta-demo`.
-Then run `docker stop <container_id> -t 30`. The `30` can be replaced with
+Then run `docker stop <container_id> -t 600`. The `600` can be replaced with
 however many seconds you think it will take to archive all the data. You can
 tear down the rest of the containers using the command above.
 
@@ -84,7 +85,7 @@ Archives can be found at `workspace-<current_date_and_time>.tar.gz` file
 in the directory `play/mbta/archive`.
 
 To replay an archive, run
-`API_KEY=<insert_api_key_here> ARCHIVE_PATH=<insert_path_archive> ../../bin/mzconduct run mbta -w replay`. Do not uncompress the archive.
+`ARCHIVE_PATH=<insert_path_archive> ../../bin/mzconduct run mbta -w replay`. Do not uncompress the archive.
 
 ## Automatic setup (Bash)
 

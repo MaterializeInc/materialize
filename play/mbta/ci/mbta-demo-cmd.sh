@@ -208,7 +208,6 @@ function start_streams_from_config_file() {
 }
 
 function pause() {
-  archive;
   cleanup_stream_to_kafka;
   cleanup_http_streams;
   cleanup_log_files;
@@ -244,6 +243,7 @@ function unpack_archive() {
   (
     cd workspace || exit
     tar -xzf "$(basename "$archive_path")"
+    rm "$(basename "$archive_path")"
   )
 }
 
@@ -270,22 +270,25 @@ case "$1" in
     ;;
   start_docker)
     if [[ $# -lt 3 ]]; then
-      echo "usage: $0 start_docker <config-file> [kafka-addr] [api-key]"
+      echo "usage: $0 start_docker <config-file> [kafka-addr] <api-key> <archive-at-shutdown>"
       exit 1
     fi
     if [[ "$3" == *":"* ]]; then
       kafka_addr=$3
       api_key=$4
+      archive=$5
     else
       api_key=$3
-    fi
-    if [[ -z "$api_key" ]]; then
-      api_key=$(cat /run/secrets/mbta_api_key)
+      archive=$4
     fi
     cleanup_log_files;
     refresh_metadata;
     start_streams_from_config_file "$2" "$api_key" "$kafka_addr";
-    trap "pause; exit " SIGTERM
+    if [[ "$archive" -eq 1 ]]; then
+      trap "archive; pause; exit " SIGTERM
+    else
+      trap "pause; exit " SIGTERM
+    fi
     while : ; do wait ; done
     ;;
   pause)
@@ -335,8 +338,7 @@ archive      Creates an archive of the files containing data downloaded
              from the MBTA streams.
 replay       Replay data from an archive into a kafka topic. This script
              will remain in the foreground until the replay is complete.
-pause        Archives the files, halts the http streaming threads, and
-             halts the processes
+pause        Halts the http streaming threads,
 purge_topics Deletes just the kafka topics.
 purge        Pause demo then purges the kafka topics.
 start_docker Starts an indefinitely long run of the demo in the

@@ -18,7 +18,6 @@ services:
     ports:
       - *materialized
     init: true
-    command: -w ${MZ_THREADS:-1}
     volumes:
       - .:/workdir
   zookeeper:
@@ -58,6 +57,7 @@ mzconduct:
           ${CONFIG_FILE_PATH:-/workdir/examples/all-frequent-routes-config-weekend.csv}
           kafka:${KAFKA_PORT:-9092}
           ${API_KEY}
+          ${ARCHIVE_AT_SHUTDOWN:-0}
 
     replay:
       steps:
