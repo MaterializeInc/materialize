@@ -2511,6 +2511,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Array(_t) => unimplemented!("array types"),
                 ScalarType::List(_t) => unimplemented!("list types"),
                 ScalarType::Record { .. } => unimplemented!("record types"),
+                ScalarType::Map { .. } => unimplemented!("map types"),
             };
             if typ.nullable {
                 val = Value::Union {
@@ -2631,6 +2632,7 @@ fn build_row_schema_json(
             ScalarType::Array(_t) => unimplemented!("array types"),
             ScalarType::List(_t) => unimplemented!("list types"),
             ScalarType::Record { .. } => unimplemented!("record types"),
+            ScalarType::Map { .. } => unimplemented!("map types"),
         };
         if typ.nullable {
             field_type = json!(["null", field_type]);

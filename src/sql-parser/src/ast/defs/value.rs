@@ -232,6 +232,8 @@ pub enum DataType {
     Jsonb,
     /// Object ID
     Oid,
+    /// Map
+    Map { value_type: Box<DataType> },
     /// User-defined type
     Custom(String),
 }
@@ -301,6 +303,11 @@ impl AstDisplay for DataType {
             }
             DataType::Jsonb => f.write_str("jsonb"),
             DataType::Oid => f.write_str("oid"),
+            DataType::Map { value_type } => {
+                f.write_str("map(text=>");
+                f.write_node(&value_type);
+                f.write_str(")");
+            }
             DataType::Custom(c) => f.write_str(c),
         }
     }
