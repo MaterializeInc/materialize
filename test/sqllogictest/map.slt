@@ -9,6 +9,7 @@
 
 mode cockroach
 
+# Test basic string to map casts.
 query error value_type parameter required
 CREATE TYPE custom AS MAP (key_type=text)
 
@@ -83,3 +84,34 @@ SELECT '{"a"=>"hello there!}'::map[text=>text]
 
 query error nested map types not yet supported
 SELECT '{a=>{b=>c}}'::map[text=>map[text=>text]]
+
+# Test map operators.
+
+## Test ?
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ? 'a'
+----
+true
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ? 'b'
+----
+true
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ? 'c'
+----
+false
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT '{a=>1, b=>2}'::map[text=>int] ? 1
+
+query T
+SELECT '{a=>1}'::map[text=>int] ? ''
+----
+false
+
+query T
+SELECT '{""=>1}'::map[text=>int] ? ''
+----
+true

@@ -554,7 +554,7 @@ impl ParamType {
             MapAny => match t {
                 Map { value_type } => !value_type.is_map(),
                 _ => false,
-            }
+            },
             Plain(to) => typeconv::get_cast(CastContext::Implicit, t, to).is_some(),
         }
     }
