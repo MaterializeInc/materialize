@@ -2,6 +2,16 @@
   "annotations": {
     "list": [
       {
+        "datasource": null,
+        "enable": true,
+        "expr": "increase(up[1m])",
+        "hide": true,
+        "iconColor": "#DEB6F2",
+        "name": "start time",
+        "showIn": 0,
+        "titleFormat": "Materialized Started"
+      },
+      {
         "builtIn": 1,
         "datasource": "-- Grafana --",
         "enable": true,
@@ -15,8 +25,8 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
-  "id": 1,
-  "iteration": 1598992520939,
+  "id": null,
+  "iteration": 1605821758407,
   "links": [],
   "panels": [
     {
@@ -72,7 +82,7 @@
           "values": false
         }
       },
-      "pluginVersion": "7.0.0",
+      "pluginVersion": "7.0.3",
       "targets": [
         {
           "expr": "sum(mz_kafka_messages_ingested)",
@@ -131,7 +141,7 @@
           "values": false
         }
       },
-      "pluginVersion": "7.0.0",
+      "pluginVersion": "7.0.3",
       "targets": [
         {
           "expr": "sum(rate(mz_kafka_messages_ingested[$__interval]))",
@@ -190,7 +200,7 @@
           "values": false
         }
       },
-      "pluginVersion": "7.0.0",
+      "pluginVersion": "7.0.3",
       "targets": [
         {
           "expr": "sum(mz_perf_arrangement_records)",
@@ -252,7 +262,7 @@
           "values": false
         }
       },
-      "pluginVersion": "7.0.0",
+      "pluginVersion": "7.0.3",
       "targets": [
         {
           "expr": "sum(rate(mz_command_durations_count{command=~\"execute|query\",status=\"success\"}[$__interval]))",
@@ -265,6 +275,29 @@
       "timeShift": null,
       "title": "Client queries per second",
       "type": "stat"
+    },
+    {
+      "content": "Timely Workers: $timely_workers<br/>\nBuilt At: $built_at<br/>\nBuild Version: $build_version<br/>\nBuild sha: $build_sha<br/>",
+      "datasource": null,
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 7,
+        "x": 17,
+        "y": 1
+      },
+      "id": 74,
+      "mode": "html",
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "Materialize Build Info",
+      "type": "text"
     },
     {
       "datasource": null,
@@ -292,8 +325,8 @@
       "gridPos": {
         "h": 4,
         "w": 3,
-        "x": 15,
-        "y": 1
+        "x": 12,
+        "y": 5
       },
       "id": 76,
       "options": {
@@ -309,7 +342,7 @@
           "values": false
         }
       },
-      "pluginVersion": "7.0.0",
+      "pluginVersion": "7.0.3",
       "targets": [
         {
           "expr": "sum(rate(mz_command_durations_count{status=\"error\"}[5m]))",
@@ -324,36 +357,13 @@
       "type": "stat"
     },
     {
-      "content": "Timely Workers: $timely_workers<br/>\nBuilt At: $built_at<br/>\nBuild Version: $build_version<br/>\nBuild sha: <code>$build_sha</code><br/>",
-      "datasource": null,
-      "description": "",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {}
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 1
-      },
-      "id": 74,
-      "mode": "html",
-      "timeFrom": null,
-      "timeShift": null,
-      "title": "Materialize Build Info",
-      "type": "text"
-    },
-    {
       "collapsed": true,
       "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 9
       },
       "id": 39,
       "panels": [
@@ -495,33 +505,38 @@
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "interval": "",
               "legendFormat": "p99",
               "refId": "B"
             },
             {
-              "expr": "histogram_quantile(0.95, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "interval": "",
               "legendFormat": "p95",
               "refId": "C"
             },
             {
-              "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "interval": "",
               "legendFormat": "median",
               "refId": "D"
             },
             {
-              "expr": "histogram_quantile(0.001, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(0.001, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "interval": "",
               "legendFormat": "p001",
               "refId": "E"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"error\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"error\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
               "interval": "",
               "legendFormat": "error p99",
               "refId": "F"
             },
             {
-              "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"error\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"error\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "interval": "",
               "legendFormat": "error max",
               "refId": "G"
             }
@@ -618,6 +633,7 @@
             {
               "expr": "rate(mz_command_durations_count[$__interval])",
               "hide": false,
+              "interval": "",
               "legendFormat": "{{command}}",
               "refId": "A"
             }
@@ -716,11 +732,13 @@
           "targets": [
             {
               "expr": "rate(mz_pg_sent_rows[$__interval])",
+              "interval": "",
               "legendFormat": "rows/sec",
               "refId": "A"
             },
             {
               "expr": "rate(mz_pg_sent_bytes[$__interval])",
+              "interval": "",
               "legendFormat": "bytes/sec",
               "refId": "B"
             }
@@ -777,7 +795,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 6
+        "y": 10
       },
       "id": 32,
       "panels": [
@@ -1463,7 +1481,234 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 7
+        "y": 11
+      },
+      "id": 89,
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": null,
+          "description": "The number of messages we've written through a Kafka Sink.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {}
+            },
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "hiddenSeries": false,
+          "id": 87,
+          "legend": {
+            "avg": false,
+            "current": false,
+            "max": false,
+            "min": false,
+            "show": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "/.*total.*/",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": true,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "rate(mz_kafka_messages_sent_total[$__interval])",
+              "interval": "",
+              "legendFormat": "{{sink_id}}/{{worker_id}} {{topic}}",
+              "refId": "A"
+            },
+            {
+              "expr": "mz_kafka_messages_sent_total",
+              "interval": "",
+              "legendFormat": "total {{sink_id}}/{{worker_id}} {{topic}}",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Kafka Messages Written",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "wps",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": null,
+          "description": "The number of errors we've received when writing messages to Kafka",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {}
+            },
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "hiddenSeries": false,
+          "id": 91,
+          "legend": {
+            "avg": false,
+            "current": false,
+            "max": false,
+            "min": false,
+            "show": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "/.*total.*/",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "rate(mz_kafka_message_send_errors_total[$__interval])",
+              "interval": "",
+              "legendFormat": "{{sink_id}}/{{worker_id}} {{topic}}",
+              "refId": "A"
+            },
+            {
+              "expr": "mz_kafka_message_send_errors_total",
+              "interval": "",
+              "legendFormat": "total {{sink_id}}/{{worker_id}} {{topic}}",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Kafka Message Write Errors",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "eps",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": "total",
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        }
+      ],
+      "title": "Sinks",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
       },
       "id": 68,
       "panels": [
@@ -1486,7 +1731,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 12
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 77,
@@ -1586,7 +1831,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 12
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 37,
@@ -1685,7 +1930,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 20
+            "y": 21
           },
           "hiddenSeries": false,
           "id": 79,
@@ -1784,19 +2029,22 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 20
+            "y": 21
           },
           "hiddenSeries": false,
           "id": 6,
           "legend": {
-            "avg": false,
-            "current": false,
+            "alignAsTable": true,
+            "avg": true,
+            "current": true,
             "hideEmpty": true,
-            "max": false,
-            "min": false,
+            "max": true,
+            "min": true,
             "show": true,
+            "sort": null,
+            "sortDesc": null,
             "total": false,
-            "values": false
+            "values": true
           },
           "lines": true,
           "linewidth": 1,
@@ -1815,6 +2063,7 @@
           "targets": [
             {
               "expr": "topk(10, mz_perf_dependency_frontiers)",
+              "interval": "",
               "legendFormat": "{{source}} -> {{dataflow}}",
               "refId": "A"
             }
@@ -1871,7 +2120,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 13
       },
       "id": 30,
       "panels": [
@@ -2392,7 +2641,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 14
       },
       "id": 83,
       "panels": [
@@ -2415,7 +2664,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 14
+            "y": 15
           },
           "hiddenSeries": false,
           "id": 16,
@@ -2510,7 +2759,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 14
+            "y": 15
           },
           "hiddenSeries": false,
           "id": 81,
@@ -2605,7 +2854,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 22
+            "y": 23
           },
           "hiddenSeries": false,
           "id": 52,
@@ -2706,7 +2955,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 22
+            "y": 23
           },
           "hiddenSeries": false,
           "id": 58,
@@ -2815,7 +3064,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 30
+            "y": 31
           },
           "hiddenSeries": false,
           "id": 50,
@@ -2984,7 +3233,7 @@
         "current": {},
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_timely_worker_threads, count)",
-        "hide": 0,
+        "hide": 2,
         "includeAll": true,
         "label": "Timely Workers",
         "multi": true,
@@ -3092,5 +3341,5 @@
   "timezone": "",
   "title": "Materialize Overview",
   "uid": "materialize-overview",
-  "version": 1
+  "version": 0
 }
