@@ -71,6 +71,12 @@ def main(source: os.PathLike, inplace: bool) -> None:
     data["title"] = "Materialize Overview"
 
     lst = data["templating"]["list"]
+    # adjust for public not needing meta
+    data["panels"] = [p for p in data["panels"] if p["title"] != "Meta"]
+    for p in data["panels"]:
+        if p["title"] == "Materialize Build Info":
+            p["gridPos"] = {"h": 4, "w": 7, "x": 17, "y": 1}
+
     data["templating"]["list"] = [
         clean_var(i) for i in lst if i["name"] in VAR_ALLOWLIST
     ]
