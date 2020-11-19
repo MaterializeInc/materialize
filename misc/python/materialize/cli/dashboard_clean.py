@@ -36,6 +36,10 @@ LOAD_TEST_LABELS = [
     r'''test=~\"$test\"''',
     r'''purpose=~\"$purpose\"''',
     r'''workflow=~\"$workflow\"''',
+    r'''num_warehouses=~\"$num_warehouses\"''',
+    r'''instance_type=~\"$ec2_instance_type\"''',
+    r'''oltp_threads=~\"$oltp_threads\"''',
+    r'''olap_threads=~\"$olap_threads\"''',
 ]
 
 VAR_ALLOWLIST = set(
