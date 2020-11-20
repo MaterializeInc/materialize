@@ -130,7 +130,7 @@ RUN mkdir rust \
     esac \
     && rm -rf rust \
     && cargo install --root /usr/local --version "=1.28.0" cargo-deb \
-    && cargo install --root /usr/local --version "=0.7.3" cargo-deny
+    && cargo install --root /usr/local --version "=0.8.4" cargo-deny
 
 # Step 2d. Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become
 # unnecessary when we upgrade to Python 3.7+.
@@ -141,12 +141,11 @@ ENV LC_CTYPE=C.UTF-8
 # Step 2e. Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 
-COPY requirements.txt requirements-dev.txt requirements-ci.txt /workdir/
+COPY requirements.txt requirements-dev.txt /workdir/
 
 RUN pip3 install \
     -r /workdir/requirements.txt \
     -r /workdir/requirements-dev.txt \
-    -r /workdir/requirements-ci.txt \
     && rm /workdir/requirements*.txt
 
 # Step 2f. Install docs site dependencies. These are towards the end for the
