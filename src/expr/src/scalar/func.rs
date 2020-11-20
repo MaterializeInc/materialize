@@ -1197,12 +1197,9 @@ fn jsonb_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn map_contains_key<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    // Map keys are always text.
-    let k = b.unwrap_str();
-    match a {
-        Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
-        _ => false.into(),
-    }
+    let map = a.unwrap_map();
+    let k = b.unwrap_str(); // Map keys are always text.
+    map.iter().any(|(k2, _v)| k == k2).into()
 }
 
 // TODO(jamii) nested loops are possibly not the fastest way to do this
