@@ -2,9 +2,9 @@
   "annotations": {
     "list": [
       {
-        "datasource": null,
+        "datasource": "$datasource",
         "enable": true,
-        "expr": "increase(up[1m])",
+        "expr": "increase(up{instance=~\"$instance\"}[1m])",
         "hide": true,
         "iconColor": "#DEB6F2",
         "name": "start time",
@@ -13,7 +13,7 @@
       },
       {
         "builtIn": 1,
-        "datasource": "-- Grafana --",
+        "datasource": "$datasource",
         "enable": true,
         "hide": true,
         "iconColor": "rgba(0, 211, 255, 1)",
@@ -31,7 +31,7 @@
   "panels": [
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "$datasource",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -44,7 +44,7 @@
       "type": "row"
     },
     {
-      "datasource": "Prometheus",
+      "datasource": "$datasource",
       "description": "",
       "fieldConfig": {
         "defaults": {
@@ -85,13 +85,13 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "sum(mz_kafka_messages_ingested)",
+          "expr": "sum(mz_kafka_messages_ingested{instance=~\"$instance\"})",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
         },
         {
-          "expr": "sum(mz_messages_ingested)",
+          "expr": "sum(mz_messages_ingested{instance=~\"$instance\"})",
           "interval": "",
           "legendFormat": "",
           "refId": "B"
@@ -103,7 +103,7 @@
       "type": "stat"
     },
     {
-      "datasource": "Prometheus",
+      "datasource": "$datasource",
       "description": "How many messages per second materialized is currently ingesting",
       "fieldConfig": {
         "defaults": {
@@ -144,13 +144,13 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "sum(rate(mz_kafka_messages_ingested[$__interval]))",
+          "expr": "sum(rate(mz_kafka_messages_ingested{instance=~\"$instance\"}[$__interval]))",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(mz_messages_ingested[$__interval]))",
+          "expr": "sum(rate(mz_messages_ingested{instance=~\"$instance\"}[$__interval]))",
           "interval": "",
           "legendFormat": "",
           "refId": "B"
@@ -162,7 +162,7 @@
       "type": "stat"
     },
     {
-      "datasource": null,
+      "datasource": "$datasource",
       "description": "A record is equivalent to a row in a traditional database",
       "fieldConfig": {
         "defaults": {
@@ -203,7 +203,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "sum(mz_perf_arrangement_records)",
+          "expr": "sum(mz_perf_arrangement_records{instance=~\"$instance\"})",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -215,7 +215,7 @@
       "type": "stat"
     },
     {
-      "datasource": null,
+      "datasource": "$datasource",
       "description": "Total number of sql data queries being executed per second.",
       "fieldConfig": {
         "defaults": {
@@ -265,7 +265,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "sum(rate(mz_command_durations_count{command=~\"execute|query\",status=\"success\"}[$__interval]))",
+          "expr": "sum(rate(mz_command_durations_count{instance=~\"$instance\",command=~\"execute|query\",status=\"success\"}[$__interval]))",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -278,7 +278,7 @@
     },
     {
       "content": "Timely Workers: $timely_workers<br/>\nBuilt At: $built_at<br/>\nBuild Version: $build_version<br/>\nBuild sha: $build_sha<br/>",
-      "datasource": null,
+      "datasource": "$datasource",
       "description": "",
       "fieldConfig": {
         "defaults": {
@@ -300,7 +300,7 @@
       "type": "text"
     },
     {
-      "datasource": null,
+      "datasource": "$datasource",
       "fieldConfig": {
         "defaults": {
           "custom": {},
@@ -345,7 +345,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "sum(rate(mz_command_durations_count{status=\"error\"}[5m]))",
+          "expr": "sum(rate(mz_command_durations_count{instance=~\"$instance\",status=\"error\"}[5m]))",
           "interval": "",
           "legendFormat": "{{purpose}}/{{test}}/{{workflow}}/{{id}}",
           "refId": "A"
@@ -358,7 +358,7 @@
     },
     {
       "collapsed": true,
-      "datasource": null,
+      "datasource": "$datasource",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -381,7 +381,7 @@
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
-          "datasource": "Prometheus",
+          "datasource": "$datasource",
           "fieldConfig": {
             "defaults": {
               "custom": {}
@@ -406,7 +406,7 @@
           "reverseYBuckets": false,
           "targets": [
             {
-              "expr": "sum(increase(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[$__interval])) by (le)",
+              "expr": "sum(increase(mz_command_durations_bucket{instance=~\"$instance\",command=~\"$command\",status=\"success\"}[$__interval])) by (le)",
               "format": "heatmap",
               "instant": false,
               "interval": "10s",
@@ -454,7 +454,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "the view of how long things took, from inside pgwire",
           "fieldConfig": {
             "defaults": {
@@ -499,43 +499,43 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{instance=~\"$instance\",command=~\"$command\",status=\"success\"}[$__interval])) by (le))",
               "interval": "",
               "legendFormat": "max",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{instance=~\"$instance\",command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
               "interval": "",
               "legendFormat": "p99",
               "refId": "B"
             },
             {
-              "expr": "histogram_quantile(0.95, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(mz_command_durations_bucket{instance=~\"$instance\",command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
               "interval": "",
               "legendFormat": "p95",
               "refId": "C"
             },
             {
-              "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{instance=~\"$instance\",command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
               "interval": "",
               "legendFormat": "median",
               "refId": "D"
             },
             {
-              "expr": "histogram_quantile(0.001, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(0.001, sum(rate(mz_command_durations_bucket{instance=~\"$instance\",command=~\"$command\",status=\"success\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
               "interval": "",
               "legendFormat": "p001",
               "refId": "E"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"error\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{instance=~\"$instance\",command=~\"$command\",status=\"error\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
               "interval": "",
               "legendFormat": "error p99",
               "refId": "F"
             },
             {
-              "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"error\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
+              "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{instance=~\"$instance\",command=~\"$command\",status=\"error\",num_warehouses=\"$num_warehouses\"}[$__interval])) by (le))",
               "interval": "",
               "legendFormat": "error max",
               "refId": "G"
@@ -587,7 +587,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "fieldConfig": {
             "defaults": {
               "custom": {}
@@ -631,7 +631,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_command_durations_count[$__interval])",
+              "expr": "rate(mz_command_durations_count{instance=~\"$instance\"}[$__interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "{{command}}",
@@ -684,7 +684,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "fieldConfig": {
             "defaults": {
               "custom": {}
@@ -731,13 +731,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_pg_sent_rows[$__interval])",
+              "expr": "rate(mz_pg_sent_rows{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "rows/sec",
               "refId": "A"
             },
             {
-              "expr": "rate(mz_pg_sent_bytes[$__interval])",
+              "expr": "rate(mz_pg_sent_bytes{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "bytes/sec",
               "refId": "B"
@@ -790,7 +790,7 @@
     },
     {
       "collapsed": true,
-      "datasource": null,
+      "datasource": "$datasource",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -804,7 +804,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "fieldConfig": {
             "defaults": {
               "custom": {}
@@ -873,13 +873,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_dataflow_events_read_total[$__interval])",
+              "expr": "rate(mz_dataflow_events_read_total{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "{{format}} events {{status}}",
               "refId": "A"
             },
             {
-              "expr": "mz_dataflow_events_read_total",
+              "expr": "mz_dataflow_events_read_total{instance=~\"$instance\"}",
               "instant": false,
               "legendFormat": "{{format}} events total {{status}}",
               "refId": "B"
@@ -931,7 +931,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "Unlike the Messages Ingested by Format, this shows the raw number of messages we've received\n\nCurrently only shows Kafka",
           "fieldConfig": {
             "defaults": {
@@ -981,19 +981,19 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_kafka_messages_ingested[$__interval])",
+              "expr": "rate(mz_kafka_messages_ingested{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "rate {{topic}} {{source_id}} {{partition_id}}",
               "refId": "A"
             },
             {
-              "expr": "mz_kafka_messages_ingested",
+              "expr": "mz_kafka_messages_ingested{instance=~\"$instance\"}",
               "interval": "",
               "legendFormat": "total {{topic}} {{source_id}} {{partition_id}}",
               "refId": "B"
             },
             {
-              "expr": "rate(mz_messages_ingested[$__interval])",
+              "expr": "rate(mz_messages_ingested{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "rate {{topic}} {{source_id}} {{partition_id}}",
               "refId": "C"
@@ -1045,7 +1045,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "The raw kafka offset as seen at ingest time by materialized.",
           "fieldConfig": {
             "defaults": {
@@ -1091,13 +1091,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "mz_kafka_partition_offset_received",
+              "expr": "mz_kafka_partition_offset_received{instance=~\"$instance\"}",
               "interval": "",
               "legendFormat": "{{topic}}/{{partition_id}} {{source_id}}",
               "refId": "A"
             },
             {
-              "expr": "mz_partition_offset_received",
+              "expr": "mz_partition_offset_received{instance=~\"$instance\"}",
               "interval": "",
               "legendFormat": "{{topic}}/{{partition_id}} {{source_id}}",
               "refId": "B"
@@ -1149,7 +1149,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "fieldConfig": {
             "defaults": {
               "custom": {}
@@ -1196,25 +1196,25 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_kafka_bytes_read_total[$__interval])",
+              "expr": "rate(mz_kafka_bytes_read_total{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "rate",
               "refId": "A"
             },
             {
-              "expr": "mz_kafka_bytes_read_total",
+              "expr": "mz_kafka_bytes_read_total{instance=~\"$instance\"}",
               "interval": "",
               "legendFormat": "total",
               "refId": "B"
             },
             {
-              "expr": "rate(mz_bytes_read_total[$__interval])",
+              "expr": "rate(mz_bytes_read_total{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "rate",
               "refId": "C"
             },
             {
-              "expr": "mz_bytes_read_total",
+              "expr": "mz_bytes_read_total{instance=~\"$instance\"}",
               "interval": "",
               "legendFormat": "total",
               "refId": "D"
@@ -1266,7 +1266,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "This shows the number of messages that materialize knows it is behind an kafka source.\n\nFor example, if there are 1,000 messages in kafka and materialized has processed 750, this value will be 250.\n\nThis is limited by the (low) frequency at which we request metadata from kafka -- it is common for all values to be zero, and there is only a problem if the number is not decreasing.",
           "fieldConfig": {
             "defaults": {
@@ -1313,14 +1313,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk(50, clamp_min(\nmz_kafka_partition_offset_max \n  - mz_kafka_partition_offset_ingested, \n  0))",
+              "expr": "topk(50, clamp_min(\nmz_kafka_partition_offset_max{instance=~\"$instance\"} \n  - mz_kafka_partition_offset_ingested{instance=~\"$instance\"}, \n  0))",
               "hide": false,
               "interval": "",
               "legendFormat": "{{topic}}/{{partition_id}} source={{source_id}}",
               "refId": "A"
             },
             {
-              "expr": "topk(50, clamp_min(\nmz_kafka_partition_offset_max \n  - mz_partition_offset_ingested, \n  0))",
+              "expr": "topk(50, clamp_min(\nmz_kafka_partition_offset_max{instance=~\"$instance\"} \n  - mz_partition_offset_ingested{instance=~\"$instance\"}, \n  0))",
               "hide": false,
               "interval": "",
               "legendFormat": "{{topic}}/{{partition_id}} source={{source_id}}",
@@ -1374,7 +1374,7 @@
     },
     {
       "collapsed": true,
-      "datasource": null,
+      "datasource": "$datasource",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -1388,7 +1388,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "This is only reported for Kinesis sources at the moment.",
           "fieldConfig": {
             "defaults": {
@@ -1438,7 +1438,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "mz_kinesis_shard_millis_behind_latest",
+              "expr": "mz_kinesis_shard_millis_behind_latest{instance=~\"$instance\"}",
               "legendFormat": "{{ stream_name }} {{ shard_id }}",
               "refId": "A"
             }
@@ -1491,7 +1491,7 @@
     },
     {
       "collapsed": true,
-      "datasource": null,
+      "datasource": "$datasource",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -1505,7 +1505,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "The number of messages we've written through a Kafka Sink.",
           "fieldConfig": {
             "defaults": {
@@ -1553,13 +1553,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_kafka_messages_sent_total[$__interval])",
+              "expr": "rate(mz_kafka_messages_sent_total{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "{{sink_id}}/{{worker_id}} {{topic}}",
               "refId": "A"
             },
             {
-              "expr": "mz_kafka_messages_sent_total",
+              "expr": "mz_kafka_messages_sent_total{instance=~\"$instance\"}",
               "interval": "",
               "legendFormat": "total {{sink_id}}/{{worker_id}} {{topic}}",
               "refId": "B"
@@ -1611,7 +1611,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "The number of errors we've received when writing messages to Kafka",
           "fieldConfig": {
             "defaults": {
@@ -1659,13 +1659,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_kafka_message_send_errors_total[$__interval])",
+              "expr": "rate(mz_kafka_message_send_errors_total{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "{{sink_id}}/{{worker_id}} {{topic}}",
               "refId": "A"
             },
             {
-              "expr": "mz_kafka_message_send_errors_total",
+              "expr": "mz_kafka_message_send_errors_total{instance=~\"$instance\"}",
               "interval": "",
               "legendFormat": "total {{sink_id}}/{{worker_id}} {{topic}}",
               "refId": "B"
@@ -1718,7 +1718,7 @@
     },
     {
       "collapsed": true,
-      "datasource": null,
+      "datasource": "$datasource",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -1732,7 +1732,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "A worker is the underlying thread of computation in materialized. In general materialized should send similar amounts of work to each worker, and therefore the commands processed per worker should be similar.",
           "fieldConfig": {
             "defaults": {
@@ -1780,7 +1780,7 @@
           "steppedLine": true,
           "targets": [
             {
-              "expr": "rate(mz_worker_commands_processed_total[$__interval])",
+              "expr": "rate(mz_worker_commands_processed_total{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "{{command}}/{{worker}}",
               "refId": "A"
@@ -1832,7 +1832,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "A worker is the underlying thread of computation in materialized. In general materialized should send similar amounts of work to each worker, and the queue depths should be similar to each other.\n\nIf a queue is growing without bound, or queues are very unbalanced, that could signify a problem.",
           "fieldConfig": {
             "defaults": {
@@ -1875,12 +1875,12 @@
           "steppedLine": true,
           "targets": [
             {
-              "expr": "mz_worker_command_queue_size",
+              "expr": "mz_worker_command_queue_size{instance=~\"$instance\"}",
               "legendFormat": "pending commands worker={{worker}}",
               "refId": "A"
             },
             {
-              "expr": "mz_worker_pending_peeks_queue_size",
+              "expr": "mz_worker_pending_peeks_queue_size{instance=~\"$instance\"}",
               "legendFormat": "pending peeks worker={{worker}}",
               "refId": "B"
             }
@@ -1931,7 +1931,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "Proportion of time spent in maintenance, per arrangement,  for the top 50 arrangements.",
           "fieldConfig": {
             "defaults": {
@@ -1977,7 +1977,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk(50, rate(mz_arrangement_maintenance_seconds_total[$__interval]))",
+              "expr": "topk(50, rate(mz_arrangement_maintenance_seconds_total{instance=~\"$instance\"}[$__interval]))",
               "interval": "",
               "legendFormat": "{{worker_id}}/{{arrangement_id}}",
               "refId": "A"
@@ -2030,7 +2030,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "This shows the top 10 dataflow operators that are introducing lag into the system.\n\nAn operator can introduce lag either because its source is running behind, or because it is doing lots of work.",
           "fieldConfig": {
             "defaults": {
@@ -2077,7 +2077,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk(10, mz_perf_dependency_frontiers)",
+              "expr": "topk(10, mz_perf_dependency_frontiers{instance=~\"$instance\"})",
               "interval": "",
               "legendFormat": "{{source}} -> {{dataflow}}",
               "refId": "A"
@@ -2130,7 +2130,7 @@
     },
     {
       "collapsed": true,
-      "datasource": null,
+      "datasource": "$datasource",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -2144,7 +2144,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "See also the CPU row in the [node-state dashboard](/d/node-state?var-job=load_test). \n\nYou will need to filter to the current instance: $instances",
           "fieldConfig": {
             "defaults": {
@@ -2187,7 +2187,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(process_cpu_seconds_total{instance=~\".*:6875\"}[$__interval])",
+              "expr": "rate(process_cpu_seconds_total{instance=~\"$instance\"}[$__interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "materialized",
@@ -2247,7 +2247,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "Per-thread-name CPU usage, multiple trheads (e.g. in a pool) often share the same name. \n\nSee the thread-name-count panel for how many threads exist with a given name.",
           "fieldConfig": {
             "defaults": {
@@ -2290,7 +2290,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(process_thread_cpu_seconds_total{instance=~\".*:6875\"}[$__interval])",
+              "expr": "rate(process_thread_cpu_seconds_total{instance=~\"$instance\"}[$__interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "{{thread_name}}",
@@ -2350,7 +2350,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "See also the Memory/Meminfo row in the [node-state dashboard](/d/node-state?var-job=load_test). \n\nYou will need to filter to the current instance: $instances",
           "fieldConfig": {
             "defaults": {
@@ -2393,14 +2393,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_resident_memory_bytes{instance=~\".*:6875\"}",
+              "expr": "process_resident_memory_bytes{instance=~\"$instance\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "rss {{job}}",
               "refId": "A"
             },
             {
-              "expr": "process_swap_memory_bytes{instance=~\".*:6875\"}",
+              "expr": "process_swap_memory_bytes{instance=~\"$instance\"}",
               "interval": "",
               "legendFormat": "swap {{job}}",
               "refId": "B"
@@ -2452,7 +2452,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "How many threads exist with a given name in materialized.\n\nHelps think about per-thread CPU usage, in case it's over 100%",
           "fieldConfig": {
             "defaults": {
@@ -2495,7 +2495,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_thread_count{instance=~\".*:6875\"}",
+              "expr": "process_thread_count{instance=~\"$instance\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "{{thread_name}}",
@@ -2555,7 +2555,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "An arrangement is where materialize stores state, records are equivalent to rows in a database or messages in a stream.\n\nThis shows the top 10 arrangements by number of records, and should be similar to the Arrangement Batches panel.",
           "fieldConfig": {
             "defaults": {
@@ -2598,7 +2598,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk(10, mz_perf_arrangement_records)",
+              "expr": "topk(10, mz_perf_arrangement_records{instance=~\"$instance\"})",
               "interval": "",
               "legendFormat": "w={{worker}} op={{operator}} name={{name}}",
               "refId": "A"
@@ -2651,7 +2651,7 @@
     },
     {
       "collapsed": true,
-      "datasource": null,
+      "datasource": "$datasource",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -2665,7 +2665,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "A batch is a slab of memory, arrangements with a large number of batches have allocated a large number of records, which should be represented in the Arrangement Records panel.\n\nThis shows the top 10 arrangements by number of batches, and should be similar to the Arrangement Records panel.",
           "fieldConfig": {
             "defaults": {
@@ -2708,7 +2708,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk(10, mz_perf_arrangements_batches)",
+              "expr": "topk(10, mz_perf_arrangements_batches{instance=~\"$instance\"})",
               "interval": "",
               "legendFormat": "w={{worker}} op={{operator}}",
               "refId": "A"
@@ -2760,7 +2760,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "This is expected to be primarily at zero, with very brief spikes.\n\nIf any time series is above zero for multiple points that suggests that we are stuck.",
           "fieldConfig": {
             "defaults": {
@@ -2803,7 +2803,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum by (worker_id) (mz_arrangement_maintenance_active_info)",
+              "expr": "sum by (worker_id) (mz_arrangement_maintenance_active_info{instance=~\"$instance\"})",
               "interval": "",
               "legendFormat": "worker {{worker_id}}",
               "refId": "A"
@@ -2855,7 +2855,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "The difference between the most-consumed and least-consumed kafka partition, in terms of when we last released messages into the dataflow layer.",
           "fieldConfig": {
             "defaults": {
@@ -2898,13 +2898,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "max by (topic, source_id) (mz_kafka_partition_closed_ts) - min by (topic, source_id) (mz_kafka_partition_closed_ts)",
+              "expr": "max by (topic, source_id) (mz_kafka_partition_closed_ts{instance=~\"$instance\"}) - min by (topic, source_id) (mz_kafka_partition_closed_ts{instance=~\"$instance\"})",
               "interval": "",
               "legendFormat": "{{topic}}-{{source_id}}",
               "refId": "A"
             },
             {
-              "expr": "max by (topic, source_id) (mz_partition_closed_ts) - min by (topic, source_id) (mz_partition_closed_ts)",
+              "expr": "max by (topic, source_id) (mz_partition_closed_ts{instance=~\"$instance\"}) - min by (topic, source_id) (mz_partition_closed_ts{instance=~\"$instance\"})",
               "interval": "",
               "legendFormat": "{{topic}}-{{source_id}}",
               "refId": "B"
@@ -2956,7 +2956,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "The total number of times that a source has been scheduled, and the rate at which they're scheduled.\n\nIn a well-behaved system, sources should be activated approximately in proportion to how much data they have to read. If sources are being scheduled at significantly different proportions it could mean that the more-scheduled sources are having a hard time keeping up.",
           "fieldConfig": {
             "defaults": {
@@ -3007,13 +3007,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_operator_scheduled_total[$__interval])",
+              "expr": "rate(mz_operator_scheduled_total{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "kafka {{topic}} {{source_id}}",
               "refId": "A"
             },
             {
-              "expr": "mz_operator_scheduled_total",
+              "expr": "mz_operator_scheduled_total{instance=~\"$instance\"}",
               "interval": "",
               "legendFormat": "kafka total {{topic}} {{source_id}}",
               "refId": "B"
@@ -3065,7 +3065,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": null,
+          "datasource": "$datasource",
           "description": "This is a measure of when we last stated that ingested data was valid for computation. Another way of thinking about this is how many seconds of data do we ingest per second of real time. In a steady state this should be approximately 1s/s.\n\nAll sources that have a rate of 0 are *stalled* and are either not ingesting new data or have no new data to ingest.\n\nInternally, this is the capability, and the underlying measure is what capability we have released.",
           "fieldConfig": {
             "defaults": {
@@ -3108,13 +3108,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_kafka_capability[$__interval])",
+              "expr": "rate(mz_kafka_capability{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "{{topic}}-{{source_id}}",
               "refId": "A"
             },
             {
-              "expr": "rate(mz_capability[$__interval])",
+              "expr": "rate(mz_capability{instance=~\"$instance\"}[$__interval])",
               "interval": "",
               "legendFormat": "{{topic}}-{{source_id}}",
               "refId": "B"
@@ -3173,6 +3173,43 @@
   "templating": {
     "list": [
       {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "allFormat": "glob",
+        "allValue": null,
+        "current": {},
+        "datasource": "$datasource",
+        "definition": "label_values(up{instance=~\".*:6875\"}, instance)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Instance",
+        "multi": false,
+        "name": "instance",
+        "options": [],
+        "query": "label_values(up{instance=~\".*:6875\"}, instance)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
         "allFormat": "glob",
         "allValue": null,
         "current": {
@@ -3183,7 +3220,7 @@
             "query"
           ]
         },
-        "datasource": "Prometheus",
+        "datasource": "$datasource",
         "definition": "label_values(mz_command_durations_bucket, command)",
         "hide": 0,
         "includeAll": false,
@@ -3246,7 +3283,7 @@
       {
         "allValue": null,
         "current": {},
-        "datasource": "Prometheus",
+        "datasource": "$datasource",
         "definition": "label_values(mz_server_metadata_timely_worker_threads, count)",
         "hide": 2,
         "includeAll": true,
@@ -3269,7 +3306,7 @@
         "allFormat": "glob",
         "allValue": null,
         "current": {},
-        "datasource": "Prometheus",
+        "datasource": "$datasource",
         "definition": "label_values(mz_server_metadata_seconds, build_time)",
         "hide": 2,
         "includeAll": false,
@@ -3292,7 +3329,7 @@
         "allFormat": "glob",
         "allValue": null,
         "current": {},
-        "datasource": "Prometheus",
+        "datasource": "$datasource",
         "definition": "label_values(mz_server_metadata_seconds, build_version)",
         "hide": 2,
         "includeAll": false,
@@ -3315,7 +3352,7 @@
         "allFormat": "glob",
         "allValue": null,
         "current": {},
-        "datasource": "Prometheus",
+        "datasource": "$datasource",
         "definition": "label_values(mz_server_metadata_seconds, build_sha)",
         "hide": 2,
         "includeAll": false,
@@ -3355,6 +3392,6 @@
   },
   "timezone": "",
   "title": "Materialize Overview",
-  "uid": "materialize-overview",
+  "uid": "materialize",
   "version": 0
 }
