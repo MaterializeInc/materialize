@@ -177,25 +177,25 @@ mod tests {
 
     #[derive(Debug)]
     struct TestCatalog {
-        objects: HashMap<String, (Id, RelationType)>,
-        names: HashMap<Id, String>,
+        objects: HashMap<String, (GlobalId, RelationType)>,
+        names: HashMap<GlobalId, String>,
     }
 
     impl<'a> TestCatalog {
         fn insert(&mut self, name: &str, typ: RelationType) {
             // TODO(justin): error on dup name?
-            let id = Id::Global(GlobalId::User(self.objects.len() as u64));
+            let id = GlobalId::User(self.objects.len() as u64);
             self.objects.insert(name.to_string(), (id, typ));
             self.names.insert(id, name.to_string());
         }
 
-        fn get(&'a self, name: &str) -> Option<&'a (Id, RelationType)> {
+        fn get(&'a self, name: &str) -> Option<&'a (GlobalId, RelationType)> {
             self.objects.get(name)
         }
     }
 
     impl IdHumanizer for TestCatalog {
-        fn humanize_id(&self, id: Id) -> Option<String> {
+        fn humanize_id(&self, id: GlobalId) -> Option<String> {
             self.names.get(&id).map(|s| s.to_string())
         }
     }
@@ -256,7 +256,7 @@ mod tests {
                     None => match catalog.get(&name) {
                         None => Err(anyhow!("no catalog object named {}", name)),
                         Some((id, typ)) => Ok(RelationExpr::Get {
-                            id: id.clone(),
+                            id: Id::Global(*id),
                             typ: typ.clone(),
                         }),
                     },

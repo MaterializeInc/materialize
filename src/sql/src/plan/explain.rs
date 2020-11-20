@@ -214,7 +214,7 @@ impl RelationExpr {
                     Id::Local(_) => {
                         unimplemented!("sql::RelationExpr::Get can't contain LocalId yet")
                     }
-                    Id::Global(_) => write!(
+                    Id::Global(id) => write!(
                         pretty,
                         "Get {} ({})",
                         id_humanizer
