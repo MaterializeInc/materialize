@@ -27,24 +27,27 @@ CREATE MATERIALIZED SOURCE mbta_stops
 CREATE MATERIALIZED SOURCE mbta_routes
   FROM FILE '/workdir/workspace/MBTA_GTFS/routes.txt' FORMAT CSV WITH HEADER;
 
+CREATE MATERIALIZED SOURCE mbta_transfers
+  FROM FILE '/workdir/workspace/MBTA_GTFS/transfers.txt' FORMAT CSV WITH HEADER;
+
 CREATE SOURCE all_pred
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'all-pred'
-  FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT;
-
-CREATE SOURCE all_trip
-  FROM KAFKA BROKER 'kafka:9092' TOPIC 'all-trip'
   FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT;
 
 CREATE SOURCE all_schd
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'all-schd'
   FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT;
 
-CREATE SOURCE vehicles
+CREATE SOURCE all_trip
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'all-trip'
+  FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT;
+
+CREATE SOURCE all_vehicles
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'all-vehicles'
   FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT;
 
 CREATE MATERIALIZED VIEW parsed_all_pred as
-SELECT id,
+SELECT pred_id,
     CAST(payload->'attributes'->>'arrival_time' AS timestamptz) arrival_time,
     CAST(payload->'attributes'->>'departure_time'  AS timestamptz) departure_time,
     CAST(CAST(payload->'attributes'->>'direction_id' AS DECIMAL(5,1)) AS INT) direction_id,
@@ -55,10 +58,10 @@ SELECT id,
     payload->'relationships'->'stop'->'data'->>'id' stop_id,
     payload->'relationships'->'trip'->'data'->>'id' trip_id,
     payload->'relationships'->'vehicle'->'data'->>'id' vehicle_id
-FROM (SELECT key0 as id, cast (text as jsonb) AS payload FROM all_pred);
+FROM (SELECT key0 as pred_id, cast (text as jsonb) AS payload FROM all_pred);
 
 CREATE MATERIALIZED VIEW parsed_all_schd as
-SELECT id,
+SELECT schd_id,
 CAST(payload->'attributes'->>'arrival_time' AS timestamptz) arrival_time,
 CAST(payload->'attributes'->>'departure_time'  AS timestamptz) departure_time,
 CAST(CAST(payload->'attributes'->>'direction_id' AS DECIMAL(5,1)) AS INT) direction_id,
@@ -66,10 +69,10 @@ CAST(CAST(payload->'attributes'->>'stop_sequence' AS DECIMAL(5,1)) AS INT) stop_
 payload->'relationships'->'route'->'data'->>'id' route_id,
 payload->'relationships'->'stop'->'data'->>'id' stop_id,
 payload->'relationships'->'trip'->'data'->>'id' trip_id
-FROM (SELECT key0 as id, cast ("text" as jsonb) AS payload FROM all_schd);
+FROM (SELECT key0 as schd_id, cast ("text" as jsonb) AS payload FROM all_schd);
 
 CREATE MATERIALIZED VIEW parsed_all_trip as
-SELECT id,
+SELECT trip_id,
 payload->'attributes'->>'bikes_allowed' bikes_allowed,
 CAST(CAST(payload->'attributes'->>'direction_id' AS DECIMAL(5,1)) AS INT) direction_id,
 payload->'attributes'->>'headsign' headsign,
@@ -78,13 +81,13 @@ payload->'relationships'->'route'->'data'->>'id' route_id,
 payload->'relationships'->'route_pattern'->'data'->>'id' route_pattern_id,
 payload->'relationships'->'service'->'data'->>'id' service_id,
 payload->'relationships'->'shape'->'data'->>'id' shape_id
-FROM (SELECT key0 as id, cast ("text" as jsonb) AS payload FROM all_trip);
+FROM (SELECT key0 as trip_id, cast ("text" as jsonb) AS payload FROM all_trip);
 
-CREATE MATERIALIZED VIEW parsed_vehicles as
-SELECT id,
+CREATE MATERIALIZED VIEW parsed_all_vehicles as
+SELECT vehicle_id,
 payload->'attributes'->>'current_status' status,
 CAST(CAST(payload->'attributes'->>'direction_id' AS DECIMAL(5,1)) AS INT) direction_id,
 payload->'relationships'->'route'->'data'->>'id' route_id,
 payload->'relationships'->'stop'->'data'->>'id' stop_id,
 payload->'relationships'->'trip'->'data'->>'id' trip_id
-FROM (SELECT key0 as id, cast ("text" as jsonb) AS payload FROM vehicles);
+FROM (SELECT key0 as vehicle_id, cast ("text" as jsonb) AS payload FROM all_vehicles);

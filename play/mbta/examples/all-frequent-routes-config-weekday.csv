@@ -42,6 +42,7 @@ all-pred,predictions,route,117,,
 all-pred,predictions,route,747,,
 all-pred,predictions,route,708,,
 all-trip,trips,route,Red,,30s
+all-trip,trips,route,Mattapan,,30s
 all-trip,trips,route,Orange,,30s
 all-trip,trips,route,Green-B,,30s
 all-trip,trips,route,Green-C,,30s
@@ -72,6 +73,7 @@ all-trip,trips,route,117,,30s
 all-trip,trips,route,747,,30s
 all-trip,trips,route,708,,30s
 all-schd,schedules,route,Red,,30s
+all-schd,schedules,route,Mattapan,,30s
 all-schd,schedules,route,Orange,,30s
 all-schd,schedules,route,Green-B,,30s
 all-schd,schedules,route,Green-C,,30s
