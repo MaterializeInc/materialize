@@ -1205,6 +1205,48 @@ fn map_contains_key<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
+fn map_contains_all_keys<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let map = a.unwrap_map();
+    let keys = b.unwrap_array();
+    if keys.elements().iter().any(|key| key.is_null()) {
+        // Map keys cannot be NULL.
+        return false.into();
+    }
+
+    // Map keys are always text.
+    keys.elements()
+        .iter()
+        .all(|key| map.iter().any(|(k, _v)| k == key.unwrap_str()))
+        .into()
+}
+
+fn map_contains_any_keys<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let map = a.unwrap_map();
+    let keys = b.unwrap_array();
+    if keys.elements().iter().any(|key| key.is_null()) {
+        // Map keys cannot be NULL.
+        return false.into();
+    }
+
+    // Map keys are always text.
+    keys.elements()
+        .iter()
+        .any(|key| map.iter().any(|(k, _v)| k == key.unwrap_str()))
+        .into()
+}
+
+fn map_contains_map<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let map_a = a.unwrap_map();
+    b.unwrap_map()
+        .iter()
+        .all(|(b_key, b_val)| {
+            map_a
+                .iter()
+                .any(|(a_key, a_val)| (a_key == b_key) && (a_val == b_val))
+        })
+        .into()
+}
+
 // TODO(jamii) nested loops are possibly not the fastest way to do this
 fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
@@ -1832,6 +1874,9 @@ pub enum BinaryFunc {
     JsonbDeleteInt64,
     JsonbDeleteString,
     MapContainsKey,
+    MapContainsAllKeys,
+    MapContainsAnyKeys,
+    MapContainsMap,
     ConvertFrom,
     Trim,
     TrimLeading,
@@ -1952,6 +1997,9 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
             BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
             BinaryFunc::MapContainsKey => Ok(eager!(map_contains_key)),
+            BinaryFunc::MapContainsAllKeys => Ok(eager!(map_contains_all_keys)),
+            BinaryFunc::MapContainsAnyKeys => Ok(eager!(map_contains_any_keys)),
+            BinaryFunc::MapContainsMap => Ok(eager!(map_contains_map)),
             BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Trim => Ok(eager!(trim)),
@@ -2093,9 +2141,8 @@ impl BinaryFunc {
             | JsonbDeleteInt64
             | JsonbDeleteString => ScalarType::Jsonb.nullable(true),
 
-            JsonbContainsString | JsonbContainsJsonb | MapContainsKey => {
-                ScalarType::Bool.nullable(in_nullable)
-            }
+            JsonbContainsString | JsonbContainsJsonb | MapContainsKey | MapContainsAllKeys
+            | MapContainsAnyKeys | MapContainsMap => ScalarType::Bool.nullable(in_nullable),
 
             ListIndex => input1_type
                 .scalar_type
@@ -2245,6 +2292,9 @@ impl BinaryFunc {
             | JsonbDeleteInt64
             | JsonbDeleteString
             | MapContainsKey
+            | MapContainsAllKeys
+            | MapContainsAnyKeys
+            | MapContainsMap
             | TextConcat
             | ListIndex
             | IsRegexpMatch { .. }
@@ -2348,9 +2398,11 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbGetString { .. } => f.write_str("->"),
             BinaryFunc::JsonbContainsString | BinaryFunc::MapContainsKey => f.write_str("?"),
             BinaryFunc::JsonbConcat => f.write_str("||"),
-            BinaryFunc::JsonbContainsJsonb => f.write_str("@>"),
+            BinaryFunc::JsonbContainsJsonb | BinaryFunc::MapContainsMap => f.write_str("@>"),
             BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
+            BinaryFunc::MapContainsAllKeys => f.write_str("?&"),
+            BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
             BinaryFunc::Trim => f.write_str("btrim"),
