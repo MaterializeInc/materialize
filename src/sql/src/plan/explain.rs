@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use expr::explain::{Bracketed, Indices, Separated};
-use expr::{Id, IdHumanizer, RowSetFinishing};
+use expr::{Id, IdHumanizer, LocalId, RowSetFinishing};
 use repr::{RelationType, ScalarType};
 
 use crate::plan::expr::{AggregateExpr, JoinKind, RelationExpr, ScalarExpr};
@@ -64,6 +64,11 @@ impl<'a> std::fmt::Display for Explanation<'a> {
             }
             prev_chain = node.chain;
 
+            // skip Let
+            if let RelationExpr::Let { .. } = node.expr {
+                continue;
+            }
+
             // explain output shows up in SLT where the linter will not allow trailing whitespace, so need to trim stuff
             writeln!(f, "| {}", node.pretty.trim())?;
             for annotation in &node.annotations {
@@ -91,12 +96,13 @@ impl<'a> std::fmt::Display for Explanation<'a> {
 impl RelationExpr {
     /// Create an Explanation, to which annotations can be added before printing
     pub fn explain(&self, id_humanizer: &impl IdHumanizer) -> Explanation {
-        self.explain_internal(id_humanizer, &mut 0)
+        self.explain_internal(id_humanizer, &mut HashMap::new(), &mut 0)
     }
 
     fn explain_internal(
         &self,
         id_humanizer: &impl IdHumanizer,
+        local_id_chain: &mut HashMap<LocalId, usize>,
         next_chain: &mut usize,
     ) -> Explanation {
         use RelationExpr::*;
@@ -141,10 +147,17 @@ impl RelationExpr {
                     | Threshold { .. }
                     | Distinct { .. } => false,
                     Join { .. } | Union { .. } => true,
+                    Let { value, .. } => {
+                        // only the value child goes in a different chain
+                        (node.expr as *const RelationExpr) == ((&**value) as *const RelationExpr)
+                    }
                     Constant { .. } | Get { .. } => unreachable!(), // these don't have children
                 },
             };
             if breaks_chain {
+                if let Some(Let { id, .. }) = &node.parent_expr {
+                    local_id_chain.insert(*id, current_chain);
+                }
                 expr_chain.insert(node.expr as *const RelationExpr, current_chain);
                 current_chain = *next_chain;
                 *next_chain += 1;
@@ -154,6 +167,7 @@ impl RelationExpr {
             let mut scalar_exprs = vec![];
             match &node.expr {
                 Constant { .. }
+                | Let { .. }
                 | Get { .. }
                 | Project { .. }
                 | Distinct { .. }
@@ -182,8 +196,11 @@ impl RelationExpr {
                         | CallVariadic { .. }
                         | If { .. } => (),
                         Exists(relation_expr) | Select(relation_expr) => {
-                            node.subqueries
-                                .push(relation_expr.explain_internal(id_humanizer, next_chain));
+                            node.subqueries.push(relation_expr.explain_internal(
+                                id_humanizer,
+                                local_id_chain,
+                                next_chain,
+                            ));
                         }
                     }
                 });
@@ -210,10 +227,16 @@ impl RelationExpr {
                 Constant { rows, .. } => {
                     write!(pretty, "Constant {}", Separated(" ", rows.clone())).unwrap();
                 }
+                Let { id, .. } => write!(pretty, "Let %{}", local_id_chain[id]).unwrap(),
                 Get { id, .. } => match id {
-                    Id::Local(_) => {
-                        unimplemented!("sql::RelationExpr::Get can't contain LocalId yet")
-                    }
+                    Id::Local(local_id) => write!(
+                        pretty,
+                        "Get %{}",
+                        local_id_chain
+                            .get(local_id)
+                            .map_or_else(|| "?".to_owned(), |i| i.to_string())
+                    )
+                    .unwrap(),
                     Id::Global(id) => write!(
                         pretty,
                         "Get {} ({})",

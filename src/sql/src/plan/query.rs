@@ -35,7 +35,7 @@ use sql_parser::ast::{
     TableAlias, TableFactor, TableWithJoins, Value, Values,
 };
 
-use ::expr::{GlobalId, Id, RowSetFinishing};
+use ::expr::{GlobalId, Id, LocalId, RowSetFinishing};
 use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{
     strconv, ColumnName, Datum, RelationDesc, RelationType, RowArena, ScalarType, Timestamp,
@@ -398,6 +398,7 @@ fn plan_query(
     qcx: &mut QueryContext,
     q: &Query,
 ) -> Result<(RelationExpr, Scope, RowSetFinishing), anyhow::Error> {
+    let mut ctes = vec![];
     for cte in &q.ctes {
         let cte_name = normalize::ident(cte.alias.name.clone());
         if qcx.ctes.get(&cte_name).is_some() {
@@ -414,14 +415,9 @@ fn plan_query(
             &cte.alias.columns,
         )?;
 
-        qcx.ctes.insert(
-            cte_name,
-            CteDesc {
-                val,
-                val_desc,
-                level_offset: 0,
-            },
-        );
+        let id = qcx.scx.allocate_id();
+        qcx.ctes.insert(cte_name, (id, val_desc));
+        ctes.push((id, val));
     }
     let limit = match &q.limit {
         None => None,
@@ -443,8 +439,7 @@ fn plan_query(
         Some(Expr::Value(Value::Number(x))) => x.parse()?,
         _ => bail!("OFFSET must be an integer constant"),
     };
-
-    match &q.body {
+    let (mut expr, scope, finishing) = match &q.body {
         SetExpr::Select(s) => {
             let plan = plan_view_select(qcx, s, &q.order_by)?;
             let finishing = RowSetFinishing {
@@ -453,7 +448,7 @@ fn plan_query(
                 limit,
                 offset,
             };
-            Ok((plan.expr, plan.scope, finishing))
+            (plan.expr, plan.scope, finishing)
         }
         _ => {
             let (expr, scope) = plan_set_expr(qcx, &q.body)?;
@@ -472,9 +467,19 @@ fn plan_query(
                 project: (0..ecx.relation_type.arity()).collect(),
                 offset,
             };
-            Ok((expr.map(map_exprs), scope, finishing))
+            (expr.map(map_exprs), scope, finishing)
+        }
+    };
+
+    for (id, value) in ctes.into_iter().rev() {
+        expr = RelationExpr::Let {
+            id,
+            value: Box::new(value),
+            body: Box::new(expr.clone()),
         }
     }
+
+    Ok((expr, scope, finishing))
 }
 
 fn plan_subquery(
@@ -2704,7 +2709,7 @@ pub struct QueryContext<'a> {
     /// The type of the outer relation expressions.
     pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query.
-    pub ctes: HashMap<String, CteDesc>,
+    pub ctes: HashMap<String, (LocalId, RelationDesc)>,
 }
 
 impl<'a> QueryContext<'a> {
@@ -2725,11 +2730,6 @@ impl<'a> QueryContext<'a> {
     /// Generate a new `QueryContext` appropriate to be used in subqueries of
     /// `self`.
     fn derived_context(&self, scope: Scope, relation_type: &RelationType) -> QueryContext<'a> {
-        let mut ctes = self.ctes.clone();
-        for (_, cte) in ctes.iter_mut() {
-            cte.level_offset += 1;
-        }
-
         QueryContext {
             scx: self.scx,
             lifetime: self.lifetime,
@@ -2740,7 +2740,7 @@ impl<'a> QueryContext<'a> {
                 .chain(std::iter::once(relation_type))
                 .cloned()
                 .collect(),
-            ctes,
+            ctes: self.ctes.clone(),
         }
     }
 
@@ -2750,14 +2750,7 @@ impl<'a> QueryContext<'a> {
         // Check if unqualified name refers to a CTE.
         if name.0.len() == 1 {
             let norm_name = normalize::ident(name.0[0].clone());
-            if let Some(cte) = self.ctes.get(&norm_name) {
-                let mut val = cte.val.clone();
-                val.visit_columns(0, &mut |depth, col| {
-                    if col.level > depth {
-                        col.level += cte.level_offset;
-                    }
-                });
-
+            if let Some((id, desc)) = self.ctes.get(&norm_name) {
                 let name = PartialName {
                     database: None,
                     schema: None,
@@ -2766,14 +2759,18 @@ impl<'a> QueryContext<'a> {
 
                 let scope = Scope::from_source(
                     Some(name),
-                    cte.val_desc.iter_names().map(|n| n.cloned()),
+                    desc.iter_names().map(|n| n.cloned()),
                     Some(self.outer_scope.clone()),
                 );
 
                 // Inline `val` where its name was referenced. In an ideal
                 // world, multiple instances of this expression would be
                 // de-duplicated.
-                return Ok((val, scope));
+                let expr = RelationExpr::Get {
+                    id: Id::Local(*id),
+                    typ: desc.typ().clone(),
+                };
+                return Ok((expr, scope));
             }
         }
 

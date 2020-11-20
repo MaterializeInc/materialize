@@ -39,6 +39,7 @@ use std::collections::{BTreeSet, HashMap};
 use anyhow::bail;
 use itertools::Itertools;
 
+use expr::Id;
 use ore::collections::CollectionExt;
 use repr::RelationType;
 use repr::*;
@@ -157,9 +158,35 @@ impl RelationExpr {
                     typ,
                 })
             }
+            Let { id, value, body } => {
+                // If `value` is correlated with `get_outer`, `applied_to` will
+                // return an expression that includes any correlated columns at
+                // the beginning. We need to discard those columns so that
+                // `value` has the expected arity.
+                let old_arity = value.arity();
+                let mut value = value.applied_to(id_gen, get_outer.clone(), col_map);
+                let new_arity = value.arity();
+                value = value.project((new_arity - old_arity..new_arity).collect());
+
+                let body = body.applied_to(id_gen, get_outer, col_map);
+
+                SR::Let {
+                    id,
+                    value: Box::new(value),
+                    body: Box::new(body),
+                }
+            }
             Get { id, typ } => {
-                // Get statements are only to external sources, and are not correlated with `get_outer`.
-                get_outer.product(SR::Get { id, typ })
+                match id {
+                    Id::Local(_) => {
+                        // TODO: need to do something not fun here where we
+                        // join on only the column references in `get_outer`.
+                        get_outer.product(SR::Get { id, typ })
+                    }
+                    // Global get statements are only to external sources, and
+                    // are not correlated with `get_outer`.
+                    Id::Global(_) => get_outer.product(SR::Get { id, typ }),
+                }
             }
             Project { input, outputs } => {
                 // Projections should be applied to the decorrelated `inner`, and to its columns,
