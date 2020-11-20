@@ -115,3 +115,57 @@ query T
 SELECT '{""=>1}'::map[text=>int] ? ''
 ----
 true
+
+## ->
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] -> ''
+----
+NULL
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] -> 'a'
+----
+1
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] -> 'b'
+----
+2
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] -> 'c'
+----
+NULL
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT '{a=>1, b=>2}'::map[text=>int] -> 1
+
+query T
+SELECT '{a=>true, b=>false}'::map[text=>bool] -> 'b'
+----
+false
+
+query T
+SELECT '{a=>true, b=>false}'::map[text=>bool] -> ARRAY[]::text[]
+----
+{}
+
+query T
+SELECT '{a=>true, b=>false}'::map[text=>bool] -> ARRAY['']::text[]
+----
+{NULL}
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] -> ARRAY['a']
+----
+{1}
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a']
+----
+{2,1}
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a', 'c']
+----
+{2,1,NULL}

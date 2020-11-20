@@ -1202,6 +1202,41 @@ fn map_contains_key<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     map.iter().any(|(k2, _v)| k == k2).into()
 }
 
+fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let target_key = b.unwrap_str();
+    match a.unwrap_map().iter().find(|(key, _v)| target_key == *key) {
+        Some((_k, v)) => v,
+        None => Datum::Null,
+    }
+}
+
+fn map_get_values<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    let map = a.unwrap_map();
+    let values: Vec<Datum> = b
+        .unwrap_array()
+        .elements()
+        .iter()
+        .map(
+            |target_key| match map.iter().find(|(key, _v)| target_key.unwrap_str() == *key) {
+                Some((_k, v)) => v,
+                None => Datum::Null,
+            },
+        )
+        .collect();
+
+    temp_storage.make_datum(|packer| {
+        packer
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: values.len(),
+                }],
+                values,
+            )
+            .unwrap()
+    })
+}
+
 // TODO(jamii) nested loops are possibly not the fastest way to do this
 fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
@@ -1829,6 +1864,8 @@ pub enum BinaryFunc {
     JsonbDeleteInt64,
     JsonbDeleteString,
     MapContainsKey,
+    MapGetValue,
+    MapGetValues,
     ConvertFrom,
     Trim,
     TrimLeading,
@@ -1949,6 +1986,8 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
             BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
             BinaryFunc::MapContainsKey => Ok(eager!(map_contains_key)),
+            BinaryFunc::MapGetValue => Ok(eager!(map_get_value)),
+            BinaryFunc::MapGetValues => Ok(eager!(map_get_values, temp_storage)),
             BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Trim => Ok(eager!(trim)),
@@ -2093,6 +2132,17 @@ impl BinaryFunc {
             JsonbContainsString | JsonbContainsJsonb | MapContainsKey => {
                 ScalarType::Bool.nullable(in_nullable)
             }
+
+            MapGetValue => input1_type
+                .scalar_type
+                .unwrap_map_value_type()
+                .clone()
+                .nullable(true),
+
+            MapGetValues => ScalarType::Array(Box::new(
+                input1_type.scalar_type.unwrap_map_value_type().clone(),
+            ))
+            .nullable(true),
 
             ListIndex => input1_type
                 .scalar_type
@@ -2242,6 +2292,8 @@ impl BinaryFunc {
             | JsonbDeleteInt64
             | JsonbDeleteString
             | MapContainsKey
+            | MapGetValue
+            | MapGetValues
             | TextConcat
             | ListIndex
             | IsRegexpMatch { .. }
@@ -2348,6 +2400,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbContainsJsonb => f.write_str("@>"),
             BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
+            BinaryFunc::MapGetValue | BinaryFunc::MapGetValues => f.write_str("->"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
             BinaryFunc::Trim => f.write_str("btrim"),
