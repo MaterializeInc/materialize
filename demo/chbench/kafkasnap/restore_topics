@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+#
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Script to populate topics from snapshot files in the working directory
+
+set -euo pipefail
+
+SNAPSHOT_DIR="/snapshot"
+
+if ! schemafiles=$(ls ${SNAPSHOT_DIR}/*.schema); then
+    echo "Failed to list schema files!"
+    exit 1
+fi
+
+for schemafile in $schemafiles; do
+    filename=$(basename "${schemafile}")
+    topic="${filename%.schema}"
+    if ! schema=$(<"${schemafile}"); then
+        echo "Failed to read schema file!"
+        exit 1
+    fi
+    schema_escaped="${schema//\"/\\\"}"
+    if ! curl --fail -X POST \
+         -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+         --data "{\"schema\": \"${schema_escaped}\"}" \
+         "schema-registry:8081/subjects/${topic}-value/versions"; then
+        echo "Failed to register schema for topic ${topic}"
+        exit 1
+    fi
+    echo "Created schema for ${topic} from file ${schemafile}"
+done
+
+if ! snapfiles=$(ls ${SNAPSHOT_DIR}/*.snap); then
+    echo "Failed to list topic files!"
+    exit 1
+fi
+
+for snapfile in $snapfiles; do
+    filename=$(basename "${snapfile}")
+    topic="${filename%.snap}"
+    if ! kafkacat -P -b kafka:9092 -t "${topic}" -e -l "${snapfile}"; then
+        echo "Failed to populate topic ${topic}"
+        exit 1
+    fi
+    echo "Populated ${topic} from file ${snapfile}"
+done

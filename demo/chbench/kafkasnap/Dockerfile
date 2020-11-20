@@ -17,3 +17,6 @@ RUN mkdir -p /snapshot
 
 COPY ./snapshot_topics /usr/local/bin/snapshot_topics
 RUN chmod +x /usr/local/bin/snapshot_topics
+
+COPY ./restore_topics /usr/local/bin/restore_topics
+RUN chmod +x /usr/local/bin/restore_topics

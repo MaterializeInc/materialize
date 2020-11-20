@@ -302,7 +302,7 @@ mzconduct:
         destroy_volumes: true
 
     # Verify that we can snapshot and restore Kafka topics without data loss
-    ci:
+    snapshot-test:
       env:
         MZ_PORT: 6875
         KAFKA_PORT: 9092
@@ -340,14 +340,25 @@ mzconduct:
         expected: any  # TODO: do we want this to be [15], it seems like it usually is
         print_result: true
       - step: stop-services
-        services: [chbench, mysql]
+        services: [chbench, mysql, materialized]
       - step: start-services
         services: [kafkasnap]
       - step: run
         service: kafkasnap
         entrypoint: snapshot_topics
-      - step: down
-        destroy_volumes: true
+      - step: drop-kafka-topics
+        kafka-container: chbench_kafka_1
+        topic_pattern: debezium.tpcch.*
+      - step: run
+        service: kafkasnap
+        entrypoint: restore_topics
+      - step: start-services
+        services: [materialized]
+      - step: wait-for-mz
+        query: 'select count(*) from q01'
+        timeout_secs: 120
+        expected: any  # TODO: do we want this to be [15], it seems like it usually is
+        print_result: true
 
     # Temporary migration workflow in case folks look at the docs before the next version
     # has been released
