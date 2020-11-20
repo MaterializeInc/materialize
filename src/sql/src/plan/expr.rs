@@ -171,7 +171,7 @@ pub enum ScalarExpr {
 ///
 /// the `WHERE` clause will coerce the contained unconstrained type parameter
 /// `$1` to have type bool.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum CoercibleScalarExpr {
     Coerced(ScalarExpr),
     Parameter(usize),
