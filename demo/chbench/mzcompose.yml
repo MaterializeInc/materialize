@@ -194,7 +194,8 @@ services:
       - *prometheus
     volumes:
       # ensure that data doesn't get lost across restarts
-      - ./prometheus/data:/prometheus
+      # data will be lost if you remove docker volumes (using nuke, for example)
+      - prometheus:/prometheus
       - grafana:/var/lib/grafana
       # specialized configurations
       # this load test customizes prometheus to scrape tpcch and peeker
@@ -250,6 +251,7 @@ services:
 volumes:
   chbench-gen:
   grafana:
+  prometheus:
 
 mzconduct:
   name: chbench
