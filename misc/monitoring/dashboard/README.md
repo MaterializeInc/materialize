@@ -9,6 +9,8 @@ production monitoring pointing at materialized.
 User documentation is at https://materialize.com/docs/monitoring/ (or
 [doc/user/content/monitoring/_index.md][doc] locally).
 
+If you would like to import our Grafana dashboard into your grafana instance, you should use the
+[`materialize-public.json`](./materialize-public.json) configuration in this directory.
 
 ## Updating the dashboard
 
@@ -30,18 +32,8 @@ the dashboard from grafana.mz to this directory, using the following procedure:
   ```console
   $ bin/dashboard-clean /tmp/dashboard.json > misc/monitoring/dashboard/conf/grafana/dashboards/overview.json
   ```
-* building the dashboard locally `mzimage build dashboard`
-* running the dashboard inside a demo: `mzconduct run billing -w load-test`
-* opening the dashboard and editing it to remove some _more_ of our cruft:
-  ```console
-  $ mzconduct web billing dashboard
-  ```
-  specifically, remove the "Meta" panel and make the "Materialize Build
-  Info" panel wide enough to look reasonable.
-* copying the json model into `/tmp/dashboard.json` again
-* running the `bin/dashboard-clean` comamnd from above, again
 * Run `mzimage build dashboard` and restart the load test to verify that
-  the changes look reasonable on a reload:
+  the new dashboard lookds reasonable:
   ```console
   $ mzconduct down billing && mzimage build dashboard && mzconduct run billing -w load-test
   ```

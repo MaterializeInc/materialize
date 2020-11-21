@@ -114,7 +114,8 @@ impl TypeCategory {
             | ParamType::ArrayAny
             | ParamType::ListAny
             | ParamType::ListElementAny
-            | ParamType::NonVecAny => Self::Pseudo,
+            | ParamType::NonVecAny
+            | ParamType::MapAny => Self::Pseudo,
             ParamType::Plain(t) => Self::from_type(t),
         }
     }
@@ -374,6 +375,8 @@ impl ParamList {
     /// - All arguments passed to `ListAny` must be `ScalarType::List`s with the
     ///   same types of elements. All arguments passed to `ListElementAny` must
     ///   also be of these elements' type.
+    /// - All arguments passed to `MapAny` must be `ScalarType::Map`s with the
+    ///   same type of value in each key, value pair.
     ///
     /// # Errors
     /// - If `typs` is inconsistent with these constraints.
@@ -408,7 +411,8 @@ impl ParamList {
             let param = &self[i];
             match (param, typ) {
                 (ParamType::ListAny, Some(ScalarType::List(typ)))
-                | (ParamType::ArrayAny, Some(ScalarType::Array(typ))) => {
+                | (ParamType::ArrayAny, Some(ScalarType::Array(typ)))
+                | (ParamType::MapAny, Some(ScalarType::Map { value_type: typ })) => {
                     set_or_check_constrained_type(typ)?
                 }
                 (ParamType::ListElementAny, Some(typ)) | (ParamType::NonVecAny, Some(typ)) => {
@@ -451,6 +455,11 @@ impl ParamList {
                     param_types.push(ParamType::Plain(ScalarType::List(Box::new(
                         constrained_type.clone(),
                     ))));
+                }
+                (ParamType::MapAny, None) => {
+                    param_types.push(ParamType::Plain(ScalarType::Map {
+                        value_type: Box::new(constrained_type.clone()),
+                    }));
                 }
                 (ParamType::ListElementAny, None) => {
                     param_types.push(ParamType::Plain(constrained_type.clone()));
@@ -520,6 +529,9 @@ pub enum ParamType {
     /// except it does not permit either `ScalarType::Array` or
     /// `ScalarType::List`.
     NonVecAny,
+    /// A polymorphic pseudotype permitting a `ScalarType::Map` of any non-nested
+    /// value type. For more details, see [`resolve_polymorphic_types`].
+    MapAny,
     /// A standard parameter that accepts arguments that match its embedded
     /// `ScalarType`.
     Plain(ScalarType),
@@ -539,6 +551,10 @@ impl ParamType {
             ListAny => matches!(t, List(..) | String),
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
+            MapAny => match t {
+                Map { value_type } => !value_type.is_map(),
+                _ => false,
+            },
             Plain(to) => typeconv::get_cast(CastContext::Implicit, t, to).is_some(),
         }
     }
@@ -908,7 +924,7 @@ fn coerce_arg_to_type(
 
         // Polymorphic pseudotypes. As in PostgreSQL, these bail on
         // uncoerced arguments.
-        ArrayAny | ListAny | ListElementAny | NonVecAny => match arg {
+        ArrayAny | ListAny | ListElementAny | NonVecAny | MapAny => match arg {
             CoercibleScalarExpr::Coerced(arg) => Ok(arg),
             _ => bail!("could not determine polymorphic type because input has type unknown"),
         },
@@ -1847,7 +1863,8 @@ lazy_static! {
                 })
             },
             "?" => Scalar {
-                params!(Jsonb, String) => JsonbContainsString
+                params!(Jsonb, String) => JsonbContainsString,
+                params!(MapAny, String) => MapContainsKey
             },
             // COMPARISON OPS
             // n.b. Decimal impls are separated from other types because they

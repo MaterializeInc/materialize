@@ -31,10 +31,10 @@ impl fmt::Display for Id {
     }
 }
 
-/// A trait for turning [`Id`]s into human-readable strings.
+/// A trait for turning [`GlobalId`]s into human-readable strings.
 pub trait IdHumanizer {
     /// Attempts to return the a human-readable string for `id`.
-    fn humanize_id(&self, id: Id) -> Option<String>;
+    fn humanize_id(&self, id: GlobalId) -> Option<String>;
 }
 
 /// The identifier for a local component of a dataflow.
@@ -159,7 +159,7 @@ impl PartitionId {
 pub struct DummyHumanizer;
 
 impl IdHumanizer for DummyHumanizer {
-    fn humanize_id(&self, _: Id) -> Option<String> {
+    fn humanize_id(&self, _: GlobalId) -> Option<String> {
         None
     }
 }

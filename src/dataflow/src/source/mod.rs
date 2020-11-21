@@ -966,6 +966,10 @@ where
             let mut bytes_read = 0;
             // Accumulate updates to offsets for system table metrics collection
             let mut metric_updates = HashMap::new();
+            // System table metrics will be written either when we have caught up with the
+            // source or when we have seen METRIC_FLUSH_INTERVAL number of messages
+            const METRIC_FLUSH_INTERVAL: i32 = 1000;
+            let mut messages_until_metric_flush = METRIC_FLUSH_INTERVAL;
 
             // Record operator has been scheduled
             consistency_info
@@ -1013,13 +1017,6 @@ where
                                 return SourceStatus::Alive;
                             }
                             Some(ts) => {
-                                if let Some((off, t)) = metric_updates.get_mut(&partition) {
-                                    *off = offset;
-                                    *t = ts;
-                                } else {
-                                    metric_updates.insert(partition.clone(), (offset, ts));
-                                }
-
                                 source_info.cache_message(
                                     &mut caching_tx,
                                     &message,
@@ -1057,6 +1054,22 @@ where
                                     .unwrap();
                                 partition_metrics.offset_ingested.set(offset.offset);
                                 partition_metrics.messages_ingested.inc();
+
+                                metric_updates.insert(partition, (offset, ts));
+                                messages_until_metric_flush -= 1;
+
+                                // periodically flush metrics in case we're ingesting a large number of messages
+                                // all at once, eg. during initial startup
+                                if messages_until_metric_flush == 0 {
+                                    messages_until_metric_flush = METRIC_FLUSH_INTERVAL;
+                                    for (partition, (offset, ts)) in metric_updates.drain() {
+                                        let partition_metrics = consistency_info
+                                            .partition_metrics
+                                            .get_mut(&partition)
+                                            .unwrap();
+                                        partition_metrics.record_offset(offset.offset, ts as i64);
+                                    }
+                                }
                             }
                         }
 

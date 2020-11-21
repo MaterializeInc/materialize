@@ -180,7 +180,7 @@ impl RelationExpr {
                             .map_or_else(|| "?".to_owned(), |i| i.to_string())
                     )
                     .unwrap(),
-                    Id::Global(_) => write!(
+                    Id::Global(id) => write!(
                         pretty,
                         "Get {} ({})",
                         id_humanizer

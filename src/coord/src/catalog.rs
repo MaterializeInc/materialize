@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
-use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
+use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::RelationDesc;
 use sql::ast::display::AstDisplay;
 use sql::catalog::CatalogError as SqlCatalogError;
@@ -1590,11 +1590,8 @@ impl Catalog {
 }
 
 impl IdHumanizer for Catalog {
-    fn humanize_id(&self, id: Id) -> Option<String> {
-        match id {
-            Id::Global(id) => self.by_id.get(&id).map(|entry| entry.name.to_string()),
-            Id::Local(_) => None,
-        }
+    fn humanize_id(&self, id: GlobalId) -> Option<String> {
+        self.by_id.get(&id).map(|entry| entry.name.to_string())
     }
 }
 

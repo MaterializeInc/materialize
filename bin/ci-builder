@@ -73,12 +73,13 @@ build() {
         "$@" ci/builder
 }
 
+tag=$rust_version-$(date +%Y%m%d-%H%M%S)
 case "$cmd" in
     build)
-        build
+        build --tag materialize/ci-builder:"$tag"
+        echo "$tag" > "$tag_file"
         ;;
     push)
-        tag=$rust_version-$(date +%Y%m%d-%H%M%S)
         build --tag materialize/ci-builder:"$tag"
         docker push materialize/ci-builder:"$tag"
         echo "$tag" > "$tag_file"

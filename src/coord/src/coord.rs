@@ -2066,7 +2066,7 @@ where
         let sink_name = format!(
             "tail-source-{}",
             self.catalog
-                .humanize_id(Id::Global(source_id))
+                .humanize_id(source_id)
                 .expect("Source id is known to exist in catalog")
         );
         let sink_id = self.catalog.allocate_id()?;
