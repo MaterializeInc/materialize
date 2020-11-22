@@ -61,7 +61,8 @@ fn from_jsonb_f64_cast(
     e: ScalarExpr,
     cast_to: &ScalarType,
 ) -> Result<ScalarExpr, anyhow::Error> {
-    let from_f64_to_cast = get_cast(CastContext::Explicit, &ScalarType::Float64, &cast_to).unwrap();
+    let from_f64_to_cast =
+        get_direct_cast(CastContext::Explicit, &ScalarType::Float64, &cast_to).unwrap();
     (from_f64_to_cast.0)(ecx, e.call_unary(UnaryFunc::CastJsonbToFloat64), cast_to)
 }
 
@@ -279,12 +280,14 @@ lazy_static! {
     };
 }
 
-/// Get a cast, if one exists, from a [`ScalarType`] to another, with control
-/// over allowing implicit or explicit casts using [`CastTo`]. For casts between
-/// `ScalarType::List`s, see [`plan_cast_between_lists`].
-///
-/// Use the returned [`CastOp`] with [`CastOp::gen_expr`].
-pub fn get_cast(ccx: CastContext, from: &ScalarType, to: &ScalarType) -> Option<&'static CastOp> {
+/// Get casts directly between two [`ScalarType`]s, with control over the
+/// allowed [`CastContext`]. More complex casts, such as between
+/// `ScalarType::List`s, are handled elsewhere.
+pub fn get_direct_cast(
+    ccx: CastContext,
+    from: &ScalarType,
+    to: &ScalarType,
+) -> Option<&'static CastOp> {
     use CastContext::*;
 
     if from == to {
@@ -500,8 +503,8 @@ pub fn plan_coerce<'a>(
     })
 }
 
-/// Plans a cast to a [`ScalarType::List`] or [`ScalarType::Map`], using an
-/// iterative process to perform the cast to each component in `to`.
+/// Plan a cast to a [`ScalarType::List`] or [`ScalarType::Map`], using an
+/// iterative process to perform the cast to each element in `to`.
 pub fn plan_iterative_cast(
     ecx: &ExprContext,
     ccx: CastContext,
@@ -635,7 +638,7 @@ where
             }
         }
         _ => {
-            let cast_op = match get_cast(ccx, &from_typ, cast_to) {
+            let cast_op = match get_direct_cast(ccx, &from_typ, cast_to) {
                 Some(cast_op) => cast_op,
                 None => return cast_bail(),
             };
