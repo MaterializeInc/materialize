@@ -555,7 +555,7 @@ impl ParamType {
                 Map { value_type } => !value_type.is_map(),
                 _ => false,
             },
-            Plain(to) => typeconv::get_cast(CastContext::Implicit, t, to).is_some(),
+            Plain(to) => typeconv::get_direct_cast(CastContext::Implicit, t, to).is_some(),
         }
     }
 
