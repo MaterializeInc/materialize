@@ -1,0 +1,24 @@
+name: Materialize Performance Handbook Lint and Build
+
+on:
+  push:
+    paths:
+      - .github/workflows/perf-handbook.yml
+      - performance/handbook/**
+
+jobs:
+
+  build:
+    name: Build handbook static site Nginx container
+    runs-on: ubuntu-20.04
+    defaults:
+      run:
+        working-directory: performance/handbook
+    steps:
+      - uses: actions/checkout@v2
+      - name: Download latest earth binary
+        run: "sudo ../bin/install_earth"
+      - name: Print Earth version
+        run: earth --version
+      - name: Build static site container
+        run: earth +server

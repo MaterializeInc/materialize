@@ -1,0 +1,38 @@
+FROM python:3.8-slim
+
+build:
+    WORKDIR /src
+    BUILD +lint
+    FROM +deps
+    COPY --dir handbook .
+    COPY mkdocs.yml .
+    RUN mkdocs build
+    SAVE ARTIFACT site /site
+
+deps:
+    ENV LANG=en_US.UTF-8
+    ENV PIP_DISABLE_PIP_VERSION_CHECK True
+    ENV PIP_NO_CACHE_DIR False
+    ENV PYTHONUNBUFFERED True
+
+    COPY resources/requirements.txt .
+    RUN pip3 install -r requirements.txt
+    SAVE IMAGE
+
+develop:
+    FROM +deps
+    WORKDIR /src
+    CMD ["mkdocs", "serve"]
+    SAVE IMAGE materialize/develop-perf-handbook:latest
+
+lint:
+    FROM ruby:2.7-alpine
+    RUN gem install mdl
+    COPY --dir handbook .
+    COPY mdl_style.rb .
+    RUN mdl -s mdl_style.rb handbook
+
+server:
+    FROM nginx:1.17-alpine
+    COPY +build/site /usr/share/nginx/html
+    SAVE IMAGE materialize/perf-handbook:latest

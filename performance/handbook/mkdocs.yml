@@ -1,0 +1,41 @@
+copyright: 'Copyright &copy; 2020 Materialize'
+
+dev_addr: '0.0.0.0:8000'
+
+docs_dir: 'handbook'
+
+edit_uri: 'edit/main/performance/handbook/handbook'
+
+markdown_extensions:
+    - admonition
+    - codehilite:
+        linenums: true
+    - toc:
+        permalink: true
+
+nav:
+    - Home:
+        - index.md
+        - about.md
+
+plugins:
+    - search
+
+repo_url: 'https://github.com/MaterializeInc/materialize'
+
+site_name: 'Materialize Performance Handbook'
+site_description: 'Handbook for Materialize developers work on materialized performance'
+site_author: 'Materialize'
+site_url: 'https://www.materialize.com'
+
+theme:
+    favicon: 'static/favicon.ico'
+    features:
+        - tabs
+    font:
+        text: 'Maven Pro'
+    logo: 'static/logo_white.png'
+    name: 'material'
+    palette:
+        primary: 'deep purple'
+        secondary: 'lime'
