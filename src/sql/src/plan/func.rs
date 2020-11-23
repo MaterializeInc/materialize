@@ -1822,7 +1822,7 @@ lazy_static! {
                 params!(ListElementAny, ListAny) => ElementListConcat
             },
 
-            //JSON
+            //JSON and MAP
             "->" => Scalar {
                 params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false },
                 params!(Jsonb, String) => JsonbGetString { stringify: false },
@@ -1844,7 +1844,8 @@ lazy_static! {
                 params!(String, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs.call_unary(UnaryFunc::CastStringToJsonb)
                           .call_binary(rhs, JsonbContainsJsonb))
-                })
+                }),
+                params!(MapAny, MapAny) => MapContainsMap
             },
             "<@" => Scalar {
                 params!(Jsonb, Jsonb) =>  Operation::binary(|_ecx, lhs, rhs| {
@@ -1862,11 +1863,20 @@ lazy_static! {
                         lhs.call_unary(UnaryFunc::CastStringToJsonb),
                         BinaryFunc::JsonbContainsJsonb,
                     ))
+                }),
+                params!(MapAny, MapAny) => Operation::binary(|_ecx, lhs, rhs| {
+                    Ok(rhs.call_binary(lhs, MapContainsMap))
                 })
             },
             "?" => Scalar {
                 params!(Jsonb, String) => JsonbContainsString,
                 params!(MapAny, String) => MapContainsKey
+            },
+            "?&" => Scalar {
+                params!(MapAny, Plain(Array(Box::new(String)))) => MapContainsAllKeys
+            },
+            "?|" => Scalar {
+                params!(MapAny, Plain(Array(Box::new(String)))) => MapContainsAnyKeys
             },
             // COMPARISON OPS
             // n.b. Decimal impls are separated from other types because they
