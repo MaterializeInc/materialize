@@ -629,6 +629,13 @@ where
     let mut current = 4u64;
 
     // We'll plan for an expected 4B records / key in the absense of hints.
+    // Note that here we will render what is essentially a 16-ary heap. At each reduce "layer",
+    // the reduce operator will take up to 16 inputs, and produce one output. We use the `expected_group_size` hint
+    // to figure out how deep we need to make this heap, but the renderer currently locks in the choice of arity.
+    // Making the heap wider (higher-arity) reduces the total number of layers we need, which shrinks the
+    // memory usage. However, that increases the worst and average case latencies to update results given new inputs.
+    // TODO(rkhaitan): move this decision making logic (choosing the overall depth and width of the reduction tree) to
+    // the optimizer.
     let limit = expected_group_size.unwrap_or(4_000_000_000);
 
     while (1 << current) < limit {
