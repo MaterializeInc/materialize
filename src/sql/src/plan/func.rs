@@ -219,7 +219,7 @@ impl<R> Operation<R> {
         F: Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
     {
         Self::new(move |ecx, spec, cexprs, params| {
-            let exprs = coerce_args_to_type(ecx, spec, cexprs, params)?;
+            let exprs = coerce_args_to_types(ecx, spec, cexprs, params)?;
             f(ecx, exprs)
         })
     }
@@ -894,59 +894,47 @@ fn find_match<'a, R: std::fmt::Debug>(
     )
 }
 
-/// Generates `ScalarExpr` necessary to coerce `Expr` into the `ScalarType`
-/// corresponding to `ParameterType`; errors if not possible. This can only
-/// work within the `func` module because it relies on `ParameterType`.
-fn coerce_arg_to_type(
+fn coerce_args_to_types(
     ecx: &ExprContext,
     spec: FuncSpec,
-    arg: CoercibleScalarExpr,
-    param: &ParamType,
-) -> Result<ScalarExpr, anyhow::Error> {
+    args: Vec<CoercibleScalarExpr>,
+    params: ParamList,
+) -> Result<Vec<ScalarExpr>, anyhow::Error> {
     use ParamType::*;
     use ScalarType::*;
 
-    match param {
-        // Concrete parameter type. Coerce then cast to that type.
-        Plain(ty) => {
-            let arg = typeconv::plan_coerce(ecx, arg, ty)?;
-            if matches!(ty, Decimal(..)) && matches!(ecx.scalar_type(&arg), Decimal(..)) {
-                // Suppress decimal -> decimal casts, to avoid casting to
-                // the default decimal scale of 0.
-                Ok(arg)
-            } else {
-                typeconv::plan_cast(spec, ecx, CastContext::Implicit, arg, ty)
-            }
-        }
-
-        // Polymorphic pseudotypes. As in PostgreSQL, these bail on
-        // uncoerced arguments.
-        ArrayAny | ListAny | ListElementAny | NonVecAny | MapAny => match arg {
-            CoercibleScalarExpr::Coerced(arg) => Ok(arg),
-            _ => bail!("could not determine polymorphic type because input has type unknown"),
-        },
-
-        // Special "any" psuedotype. Per PostgreSQL, uncoerced literals
-        // are acceptable, but uncoerced parameters are not.
-        Any => match arg {
-            CoercibleScalarExpr::Parameter(n) => {
-                bail!("could not determine data type of parameter ${}", n)
-            }
-            _ => arg.type_as_any(ecx),
-        },
-    }
-}
-
-/// Batch version of `coerce_arg_to_type`.
-fn coerce_args_to_type(
-    ecx: &ExprContext,
-    spec: FuncSpec,
-    cexprs: Vec<CoercibleScalarExpr>,
-    params: ParamList,
-) -> Result<Vec<ScalarExpr>, anyhow::Error> {
     let mut exprs = Vec::new();
-    for (i, cexpr) in cexprs.into_iter().enumerate() {
-        exprs.push(coerce_arg_to_type(ecx, spec, cexpr, &params[i])?);
+    for (i, arg) in args.into_iter().enumerate() {
+        let expr = match &params[i] {
+            // Concrete parameter type. Coerce then cast to that type.
+            Plain(ty) => {
+                let arg = typeconv::plan_coerce(ecx, arg, ty)?;
+                if matches!(ty, Decimal(..)) && matches!(ecx.scalar_type(&arg), Decimal(..)) {
+                    // Suppress decimal -> decimal casts, to avoid casting to
+                    // the default decimal scale of 0.
+                    arg
+                } else {
+                    typeconv::plan_cast(spec, ecx, CastContext::Implicit, arg, ty)?
+                }
+            }
+
+            // Polymorphic pseudotypes. As in PostgreSQL, these bail on
+            // uncoerced arguments.
+            ArrayAny | ListAny | ListElementAny | NonVecAny | MapAny => match arg {
+                CoercibleScalarExpr::Coerced(arg) => arg,
+                _ => bail!("could not determine polymorphic type because input has type unknown"),
+            },
+
+            // Special "any" psuedotype. Per PostgreSQL, uncoerced literals
+            // are acceptable, but uncoerced parameters are not.
+            Any => match arg {
+                CoercibleScalarExpr::Parameter(n) => {
+                    bail!("could not determine data type of parameter ${}", n)
+                }
+                _ => arg.type_as_any(ecx)?,
+            },
+        };
+        exprs.push(expr);
     }
     Ok(exprs)
 }
@@ -1180,7 +1168,7 @@ lazy_static! {
                     // For consistency with other functions, verify that
                     // coercion is possible, though we don't actually care about
                     // the coerced results.
-                    coerce_args_to_type(ecx, spec, exprs, params)?;
+                    coerce_args_to_types(ecx, spec, exprs, params)?;
 
                     // TODO(benesch): make this function have return type
                     // regtype, when we support that type. Document the function
