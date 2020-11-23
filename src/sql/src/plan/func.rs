@@ -1825,7 +1825,9 @@ lazy_static! {
             //JSON
             "->" => Scalar {
                 params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false },
-                params!(Jsonb, String) => JsonbGetString { stringify: false }
+                params!(Jsonb, String) => JsonbGetString { stringify: false },
+                params!(MapAny, String) => MapGetValue,
+                params!(MapAny, Plain(Array(Box::new(String)))) => MapGetValues
             },
             "->>" => Scalar {
                 params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true },
