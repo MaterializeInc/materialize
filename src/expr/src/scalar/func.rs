@@ -1197,12 +1197,9 @@ fn jsonb_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn map_contains_key<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    // Map keys are always text.
-    let k = b.unwrap_str();
-    match a {
-        Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
-        _ => false.into(),
-    }
+    let map = a.unwrap_map();
+    let k = b.unwrap_str(); // Map keys are always text.
+    map.iter().any(|(k2, _v)| k == k2).into()
 }
 
 fn map_contains_all_keys<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1235,6 +1232,41 @@ fn map_contains_map<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
                 .any(|(a_key, a_val)| (a_key == b_key) && (a_val == b_val))
         })
         .into()
+}
+
+fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let target_key = b.unwrap_str();
+    match a.unwrap_map().iter().find(|(key, _v)| target_key == *key) {
+        Some((_k, v)) => v,
+        None => Datum::Null,
+    }
+}
+
+fn map_get_values<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    let map = a.unwrap_map();
+    let values: Vec<Datum> = b
+        .unwrap_array()
+        .elements()
+        .iter()
+        .map(
+            |target_key| match map.iter().find(|(key, _v)| target_key.unwrap_str() == *key) {
+                Some((_k, v)) => v,
+                None => Datum::Null,
+            },
+        )
+        .collect();
+
+    temp_storage.make_datum(|packer| {
+        packer
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: values.len(),
+                }],
+                values,
+            )
+            .unwrap()
+    })
 }
 
 // TODO(jamii) nested loops are possibly not the fastest way to do this
@@ -1867,6 +1899,8 @@ pub enum BinaryFunc {
     MapContainsAllKeys,
     MapContainsAnyKeys,
     MapContainsMap,
+    MapGetValue,
+    MapGetValues,
     ConvertFrom,
     Trim,
     TrimLeading,
@@ -1990,6 +2024,8 @@ impl BinaryFunc {
             BinaryFunc::MapContainsAllKeys => Ok(eager!(map_contains_all_keys)),
             BinaryFunc::MapContainsAnyKeys => Ok(eager!(map_contains_any_keys)),
             BinaryFunc::MapContainsMap => Ok(eager!(map_contains_map)),
+            BinaryFunc::MapGetValue => Ok(eager!(map_get_value)),
+            BinaryFunc::MapGetValues => Ok(eager!(map_get_values, temp_storage)),
             BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Trim => Ok(eager!(trim)),
@@ -2133,6 +2169,17 @@ impl BinaryFunc {
 
             JsonbContainsString | JsonbContainsJsonb | MapContainsKey | MapContainsAllKeys
             | MapContainsAnyKeys | MapContainsMap => ScalarType::Bool.nullable(in_nullable),
+
+            MapGetValue => input1_type
+                .scalar_type
+                .unwrap_map_value_type()
+                .clone()
+                .nullable(true),
+
+            MapGetValues => ScalarType::Array(Box::new(
+                input1_type.scalar_type.unwrap_map_value_type().clone(),
+            ))
+            .nullable(true),
 
             ListIndex => input1_type
                 .scalar_type
@@ -2285,6 +2332,8 @@ impl BinaryFunc {
             | MapContainsAllKeys
             | MapContainsAnyKeys
             | MapContainsMap
+            | MapGetValue
+            | MapGetValues
             | TextConcat
             | ListIndex
             | IsRegexpMatch { .. }
@@ -2393,6 +2442,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
             BinaryFunc::MapContainsAllKeys => f.write_str("?&"),
             BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
+            BinaryFunc::MapGetValue | BinaryFunc::MapGetValues => f.write_str("->"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
             BinaryFunc::Trim => f.write_str("btrim"),
