@@ -384,8 +384,8 @@ pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     //
     // [0]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.9
     // [1]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.10
-    if s.starts_with("\\x") {
-        hex::decode(&s[2..]).map_err(|e| ParseError::new("bytea", s).with_details(e))
+    if let Some(remainder) = s.strip_prefix(r"\x") {
+        hex::decode(remainder).map_err(|e| ParseError::new("bytea", s).with_details(e))
     } else {
         parse_bytes_traditional(s)
     }

@@ -107,7 +107,7 @@ fn flamegraph(
         |_node, is_last| {
             data_json.borrow_mut().push_str("]}");
             if !is_last {
-                data_json.borrow_mut().push_str(",");
+                data_json.borrow_mut().push(',');
             }
         },
     );
