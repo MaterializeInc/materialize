@@ -6,5 +6,5 @@ edition = "2018"
 publish = false
 
 [dependencies]
-reqwest = { version = "0.10.8" }
+reqwest = { version = "0.10.9" }
 serde = { version = "1.0", features = ["derive"] }
