@@ -27,7 +27,7 @@ rand = "0.7.3"
 regex = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = "0.9.1"
+sha2 = "0.9.2"
 snap = { version = "1", optional = true }
 uuid = "0.8"
 
