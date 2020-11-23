@@ -28,6 +28,10 @@ class VersionAlreadyExistsError(Exception):
     exists."""
 
 
+class DebAlreadyExistsError(Exception):
+    """Raised when uploading a Debian package that already exists."""
+
+
 class PackageClient:
     """A client for a specific Bintray package."""
 
@@ -95,7 +99,10 @@ class PackageClient:
                 "X-Bintray-Debian-Architecture": ",".join(architectures),
             },
         )
-        res.raise_for_status()
+        if res.status_code == requests.codes.conflict:
+            raise DebAlreadyExistsError()
+        else:
+            res.raise_for_status()
         return res
 
     def publish_uploads(self, version: str, wait_for_seconds: int = 0) -> Response:
