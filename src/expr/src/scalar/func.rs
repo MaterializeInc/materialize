@@ -1202,6 +1202,38 @@ fn map_contains_key<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     map.iter().any(|(k2, _v)| k == k2).into()
 }
 
+fn map_contains_all_keys<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let map = a.unwrap_map();
+    let keys = b.unwrap_array();
+
+    keys.elements()
+        .iter()
+        .all(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str()))
+        .into()
+}
+
+fn map_contains_any_keys<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let map = a.unwrap_map();
+    let keys = b.unwrap_array();
+
+    keys.elements()
+        .iter()
+        .any(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str()))
+        .into()
+}
+
+fn map_contains_map<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let map_a = a.unwrap_map();
+    b.unwrap_map()
+        .iter()
+        .all(|(b_key, b_val)| {
+            map_a
+                .iter()
+                .any(|(a_key, a_val)| (a_key == b_key) && (a_val == b_val))
+        })
+        .into()
+}
+
 fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let target_key = b.unwrap_str();
     match a.unwrap_map().iter().find(|(key, _v)| target_key == *key) {
@@ -1866,6 +1898,9 @@ pub enum BinaryFunc {
     MapContainsKey,
     MapGetValue,
     MapGetValues,
+    MapContainsAllKeys,
+    MapContainsAnyKeys,
+    MapContainsMap,
     ConvertFrom,
     Trim,
     TrimLeading,
@@ -1988,6 +2023,9 @@ impl BinaryFunc {
             BinaryFunc::MapContainsKey => Ok(eager!(map_contains_key)),
             BinaryFunc::MapGetValue => Ok(eager!(map_get_value)),
             BinaryFunc::MapGetValues => Ok(eager!(map_get_values, temp_storage)),
+            BinaryFunc::MapContainsAllKeys => Ok(eager!(map_contains_all_keys)),
+            BinaryFunc::MapContainsAnyKeys => Ok(eager!(map_contains_any_keys)),
+            BinaryFunc::MapContainsMap => Ok(eager!(map_contains_map)),
             BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Trim => Ok(eager!(trim)),
@@ -2129,9 +2167,8 @@ impl BinaryFunc {
             | JsonbDeleteInt64
             | JsonbDeleteString => ScalarType::Jsonb.nullable(true),
 
-            JsonbContainsString | JsonbContainsJsonb | MapContainsKey => {
-                ScalarType::Bool.nullable(in_nullable)
-            }
+            JsonbContainsString | JsonbContainsJsonb | MapContainsKey | MapContainsAllKeys
+            | MapContainsAnyKeys | MapContainsMap => ScalarType::Bool.nullable(in_nullable),
 
             MapGetValue => input1_type
                 .scalar_type
@@ -2294,6 +2331,9 @@ impl BinaryFunc {
             | MapContainsKey
             | MapGetValue
             | MapGetValues
+            | MapContainsAllKeys
+            | MapContainsAnyKeys
+            | MapContainsMap
             | TextConcat
             | ListIndex
             | IsRegexpMatch { .. }
@@ -2397,10 +2437,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbGetString { .. } => f.write_str("->"),
             BinaryFunc::JsonbContainsString | BinaryFunc::MapContainsKey => f.write_str("?"),
             BinaryFunc::JsonbConcat => f.write_str("||"),
-            BinaryFunc::JsonbContainsJsonb => f.write_str("@>"),
+            BinaryFunc::JsonbContainsJsonb | BinaryFunc::MapContainsMap => f.write_str("@>"),
             BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
             BinaryFunc::MapGetValue | BinaryFunc::MapGetValues => f.write_str("->"),
+            BinaryFunc::MapContainsAllKeys => f.write_str("?&"),
+            BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
             BinaryFunc::Trim => f.write_str("btrim"),

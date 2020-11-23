@@ -87,7 +87,7 @@ SELECT '{a=>{b=>c}}'::map[text=>map[text=>text]]
 
 # Test map operators.
 
-## Test ?
+## ?
 query T
 SELECT '{a=>1, b=>2}'::map[text=>int] ? 'a'
 ----
@@ -113,6 +113,150 @@ false
 
 query T
 SELECT '{""=>1}'::map[text=>int] ? ''
+----
+true
+
+## ?&
+query error string literal does not support casting from string to string\[\]
+SELECT '{a=>1, b=>2}'::map[text=>int] ?& 'a'
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY[1]
+
+query error cannot determine type of empty array
+SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY[]
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY[NULL]
+----
+false
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['a']
+----
+true
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['b', 'a']
+----
+true
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['c', 'b']
+----
+false
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT '{1=>t, 2=>f}'::map[text=>bool] ?& ARRAY[1]
+
+query T
+SELECT '{1=>t, 2=>f}'::map[text=>bool] ?& ARRAY['1']
+----
+true
+
+query T
+SELECT '{1=>t, 2=>f}'::map[text=>bool] ?& ARRAY['']
+----
+false
+
+query T
+SELECT '{1=>t, 2=>f}'::map[text=>bool] ?& ARRAY['']
+----
+false
+
+## ?|
+query error string literal does not support casting from string to string\[\]
+SELECT '{a=>1, b=>2}'::map[text=>int] ?| 'a'
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY[1]
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY[NULL]
+----
+false
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['a']
+----
+true
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'b']
+----
+true
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'd', '1']
+----
+false
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT '{1=>t, 2=>f}'::map[text=>bool] ?| ARRAY[1]
+
+query T
+SELECT '{1=>t, 2=>f}'::map[text=>bool] ?| ARRAY['1']
+----
+true
+
+## @>
+query error could not determine polymorphic type because input has type unknown
+SELECT '{a=>1, b=>2}'::map[text=>int] @> 'a'
+
+query error  arguments cannot be implicitly cast to any implementation's parameters
+SELECT '{a=>1, b=>2}'::map[text=>int] @> 'a'::text
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT '{a=>1, b=>2}'::map[text=>int] @> ARRAY[1]
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>t}'::map[text=>bool]
+----
+false
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>1}'::map[text=>int]
+----
+true
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>1, b=>2}'::map[text=>int]
+----
+true
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>10, b=>20}'::map[text=>int]
+----
+false
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>1, b=>2, c=>3}'::map[text=>int]
+----
+false
+
+## <@
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>t}'::map[text=>bool]
+----
+false
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>1}'::map[text=>int]
+----
+false
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>1, b=>2}'::map[text=>int]
+----
+true
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>10, b=>20}'::map[text=>int]
+----
+false
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>1, b=>2, c=>3}'::map[text=>int]
 ----
 true
 
