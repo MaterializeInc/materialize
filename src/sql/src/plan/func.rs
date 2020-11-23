@@ -576,10 +576,11 @@ impl ParamType {
     }
 
     fn is_polymorphic(&self) -> bool {
-        matches!(
-            self,
-            Self::ArrayAny | Self::ListAny | Self::ListElementAny | Self::NonVecAny
-        )
+        use ParamType::*;
+        match self {
+            ArrayAny | ListAny | MapAny | ListElementAny | NonVecAny => true,
+            Any | Plain(_) => false,
+        }
     }
 }
 
