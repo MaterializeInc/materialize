@@ -257,8 +257,8 @@ SELECT '{hello=>{world=>"2020-11-23"}}'::map[text=>map[text=>date]] -> 'hello'::
 false
 
 ## @>
-query error could not determine polymorphic type because input has type unknown
-SELECT '{a=>1, b=>2}'::map[text=>int] @> 'a'
+query error invalid input syntax for map: expected '\{', found c: "c"
+SELECT '{a=>1, b=>2}'::map[text=>int] @> 'c'
 
 query error  arguments cannot be implicitly cast to any implementation's parameters
 SELECT '{a=>1, b=>2}'::map[text=>int] @> 'a'::text
@@ -266,7 +266,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] @> 'a'::text
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT '{a=>1, b=>2}'::map[text=>int] @> ARRAY[1]
 
-query T
+query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit cast
 SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>t}'::map[text=>bool]
 ----
 false
@@ -291,7 +291,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>1, b=>2, c=>3}'::map[text=>int]
 ----
 false
 
-query T
+query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>bytea]] @> '{hello=>world}'::map[text=>text]
 ----
 false
@@ -307,7 +307,7 @@ SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>jsonb]] @> '{hello=>{worl
 false
 
 ## <@
-query T
+query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>t}'::map[text=>bool]
 ----
 false
@@ -332,7 +332,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>1, b=>2, c=>3}'::map[text=>int]
 ----
 true
 
-query T
+query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT '{hello=>{world=>a}}'::map[text=>map[text=>char]] <@ '{hello=>c}'::map[text=>char]
 ----
 false
