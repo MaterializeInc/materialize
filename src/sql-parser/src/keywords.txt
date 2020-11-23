@@ -160,6 +160,7 @@ Oid
 On
 Only
 Optimized
+Option
 Or
 Order
 Outer

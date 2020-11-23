@@ -2775,6 +2775,12 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let options = if self.parse_keyword(OPTION) {
+            self.parse_options()?
+        } else {
+            vec![]
+        };
+
         Ok(Select {
             distinct,
             projection,
@@ -2782,6 +2788,7 @@ impl<'a> Parser<'a> {
             selection,
             group_by,
             having,
+            options,
         })
     }
 
