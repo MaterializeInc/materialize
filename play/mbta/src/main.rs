@@ -35,8 +35,8 @@ fn parse_entry(parsed_object: &mut json::JsonValue) -> (String, Option<String>) 
 
 fn parse_line(line: &str) -> Result<Vec<(String, Option<String>)>, String> {
     let mut results = Vec::new();
-    if line.starts_with("data: ") {
-        let mut parsed_json = json::parse(&line[6..]);
+    if let Some(remainder) = line.strip_prefix("data: ") {
+        let mut parsed_json = json::parse(remainder);
         if let Ok(parsed_json) = &mut parsed_json {
             if parsed_json.is_array() {
                 for member in parsed_json.members_mut() {
