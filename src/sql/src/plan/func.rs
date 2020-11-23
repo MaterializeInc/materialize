@@ -419,7 +419,7 @@ impl ParamList {
                     set_or_check_constrained_type(typ)?
                 }
                 // These checks don't need to be more exhaustive (e.g. failing
-                // if arguments passed to `ListAny` are not `ScalartType::List`)
+                // if arguments passed to `ListAny` are not `ScalarType::List`)
                 // because we've already done general type checking in
                 // `matches_argtypes`.
                 _ => {}
@@ -544,11 +544,8 @@ impl ParamType {
         use ScalarType::*;
 
         match self {
-            // To support list (and, soon, array) concatenation, we must tell
-            // ourselves this white lie until
-            // https://github.com/MaterializeInc/materialize/issues/4627
-            ArrayAny => matches!(t, Array(..) | String),
-            ListAny => matches!(t, List(..) | String),
+            ArrayAny => matches!(t, Array(..)),
+            ListAny => matches!(t, List(..)),
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => match t {
