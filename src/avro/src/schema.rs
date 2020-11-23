@@ -951,7 +951,7 @@ impl SchemaParser {
                 "ignore" => Some(RecordFieldOrder::Ignore),
                 _ => None,
             })
-            .unwrap_or_else(|| RecordFieldOrder::Ascending);
+            .unwrap_or(RecordFieldOrder::Ascending);
 
         Ok(RecordField {
             name,

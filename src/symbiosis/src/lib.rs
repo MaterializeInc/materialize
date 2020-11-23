@@ -57,12 +57,7 @@ impl Postgres {
         let mut config: tokio_postgres::Config = url.parse()?;
         let username = whoami::username();
         if config.get_user().is_none() {
-            config.user(
-                env::var("PGUSER")
-                    .ok()
-                    .as_deref()
-                    .unwrap_or_else(|| &username),
-            );
+            config.user(env::var("PGUSER").ok().as_deref().unwrap_or(&username));
         }
         if config.get_password().is_none() {
             if let Ok(password) = env::var("PGPASSWORD") {
@@ -75,12 +70,7 @@ impl Postgres {
             }
         }
         if config.get_hosts().is_empty() {
-            config.host(
-                env::var("PGHOST")
-                    .ok()
-                    .as_deref()
-                    .unwrap_or_else(|| "localhost"),
-            );
+            config.host(env::var("PGHOST").ok().as_deref().unwrap_or("localhost"));
         }
         let (client, conn) = config
             .connect(tokio_postgres::NoTls)
