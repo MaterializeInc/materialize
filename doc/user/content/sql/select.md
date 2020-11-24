@@ -8,18 +8,25 @@ menu:
 
 `SELECT` is used in a few ways within Materialize. You can use it to:
 
-- Query materialized views and materialized sources, e.g. `SELECT * FROM some_view;`
-- Describe a view you want to materialize. e.g. `CREATE MATERIALIZED VIEW some_view AS SELECT...`
-- Describe a view without materializing it, e.g. `CREATE VIEW some_nonmaterialized_view AS...`
+- Query materialized views and materialized sources, e.g. `SELECT * FROM
+  some_view;`
+- Describe a view you want to materialize. e.g. `CREATE MATERIALIZED VIEW
+  some_view AS SELECT...`
+- Describe a view without materializing it, e.g. `CREATE VIEW
+  some_nonmaterialized_view AS...`
 
 To better understand the distinction between these uses, you should check out
 our [architecture overview](../../overview/architecture).
 
 ## Conceptual framework
 
-The `SELECT` statement is the root of a SQL query, and is used both to interactively query data Materialize manages, and to bind SQL queries to named views which can be queried later.
+The `SELECT` statement is the root of a SQL query, and is used both to
+interactively query data Materialize manages, and to bind SQL queries to named
+views which can be queried later.
 
-When used to interactively query data, your query must depend only on materialized sources and views. There are exceptions, discussed in more detail below. When used to construct views, this restriction is lifted.
+When used to interactively query data, your query must depend only on
+materialized sources and views. There are exceptions, discussed in more detail
+below. When used to construct views, this restriction is lifted.
 
 This is covered in much greater detail in our [architecture
 overview](../../overview/architecture), but here's a quick summary of how
@@ -58,36 +65,53 @@ _join&lowbar;expr_ | A join expression; for more details, see our [`JOIN` docume
 
 ## Details
 
-Because Materialize works very differently from a traditional RDBMS, it's important to understand the implications that certain features of `SELECT` will impact your Materialize instances.
+Because Materialize works very differently from a traditional RDBMS, it's
+important to understand the implications that certain features of `SELECT` will
+impact your Materialize instances.
 
 ### Creating materialized views
 
-Creating a materialized view generates a persistent dataflow, which has a different performance profile from performing a `SELECT` in an RDBMS.
+Creating a materialized view generates a persistent dataflow, which has a
+different performance profile from performing a `SELECT` in an RDBMS.
 
-A materialized view costs Materialize both CPU and RAM to maintain. Materialize must maintain the results of the query, but often it must also maintain additional intermediate state. To learn more about the costs of materialization, check out our [architecture overview](../../overview/architecture).
+A materialized view costs Materialize both CPU and RAM to maintain. Materialize
+must maintain the results of the query, but often it must also maintain
+additional intermediate state. To learn more about the costs of materialization,
+check out our [architecture overview](../../overview/architecture).
 
 ### Reading from sources and views
 
-Performing a `SELECT * FROM` a materialized source or materialized view is Materialize's ideal operation. When Materialize receives such a `SELECT` query, it quickly returns the maintained results from memory, with no re-execution.
+Performing a `SELECT * FROM` a materialized source or materialized view is
+Materialize's ideal operation. When Materialize receives such a `SELECT` query,
+it quickly returns the maintained results from memory, with no re-execution.
 
-Materialize also quickly returns results for queries that only filter, project, and re-order results of materialized sources or materialized views.
+Materialize also quickly returns results for queries that only filter, project,
+and re-order results of materialized sources or materialized views.
 
 ### Querying sources and views
 
-Performing a `SELECT` query that does not directly read out of a materialization requires Materialize to evaluate your query. Materialize will construct a temporary dataflow to materialize your query, and remove the dataflow as soon as it returns the query results to you.
+Performing a `SELECT` query that does not directly read out of a materialization
+requires Materialize to evaluate your query. Materialize will construct a
+temporary dataflow to materialize your query, and remove the dataflow as soon as
+it returns the query results to you.
 
-When you perform a `SELECT` query, all of your inputs must be *queryable*. An input is queryable if it is a constant collection, materialized, or it depends only on queryable inputs itself. The main reason an input might not be queryable is it if relies on an unmaterialized source for its definition.
+When you perform a `SELECT` query, all of your inputs must be *queryable*. An
+input is queryable if it is a constant collection, materialized, or it depends
+only on queryable inputs itself. The main reason an input might not be queryable
+is it if relies on an unmaterialized source for its definition.
 
-You can create a materialized view out of any query using [`CREATE MATERIALIZED VIEW`](../create-materialized-view), and it will always then be queryable.
+You can create a materialized view out of any query using [`CREATE MATERIALIZED
+VIEW`](../create-materialized-view), and it will always then be queryable.
 
-If you supply an `AS OF <time>` argument to your `SELECT` query the queryable requirement is lifted.
+If you supply an `AS OF <time>` argument to your `SELECT` query the queryable
+requirement is lifted.
 
 ### Common table expressions (CTEs)
 
 Common table expressions, also known as CTEs and `WITH` queries, create aliases
 for statements that subsequent expressions can refer to (including subsquent
 CTEs). This can enhance legibility of complex queries, but doesn't alter the
-query's semantics.
+queries' semantics.
 
 For an example, see [Using CTEs](#using-ctes).
 
@@ -107,7 +131,8 @@ CTEs have the following limitations, which we are working to improve:
 
 This assumes you've already [created a source](../create-source).
 
-The following query creates a materialized view representing the total of all purchases made by users per region.
+The following query creates a materialized view representing the total of all
+purchases made by users per region.
 
 ``` sql
 CREATE MATERIALIZED VIEW mat_view AS
@@ -118,7 +143,9 @@ CREATE MATERIALIZED VIEW mat_view AS
     GROUP BY region.id;
 ```
 
-In this case, Materialized will create a dataflow to maintain the results of this query, and that dataflow will live on until the view it's maintaining is dropped.
+In this case, Materialized will create a dataflow to maintain the results of
+this query, and that dataflow will live on until the view it's maintaining is
+dropped.
 
 ### Reading from a view
 
@@ -128,7 +155,8 @@ Assuming you create the view listed above, named `mat_view`:
 SELECT * FROM mat_view
 ```
 
-In this case, Materialized simply returns the results of the dataflow you created to maintain the view.
+In this case, Materialized simply returns the results of the dataflow you
+created to maintain the view.
 
 ### Querying views
 
@@ -140,7 +168,10 @@ JOIN mysql_simple_region AS region ON user.region_id = region.id
 GROUP BY region.id;
 ```
 
-In this case, Materialized will spin up the same dataflow as it did for creating a materialized view, but it will tear down the dataflow once it's returned its results to the client. If you regularly want to view the results of this query, you may want to [create a view](../create-view) for it.
+In this case, Materialized will spin up the same dataflow as it did for creating
+a materialized view, but it will tear down the dataflow once it's returned its
+results to the client. If you regularly want to view the results of this query,
+you may want to [create a view](../create-view) for it.
 
 ### Using CTEs
 
