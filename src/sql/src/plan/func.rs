@@ -544,11 +544,8 @@ impl ParamType {
         use ScalarType::*;
 
         match self {
-            // To support list (and, soon, array) concatenation, we must tell
-            // ourselves this white lie until
-            // https://github.com/MaterializeInc/materialize/issues/4627
-            ArrayAny => matches!(t, Array(..) | String),
-            ListAny => matches!(t, List(..) | String),
+            ArrayAny => matches!(t, Array(..)),
+            ListAny => matches!(t, List(..)),
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),

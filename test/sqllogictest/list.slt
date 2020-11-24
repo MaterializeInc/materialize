@@ -1689,6 +1689,12 @@ SELECT LIST[[1], [2]] || LIST[[3], [4]]
 ----
 {{1},{2},{3},{4}}
 
+# Concatenation properly casts text to appropriate list type
+query T
+SELECT LIST[1] || '{2}'
+----
+{1,2}
+
 # 🔬🔬🔬 list + element
 
 query T
@@ -1831,3 +1837,7 @@ SELECT LIST[[NULL]] || LIST[1]
 
 query error no overload for i32 list list list || i32 list: Cannot concatenate i32 list list list and i32 list
 SELECT LIST[[[1]]] || LIST[2]
+
+# Literal text cannot be implicitly cast to list
+query error no overload for i32 list || string: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT LIST[1] || '{2}'::text
