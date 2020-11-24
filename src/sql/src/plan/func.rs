@@ -336,7 +336,7 @@ pub enum ParamList {
 
 impl ParamList {
     /// Determines whether `typs` are compatible with `self`.
-    fn matches_argtypes(&self, typs: &[Option<ScalarType>]) -> bool {
+    fn matches_argtypes(&self, ecx: &ExprContext, typs: &[Option<ScalarType>]) -> bool {
         if !self.validate_arg_len(typs.len()) {
             return false;
         }
@@ -350,7 +350,7 @@ impl ParamList {
                 //
                 // N.B. this will require more fallthrough checks once we
                 // support RECORD types in functions.
-                if !param.accepts_type(typ) {
+                if !param.accepts_type(ecx, typ) {
                     return false;
                 }
             }
@@ -488,7 +488,7 @@ pub enum ParamType {
 
 impl ParamType {
     /// Does `self` accept arguments of type `t`?
-    fn accepts_type(&self, t: &ScalarType) -> bool {
+    fn accepts_type(&self, ecx: &ExprContext, t: &ScalarType) -> bool {
         use ParamType::*;
         use ScalarType::*;
 
@@ -498,8 +498,10 @@ impl ParamType {
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
-            DecimalAny => typeconv::can_cast(CastContext::Implicit, t, &ScalarType::Decimal(0, 0)),
-            Plain(to) => typeconv::can_cast(CastContext::Implicit, t, to),
+            DecimalAny => {
+                typeconv::can_cast(ecx, CastContext::Implicit, t, &ScalarType::Decimal(0, 0))
+            }
+            Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
         }
     }
 
@@ -624,10 +626,10 @@ where
     // this purpose.
     let impls: Vec<_> = impls
         .iter()
-        .filter(|i| i.params.matches_argtypes(types))
+        .filter(|i| i.params.matches_argtypes(ecx, types))
         .collect();
 
-    let f = find_match(types, impls)?;
+    let f = find_match(ecx, types, impls)?;
 
     (f.op.0)(ecx, spec, cexprs, &f.params)
 }
@@ -638,6 +640,7 @@ where
 ///
 /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
 fn find_match<'a, R: std::fmt::Debug>(
+    ecx: &ExprContext,
     types: &[Option<ScalarType>],
     impls: Vec<&'a FuncImpl<R>>,
 ) -> Result<&'a FuncImpl<R>, anyhow::Error> {
@@ -790,15 +793,15 @@ fn find_match<'a, R: std::fmt::Debug>(
                 let mut found_preferred_type_candidate = false;
                 candidates.retain(|c| {
                     if let Some(typ) = &preferred_type {
-                        found_preferred_type_candidate =
-                            c.fimpl.params[i].accepts_type(typ) || found_preferred_type_candidate;
+                        found_preferred_type_candidate = c.fimpl.params[i].accepts_type(ecx, typ)
+                            || found_preferred_type_candidate;
                     }
                     selected_category == TypeCategory::from_param(&c.fimpl.params[i])
                 });
 
                 if found_preferred_type_candidate {
                     let preferred_type = preferred_type.unwrap();
-                    candidates.retain(|c| c.fimpl.params[i].accepts_type(&preferred_type));
+                    candidates.retain(|c| c.fimpl.params[i].accepts_type(ecx, &preferred_type));
                 }
             }
             Some(typ) => {
@@ -830,7 +833,7 @@ fn find_match<'a, R: std::fmt::Debug>(
             })
             .collect();
 
-        candidates.retain(|c| c.fimpl.params.matches_argtypes(&common_typed));
+        candidates.retain(|c| c.fimpl.params.matches_argtypes(ecx, &common_typed));
 
         maybe_get_last_candidate!();
     }
