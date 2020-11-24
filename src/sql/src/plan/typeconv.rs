@@ -525,9 +525,6 @@ pub fn plan_iterative_cast(
         (String, List(el_typ)) => (String, *el_typ.clone()),
         (String, Map { value_type }) => {
             ecx.require_experimental_mode("maps")?;
-            if let ScalarType::Map { .. } = **value_type {
-                unsupported!("nested map types");
-            }
             (String, *value_type.clone())
         }
         _ => bail!("invalid cast from {} to {}", from, to),

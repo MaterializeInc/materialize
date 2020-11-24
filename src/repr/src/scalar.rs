@@ -801,12 +801,6 @@ impl<'a> ScalarType {
     pub fn is_vec(&self) -> bool {
         matches!(self, ScalarType::List(_) | ScalarType::Array(_))
     }
-
-    /// Returns whether or not `self` is a [`ScalarType::Map`] irrespective
-    /// of its inner value type.
-    pub fn is_map(&self) -> bool {
-        matches!(self, ScalarType::Map { .. })
-    }
 }
 
 // TODO(benesch): the implementations of PartialEq and Hash for ScalarType can

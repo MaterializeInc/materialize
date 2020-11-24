@@ -374,17 +374,21 @@ fn cast_string_to_list<'a>(
 
 fn cast_string_to_map<'a>(
     a: Datum<'a>,
+    map_typ: &ScalarType,
     cast_expr: &'a ScalarExpr,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let parsed_map =
-        strconv::parse_map(a.unwrap_str(), |value_text| -> Result<Datum, EvalError> {
+    let parsed_map = strconv::parse_map(
+        a.unwrap_str(),
+        matches!(map_typ.unwrap_map_value_type(), ScalarType::Map { .. }),
+        |value_text| -> Result<Datum, EvalError> {
             let value_text = match value_text {
                 Cow::Owned(s) => temp_storage.push_string(s),
                 Cow::Borrowed(s) => s,
             };
             cast_expr.eval(&[Datum::String(value_text)], temp_storage)
-        })?;
+        },
+    )?;
     let mut pairs: Vec<(String, Datum)> = parsed_map.into_iter().map(|(k, v)| (k, v)).collect();
     pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
     pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
@@ -2673,9 +2677,10 @@ impl UnaryFunc {
                 cast_expr,
                 return_ty,
             } => cast_string_to_list(a, return_ty, &*cast_expr, temp_storage),
-            UnaryFunc::CastStringToMap { cast_expr, .. } => {
-                cast_string_to_map(a, &*cast_expr, temp_storage)
-            }
+            UnaryFunc::CastStringToMap {
+                cast_expr,
+                return_ty,
+            } => cast_string_to_map(a, return_ty, &*cast_expr, temp_storage),
             UnaryFunc::CastStringToTime => cast_string_to_time(a),
             UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
             UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),

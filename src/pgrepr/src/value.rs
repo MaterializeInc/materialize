@@ -483,9 +483,11 @@ fn decode_map(
     val_type: &Type,
     raw: &str,
 ) -> Result<BTreeMap<String, Option<Value>>, Box<dyn Error + Sync + Send>> {
-    Ok(strconv::parse_map(raw, |elem_text| {
-        Value::decode_text(val_type, elem_text.as_bytes()).map(Some)
-    })?)
+    Ok(strconv::parse_map(
+        raw,
+        matches!(val_type, Type::Map { .. }),
+        |elem_text| Value::decode_text(val_type, elem_text.as_bytes()).map(Some),
+    )?)
 }
 
 fn encode_record<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
