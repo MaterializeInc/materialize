@@ -2250,20 +2250,9 @@ impl<'a> Parser<'a> {
                     DataType::Decimal(precision, scale)
                 }
                 JSON | JSONB => DataType::Jsonb,
-                MAP => {
-                    let value_type = self.parse_map()?;
-                    if let DataType::Map { .. } = value_type {
-                        return parser_err!(
-                            self,
-                            self.peek_prev_pos(),
-                            "nested map types not yet supported"
-                        );
-                    }
-
-                    DataType::Map {
-                        value_type: Box::new(value_type),
-                    }
-                }
+                MAP => DataType::Map {
+                    value_type: Box::new(self.parse_map()?),
+                },
                 _ => self.expected(
                     self.peek_prev_pos(),
                     "a known data type",
@@ -2775,6 +2764,12 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let options = if self.parse_keyword(OPTION) {
+            self.parse_options()?
+        } else {
+            vec![]
+        };
+
         Ok(Select {
             distinct,
             projection,
@@ -2782,6 +2777,7 @@ impl<'a> Parser<'a> {
             selection,
             group_by,
             having,
+            options,
         })
     }
 

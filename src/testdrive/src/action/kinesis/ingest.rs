@@ -69,11 +69,9 @@ impl Action for IngestAction {
                 match state.kinesis_client.put_record(put_input.clone()).await {
                     Ok(_output) => Ok(()),
                     Err(RusotoError::Service(PutRecordError::ResourceNotFound(err))) => {
-                        return Err(format!("resource not found: {}", err))
+                        Err(format!("resource not found: {}", err))
                     }
-                    Err(err) => {
-                        return Err(format!("unable to put Kinesis record: {}", err.to_string()))
-                    }
+                    Err(err) => Err(format!("unable to put Kinesis record: {}", err.to_string())),
                 }
             })
             .await

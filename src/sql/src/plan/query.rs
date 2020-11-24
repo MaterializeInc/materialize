@@ -718,7 +718,19 @@ fn plan_view_select(
         selection,
         group_by,
         having,
+        options,
     } = s;
+
+    // Extract hints about group size if there are any
+    let mut options = crate::normalize::options(options);
+
+    let option = options.remove("expected_group_size");
+
+    let expected_group_size = match option {
+        Some(Value::Number(n)) => Some(n.parse::<usize>()?),
+        Some(_) => bail!("expected_group_size must be a number"),
+        None => None,
+    };
 
     // Step 1. Handle FROM clause, including joins.
     let (mut relation_expr, from_scope) =
@@ -846,7 +858,10 @@ fn plan_view_select(
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || having.is_some() {
             // apply GROUP BY / aggregates
-            relation_expr = relation_expr.map(group_exprs).reduce(group_key, agg_exprs);
+            relation_expr =
+                relation_expr
+                    .map(group_exprs)
+                    .reduce(group_key, agg_exprs, expected_group_size);
             (group_scope, select_all_mapping)
         } else {
             // if no GROUP BY, aggregates or having then all columns remain in scope

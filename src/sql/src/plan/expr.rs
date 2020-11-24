@@ -76,6 +76,7 @@ pub enum RelationExpr {
         input: Box<RelationExpr>,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
+        expected_group_size: Option<usize>,
     },
     Distinct {
         input: Box<RelationExpr>,
@@ -377,6 +378,7 @@ impl RelationExpr {
                 input,
                 group_key,
                 aggregates,
+                expected_group_size: _,
             } => {
                 let input_typ = input.typ(outers, params);
                 let mut column_types = group_key
@@ -476,11 +478,17 @@ impl RelationExpr {
         }
     }
 
-    pub fn reduce(self, group_key: Vec<usize>, aggregates: Vec<AggregateExpr>) -> Self {
+    pub fn reduce(
+        self,
+        group_key: Vec<usize>,
+        aggregates: Vec<AggregateExpr>,
+        expected_group_size: Option<usize>,
+    ) -> Self {
         RelationExpr::Reduce {
             input: Box::new(self),
             group_key,
             aggregates,
+            expected_group_size,
         }
     }
 

@@ -551,11 +551,8 @@ impl ParamType {
             ListAny => matches!(t, List(..) | String),
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
-            MapAny => match t {
-                Map { value_type } => !value_type.is_map(),
-                _ => false,
-            },
-            Plain(to) => typeconv::get_cast(CastContext::Implicit, t, to).is_some(),
+            MapAny => matches!(t, Map { .. }),
+            Plain(to) => typeconv::get_direct_cast(CastContext::Implicit, t, to).is_some(),
         }
     }
 

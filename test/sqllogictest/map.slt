@@ -82,8 +82,40 @@ SELECT '{31=> \ normal }'::map[text=>text]
 query error unterminated quoted string
 SELECT '{"a"=>"hello there!}'::map[text=>text]
 
-query error nested map types not yet supported
-SELECT '{a=>{b=>c}}'::map[text=>map[text=>text]]
+## Nested maps
+
+query error expected '\{', found a: "a": "\{a=>a\}"
+SELECT '{a=>a}'::map[text=>map[text=>text]]
+
+query error expected =>: "\{a\}": "\{a=>\{a\}\}"
+SELECT '{a=>{a}}'::map[text=>map[text=>text]]
+
+query error expected '\{', found b: "b": "\{a=>\{a=>a\}, b=>b\}"
+SELECT '{a=>{a=>a}, b=>b}'::map[text=>map[text=>text]]
+
+query error unterminated embedded element
+SELECT '{hello=>{world=>broken'::map[text=>map[text=>text]]
+
+query error unescaped '\{' at beginning of value; perhaps you want a nested map
+SELECT '{hello=>{world=>true}}'::map[text=>bool]
+
+query T
+SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>text]]
+----
+{hello=>{world=>nested}}
+
+query error expected TEXT, found INT
+SELECT '{hello=>{1=>false}}'::map[text=>map[int=>bool]]
+
+query T
+SELECT '{hello=>{world=>"2020-11-23"}}'::map[text=>map[text=>timestamp]]
+----
+{hello=>{world=>"2020-11-23 00:00:00"}}
+
+query T
+SELECT '{hello=>{\{\}=>\"\"}}'::map[text=>map[text=>text]]
+----
+{hello=>{"{}"=>"\"\""}}
 
 # Test map operators.
 
@@ -113,6 +145,11 @@ false
 
 query T
 SELECT '{""=>1}'::map[text=>int] ? ''
+----
+true
+
+query T
+SELECT '{hello=>{world=>false}}'::map[text=>map[text=>bool]] -> 'hello'::text ? 'world'::text
 ----
 true
 
@@ -164,6 +201,16 @@ SELECT '{1=>t, 2=>f}'::map[text=>bool] ?& ARRAY['']
 ----
 false
 
+query T
+SELECT '{hello=>{world=>123.40}}'::map[text=>map[text=>double]] -> 'hello'::text ?& ARRAY['world']
+----
+true
+
+query T
+SELECT '{hello=>{world=>1293}}'::map[text=>map[text=>smallint]] -> 'hello'::text ?& ARRAY['world', 'extra']
+----
+false
+
 ## ?|
 query error string literal does not support casting from string to string\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| 'a'
@@ -198,6 +245,16 @@ query T
 SELECT '{1=>t, 2=>f}'::map[text=>bool] ?| ARRAY['1']
 ----
 true
+
+query T
+SELECT '{hello=>{world=>63616665-6630-3064-6465-616462656568}}'::map[text=>map[text=>uuid]] -> 'hello'::text ?| ARRAY['world', 'extra']
+----
+true
+
+query T
+SELECT '{hello=>{world=>"2020-11-23"}}'::map[text=>map[text=>date]] -> 'hello'::text ?| ARRAY['missing']
+----
+false
 
 ## @>
 query error could not determine polymorphic type because input has type unknown
@@ -234,6 +291,21 @@ SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>1, b=>2, c=>3}'::map[text=>int]
 ----
 false
 
+query T
+SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>bytea]] @> '{hello=>world}'::map[text=>text]
+----
+false
+
+query T
+SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>text]] @> '{hello=>{world=>nested}}'::map[text=>map[text=>text]]
+----
+true
+
+query T
+SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>jsonb]] @> '{hello=>{world=>nested}, extra=>{elements=>here}}'::map[text=>map[text=>jsonb]]
+----
+false
+
 ## <@
 query T
 SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>t}'::map[text=>bool]
@@ -257,6 +329,21 @@ false
 
 query T
 SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>1, b=>2, c=>3}'::map[text=>int]
+----
+true
+
+query T
+SELECT '{hello=>{world=>a}}'::map[text=>map[text=>char]] <@ '{hello=>c}'::map[text=>char]
+----
+false
+
+query T
+SELECT '{hello=>{world=>16}}'::map[text=>map[text=>oid]] <@ '{hello=>{world=>16}}'::map[text=>map[text=>oid]]
+----
+true
+
+query T
+SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>text]] <@ '{hello=>{world=>nested}, extra=>{elements=>here}}'::map[text=>map[text=>text]]
 ----
 true
 
@@ -313,3 +400,18 @@ query T
 SELECT '{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a', 'c']
 ----
 {2,1,NULL}
+
+query T
+SELECT '{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'missing'::text
+----
+NULL
+
+query T
+SELECT '{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'hello'::text
+----
+{world=>nested}
+
+query T
+SELECT '{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'hello'::text -> 'world'::text
+----
+nested

@@ -61,6 +61,7 @@ impl ProjectionExtraction {
             group_key,
             aggregates,
             monotonic: _,
+            expected_group_size: _,
         } = relation
         {
             let mut projection = Vec::new();

@@ -62,6 +62,7 @@ impl NonNullable {
                 group_key: _,
                 aggregates,
                 monotonic: _,
+                expected_group_size: _,
             } => {
                 if aggregates.iter().any(|a| {
                     scalar_contains_isnull(&(a).expr) || matches!(&(a).func, AggregateFunc::Count)

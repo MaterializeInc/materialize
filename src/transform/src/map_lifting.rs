@@ -314,6 +314,7 @@ impl LiteralLifting {
                 group_key,
                 aggregates,
                 monotonic: _,
+                expected_group_size: _,
             } => {
                 let literals = self.action(input, gets);
                 if !literals.is_empty() {

@@ -410,6 +410,7 @@ impl RelationExpr {
                 input,
                 group_key,
                 aggregates,
+                expected_group_size,
             } => {
                 // Reduce may contain expressions with correlated subqueries.
                 // In addition, here an empty reduction key signifies that we need to supply default values
@@ -428,7 +429,8 @@ impl RelationExpr {
                     .map(|agg| (agg.func.default(), agg.typ(&input_type)))
                     .collect();
                 // NOTE we don't need to remove any extra columns from aggregate.applied_to above because the reduce will do that anyway
-                let mut reduced = input.reduce(applied_group_key, applied_aggregates);
+                let mut reduced =
+                    input.reduce(applied_group_key, applied_aggregates, expected_group_size);
 
                 // Introduce default values in the case the group key is empty.
                 if group_key.is_empty() {
