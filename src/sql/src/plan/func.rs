@@ -147,7 +147,7 @@ struct Operation<R>(
                 &ExprContext,
                 FuncSpec,
                 Vec<CoercibleScalarExpr>,
-                ParamList,
+                &ParamList,
             ) -> Result<R, anyhow::Error>
             + Send
             + Sync,
@@ -168,7 +168,7 @@ impl<R> Operation<R> {
                 &ExprContext,
                 FuncSpec,
                 Vec<CoercibleScalarExpr>,
-                ParamList,
+                &ParamList,
             ) -> Result<R, anyhow::Error>
             + Send
             + Sync
@@ -355,7 +355,7 @@ impl ParamList {
             }
         }
 
-        self.resolve_polymorphic_types(typs).is_ok()
+        !self.has_polymorphic() || self.resolve_polymorphic_types(typs).is_some()
     }
 
     /// Validates that the number of input elements are viable for `self`.
@@ -366,8 +366,17 @@ impl ParamList {
         }
     }
 
-    /// Enforces polymorphic type consistency by generating a new `ParamList`
-    /// with concretely typed parameters in place of polymorphic parameters.
+    /// Reports whether the parameter list contains any polymorphic parameters.
+    fn has_polymorphic(&self) -> bool {
+        let p = match self {
+            ParamList::Exact(p) | ParamList::Repeat(p) => p,
+        };
+        p.iter().any(|p| p.is_polymorphic())
+    }
+
+    /// Enforces polymorphic type consistency by finding the concrete type
+    /// that satisfies the constraints expressed by the polymorphic types in
+    /// the parameter list.
     ///
     /// Polymorphic type consistency constraints include:
     /// - All arguments passed to `ArrayAny` must be `ScalarType::Array`s with
@@ -378,28 +387,16 @@ impl ParamList {
     /// - All arguments passed to `MapAny` must be `ScalarType::Map`s with the
     ///   same type of value in each key, value pair.
     ///
-    /// # Errors
-    /// - If `typs` is inconsistent with these constraints.
-    fn resolve_polymorphic_types(
-        &self,
-        typs: &[Option<ScalarType>],
-    ) -> Result<ParamList, anyhow::Error> {
-        // Early return if polymorphic constraints are unnecessary.
-        let p = match self {
-            ParamList::Exact(p) | ParamList::Repeat(p) => p,
-        };
-
-        if !p.iter().any(|p| p.is_polymorphic()) {
-            return Ok(self.clone());
-        }
-
+    /// Returns `Some` if the constraints was successfully resolved, or `None`
+    /// otherwise.
+    fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
         let mut constrained_type: Option<ScalarType> = None;
         let mut set_or_check_constrained_type = |typ: &ScalarType| {
             match constrained_type {
                 None => constrained_type = Some(typ.clone()),
                 Some(ref t) => {
                     if typ != t {
-                        bail!("incompatible types; have {}, can only accept {}", typ, t)
+                        return Err(());
                     }
                 }
             }
@@ -413,10 +410,10 @@ impl ParamList {
                 (ParamType::ListAny, Some(ScalarType::List(typ)))
                 | (ParamType::ArrayAny, Some(ScalarType::Array(typ)))
                 | (ParamType::MapAny, Some(ScalarType::Map { value_type: typ })) => {
-                    set_or_check_constrained_type(typ)?
+                    set_or_check_constrained_type(typ).ok()?
                 }
                 (ParamType::ListElementAny, Some(typ)) | (ParamType::NonVecAny, Some(typ)) => {
-                    set_or_check_constrained_type(typ)?
+                    set_or_check_constrained_type(typ).ok()?
                 }
                 // These checks don't need to be more exhaustive (e.g. failing
                 // if arguments passed to `ListAny` are not `ScalartType::List`)
@@ -426,62 +423,7 @@ impl ParamList {
             }
         }
 
-        let constrained_type = match constrained_type {
-            None => bail!(
-                "could not constrain polymorphic type because all args to \
-                polymorphic parameters were of unknown type"
-            ),
-            Some(t) => t,
-        };
-
-        let mut param_types = Vec::new();
-        // Constrain polymorphic types.
-        for (i, typ) in typs.iter().enumerate() {
-            let param = &self[i];
-            match (param, typ) {
-                // If parameter is polymorphic and type is known, we already
-                // validated that it's consistent with the constrained type.
-                (p, Some(typ)) if p.is_polymorphic() => {
-                    param_types.push(ParamType::Plain(typ.clone()));
-                }
-                // Make unknown types into the constrained version of their
-                // parameter type.
-                (ParamType::ArrayAny, None) => {
-                    param_types.push(ParamType::Plain(ScalarType::Array(Box::new(
-                        constrained_type.clone(),
-                    ))));
-                }
-                (ParamType::ListAny, None) => {
-                    param_types.push(ParamType::Plain(ScalarType::List(Box::new(
-                        constrained_type.clone(),
-                    ))));
-                }
-                (ParamType::MapAny, None) => {
-                    param_types.push(ParamType::Plain(ScalarType::Map {
-                        value_type: Box::new(constrained_type.clone()),
-                    }));
-                }
-                (ParamType::ListElementAny, None) => {
-                    param_types.push(ParamType::Plain(constrained_type.clone()));
-                }
-                (ParamType::NonVecAny, None) => {
-                    if constrained_type.is_vec() {
-                        bail!(
-                            "could not constrain polymorphic type because {} used in \
-                            position that does not accept arrays or lists",
-                            constrained_type
-                        )
-                    }
-                    param_types.push(ParamType::Plain(constrained_type.clone()));
-                }
-                _ => param_types.push(param.clone()),
-            }
-        }
-
-        Ok(match self {
-            ParamList::Exact(_) => ParamList::Exact(param_types),
-            ParamList::Repeat(_) => ParamList::Repeat(param_types),
-        })
+        constrained_type
     }
 
     /// Matches a `&[ScalarType]` derived from the user's function argument
@@ -681,9 +623,7 @@ where
 
     let f = find_match(types, impls)?;
 
-    // Coerce args to selected candidates' resolved types.
-    let params = f.params.resolve_polymorphic_types(types)?;
-    (f.op.0)(ecx, spec, cexprs, params)
+    (f.op.0)(ecx, spec, cexprs, &f.params)
 }
 
 /// Finds an exact match based on the arguments, or, if no exact match, finds
@@ -895,40 +835,77 @@ fn find_match<'a, R: std::fmt::Debug>(
     )
 }
 
+/// Coerces concrete arguments for a function according to the abstract
+/// parameters specified in the function definition.
+///
+/// You must only call this function if `ParamList::matches_argtypes` has
+/// verified that the `args` are valid for `params`.
 fn coerce_args_to_types(
     ecx: &ExprContext,
     spec: FuncSpec,
     args: Vec<CoercibleScalarExpr>,
-    params: ParamList,
+    params: &ParamList,
 ) -> Result<Vec<ScalarExpr>, anyhow::Error> {
-    use ParamType::*;
-    use ScalarType::*;
+    let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
+    let get_constrained_ty = || {
+        params
+            .resolve_polymorphic_types(&types)
+            .expect("function selection verifies that polymorphic types successfully resolved")
+    };
+
+    let do_convert = |arg, ty: &ScalarType| {
+        let arg = typeconv::plan_coerce(ecx, arg, ty)?;
+        if matches!(ty, ScalarType::Decimal(..))
+            && matches!(ecx.scalar_type(&arg), ScalarType::Decimal(..))
+        {
+            // Suppress decimal -> decimal casts, to avoid casting to
+            // the default decimal scale of 0.
+            Ok(arg)
+        } else {
+            typeconv::plan_cast(spec, ecx, CastContext::Implicit, arg, ty)
+        }
+    };
 
     let mut exprs = Vec::new();
     for (i, arg) in args.into_iter().enumerate() {
         let expr = match &params[i] {
-            // Concrete parameter type. Coerce then cast to that type.
-            Plain(ty) => {
-                let arg = typeconv::plan_coerce(ecx, arg, ty)?;
-                if matches!(ty, Decimal(..)) && matches!(ecx.scalar_type(&arg), Decimal(..)) {
-                    // Suppress decimal -> decimal casts, to avoid casting to
-                    // the default decimal scale of 0.
-                    arg
-                } else {
-                    typeconv::plan_cast(spec, ecx, CastContext::Implicit, arg, ty)?
+            // Concrete type. Direct conversion.
+            ParamType::Plain(ty) => do_convert(arg, ty)?,
+
+            // Polymorphic pseudotypes. Convert based on constrained type.
+            ParamType::ArrayAny => {
+                let ty = ScalarType::Array(Box::new(get_constrained_ty()));
+                do_convert(arg, &ty)?
+            }
+            ParamType::ListAny => {
+                let ty = ScalarType::List(Box::new(get_constrained_ty()));
+                do_convert(arg, &ty)?
+            }
+            ParamType::MapAny => {
+                let ty = ScalarType::Map {
+                    value_type: Box::new(get_constrained_ty()),
+                };
+                do_convert(arg, &ty)?
+            }
+            ParamType::ListElementAny => {
+                let ty = get_constrained_ty();
+                do_convert(arg, &ty)?
+            }
+            ParamType::NonVecAny => {
+                let ty = get_constrained_ty();
+                if ty.is_vec() {
+                    bail!(
+                        "could not constrain polymorphic type because {} used in \
+                        position that does not accept arrays or lists",
+                        ty
+                    )
                 }
+                do_convert(arg, &ty)?
             }
 
-            // Polymorphic pseudotypes. As in PostgreSQL, these bail on
-            // uncoerced arguments.
-            ArrayAny | ListAny | ListElementAny | NonVecAny | MapAny => match arg {
-                CoercibleScalarExpr::Coerced(arg) => arg,
-                _ => bail!("could not determine polymorphic type because input has type unknown"),
-            },
-
             // Special "any" psuedotype. Per PostgreSQL, uncoerced literals
-            // are acceptable, but uncoerced parameters are not.
-            Any => match arg {
+            // are accepted, but uncoerced parameters are rejected.
+            ParamType::Any => match arg {
                 CoercibleScalarExpr::Parameter(n) => {
                     bail!("could not determine data type of parameter ${}", n)
                 }
