@@ -37,16 +37,18 @@ Scenario | `SELECT` behavior
 
 Field | Use
 ------|-----
+**WITH** ... **AS** ... | [Common table expressions](#common-table-expressions-ctes) (CTEs) for this query.
+**(** _col&lowbar;ident_... **)** | Rename the CTE's columns to the list of identifiers, both of which must be the same length.
 **ALL** | Return all rows from query _(implied default)_.
 **DISTINCT** | Return only distinct values from query.
-**DISTINCT ON (** _col&lowbar;ref..._ **)**  | Return only the first row with a distinct value for _col&lowbar;ref_. {{< version-added v0.5.1 >}}
+**DISTINCT ON (** _col&lowbar;ref_... **)**  | Return only the first row with a distinct value for _col&lowbar;ref_. {{< version-added v0.5.1 >}}
 _target&lowbar;elem_ | Return identified columns or functions.
-**FROM** _table&lowbar;ref_ | The tables you want to read from; note that these can also be other `SELECT` statements.
+**FROM** _table&lowbar;ref_ | The tables you want to read from; note that these can also be other `SELECT` statements or [common table expressions](#common-table-expressions-ctes).
 _join&lowbar;expr_ | A join expression; for more details, see our [`JOIN` documentation](../join).
 **WHERE** _expression_ | Filter tuples by _expression_.
 **GROUP BY** _col&lowbar;ref_ | Group aggregations by _col&lowbar;ref_.
 **HAVING** _expression_ | Filter aggregations by _expression_.
-**ORDER BY** _col&lowbar;ref_ ... | Order results in either **ASC** or **DESC** order (_**ASC** is implied default_).<br/><br>
+**ORDER BY** _col&lowbar;ref_... | Order results in either **ASC** or **DESC** order (_**ASC** is implied default_).<br/><br>
 **LIMIT** | Limit the number of returned results to _expr_.
 **OFFSET** | Skip the first _expr_ number of rows.
 **UNION** | Records present in `select_stmt` or `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the sum of the times it occurs in each input statement.
@@ -79,6 +81,25 @@ When you perform a `SELECT` query, all of your inputs must be *queryable*. An in
 You can create a materialized view out of any query using [`CREATE MATERIALIZED VIEW`](../create-materialized-view), and it will always then be queryable.
 
 If you supply an `AS OF <time>` argument to your `SELECT` query the queryable requirement is lifted.
+
+### Common table expressions (CTEs)
+
+Common table expressions, also known as CTEs and `WITH` queries, create aliases
+for statements that subsequent expressions can refer to (including subsquent
+CTEs). This can enhance legibility of complex queries, but doesn't alter the
+query's semantics.
+
+For an example, see [Using CTEs](#using-ctes).
+
+#### Known limitations
+
+CTEs have the following limitations, which we are working to improve:
+
+- CTEs only support `SELECT` queries. {{% gh 4867 %}}
+- Materialize inlines the CTE where it's referenced, which could cause
+  unexpected performance characteristics for especially complex expressions. {{%
+  gh 4867 %}}
+- `WTIH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
 
 ## Examples
 
@@ -120,6 +141,37 @@ GROUP BY region.id;
 ```
 
 In this case, Materialized will spin up the same dataflow as it did for creating a materialized view, but it will tear down the dataflow once it's returned its results to the client. If you regularly want to view the results of this query, you may want to [create a view](../create-view) for it.
+
+### Using CTEs
+
+```sql
+WITH
+  regional_sales (region, total_sales) AS (
+    SELECT region, sum(amount)
+    FROM orders
+    GROUP BY region
+  ),
+  top_regions AS (
+    SELECT region
+    FROM regional_sales
+    ORDER BY total_sales DESC
+    LIMIT 5
+  )
+SELECT region,
+       product,
+       SUM(quantity) AS product_units,
+       SUM(amount) AS product_sales
+FROM orders
+WHERE region IN (SELECT region FROM top_regions)
+GROUP BY region, product;
+```
+
+Both `regional_sales` and `top_regions` are CTEs. You could write a query that
+produces the same results by replacing references to the CTE with the query it
+names, but the CTEs make the entire query simpler to understand.
+
+With regard to dataflows, this is similar to [Querying views](#querying-views)
+above: Materialize tears down the created dataflow after returning the results.
 
 ## Related pages
 
