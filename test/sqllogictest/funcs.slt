@@ -156,7 +156,6 @@ EXPLAIN PLAN FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0, #1)
 | Map date_truncts(#0, #1)
 | Project (#2)
 
@@ -399,8 +398,9 @@ EXPLAIN PLAN FOR SELECT a IS NULL FROM t
 ----
 %0 =
 | Get materialize.public.t (u9)
+| Project (#0)
 | Map isnull(#0)
-| Project (#2)
+| Project (#1)
 
 EOF
 
@@ -409,8 +409,9 @@ EXPLAIN PLAN FOR SELECT a + a + a + a + a IS NULL FROM t
 ----
 %0 =
 | Get materialize.public.t (u9)
+| Project (#0)
 | Map isnull(#0)
-| Project (#2)
+| Project (#1)
 
 EOF
 
@@ -419,8 +420,9 @@ EXPLAIN PLAN FOR SELECT a + b IS NULL FROM t
 ----
 %0 =
 | Get materialize.public.t (u9)
+| Project (#0)
 | Map isnull(#0)
-| Project (#2)
+| Project (#1)
 
 EOF
 
