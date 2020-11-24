@@ -498,11 +498,8 @@ impl ParamType {
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
-            DecimalAny => {
-                typeconv::get_direct_cast(CastContext::Implicit, t, &ScalarType::Decimal(0, 0))
-                    .is_some()
-            }
-            Plain(to) => typeconv::get_direct_cast(CastContext::Implicit, t, to).is_some(),
+            DecimalAny => typeconv::can_cast(CastContext::Implicit, t, &ScalarType::Decimal(0, 0)),
+            Plain(to) => typeconv::can_cast(CastContext::Implicit, t, to),
         }
     }
 

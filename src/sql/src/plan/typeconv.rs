@@ -29,7 +29,7 @@ use super::scope::Scope;
 
 /// A function that, when invoked, casts the input expression to the
 /// target type.
-pub struct CastOp(Box<dyn Fn(&ExprContext, ScalarExpr, &ScalarType) -> ScalarExpr + Send + Sync>);
+struct CastOp(Box<dyn Fn(&ExprContext, ScalarExpr, &ScalarType) -> ScalarExpr + Send + Sync>);
 
 impl CastOp {
     fn new<F>(f: F) -> CastOp
@@ -271,7 +271,7 @@ lazy_static! {
 /// Get casts directly between two [`ScalarType`]s, with control over the
 /// allowed [`CastContext`]. More complex casts, such as between
 /// `ScalarType::List`s, are handled elsewhere.
-pub fn get_direct_cast(
+fn get_direct_cast(
     ccx: CastContext,
     from: &ScalarType,
     to: &ScalarType,
@@ -493,7 +493,7 @@ pub fn plan_coerce<'a>(
 
 /// Plan a cast to a [`ScalarType::List`] or [`ScalarType::Map`], using an
 /// iterative process to perform the cast to each element in `to`.
-pub fn plan_iterative_cast(
+fn plan_iterative_cast(
     ecx: &ExprContext,
     ccx: CastContext,
     expr: ScalarExpr,
@@ -630,4 +630,11 @@ where
             Ok((cast_op.0)(ecx, expr, cast_to))
         }
     }
+}
+
+/// Reports whether it is possible to perform a cast from the specified types.
+pub fn can_cast(ccx: CastContext, cast_from: &ScalarType, cast_to: &ScalarType) -> bool {
+    // TODO(benesch): this needs to be aware of the casts in
+    // `plan_iterative_cast` too.
+    get_direct_cast(ccx, cast_from, cast_to).is_some()
 }
