@@ -413,6 +413,10 @@ impl ScalarExpr {
                         exprs.truncate(i + 1);
                     }
 
+                    // Deduplicate arguments in cases like `coalesce(#0, #0)`.
+                    let mut prior_exprs = HashSet::new();
+                    exprs.retain(|e| prior_exprs.insert(e.clone()));
+
                     if let Some(expr) = exprs.iter_mut().find(|e| e.is_literal_err()) {
                         // One of the remaining arguments is an error, so
                         // just replace the entire coalesce with that error.
