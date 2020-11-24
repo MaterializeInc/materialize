@@ -388,7 +388,7 @@ impl ParamList {
     /// - All arguments passed to `MapAny` must be `ScalarType::Map`s with the
     ///   same type of value in each key, value pair.
     ///
-    /// Returns `Some` if the constraints was successfully resolved, or `None`
+    /// Returns `Some` if the constraints were successfully resolved, or `None`
     /// otherwise.
     fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
         let mut constrained_type: Option<ScalarType> = None;
