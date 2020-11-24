@@ -112,6 +112,7 @@ WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 ----
 %0 =
 | Get materialize.public.l (u1)
+| Project (#0)
 | Filter !(isnull(#0))
 
 %1 =
@@ -125,10 +126,9 @@ WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 | ArrangeBy (#0)
 
 %3 =
-| Join %0 %1 %2 (= #2 (#0 + 1)) (= #4 (#0 + #2))
+| Join %0 %1 %2 (= #1 (#0 + 1)) (= #3 (#0 + #1))
 | | implementation = Differential %0 %1.(#0) %2.(#0)
-| | demand = (#0, #3, #5)
-| Project (#0, #3, #5)
+| Project (#0, #2, #4)
 
 EOF
 
@@ -198,7 +198,6 @@ WHERE l1.la IN (
 %9 =
 | Join %3 %8 (= #0 #2)
 | | implementation = Differential %3 %8.(#0)
-| | demand = (#0, #1)
 | Project (#0, #1)
 
 EOF
@@ -338,9 +337,8 @@ SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 %5 =
 | Join %3 %4 (= #0 #2)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %6 =
 | Get materialize.public.l (u1)
@@ -387,9 +385,8 @@ SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 %5 =
 | Join %3 %4 (= #0 #2)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %6 =
 | Get materialize.public.r (u3)
@@ -440,9 +437,8 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 %6 =
 | Join %4 %5 (= #0 #2)
 | | implementation = Differential %4 %5.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %7 =
 | Get materialize.public.r (u3)
@@ -462,9 +458,8 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 %11 =
 | Join %9 %10 (= #0 #2)
 | | implementation = Differential %9 %10.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %12 =
 | Get materialize.public.l (u1)
@@ -508,7 +503,6 @@ EXPLAIN PLAN FOR SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 %2 =
 | Join %0 %1 (= (#0 % 2) (#2 % 2))
 | | implementation = Differential %1 %0.((#0 % 2))
-| | demand = (#0..#3)
 
 EOF
 
@@ -561,7 +555,6 @@ EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #1)
 | Project (#0, #1)
 
 EOF
