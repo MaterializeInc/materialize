@@ -3230,6 +3230,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "criterion",
+ "enum-kinds",
  "hex",
  "itertools",
  "ordered-float",

@@ -21,7 +21,7 @@ use anyhow::bail;
 use lazy_static::lazy_static;
 
 use expr::VariadicFunc;
-use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
 use super::expr::{BinaryFunc, CoercibleScalarExpr, ColumnRef, ScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
@@ -96,7 +96,7 @@ macro_rules! casts(
             $from_to:expr => $cast_context:ident: $cast_op:expr
         ),+
     } => {{
-        let mut m: HashMap<(ScalarType, ScalarType), CastImpl> = HashMap::new();
+        let mut m = HashMap::new();
         $(
             m.insert($from_to, CastImpl {
                 op: CastOp::from($cast_op),
@@ -111,8 +111,8 @@ lazy_static! {
     /// Used when the [`ScalarExpr`] is already of the desired [`ScalarType`].
     static ref NOOP_CAST: CastOp = CastOp::new(|_ecx: &ExprContext, e, _cast_to: &ScalarType| Ok(e));
 
-    static ref VALID_CASTS: HashMap<(ScalarType, ScalarType), CastImpl> = {
-        use ScalarType::*;
+    static ref VALID_CASTS: HashMap<(ScalarBaseType, ScalarBaseType), CastImpl> = {
+        use ScalarBaseType::*;
         use UnaryFunc::*;
 
         casts! {
@@ -126,7 +126,7 @@ lazy_static! {
             (Int32, Int64) => Implicit: CastInt32ToInt64,
             (Int32, Float32) => Implicit: CastInt32ToFloat32,
             (Int32, Float64) => Implicit: CastInt32ToFloat64,
-            (Int32, Decimal(0, 0)) => Implicit: CastOp::new(|_ecx, e, to_type| {
+            (Int32, Decimal) => Implicit: CastOp::new(|_ecx, e, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Ok(rescale_decimal(e.call_unary(CastInt32ToDecimal), 0, s))
             }),
@@ -135,7 +135,7 @@ lazy_static! {
             // INT64
             (Int64, Bool) => Explicit: CastInt64ToBool,
             (Int64, Int32) => Assignment: CastInt64ToInt32,
-            (Int64, Decimal(0, 0)) => Implicit: CastOp::new(|_ecx, e, to_type| {
+            (Int64, Decimal) => Implicit: CastOp::new(|_ecx, e, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Ok(rescale_decimal(e.call_unary(CastInt64ToDecimal), 0, s))
             }),
@@ -150,7 +150,7 @@ lazy_static! {
             // FLOAT32
             (Float32, Int64) => Assignment: CastFloat32ToInt64,
             (Float32, Float64) => Implicit: CastFloat32ToFloat64,
-            (Float32, Decimal(0, 0)) => Assignment: CastOp::new(|_ecx, e, to_type| {
+            (Float32, Decimal) => Assignment: CastOp::new(|_ecx, e, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 let s = ScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
                 Ok(e.call_binary(s, BinaryFunc::CastFloat32ToDecimal))
@@ -160,7 +160,7 @@ lazy_static! {
             // FLOAT64
             (Float64, Int32) => Assignment: CastFloat64ToInt32,
             (Float64, Int64) => Assignment: CastFloat64ToInt64,
-            (Float64, Decimal(0, 0)) => Assignment: CastOp::new(|_ecx, e, to_type| {
+            (Float64, Decimal) => Assignment: CastOp::new(|_ecx, e, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 let s = ScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
                 Ok(e.call_binary(s, BinaryFunc::CastFloat64ToDecimal))
@@ -168,35 +168,35 @@ lazy_static! {
             (Float64, String) => Assignment: CastFloat64ToString,
 
             // DECIMAL
-            (Decimal(0, 0), Int32) => Assignment: CastOp::new(|ecx, e, _to_type| {
+            (Decimal, Int32) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 Ok(e.call_unary(CastDecimalToInt32(s)))
             }),
-            (Decimal(0, 0), Int64) => Assignment: CastOp::new(|ecx, e, _to_type| {
+            (Decimal, Int64) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 Ok(e.call_unary(CastDecimalToInt64(s)))
             }),
-            (Decimal(0, 0), Float32) => Implicit: CastOp::new(|ecx, e, _to_type| {
+            (Decimal, Float32) => Implicit: CastOp::new(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 let factor = 10_f32.powi(i32::from(s));
                 let factor =
-                    ScalarExpr::literal(Datum::from(factor), Float32);
+                    ScalarExpr::literal(Datum::from(factor), ScalarType::Float32);
                 Ok(e.call_unary(CastSignificandToFloat32)
                     .call_binary(factor, BinaryFunc::DivFloat32))
             }),
-            (Decimal(0, 0), Float64) => Implicit: CastOp::new(|ecx, e, _to_type| {
+            (Decimal, Float64) => Implicit: CastOp::new(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 let factor = 10_f64.powi(i32::from(s));
-                let factor = ScalarExpr::literal(Datum::from(factor), Float32);
+                let factor = ScalarExpr::literal(Datum::from(factor), ScalarType::Float32);
                 Ok(e.call_unary(CastSignificandToFloat64)
                     .call_binary(factor, BinaryFunc::DivFloat64))
             }),
-            (Decimal(0, 0), Decimal(0, 0)) => Implicit: CastOp::new(|ecx, e, to_type| {
+            (Decimal, Decimal) => Implicit: CastOp::new(|ecx, e, to_type| {
                 let (_, f) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 let (_, t) = to_type.unwrap_decimal_parts();
                 Ok(rescale_decimal(e, f, t))
             }),
-            (Decimal(0, 0), String) => Assignment: CastOp::new(|ecx, e, _to_type| {
+            (Decimal, String) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 Ok(e.call_unary(CastDecimalToString(s)))
             }),
@@ -234,7 +234,7 @@ lazy_static! {
             (String, Oid) => Explicit: CastStringToInt32,
             (String, Float32) => Explicit: CastStringToFloat32,
             (String, Float64) => Explicit: CastStringToFloat64,
-            (String, Decimal(0, 0)) => Explicit: CastOp::new(|_ecx, e, to_type| {
+            (String, Decimal) => Explicit: CastOp::new(|_ecx, e, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Ok(e.call_unary(CastStringToDecimal(s)))
             }),
@@ -248,19 +248,19 @@ lazy_static! {
             (String, Uuid) => Explicit: CastStringToUuid,
 
             // RECORD
-            (Record { fields: vec![] }, String) => Assignment: CastOp::new(|ecx, e, _to_type| {
+            (Record, String) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let ty = ecx.scalar_type(&e);
                 Ok(e.call_unary(CastRecordToString { ty }))
             }),
 
             // ARRAY
-            (Array(Box::new(String)), String) => Assignment: CastOp::new(|ecx, e, _to_type| {
+            (Array, String) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let ty = ecx.scalar_type(&e);
                 Ok(e.call_unary(CastArrayToString { ty }))
             }),
 
             // LIST
-            (List(Box::new(String)), String) => Assignment: CastOp::new(|ecx, e, _to_type| {
+            (List, String) => Assignment: CastOp::new(|ecx, e, _to_type| {
                 let ty = ecx.scalar_type(&e);
                 Ok(e.call_unary(CastListToString { ty }))
             }),
@@ -271,7 +271,7 @@ lazy_static! {
             (Jsonb, Int64) => Explicit: CastOp::new(from_jsonb_f64_cast),
             (Jsonb, Float32) => Explicit: CastOp::new(from_jsonb_f64_cast),
             (Jsonb, Float64) => Explicit: CastJsonbToFloat64,
-            (Jsonb, Decimal(0, 0)) => Explicit: CastOp::new(from_jsonb_f64_cast),
+            (Jsonb, Decimal) => Explicit: CastOp::new(from_jsonb_f64_cast),
             (Jsonb, String) => Assignment: CastJsonbToString,
 
             // UUID
@@ -294,7 +294,7 @@ pub fn get_direct_cast(
         return Some(&NOOP_CAST);
     }
 
-    let cast = VALID_CASTS.get(&(from.desaturate(), to.desaturate()))?;
+    let cast = VALID_CASTS.get(&(from.into(), to.into()))?;
 
     match (ccx, cast.context) {
         (Explicit, Implicit) | (Explicit, Assignment) | (Explicit, Explicit) => Some(&cast.op),
