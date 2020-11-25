@@ -518,6 +518,9 @@ class Workflow:
     def mzcompose_up(self, services: List[str]) -> None:
         mzcompose_up(services, self._docker_extra_args(), extra_env=self.env)
 
+    def mzcompose_restart(self, services: List[str]) -> None:
+        mzcompose_restart(services, self._docker_extra_args(), extra_env=self.env)
+
     def mzcompose_run(self, services: List[str], service_ports: bool = True) -> None:
         mzcompose_run(
             services,
@@ -598,6 +601,19 @@ class PrintEnvStep(WorkflowStep):
         print("Workflow has environment of", workflow.env)
 
 
+@Steps.register("sleep")
+class PrintEnvStep(WorkflowStep):
+    """Waits for the defined duration of time."""
+
+    def __init__(self, path: Path, duration: int) -> None:
+        super().__init__(path=Path)
+        self._duration = duration
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        print(f"Sleeping {self._duration} seconds")
+        time.sleep(self._duration)
+
+
 @Steps.register("start-services")
 class StartServicesStep(WorkflowStep):
     """
@@ -617,6 +633,27 @@ class StartServicesStep(WorkflowStep):
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
             raise Failed(f"ERROR: services didn't come up cleanly: {services}")
+
+
+@Steps.register("restart-services")
+class RestartServicesStep(WorkflowStep):
+    """
+    Params:
+      services: List of service names
+    """
+
+    def __init__(self, path: Path, *, services: Optional[List[str]] = None) -> None:
+        super().__init__(path)
+        self._services = services if services is not None else []
+        if not isinstance(self._services, list):
+            raise BadSpec(f"services should be a list, got: {self._services}")
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        try:
+            workflow.mzcompose_restart(self._services)
+        except subprocess.CalledProcessError:
+            services = ", ".join(self._services)
+            raise Failed(f"ERROR: services didn't restart cleanly: {services}")
 
 
 @Steps.register("stop-services")
@@ -1269,6 +1306,18 @@ def mzcompose_up(
     if args is None:
         args = []
     cmd = ["bin/mzcompose", "--mz-quiet", *args, "up", "-d"]
+    print("CWD:", os.getcwd())
+    return spawn.runv(cmd + services, env=_merge_env(extra_env))
+
+
+def mzcompose_restart(
+    services: List[str],
+    args: Optional[List[str]] = None,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> subprocess.CompletedProcess:
+    if args is None:
+        args = []
+    cmd = ["bin/mzcompose", "--mz-quiet", *args, "restart"]
     print("CWD:", os.getcwd())
     return spawn.runv(cmd + services, env=_merge_env(extra_env))
 

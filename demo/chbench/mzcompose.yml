@@ -173,6 +173,10 @@ services:
     command: "true"
     volumes:
       - chbench-gen:/gen
+  mzutil:
+    build: mzutil
+    volumes:
+      - view-snapshots:/snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -252,6 +256,7 @@ volumes:
   chbench-gen:
   grafana:
   prometheus:
+  view-snapshots:
 
 mzconduct:
   name: chbench
@@ -317,6 +322,47 @@ mzconduct:
           --only-initialize
           -c /etc/peeker/materialized-sources.toml
           -q loadtest
+
+    # Run a test that populates Kafka with data from chbench for a set amount of time
+    # After the first timer expires, stop chbench
+    # Record offsets ingested by Materialize and the answers to our count(*) views
+    # Restart Materialized and measure time until it catches up to previous views
+    ingest-performance-benchmark:
+      steps:
+      - step: workflow
+        workflow: bring-up-source-data-postgres
+      # start the dashboard before the load data get started so that we have data from
+      # the beginning of time
+      - step: start-services
+        services: [dashboard]
+      - step: workflow
+        workflow: heavy-load-postgres
+      # Kafka connect / debezium takes forever to initialize (well, 5 minutes or so)
+      - step: sleep
+        duration: 300
+      - step: run
+        service: peeker
+        command: --only-initialize --queries ${PEEKER_QUERIES:-count-sources}
+      - step: ensure-stays-up
+        container: dashboard
+        seconds: 1
+      # Populate Kafka topics with sufficient data that Materialize will take a decent amount of
+      # time to catch up
+      - step: sleep
+        duration: 600
+      - step: stop-services
+        services: [chbench, postgres]
+      # Give Materialize a few seconds to catch up with topics / drain
+      - step: sleep
+        duration: 15
+      - step: run
+        service: mzutil
+        command: snapshot_view_states
+      - step: restart-services
+        services: [materialized]
+      - step: run
+        service: mzutil
+        command: await_view_states
 
     load-test:
       steps:
