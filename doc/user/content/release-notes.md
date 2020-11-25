@@ -48,6 +48,10 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.5.3 %}}
 
+- Fix a regression in the SQL parser, introduced in v0.5.2, in which nested
+  field accesses, e.g. `SELECT ((col).field1).field2`, would fail to parse
+  {{% gh 4827 %}}.
+
 {{% version-header v0.5.2 %}}
 
 - Provide the [`list`](/sql/types/list/) type, which is an ordered sequences of
@@ -81,16 +85,16 @@ Wrap your release notes at the 80 character mark.
   characters, e.g., `SELECT ’1’`. {{% gh 4755 %}}
 
 - Suppress logging of warnings and errors to stderr when users supply the
-  [`--log-file` command line flag](/cli/#command-line-flags). {{% gh 4777 %}}
+  [`--log-file` command line flag](/cli/#command-line-flags) {{% gh 4777 %}}.
 
 - When using the systemd service distributed in the APT package, write log
-  messages to the systemd journal instead of a file in the `mzdata` directory. {{%
-  gh 4781 %}}
+  messages to the systemd journal instead of a file in the `mzdata` directory
+  {{% gh 4781 %}}.
 
-- Ingest SQL Server-style Debezium data. {{% gh 4762 %}}
+- Ingest SQL Server-style Debezium data {{% gh 4762 %}}.
 
 - Allow slightly more complicated [`INSERT`](/sql/insert) bodies, e.g. inserting
-  `SELECT`ed literals. {{% gh 4748 %}}
+  `SELECT`ed literals {{% gh 4748 %}}.
 
 {{% version-header v0.5.1 %}}
 
