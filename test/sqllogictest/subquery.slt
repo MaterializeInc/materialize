@@ -283,7 +283,6 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 %3 =
 | Join %0 %1 %2 (= #0 #1)
 | | implementation = Differential %1 %2.() %0.(#0)
-| Project (#0, #0, #2)
 
 EOF
 
@@ -300,7 +299,6 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 %2 =
 | Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #2)
 
 %3 =
 | Get %2
@@ -319,14 +317,13 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 | | implementation = DeltaQuery
 | |   delta %4 %5.(#0)
 | |   delta %5 %4.(#0)
-| | demand = (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %7 =
 | Join %3 %6 (= #2 #3)
 | | implementation = Differential %3 %6.(#0)
-| Project (#0, #0, #2)
+| Project (#0..#2)
 
 EOF
 
@@ -484,7 +481,6 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 | | implementation = DeltaQuery
 | |   delta %1 %2.(#0)
 | |   delta %2 %1.(#0)
-| | demand = (#0)
 | Distinct group=(#0)
 
 %4 =
@@ -536,7 +532,6 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 | | implementation = DeltaQuery
 | |   delta %1 %2.(#0)
 | |   delta %2 %1.(#0)
-| | demand = (#0)
 | Distinct group=(#0)
 
 %4 =
@@ -588,7 +583,6 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 %3 =
 | Join %1 %2
 | | implementation = Differential %2 %1.()
-| | demand = (#0, #1)
 | Filter (#0 <= #1)
 | Distinct group=(#0)
 

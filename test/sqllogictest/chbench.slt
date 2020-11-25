@@ -319,7 +319,6 @@ ORDER BY n_name, su_name, i_id
 | |   delta %6 %7.(#0) %8.(#0) %5.(#17)
 | |   delta %7 %8.(#0) %6.(#3) %5.(#17)
 | |   delta %8 %7.(#2) %6.(#3) %5.(#17)
-| | demand = (#0, #2, #30)
 | Filter "^EUROP.*$" ~(#30)
 | Reduce group=(#0)
 | | agg min(#2)
@@ -380,9 +379,9 @@ ORDER BY revenue DESC, o_entry_d
 | |   delta %1 %2.(#0, #1, #2) %0.(#0, #1, #2) %3.(#2, #1, #0)
 | |   delta %2 %0.(#0, #1, #2) %1.(#0, #1, #2) %3.(#2, #1, #0)
 | |   delta %3 %1.(#0, #1, #2) %2.(#0, #1, #2) %0.(#0, #1, #2)
-| Project (#1, #2, #9, #22, #29, #41)
-| Filter "^A.*$" ~(#2), (datetots(#4) > 2007-01-02 00:00:00)
-| Reduce group=(#3, #1, #0, #4)
+| Project (#9, #29, #33..#35, #41)
+| Filter "^A.*$" ~(#0), (datetots(#1) > 2007-01-02 00:00:00)
+| Reduce group=(#2, #4, #3, #1)
 | | agg sum(#5)
 | Project (#0..#2, #4, #3)
 
@@ -428,7 +427,6 @@ ORDER BY o_ol_cnt
 | | implementation = DeltaQuery
 | |   delta %2 %3.(#2, #1, #0)
 | |   delta %3 %2.(#0, #1, #2)
-| | demand = (#0..#2, #4, #14)
 | Filter (#14 >= #4)
 | Distinct group=(#0, #1, #2, #4)
 | ArrangeBy (#0, #1, #2, #3)
@@ -695,8 +693,8 @@ ORDER BY l_year
 | |   delta %6 %8.(#0) %5.(#21) %4.(#2, #1, #3) %3.(#2, #1, #0) %2.(#0, #1) %0.(#0) %1.(#0) %7.(#0)
 | |   delta %7 %1.(#3) %2.(#17) %0.(#0) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %6.(#0) %8.(#0)
 | |   delta %8 %6.(#2) %5.(#21) %4.(#2, #1, #3) %3.(#2, #1, #0) %2.(#0, #1) %0.(#0) %1.(#0) %7.(#0)
-| Project (#0, #4, #38, #44, #75, #79)
-| Filter !(isnull(#0)), "^.*b$" ~(#1), (#5 = "EUROPE"), (#0 < 1000), (datetots(#3) <= 2012-01-02 00:00:00), (datetots(#3) >= 2007-01-02 00:00:00)
+| Project (#4, #34, #38, #44, #75, #79)
+| Filter !(isnull(#1)), "^.*b$" ~(#0), (#5 = "EUROPE"), (#1 < 1000), (datetots(#3) <= 2012-01-02 00:00:00), (datetots(#3) >= 2007-01-02 00:00:00)
 | Reduce group=(date_part_year_tstz(datetotstz(#3)))
 | | agg sum(if (#4 = "GERMANY") then {#2} else {0dec})
 | | agg sum(#2)
@@ -878,7 +876,6 @@ ORDER BY ordercount DESC
 | |   delta %4 %5.(#0) %6.(#0)
 | |   delta %5 %6.(#0) %4.(#17)
 | |   delta %6 %5.(#3) %4.(#17)
-| | demand = (#14, #26)
 | Filter (#26 = "GERMANY")
 | Reduce group=()
 | | agg sum(#14)
@@ -965,7 +962,6 @@ ORDER BY custdist DESC, c_count DESC
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#2, #1, #3)
 | |   delta %1 %0.(#0, #1, #2)
-| | demand = (#0..#22, #27)
 | Filter (#27 > 8)
 
 %3 =
@@ -1020,7 +1016,6 @@ AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#4)
-| | demand = (#6, #8, #14)
 | Filter (datetots(#6) < 2020-01-02 00:00:00), (datetots(#6) >= 2007-01-02 00:00:00)
 | Reduce group=()
 | | agg sum(if "^PR.*$" ~(#14) then {#8} else {0dec})
@@ -1097,7 +1092,6 @@ ORDER BY su_suppkey
 | | implementation = DeltaQuery
 | |   delta %1 %2.(#0, #1)
 | |   delta %2 %1.(#5, #4)
-| | demand = (#6, #8, #27)
 | Filter (datetots(#6) >= 2007-01-02 00:00:00)
 | Reduce group=(#27)
 | | agg sum(#8)
@@ -1116,7 +1110,6 @@ ORDER BY su_suppkey
 | | implementation = DeltaQuery
 | |   delta %4 %5.(#0, #1)
 | |   delta %5 %4.(#5, #4)
-| | demand = (#6, #8, #27)
 | Filter (datetots(#6) >= 2007-01-02 00:00:00)
 | Reduce group=(#27)
 | | agg sum(#8)
@@ -1165,7 +1158,6 @@ ORDER BY supplier_cnt DESC
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
-| | demand = (#17, #20..#22)
 | Filter !("^zz.*$" ~(#22))
 
 %3 =
@@ -1243,7 +1235,6 @@ AND ol_quantity < t.a
 | | implementation = DeltaQuery
 | |   delta %1 %2.(#4)
 | |   delta %2 %1.(#0)
-| | demand = (#0, #4, #12)
 | Filter "^.*b$" ~(#4)
 | Reduce group=(#0)
 | | agg sum(#12)
@@ -1256,7 +1247,6 @@ AND ol_quantity < t.a
 | | implementation = DeltaQuery
 | |   delta %0 %3.(#0)
 | |   delta %3 %0.(#4)
-| | demand = (#7, #8, #13)
 | Filter (i32tof64(#7) < #13)
 | Reduce group=()
 | | agg sum(#8)
@@ -1316,7 +1306,7 @@ ORDER BY sum(ol_amount) DESC, o_entry_d
 | |   delta %0 %1.(#2, #1, #3) %2.(#2, #1, #0)
 | |   delta %1 %0.(#0, #1, #2) %2.(#2, #1, #0)
 | |   delta %2 %1.(#0, #1, #2) %0.(#0, #1, #2)
-| Reduce group=(#22, #2, #1, #0, #5, #26, #28)
+| Reduce group=(#22, #24, #23, #0, #5, #26, #28)
 | | agg sum(#38)
 | Project (#0, #3..#7)
 | Filter (#5 > 20000dec)
@@ -1367,7 +1357,6 @@ WHERE (
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#4)
-| | demand = (#2, #7, #8, #13, #14)
 | Filter ((("^.*a$" ~(#14) && (((#2 = 1) || (#2 = 2)) || (#2 = 3))) || ("^.*b$" ~(#14) && (((#2 = 1) || (#2 = 2)) || (#2 = 4)))) || ("^.*c$" ~(#14) && (((#2 = 1) || (#2 = 5)) || (#2 = 3)))), (#7 <= 10), (#13 <= 40000000dec), (#7 >= 1), (#13 >= 100dec)
 | Reduce group=()
 | | agg sum(#8)
@@ -1424,7 +1413,6 @@ ORDER BY su_name
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#3)
-| | demand = (#0..#2, #8)
 | Filter (#8 = "GERMANY")
 
 %3 =
@@ -1449,7 +1437,6 @@ ORDER BY su_name
 %8 =
 | Join %4 %5 %6 %7 (= #11 #33 #39)
 | | implementation = Differential %5.(#0) %7.(#0) %6.(#4) %4.()
-| | demand = (#0, #11..#13, #35, #36, #43)
 | Filter "^co.*$" ~(#43), (datetots(#35) > 2010-05-23 12:00:00)
 | Reduce group=(#0, #11, #12, #13)
 | | agg sum(#36)
@@ -1517,7 +1504,6 @@ ORDER BY numwait DESC, su_name
 %5 =
 | Join %0 %1 %2 %3 %4 (= #0 #42) (= #3 #43) (= #7 #17) (= #8 #18) (= #9 #19 #26) (= #11 #25)
 | | implementation = Differential %1 %2.(#0, #1, #2) %3.(#0, #1) %0.(#0) %4.(#0)
-| | demand = (#1, #7..#9, #13, #21, #44)
 | Filter (#44 = "GERMANY"), (#13 > #21)
 
 %6 =
@@ -1598,7 +1584,6 @@ ORDER BY substr(c_state, 1, 1)
 %2 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
-| | demand = (#0..#2, #9, #16, #24)
 | Filter ((#16 * 1000000dec) > #24)
 
 %3 =

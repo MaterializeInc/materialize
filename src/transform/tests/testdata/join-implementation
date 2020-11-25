@@ -26,6 +26,5 @@ opt
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| Project (#0, #1, #0, #3)
 ----
 ----

@@ -229,7 +229,6 @@ impl Default for Optimizer {
                     Box::new(crate::redundant_join::RedundantJoin),
                     Box::new(crate::topk_elision::TopKElision),
                     Box::new(crate::reduction::NegatePredicate),
-                    Box::new(crate::demand::Demand),
                 ],
             }),
             // As a final logical action, convert any constant expression to a constant.
@@ -247,7 +246,6 @@ impl Default for Optimizer {
                     Box::new(crate::join_implementation::JoinImplementation),
                     Box::new(crate::projection_pushdown::ProjectionPushdown),
                     Box::new(crate::fusion::filter::Filter),
-                    Box::new(crate::demand::Demand),
                     Box::new(crate::map_lifting::LiteralLifting),
                 ],
             }),

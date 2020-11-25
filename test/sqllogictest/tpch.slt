@@ -242,7 +242,6 @@ ORDER BY
 | |   delta %2 %0.(#0) %1.(#0) %3.(#0) %4.(#0)
 | |   delta %3 %4.(#0) %1.(#3) %2.(#1) %0.(#0)
 | |   delta %4 %3.(#2) %1.(#3) %2.(#1) %0.(#0)
-| | demand = (#0, #2, #4, #5, #10, #11, #13..#15, #19, #22, #26)
 | Filter "^.*BRASS$" ~(#4), (#5 = 15), (#26 = "EUROPE")
 
 %6 =
@@ -277,7 +276,6 @@ ORDER BY
 | |   delta %9 %10.(#0) %11.(#0) %8.(#1) %7.(#0)
 | |   delta %10 %11.(#0) %9.(#3) %8.(#1) %7.(#0)
 | |   delta %11 %10.(#2) %9.(#3) %8.(#1) %7.(#0)
-| | demand = (#0, #4, #18)
 | Filter (#18 = "EUROPE")
 | Reduce group=(#0)
 | | agg min(#4)
@@ -336,9 +334,9 @@ ORDER BY
 | |   delta %0 %1.(#1) %2.(#0)
 | |   delta %1 %0.(#0) %2.(#0)
 | |   delta %2 %1.(#0) %0.(#0)
-| Project (#6, #8, #12, #15, #22, #23, #27)
-| Filter (#0 = "BUILDING"), (#2 < 1995-03-15), (#6 > 1995-03-15)
-| Reduce group=(#1, #2, #3)
+| Project (#6, #12, #15, #17, #22, #23, #27)
+| Filter (#0 = "BUILDING"), (#1 < 1995-03-15), (#6 > 1995-03-15)
+| Reduce group=(#3, #1, #2)
 | | agg sum((#4 * (100dec - #5)))
 | Project (#0, #3, #1, #2)
 
@@ -391,7 +389,6 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %2 %3.(#0)
 | |   delta %3 %2.(#0)
-| | demand = (#0, #20, #21)
 | Filter (#20 < #21)
 | Distinct group=(#0)
 | ArrangeBy (#0)
@@ -909,7 +906,6 @@ ORDER BY
 | |   delta %4 %5.(#0) %6.(#0)
 | |   delta %5 %6.(#0) %4.(#1)
 | |   delta %6 %5.(#3) %4.(#1)
-| | demand = (#2, #3, #13)
 | Filter (#13 = "GERMANY")
 | Reduce group=()
 | | agg sum((#3 * i32todec(#2)))
@@ -1019,7 +1015,6 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#1)
 | |   delta %1 %0.(#0)
-| | demand = (#0..#8, #16)
 | Filter !("^.*special.*requests.*$" ~(#16))
 
 %3 =
@@ -1081,7 +1076,6 @@ WHERE
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#1)
-| | demand = (#5, #6, #10, #20)
 | Filter (datetots(#10) < 1995-10-01 00:00:00), (#10 >= 1995-09-01)
 | Reduce group=()
 | | agg sum(if "^PROMO.*$" ~(#20) then {(#5 * (100dec - #6))} else {0dec})
@@ -1220,7 +1214,6 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
-| | demand = (#1, #8..#10)
 | Filter !("^MEDIUM POLISHED.*$" ~(#9)), ((((((((#10 = 49) || (#10 = 14)) || (#10 = 23)) || (#10 = 45)) || (#10 = 19)) || (#10 = 3)) || (#10 = 36)) || (#10 = 9)), (#8 != "Brand#45")
 
 %3 =
@@ -1299,7 +1292,6 @@ WHERE
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#1)
-| | demand = (#1, #4, #5, #19, #22)
 | Filter (#19 = "Brand#23"), (#22 = "MED BOX")
 
 %3 =
@@ -1307,7 +1299,7 @@ WHERE
 
 %4 =
 | Get %2
-| Distinct group=(#1)
+| Distinct group=(#16)
 | ArrangeBy (#0)
 
 %5 =
@@ -1319,7 +1311,6 @@ WHERE
 | | implementation = DeltaQuery
 | |   delta %4 %5.(#1)
 | |   delta %5 %4.(#0)
-| | demand = (#0, #5)
 | Reduce group=(#0)
 | | agg sum(#5)
 | | agg count(true)
@@ -1327,9 +1318,8 @@ WHERE
 | ArrangeBy (#0)
 
 %7 =
-| Join %3 %6 (= #1 #25)
+| Join %3 %6 (= #16 #25)
 | | implementation = Differential %3 %6.(#0)
-| | demand = (#4, #5, #28)
 | Filter ((#4 * 10000000dec) < #28)
 | Reduce group=()
 | | agg sum(#5)
@@ -1410,7 +1400,6 @@ ORDER BY
 | |   delta %0 %1.(#1) %2.(#0)
 | |   delta %1 %0.(#0) %2.(#0)
 | |   delta %2 %1.(#0) %0.(#0)
-| | demand = (#0, #1, #8, #11, #12, #21)
 
 %4 =
 | Get %3
@@ -1429,18 +1418,17 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %5 %6.(#0)
 | |   delta %6 %5.(#0)
-| | demand = (#0, #5)
-| Reduce group=(#0)
+| Reduce group=(#0, #1)
 | | agg sum(#5)
+| Filter (#2 > 30000dec)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %8 =
 | Join %4 %7 (= #8 #33)
 | | implementation = Differential %4 %7.(#0)
-| Project (#0, #1, #8, #11, #12, #21, #34)
-| Filter (#6 > 30000dec)
-| Reduce group=(#1, #0, #2, #4, #3)
-| | agg sum(#5)
+| Reduce group=(#1, #0, #8, #12, #11)
+| | agg sum(#21)
 
 Finish order_by=(#4 desc, #3 asc) limit=none offset=0 project=(#0..#5)
 
@@ -1498,7 +1486,6 @@ WHERE
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#1)
-| | demand = (#4..#6, #13, #14, #19, #21, #22)
 | Filter (((((((#19 = "Brand#12") && ((((#22 = "SM CASE") || (#22 = "SM BOX")) || (#22 = "SM PACK")) || (#22 = "SM PKG"))) && (#4 >= 100dec)) && (#4 <= 1100dec)) && (#21 <= 5)) || (((((#19 = "Brand#23") && ((((#22 = "MED BAG") || (#22 = "MED BOX")) || (#22 = "MED PKG")) || (#22 = "MED PACK"))) && (#4 >= 1000dec)) && (#4 <= 2000dec)) && (#21 <= 10))) || (((((#19 = "Brand#34") && ((((#22 = "LG CASE") || (#22 = "LG BOX")) || (#22 = "LG PACK")) || (#22 = "LG PKG"))) && (#4 >= 2000dec)) && (#4 <= 3000dec)) && (#21 <= 15))), ((#14 = "AIR") || (#14 = "AIR REG")), (#13 = "DELIVER IN PERSON"), (#21 >= 1)
 | Reduce group=()
 | | agg sum((#5 * (100dec - #6)))
@@ -1577,7 +1564,6 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#3)
-| | demand = (#0..#2, #8)
 | Filter (#8 = "CANADA")
 
 %3 =
@@ -1595,7 +1581,6 @@ ORDER BY
 %6 =
 | Join %3 %4 %5 (= #11 #16)
 | | implementation = Differential %4.(#0) %5.(#0) %3.()
-| | demand = (#0, #11..#13, #17)
 | Filter "^forest.*$" ~(#17)
 
 %7 =
@@ -1619,7 +1604,6 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %9 %10.(#1, #2)
 | |   delta %10 %9.(#0, #1)
-| | demand = (#0, #1, #6, #12)
 | Filter (datetots(#12) < 1996-01-01 00:00:00), (#12 >= 1995-01-01)
 | Reduce group=(#0, #1)
 | | agg sum(#6)
@@ -1629,7 +1613,6 @@ ORDER BY
 %12 =
 | Join %8 %11 (= #11 #25) (= #12 #26)
 | | implementation = Differential %8 %11.(#0, #1)
-| | demand = (#0, #13, #28)
 | Filter ((i32todec(#13) * 1000dec) > #28)
 | Distinct group=(#0)
 | ArrangeBy (#0)
@@ -1709,7 +1692,6 @@ ORDER BY
 | |   delta %1 %0.(#0) %2.(#0) %3.(#0)
 | |   delta %2 %1.(#0) %0.(#0) %3.(#0)
 | |   delta %3 %0.(#3) %1.(#2) %2.(#0)
-| | demand = (#0, #1, #7, #18, #19, #25, #33)
 | Filter (#25 = "F"), (#33 = "SAUDI ARABIA"), (#19 > #18)
 
 %5 =
@@ -1717,7 +1699,7 @@ ORDER BY
 
 %6 =
 | Get %4
-| Distinct group=(#7, #0)
+| Distinct group=(#7, #9)
 
 %7 =
 | Get materialize.public.lineitem (u21)
@@ -1726,23 +1708,21 @@ ORDER BY
 %8 =
 | Join %6 %7 (= #0 #2)
 | | implementation = Differential %6 %7.(#0)
-| | demand = (#0, #1, #4)
 | Filter (#4 != #1)
 | Distinct group=(#0, #1)
 | ArrangeBy (#0, #1)
 
 %9 =
-| Join %5 %8 (= #0 #37) (= #7 #36)
+| Join %5 %8 (= #7 #36) (= #9 #37)
 | | implementation = Differential %5 %8.(#0, #1)
-| | demand = (#0, #1, #7)
 
 %10 =
 | Get %9
-| Distinct group=(#7, #0)
+| Distinct group=(#7, #9)
 
 %11 =
 | Get %9
-| ArrangeBy (#0, #7)
+| ArrangeBy (#7, #9)
 
 %12 =
 | Get %10
@@ -1768,8 +1748,8 @@ ORDER BY
 | Union %14 %15
 
 %17 =
-| Join %11 %16 (= #0 #39) (= #7 #38)
-| | implementation = Differential %16 %11.(#0, #7)
+| Join %11 %16 (= #7 #38) (= #9 #39)
+| | implementation = Differential %16 %11.(#7, #9)
 | Reduce group=(#1)
 | | agg count(true)
 
@@ -1844,7 +1824,6 @@ ORDER BY
 %2 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
-| | demand = (#0, #4, #5, #10)
 | Filter ((#5 * 1000000dec) > #10)
 
 %3 =
