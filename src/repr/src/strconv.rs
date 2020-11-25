@@ -739,6 +739,18 @@ where
     let is_end_of_literal = |c| matches!(c, ',' | '}' | '=');
 
     loop {
+        // Check for terminals.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        match buf.next() {
+            Some('}') => break,
+            _ if map.len() == 0 => {
+                buf.prev();
+            }
+            Some(',') => {}
+            Some(c) => bail!("expected ',' or end of input, got '{}'", c),
+            None => bail!("unexpected end of input"),
+        }
+
         // Get key.
         buf.take_while(|ch| ch.is_ascii_whitespace());
         let key = match buf.peek() {
@@ -774,15 +786,6 @@ where
 
         // Insert elements.
         map.insert(key, value);
-
-        // Check for terminals.
-        buf.take_while(|ch| ch.is_ascii_whitespace());
-        match buf.next() {
-            Some('}') => break,
-            Some(',') => {}
-            Some(c) => bail!("expected ',' or end of input, got '{}'", c),
-            None => bail!("unexpected end of input"),
-        }
     }
     Ok(map)
 }
