@@ -38,12 +38,13 @@ use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
     ColumnOption, Connector, CopyDirection, CopyRelation, CopyStatement, CopyTarget,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement, CreateSchemaStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
-    DiscardStatement, DiscardTarget, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
-    ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement,
-    ObjectName, ObjectType, Query, SelectStatement, SetVariableStatement, SetVariableValue,
-    ShowVariableStatement, SqlOption, Statement, TailStatement, Value, WithOption, WithOptionValue,
+    CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
+    CreateViewStatement, DiscardStatement, DiscardTarget, DropDatabaseStatement,
+    DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
+    IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query, SelectStatement,
+    SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption, Statement,
+    TailStatement, Value, WithOption, WithOptionValue,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -131,7 +132,7 @@ pub fn describe_statement(
         | Statement::CreateTable(_)
         | Statement::CreateSink(_)
         | Statement::CreateView(_)
-        | Statement::CreateMapType(_)
+        | Statement::CreateType(_)
         | Statement::DropDatabase(_)
         | Statement::DropObjects(_)
         | Statement::SetVariable(_)
@@ -298,7 +299,7 @@ pub fn handle_statement(
         Statement::CreateSource(stmt) => handle_create_source(scx, stmt),
         Statement::CreateTable(stmt) => handle_create_table(scx, stmt),
         Statement::CreateView(stmt) => handle_create_view(scx, stmt, params),
-        Statement::CreateMapType(stmt) => handle_create_map_type(scx, stmt),
+        Statement::CreateType(stmt) => handle_create_type(scx, stmt),
         Statement::DropDatabase(stmt) => handle_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => handle_drop_objects(scx, stmt),
         Statement::AlterObjectRename(stmt) => handle_alter_object_rename(scx, stmt),
@@ -947,44 +948,40 @@ fn handle_create_view(
     })
 }
 
-fn handle_create_map_type(
+fn handle_create_type(
     scx: &StatementContext,
-    stmt: CreateMapTypeStatement,
+    stmt: CreateTypeStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let create_sql = normalize::create_statement(scx, Statement::CreateMapType(stmt.clone()))?;
-    let CreateMapTypeStatement { name, with_options } = stmt;
+    let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
+    let CreateTypeStatement {
+        name,
+        as_type,
+        with_options,
+    } = stmt;
 
     let mut with_options = normalize::option_objects(&with_options);
-    let key_name = match with_options.remove("key_type") {
-        Some(SqlOption::Value {
-            value: Value::String(val),
-            ..
-        }) => ObjectName(vec![Ident::new(val)]),
-        Some(SqlOption::ObjectName { object_name, .. }) => object_name,
-        Some(_) => bail!("key_type must be a string or identifier"),
-        None => bail!("key_type parameter required"),
-    };
-    let key = scx
-        .catalog
-        .resolve_item(&normalize::object_name(key_name)?)?;
-    if key.item.to_uppercase().as_str() != "TEXT" {
-        bail!("key_type must be text")
-    }
-    let key_id = scx.catalog.get_item(&key).id();
 
-    let value_name = match with_options.remove("value_type") {
-        Some(SqlOption::Value {
-            value: Value::String(val),
-            ..
-        }) => ObjectName(vec![Ident::new(val)]),
-        Some(SqlOption::ObjectName { object_name, .. }) => object_name,
-        Some(_) => bail!("value_type must be a string or identifier"),
-        None => bail!("value_type parameter required"),
+    let option_keys = match as_type {
+        CreateTypeAs::List => vec!["element_type"],
+        CreateTypeAs::Map => vec!["key_type", "value_type"],
     };
-    let value = scx
-        .catalog
-        .resolve_item(&normalize::object_name(value_name)?)?;
-    let value_id = scx.catalog.get_item(&value).id();
+
+    let mut ids = vec![];
+    for key in option_keys {
+        let item_name = match with_options.remove(&key.to_string()) {
+            Some(SqlOption::Value {
+                value: Value::String(val),
+                ..
+            }) => ObjectName(vec![Ident::new(val)]),
+            Some(SqlOption::ObjectName { object_name, .. }) => object_name,
+            Some(_) => bail!("{} must be a string or identifier", key),
+            None => bail!("{} parameter required", key),
+        };
+        let item_name = scx
+            .catalog
+            .resolve_item(&normalize::object_name(item_name)?)?;
+        ids.push(scx.catalog.get_item(&item_name).id());
+    }
 
     if !with_options.is_empty() {
         bail!(
@@ -998,12 +995,31 @@ fn handle_create_map_type(
         bail!("type \"{}\" already exists", name.to_string());
     }
 
+    let inner = match as_type {
+        CreateTypeAs::List => TypeInner::List {
+            element_id: ids.remove(0),
+        },
+        CreateTypeAs::Map => {
+            let key_id = ids.remove(0);
+            // TODO(sean): As part of
+            // https://github.com/MaterializeInc/materialize/issues/4953 we
+            // should be able to resolve IDs to `ScalarType`s, so this shouldn't
+            // rely on external knowledge that this OID is text's.
+            if scx.catalog.get_item_by_id(&key_id).oid() != 25 {
+                bail!("key_type must be text")
+            };
+            TypeInner::Map {
+                key_id,
+                value_id: ids.remove(0),
+            }
+        }
+    };
+
+    assert!(ids.is_empty());
+
     Ok(Plan::CreateType {
         name,
-        typ: Type {
-            create_sql,
-            inner: TypeInner::Map { key_id, value_id },
-        },
+        typ: Type { create_sql, inner },
     })
 }
 

@@ -408,13 +408,31 @@ lazy_static! {
         id: GlobalId::System(2027),
         index_id: GlobalId::System(2028),
     };
+    pub static ref MZ_ARRAY_TYPES: BuiltinTable = BuiltinTable {
+        name: "mz_array_types",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("type_id", ScalarType::String.nullable(false))
+            .with_column("element_id", ScalarType::String.nullable(false)),
+        id: GlobalId::System(2029),
+        index_id: GlobalId::System(2030),
+    };
     pub static ref MZ_BASE_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_base_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2029),
-        index_id: GlobalId::System(2030),
+        id: GlobalId::System(2031),
+        index_id: GlobalId::System(2032),
+    };
+    pub static ref MZ_LIST_TYPES: BuiltinTable = BuiltinTable {
+        name: "mz_list_types",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("type_id", ScalarType::String.nullable(false))
+            .with_column("element_id", ScalarType::String.nullable(false)),
+        id: GlobalId::System(2033),
+        index_id: GlobalId::System(2034),
     };
     pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_map_types",
@@ -423,17 +441,8 @@ lazy_static! {
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("key_id", ScalarType::String.nullable(false))
             .with_column("value_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2031),
-        index_id: GlobalId::System(2032),
-    };
-    pub static ref MZ_ARRAY_TYPES: BuiltinTable = BuiltinTable {
-        name: "mz_array_types",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
-            .with_column("type_id", ScalarType::String.nullable(false))
-            .with_column("element_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2033),
-        index_id: GlobalId::System(2034),
+        id: GlobalId::System(2035),
+        index_id: GlobalId::System(2036),
     };
 }
 
@@ -1105,9 +1114,10 @@ lazy_static! {
             Builtin::Table(&MZ_SINKS),
             Builtin::Table(&MZ_VIEWS),
             Builtin::Table(&MZ_TYPES),
-            Builtin::Table(&MZ_BASE_TYPES),
-            Builtin::Table(&MZ_MAP_TYPES),
             Builtin::Table(&MZ_ARRAY_TYPES),
+            Builtin::Table(&MZ_BASE_TYPES),
+            Builtin::Table(&MZ_LIST_TYPES),
+            Builtin::Table(&MZ_MAP_TYPES),
             Builtin::View(&MZ_RELATIONS),
             Builtin::View(&MZ_OBJECTS),
             Builtin::View(&MZ_CATALOG_NAMES),

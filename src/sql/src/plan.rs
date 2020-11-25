@@ -211,6 +211,9 @@ pub struct Type {
 
 #[derive(Clone, Debug)]
 pub enum TypeInner {
+    List {
+        element_id: GlobalId,
+    },
     Map {
         key_id: GlobalId,
         value_id: GlobalId,

@@ -155,6 +155,9 @@ pub trait CatalogItem {
     /// Returns a stable ID for the catalog item.
     fn id(&self) -> GlobalId;
 
+    /// Returns the CatalogItem's OID.
+    fn oid(&self) -> u32;
+
     /// Returns a description of the result set produced by the catalog item.
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
