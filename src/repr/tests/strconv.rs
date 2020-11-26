@@ -15,6 +15,12 @@ use repr::strconv;
 
 #[test]
 fn test_parse_date() {
+    run_test_parse_date("690203", NaiveDate::from_ymd(2069, 2, 3));
+    run_test_parse_date("700203", NaiveDate::from_ymd(1970, 2, 3));
+    run_test_parse_date("010203", NaiveDate::from_ymd(2001, 2, 3));
+    run_test_parse_date("0010203", NaiveDate::from_ymd(1, 2, 3));
+    run_test_parse_date("00010203", NaiveDate::from_ymd(1, 2, 3));
+    run_test_parse_date("20010203", NaiveDate::from_ymd(2001, 2, 3));
     run_test_parse_date("2001-02-03", NaiveDate::from_ymd(2001, 2, 3));
     run_test_parse_date("2001-02-03 04:05:06.789", NaiveDate::from_ymd(2001, 2, 3));
     fn run_test_parse_date(s: &str, n: NaiveDate) {
