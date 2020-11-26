@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+
+import argparse
+import asyncio
+
+import psycopg3
+
+async def tail_count_order(args):
+    """Record the current table status of all views installed in Materialize.
+
+    Will continue until the query runs out or interrupted.
+    """
+
+    async with await psycopg3.AsyncConnection.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
+        async with await conn.cursor() as cursor:
+            async with cursor.copy(f"COPY (TAIL {args.view} WITH (PROGRESS)) TO STDOUT") as tail:
+                async for row in tail:
+                    row = row.decode('utf-8')
+                    (timestamp, progressed, diff, *columns) = row.strip().split('\t')
+                    print(f"{timestamp} {progressed} {diff} {columns}")
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", help="Materialize hostname", default="localhost", type=str)
+    parser.add_argument("-p", "--port", help="Materialize port number", default=6875, type=int)
+
+    parser.add_argument("view", help="Name of the view to TAIL", type=str)
+
+    args = parser.parse_args()
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(tail_count_order(args))
+    loop.close()
