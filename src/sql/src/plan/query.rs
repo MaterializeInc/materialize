@@ -148,8 +148,11 @@ pub fn plan_insert_query(
     }
 
     // Validate target column order.
-    let ordering = if columns.is_empty() {
-        (0..desc.arity()).collect()
+    let mut project_key: Vec<_> = (0..desc.arity()).collect();
+    let mut ordering = Vec::with_capacity(desc.arity());
+
+    if columns.is_empty() {
+        ordering.extend(0..desc.arity());
     } else {
         let column_to_index: HashMap<&ColumnName, usize> = desc
             .iter_names()
@@ -158,11 +161,11 @@ pub fn plan_insert_query(
             .map(|(idx, name)| (name, idx))
             .collect();
 
-        let mut ordering = Vec::with_capacity(columns.len());
-        for c in columns {
+        for (src_idx, c) in columns.into_iter().enumerate() {
             let c = normalize::column_name(c);
             if let Some(idx) = column_to_index.get(&c) {
                 ordering.push(*idx);
+                project_key[*idx] = src_idx;
             } else {
                 bail!(
                     "INSERT statement specifies column {}, but it is not present in table",
@@ -170,8 +173,7 @@ pub fn plan_insert_query(
                 );
             }
         }
-        ordering
-    };
+    }
     if ordering.iter().has_duplicates() {
         bail!("INSERT statement specifies duplicate column");
     }
@@ -228,7 +230,7 @@ pub fn plan_insert_query(
     let expr = cast_relation(
         &qcx,
         CastContext::Assignment,
-        expr.project(ordering),
+        expr.project(project_key),
         desc.iter_types().map(|ty| &ty.scalar_type),
     )
     .map_err(|e| {
