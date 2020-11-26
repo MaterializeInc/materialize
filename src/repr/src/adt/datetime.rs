@@ -807,11 +807,23 @@ fn fill_pdt_date(
 
     // Check for one number that represents YYYYMMDDD.
     match actual.front() {
-        Some(Num(mut val)) if val > 9_999_999 && val < 100_000_000 /* i.e. has 8 digits */ => {
+        Some(Num(mut val, digits)) if 6 <= *digits && *digits <= 8 => {
             pdt.day = Some(DateTimeFieldValue::new(val % 100, 0));
             val /= 100;
             pdt.month = Some(DateTimeFieldValue::new(val % 100, 0));
             val /= 100;
+            // Handle 2 digit year case
+            if *digits == 6 {
+                if val < 70 {
+                    val += 2000;
+                } else {
+                    val += 1900;
+                }
+            }
+            // 1BC is not represented as year 0 in postgres
+            if val == 0 {
+                return Err("YEAR cannot be zero".into());
+            }
             pdt.year = Some(DateTimeFieldValue::new(val, 0));
             actual.pop_front();
             // Trim remaining optional tokens, but never an immediately
@@ -827,25 +839,25 @@ fn fill_pdt_date(
 
     let valid_formats = vec![
         vec![
-            Num(0), // year
+            Num(0, 1), // year
             Dash,
-            Num(0), // month
+            Num(0, 1), // month
             Dash,
-            Num(0), // day
+            Num(0, 1), // day
         ],
         vec![
-            Num(0), // year
+            Num(0, 1), // year
             Delim,
-            Num(0), // month
+            Num(0, 1), // month
             Dash,
-            Num(0), // day
+            Num(0, 1), // day
         ],
         vec![
-            Num(0), // year
+            Num(0, 1), // year
             Delim,
-            Num(0), // month
+            Num(0, 1), // month
             Delim,
-            Num(0), // day
+            Num(0, 1), // day
         ],
     ];
 
@@ -985,7 +997,12 @@ fn fill_pdt_interval_pg(
     // We remove all spaces during tokenization, so TimeUnit only shows up if
     // there is no space between the number and the TimeUnit, e.g. `1y 2d 3h`, which
     // PostgreSQL allows.
-    let mut expected = VecDeque::from(vec![Num(0), Dot, Nanos(0), TimeUnit(DateTimeField::Year)]);
+    let mut expected = VecDeque::from(vec![
+        Num(0, 1),
+        Dot,
+        Nanos(0),
+        TimeUnit(DateTimeField::Year),
+    ]);
 
     let sign = trim_and_return_sign(&mut actual);
 
@@ -1056,7 +1073,7 @@ fn fill_pdt_from_tokens(
                 }
             }
             (Dot, Dot) => {}
-            (Num(val), Num(_)) => match unit_buf {
+            (Num(val, _), Num(_, _)) => match unit_buf {
                 Some(_) => {
                     return Err(
                         "Invalid syntax; parts must be separated by '-', ':', or ' '".to_string(),
@@ -1080,7 +1097,7 @@ fn fill_pdt_from_tokens(
                     });
                 }
             },
-            (Num(n), Nanos(_)) => {
+            (Num(n, _), Nanos(_)) => {
                 // Create disposable copy of n.
                 let mut nc = *n;
 
@@ -1117,7 +1134,7 @@ fn fill_pdt_from_tokens(
                 }
             }
             // Allow skipping expected spaces (Delim), numbers, dots, and nanoseconds.
-            (_, Num(_)) | (_, Dot) | (_, Nanos(_)) | (_, Delim) => {
+            (_, Num(_, _)) | (_, Dot) | (_, Nanos(_)) | (_, Delim) => {
                 expected.pop_front();
                 continue;
             }
@@ -1177,7 +1194,7 @@ fn determine_format_w_datetimefield(
 
     trim_and_return_sign(&mut toks);
 
-    if let Some(Num(_)) = toks.front() {
+    if let Some(Num(_, _)) = toks.front() {
         toks.pop_front();
     }
 
@@ -1186,7 +1203,7 @@ fn determine_format_w_datetimefield(
         None | Some(Delim) => Ok(None),
         Some(Dot) => {
             match toks.front() {
-                Some(Num(_)) | Some(Nanos(_)) => {
+                Some(Num(_, _)) | Some(Nanos(_)) => {
                     toks.pop_front();
                 }
                 _ => {}
@@ -1202,7 +1219,7 @@ fn determine_format_w_datetimefield(
         Some(Dash) => Ok(Some(SqlStandard(Year))),
         // Implies {}{}{?:...}
         Some(Colon) => {
-            if let Some(Num(_)) = toks.front() {
+            if let Some(Num(_, _)) = toks.front() {
                 toks.pop_front();
             }
             match toks.pop_front() {
@@ -1230,11 +1247,11 @@ fn expected_dur_like_tokens(from: DateTimeField) -> Result<VecDeque<TimeStrToken
     use TimeStrToken::*;
 
     let all_toks = [
-        Num(0), // hour
+        Num(0, 1), // hour
         Colon,
-        Num(0), // minute
+        Num(0, 1), // minute
         Colon,
-        Num(0), // second
+        Num(0, 1), // second
         Dot,
         Nanos(0), // Nanos
     ];
@@ -1262,11 +1279,11 @@ fn expected_sql_standard_interval_tokens(from: DateTimeField) -> VecDeque<TimeSt
     use TimeStrToken::*;
 
     let all_toks = [
-        Num(0), // year
+        Num(0, 1), // year
         Dash,
-        Num(0), // month
+        Num(0, 1), // month
         Delim,
-        Num(0), // day
+        Num(0, 1), // day
         Delim,
     ];
 
@@ -1316,7 +1333,8 @@ pub(crate) enum TimeStrToken {
     Dot,
     Plus,
     Zulu,
-    Num(i64),
+    // Holds the parsed number and the number of digits in the original string
+    Num(i64, usize),
     Nanos(i64),
     // String representation of a named timezone e.g. 'EST'
     TzName(String),
@@ -1338,7 +1356,7 @@ impl std::fmt::Display for TimeStrToken {
             Dot => write!(f, "."),
             Plus => write!(f, "+"),
             Zulu => write!(f, "Z"),
-            Num(i) => write!(f, "{}", i),
+            Num(i, digits) => write!(f, "{:01$}", i, digits - 1),
             Nanos(i) => write!(f, "{}", i),
             TzName(n) => write!(f, "{}", n),
             TimeUnit(d) => write!(f, "{:?}", d),
@@ -1364,9 +1382,12 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
     let mut num_buf = String::with_capacity(4);
     let mut char_buf = String::with_capacity(7);
     fn parse_num(n: &str, idx: usize) -> Result<TimeStrToken, String> {
-        Ok(TimeStrToken::Num(n.parse().map_err(|e| {
-            format!("Unable to parse value as a number at index {}: {}", idx, e)
-        })?))
+        Ok(TimeStrToken::Num(
+            n.parse().map_err(|e| {
+                format!("Unable to parse value as a number at index {}: {}", idx, e)
+            })?,
+            n.len(),
+        ))
     };
     fn maybe_tokenize_num_buf(
         n: &mut String,
@@ -1491,20 +1512,26 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
             (n, None)
         };
 
-        toks.push(TimeStrToken::Num(first.parse().map_err(|e| {
-            format!(
-                "Unable to tokenize value {} as a number at index {}: {}",
-                first, idx, e
-            )
-        })?));
-
-        if let Some(second) = second {
-            toks.push(TimeStrToken::Num(second.parse().map_err(|e| {
+        toks.push(TimeStrToken::Num(
+            first.parse().map_err(|e| {
                 format!(
                     "Unable to tokenize value {} as a number at index {}: {}",
-                    second, idx, e
+                    first, idx, e
                 )
-            })?));
+            })?,
+            first.len(),
+        ));
+
+        if let Some(second) = second {
+            toks.push(TimeStrToken::Num(
+                second.parse().map_err(|e| {
+                    format!(
+                        "Unable to tokenize value {} as a number at index {}: {}",
+                        second, idx, e
+                    )
+                })?,
+                second.len(),
+            ));
         }
 
         Ok(())
@@ -1558,12 +1585,12 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
 fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<i64, String> {
     use TimeStrToken::*;
     let all_formats = [
-        vec![Plus, Num(0), Colon, Num(0)],
-        vec![Dash, Num(0), Colon, Num(0)],
-        vec![Plus, Num(0), Num(0)],
-        vec![Dash, Num(0), Num(0)],
-        vec![Plus, Num(0)],
-        vec![Dash, Num(0)],
+        vec![Plus, Num(0, 1), Colon, Num(0, 1)],
+        vec![Dash, Num(0, 1), Colon, Num(0, 1)],
+        vec![Plus, Num(0, 1), Num(0, 1)],
+        vec![Dash, Num(0, 1), Num(0, 1)],
+        vec![Plus, Num(0, 1)],
+        vec![Dash, Num(0, 1)],
         vec![TzName("".to_string())],
         vec![Zulu],
     ];
@@ -1585,7 +1612,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                 (Dash, Dash) => {
                     is_positive = false;
                 }
-                (Num(val), Num(_)) => {
+                (Num(val, _), Num(_, _)) => {
                     let val = *val;
                     match (hour_offset, minute_offset) {
                         (None, None) => {
@@ -1720,15 +1747,15 @@ mod test {
         use TimeStrToken::*;
         assert_eq!(
             expected_sql_standard_interval_tokens(Hour),
-            vec![Num(0), Colon, Num(0), Colon, Num(0), Dot, Nanos(0)]
+            vec![Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1), Dot, Nanos(0)]
         );
         assert_eq!(
             expected_sql_standard_interval_tokens(Minute),
-            vec![Num(0), Colon, Num(0), Dot, Nanos(0)]
+            vec![Num(0, 1), Colon, Num(0, 1), Dot, Nanos(0)]
         );
         assert_eq!(
             expected_sql_standard_interval_tokens(Second),
-            vec![Num(0), Dot, Nanos(0)]
+            vec![Num(0, 1), Dot, Nanos(0)]
         );
     }
 
@@ -1738,16 +1765,16 @@ mod test {
         use TimeStrToken::*;
         assert_eq!(
             expected_sql_standard_interval_tokens(Year),
-            vec![Num(0), Dash, Num(0), Delim]
+            vec![Num(0, 1), Dash, Num(0, 1), Delim]
         );
 
         assert_eq!(
             expected_sql_standard_interval_tokens(Day),
-            vec![Num(0), Delim]
+            vec![Num(0, 1), Delim]
         );
         assert_eq!(
             expected_sql_standard_interval_tokens(Hour),
-            vec![Num(0), Colon, Num(0), Colon, Num(0), Dot, Nanos(0)]
+            vec![Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1), Dot, Nanos(0)]
         );
     }
     #[test]
