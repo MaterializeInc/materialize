@@ -1196,77 +1196,26 @@ where
             )),
         )
         .await;
-        match typ.inner {
-            TypeInner::Array { element_id } => {
-                self.report_array_type_update(id, element_id, diff).await
-            }
-            TypeInner::Base => self.report_base_type_update(id, diff).await,
-            TypeInner::List { element_id } => {
-                self.report_list_type_update(id, element_id, diff).await
-            }
-            TypeInner::Map { key_id, value_id } => {
-                self.report_map_type_update(id, key_id, value_id, diff)
-                    .await
-            }
-        }
-    }
 
-    async fn report_base_type_update(&mut self, id: GlobalId, diff: isize) {
+        let (index_id, update) = match typ.inner {
+            TypeInner::Array { element_id } => (
+                MZ_ARRAY_TYPES.id,
+                vec![id.to_string(), element_id.to_string()],
+            ),
+            TypeInner::Base => (MZ_BASE_TYPES.id, vec![id.to_string()]),
+            TypeInner::List { element_id } => (
+                MZ_LIST_TYPES.id,
+                vec![id.to_string(), element_id.to_string()],
+            ),
+            TypeInner::Map { key_id, value_id } => (
+                MZ_MAP_TYPES.id,
+                vec![id.to_string(), key_id.to_string(), value_id.to_string()],
+            ),
+        };
         self.update_catalog_view(
-            MZ_BASE_TYPES.id,
-            iter::once((Row::pack(&[Datum::String(&id.to_string())]), diff)),
-        )
-        .await
-    }
-
-    async fn report_array_type_update(
-        &mut self,
-        type_id: GlobalId,
-        element_id: GlobalId,
-        diff: isize,
-    ) {
-        self.update_catalog_view(
-            MZ_ARRAY_TYPES.id,
+            index_id,
             iter::once((
-                Row::pack(&[
-                    Datum::String(&type_id.to_string()),
-                    Datum::String(&element_id.to_string()),
-                ]),
-                diff,
-            )),
-        )
-        .await
-    }
-
-    async fn report_list_type_update(&mut self, id: GlobalId, element_id: GlobalId, diff: isize) {
-        self.update_catalog_view(
-            MZ_LIST_TYPES.id,
-            iter::once((
-                Row::pack(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(&element_id.to_string()),
-                ]),
-                diff,
-            )),
-        )
-        .await
-    }
-
-    async fn report_map_type_update(
-        &mut self,
-        id: GlobalId,
-        key_id: GlobalId,
-        value_id: GlobalId,
-        diff: isize,
-    ) {
-        self.update_catalog_view(
-            MZ_MAP_TYPES.id,
-            iter::once((
-                Row::pack(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(&key_id.to_string()),
-                    Datum::String(&value_id.to_string()),
-                ]),
+                Row::pack(update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()),
                 diff,
             )),
         )
