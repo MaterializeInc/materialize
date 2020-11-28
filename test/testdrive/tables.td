@@ -132,10 +132,10 @@ INSERT ... DEFAULT VALUES not yet supported
 INSERT statements cannot reference other relations
 
 ! INSERT INTO t VALUES (1);
-INSERT statement specifies 1 columns, but table has 2 columns
+null value in column "b" violates not-null constraint
 
 ! INSERT INTO t VALUES (1, NULL);
-NULL value in column b violates not-null constraint
+null value in column "b" violates not-null constraint
 
 ! INSERT INTO t VALUES ('d', 4);
 invalid input syntax for int4: invalid digit found in string: "d"
@@ -179,7 +179,7 @@ a       b
 > CREATE TABLE s (a int NOT NULL);
 
 ! INSERT INTO s VALUES (1 + NULL);
-NULL value in column a violates not-null constraint
+null value in column "a" violates not-null constraint
 
 > CREATE TABLE v (a timestamptz, b decimal(38, 0));
 
@@ -263,13 +263,22 @@ cannot insert into system table 'mz_catalog.mz_kafka_sinks'
 > INSERT INTO t (b, c, a) VALUES ('a', 2, 1), ('b', NULL, 3);
 
 > select * from t;
-a  b    c
----------------
-1  "a"  2
-3  "b"  <null>
+a      b    c
+-------------------
+1      "a"  2
+3      "b"  <null>
+
+> INSERT INTO t (b) VALUES ('c');
+
+> select * from t;
+a      b    c
+-------------------
+1      "a"  2
+3      "b"  <null>
+<null> "c"  <null>
 
 ! INSERT INTO t (notpresent, a, c) VALUES ('str', 1, 2);
-INSERT statement specifies column notpresent, but it is not present in table
+column "notpresent" of relation "materialize.public.t" does not exist
 
 ! INSERT INTO t (a, b, c) VALUES ('str', 1, 2);
 invalid input syntax for int4: invalid digit found in string: "str"
@@ -278,19 +287,19 @@ invalid input syntax for int4: invalid digit found in string: "str"
 invalid input syntax for int4: invalid digit found in string: "str"
 
 ! INSERT INTO t (d, c, b, a) VALUES (1, 1, 1, 'str');
-INSERT statement specifies column d, but it is not present in table
+column "d" of relation "materialize.public.t" does not exist
 
 ! INSERT INTO t (a) VALUES (1);
-INSERT statement with incomplete column set not yet supported
+null value in column "b" violates not-null constraint
 
 ! INSERT INTO t (a) VALUES (1, 'str');
-INSERT statement with incomplete column set not yet supported
+INSERT has more expressions than target columns
 
 ! INSERT INTO t (a, b, c) VALUES (1);
-INSERT statement specifies 1 columns, but table has 3 columns
+INSERT has more target columns than expressions
 
 ! INSERT INTO t (a, a) VALUES (1, 'str')
-INSERT statement specifies duplicate column
+column "a" specified more than once
 
 # Test pg_table_is_visible.
 > CREATE SCHEMA non_default
@@ -308,7 +317,7 @@ v       true
 # pretty useless.
 > CREATE TABLE nocols ();
 ! INSERT INTO nocols VALUES (1)
-INSERT statement specifies 1 columns, but table has 0 columns
+INSERT has more expressions than target columns
 > SELECT count(*) FROM nocols
 0
 > INSERT INTO nocols SELECT UNION ALL SELECT
