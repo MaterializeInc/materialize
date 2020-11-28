@@ -297,7 +297,7 @@ SELECT 1.1::numeric::boolean
 query error CAST does not support casting from f64 to bool
 SELECT 1.2::double::boolean
 
-query error CAST does not support casting from f64 to bool
+query error CAST does not support casting from f32 to bool
 SELECT 1.3::real::boolean
 
 query T
@@ -348,7 +348,7 @@ SELECT 1.1::numeric::date
 query error CAST does not support casting from f64 to date
 SELECT 1.2::double::date
 
-query error CAST does not support casting from f64 to date
+query error CAST does not support casting from f32 to date
 SELECT 1.3::real::date
 
 query error CAST does not support casting from i32 to date
@@ -494,10 +494,10 @@ SELECT 1::bigint::real;
 ----
 1.000
 
-query error CAST does not support casting from bool to f64
+query error CAST does not support casting from bool to f32
 SELECT TRUE::boolean::real
 
-query error CAST does not support casting from date to f64
+query error CAST does not support casting from date to f32
 SELECT '2001 02-03'::date::real
 
 query T
@@ -520,7 +520,7 @@ SELECT 2::int::real;
 ----
 2.000
 
-query error CAST does not support casting from interval to f64
+query error CAST does not support casting from interval to f32
 SELECT '1'::interval::real
 
 #pginvalid
@@ -534,16 +534,16 @@ SELECT '2'::jsonb::real;
 ----
 2.000
 
-query error invalid input syntax for float8: invalid float literal: "dog"
+query error invalid input syntax for float4: invalid float literal: "dog"
 SELECT 'dog'::text::real
 
-query error CAST does not support casting from time to f64
+query error CAST does not support casting from time to f32
 SELECT '01:02:03'::time::real
 
-query error CAST does not support casting from timestamp to f64
+query error CAST does not support casting from timestamp to f32
 SELECT '2002 03-04'::timestamp::real
 
-query error CAST does not support casting from timestamptz to f64
+query error CAST does not support casting from timestamptz to f32
 SELECT '2003 04-05'::timestamptz::real
 
 query T
@@ -615,7 +615,7 @@ SELECT 1.1::numeric::interval
 query error CAST does not support casting from f64 to interval
 SELECT 1.2::double::interval
 
-query error CAST does not support casting from f64 to interval
+query error CAST does not support casting from f32 to interval
 SELECT 1.3::real::interval
 
 query error CAST does not support casting from i32 to interval
@@ -775,7 +775,7 @@ SELECT 1.1::numeric::time
 query error CAST does not support casting from f64 to time
 SELECT 1.2::double::time
 
-query error CAST does not support casting from f64 to time
+query error CAST does not support casting from f32 to time
 SELECT 1.3::real::time
 
 query error CAST does not support casting from i32 to time
@@ -820,7 +820,7 @@ SELECT 1.1::numeric::timestamp
 query error CAST does not support casting from f64 to timestamp
 SELECT 1.2::double::timestamp
 
-query error CAST does not support casting from f64 to timestamp
+query error CAST does not support casting from f32 to timestamp
 SELECT 1.3::real::timestamp
 
 query error CAST does not support casting from i32 to timestamp
@@ -865,7 +865,7 @@ SELECT 1.1::numeric::timestamptz
 query error CAST does not support casting from f64 to timestamptz
 SELECT 1.2::double::timestamptz
 
-query error CAST does not support casting from f64 to timestamptz
+query error CAST does not support casting from f32 to timestamptz
 SELECT 1.3::real::timestamptz
 
 query error CAST does not support casting from i32 to timestamptz

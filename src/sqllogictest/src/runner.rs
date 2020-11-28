@@ -305,12 +305,17 @@ fn format_row(
                 let d = d.unwrap_decimal().with_scale(*s);
                 format!("{:.0}", d)
             }
+            (Type::Integer, ScalarType::Float32) => format!("{:.0}", d.unwrap_float32().trunc()),
             (Type::Integer, ScalarType::Float64) => format!("{:.0}", d.unwrap_float64().trunc()),
             (Type::Integer, ScalarType::String) => "0".to_owned(),
             (Type::Integer, ScalarType::Bool) => i8::from(d.unwrap_bool()).to_string(),
 
             (Type::Real, ScalarType::Int32) => format!("{:.3}", d.unwrap_int32()),
             (Type::Real, ScalarType::Int64) => format!("{:.3}", d.unwrap_int64()),
+            (Type::Real, ScalarType::Float32) => match mode {
+                Mode::Standard => format!("{:.3}", d.unwrap_float32()),
+                Mode::Cockroach => format!("{}", d.unwrap_float32()),
+            },
             (Type::Real, ScalarType::Float64) => match mode {
                 Mode::Standard => format!("{:.3}", d.unwrap_float64()),
                 Mode::Cockroach => format!("{}", d.unwrap_float64()),
@@ -325,6 +330,7 @@ fn format_row(
 
             (Type::Text, ScalarType::Int32) => format!("{}", d.unwrap_int32()),
             (Type::Text, ScalarType::Int64) => format!("{}", d.unwrap_int64()),
+            (Type::Text, ScalarType::Float32) => format!("{:.3}", d.unwrap_float32()),
             (Type::Text, ScalarType::Float64) => format!("{:.3}", d.unwrap_float64()),
             // Bytes are printed as text iff they are valid UTF-8. This
             // seems guaranteed to confuse everyone, but it is required for

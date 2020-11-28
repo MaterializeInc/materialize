@@ -2545,7 +2545,17 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::
         DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
         DataType::SmallInt | DataType::Int => ScalarType::Int32,
         DataType::BigInt => ScalarType::Int64,
-        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
+        DataType::Float(Some(p)) if *p < 25 => ScalarType::Float32,
+        DataType::Float(p) => {
+            if let Some(p) = p {
+                if *p > 53 {
+                    bail!("precision for type float must be less than 54 bits")
+                }
+            }
+            ScalarType::Float64
+        }
+        DataType::Real => ScalarType::Float32,
+        DataType::Double => ScalarType::Float64,
         DataType::Decimal(precision, scale) => {
             let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
             let scale = scale.unwrap_or(0);
