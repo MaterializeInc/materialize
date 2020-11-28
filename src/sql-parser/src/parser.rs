@@ -2189,12 +2189,12 @@ impl<'a> Parser<'a> {
         let mut data_type = match self.next_token() {
             Some(Token::Keyword(kw)) => match kw {
                 BOOL | BOOLEAN => DataType::Boolean,
-                FLOAT | FLOAT4 => DataType::Float(self.parse_optional_precision()?),
-                REAL => DataType::Real,
                 DOUBLE => {
                     let _ = self.parse_keyword(PRECISION);
                     DataType::Double
                 }
+                FLOAT => DataType::Float(self.parse_optional_precision()?),
+                FLOAT4 | REAL => DataType::Real,
                 FLOAT8 => DataType::Double,
                 SMALLINT => DataType::SmallInt,
                 INT | INTEGER | INT4 => DataType::Int,

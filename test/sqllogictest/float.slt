@@ -38,3 +38,16 @@ query TTT
 SELECT 'NaN'::double precision::text, 'nan'::double precision::text, 'nAN'::double precision::text
 ----
 NaN  NaN  NaN
+
+query R
+SELECT 1.2::float8::float4
+----
+1.2
+
+query R
+SELECT '2e40'::float8
+----
+20000000000000000000000000000000000000000
+
+query error float out of range
+SELECT '2e40'::float8::float4
