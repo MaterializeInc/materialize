@@ -27,6 +27,8 @@ We also highly recommend checking out [What is Materialize?](/overview/what-is-m
 ## Install, run, connect
 
 1. Install the `materialized` binary using [these instructions](/install).
+    
+    **Note**: Running Materialize via Docker will not work with this guide. Please install and run Materialize using a non-Docker method for the purposes of this guide.
 
 1. Run the `materialized` binary. For example, if you installed it in your `$PATH`:
 
