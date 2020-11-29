@@ -6,6 +6,12 @@
 
 Materialize is a streaming database for real-time applications.
 
+## Get started
+
+Check out [our getting started guide](https://materialize.com/docs/get-started/).
+
+## About
+
 Materialize lets you ask questions of your live data, which it answers and then maintains for you as your data continue to change. The moment you need a refreshed answer, you can get it in milliseconds. Materialize is designed to help you interactively explore your streaming data, perform data warehousing analytics against live relational data, or just increase the freshness *and* reduce the load of your dashboard and monitoring tasks.
 
 Materialize focuses on providing correct and consistent answers with minimal latency. It does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL92 queries as *dataflows*, which can react efficiently to changes in your data as they happen. Materialize is powered by [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow), which connects the times at which your inputs change with the times of answers reported back to you.
@@ -86,10 +92,6 @@ Stream inserts, updates, and deletes on the underlying tables (`lineitem` and `s
 **Push based**: Or configure Materialize to stream results to a Kafka topic as soon as the views change.
 
 If you want to use an ORM, [chat with us](https://github.com/MaterializeInc/materialize/issues/new/choose). They're surprisingly tricky.
-
-## Get started
-
-Check out [our getting started guide](https://materialize.com/docs/get-started/).
 
 ## Documentation
 
