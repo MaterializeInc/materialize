@@ -1,6 +1,6 @@
 [![Build status](https://badge.buildkite.com/97d6604e015bf633d1c2a12d166bb46f3b43a927d3952c999a.svg?branch=main)](https://buildkite.com/materialize/tests)
 [![Doc reference](https://img.shields.io/badge/doc-reference-orange)](https://materialize.com/docs)
-[![Chat on Slack](https://img.shields.io/badge/chat-on%20slack-purple)](https://join.slack.com/t/materializecommunity/shared_invite/zt-igbcmoxh-5V7XXMBIeDe7PFHO6sG6Dw)
+[![Chat on Slack](https://img.shields.io/badge/chat-on%20slack-purple)](https://join.slack.com/t/materializecommunity/shared_invite/zt-jjwe1t45-klG9k7V7xibdtqA6bcFpyQ)
 
 [<img src="https://materialize.com/wp-content/uploads/2020/01/materialize_logo_primary.png" width=60%>](https://materialize.com)
 
