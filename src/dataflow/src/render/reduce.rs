@@ -182,28 +182,29 @@ where
             } else {
                 // Collect aggregates with their indexes, so they can be sliced and diced.
                 let mut accumulable = Vec::new();
-                let mut min_or_max = Vec::new();
+                let mut min_max = Vec::new();
                 let mut remaining = Vec::new();
                 for index in 0..aggregates.len() {
                     if accumulable_hierarchical(&aggregates[index].func).0 {
                         accumulable.push((index, aggregates[index].clone()));
                     } else if is_min_or_max(&aggregates[index].func) && !monotonic {
-                        min_or_max.push((index, aggregates[index].clone()));
+                        min_max.push((index, aggregates[index].clone()));
                     } else {
                         remaining.push((index, aggregates[index].clone()));
                     }
                 }
 
                 let arrangement = if !accumulable.is_empty()
-                    && min_or_max.is_empty()
+                    && min_max.is_empty()
                     && remaining.is_empty()
                 {
                     // If we have only accumulable aggregations, they can be arranged and returned.
                     build_accumulables(ok_input, accumulable, true)
-                } else if accumulable.is_empty() && !min_or_max.is_empty() && remaining.is_empty() {
-                    build_mins_and_maxes(ok_input, min_or_max, true, *expected_group_size)
-                } else if remaining.len() == 1 && accumulable.is_empty() && min_or_max.is_empty() {
-                    // If we have a single non-accumulable aggregation, it can be arranged and returned.
+                } else if accumulable.is_empty() && !min_max.is_empty() && remaining.is_empty() {
+                    // If we only have min/max aggregations, they can be arranged and returned.
+                    build_min_max(ok_input, min_max, true, *expected_group_size)
+                } else if remaining.len() == 1 && accumulable.is_empty() && min_max.is_empty() {
+                    // If we have a single non-fusable aggregation, it can be arranged and returned.
                     build_aggregate_stage(
                         ok_input,
                         0,
@@ -227,17 +228,13 @@ where
                             );
                         to_collect.push(accumulables_collection);
                     }
-                    if !min_or_max.is_empty() {
-                        let min_or_max_collection = build_mins_and_maxes(
-                            ok_input.clone(),
-                            min_or_max,
-                            false,
-                            *expected_group_size,
-                        )
-                        .as_collection(|key, val| {
-                            (key.clone(), (ReductionType::FusedMinMax, None, val.clone()))
-                        });
-                        to_collect.push(min_or_max_collection);
+                    if !min_max.is_empty() {
+                        let min_max_collection =
+                            build_min_max(ok_input.clone(), min_max, false, *expected_group_size)
+                                .as_collection(|key, val| {
+                                    (key.clone(), (ReductionType::FusedMinMax, None, val.clone()))
+                                });
+                        to_collect.push(min_max_collection);
                     }
                     for (index, aggr) in remaining {
                         let collection = build_aggregate_stage(
@@ -282,7 +279,7 @@ where
                                     new_row.iter()
                                 };
 
-                                let mut min_or_max = if (input[0].0).0 == ReductionType::FusedMinMax {
+                                let mut min_max = if (input[0].0).0 == ReductionType::FusedMinMax {
                                     // This input corresponds to our densely packed min/max aggregates.
                                     let iter = (input[0].0).2.iter();
                                     // Make sure we never try to read from this input again.
@@ -296,7 +293,7 @@ where
                                 for flags in is_accumulable.iter().zip(is_min_max.iter()) {
                                     match flags {
                                         (true, false) => row_packer.push(accumulable.next().unwrap()),
-                                        (false, true) => row_packer.push(min_or_max.next().unwrap()),
+                                        (false, true) => row_packer.push(min_max.next().unwrap()),
                                         (false, false) => {
                                             // Since this is not an accumulable aggregate, we need to grab
                                             // the next result from other reduction dataflows and put them
@@ -453,7 +450,10 @@ where
     })
 }
 
-fn build_mins_and_maxes<G>(
+// Render a single reduction tree that computes a set of mins and max aggregations
+// hierarchically. Note that because we know all the aggregations are mins and maxes
+// we can also ignore the distinct bit here.
+fn build_min_max<G>(
     collection: Collection<G, (Row, Row)>,
     aggrs: Vec<(usize, AggregateExpr)>,
     prepend_key: bool,
@@ -501,7 +501,7 @@ where
     // Repeatedly apply hierarchical reduction with a progressively coarser key.
     let mut stage = collection.map(move |(key, values)| ((key, values.hashed()), values));
     for log_modulus in shifts.iter() {
-        stage = build_mins_maxes_stage(stage, aggr_funcs.clone(), 1u64 << log_modulus);
+        stage = build_min_max_stage(stage, aggr_funcs.clone(), 1u64 << log_modulus);
     }
 
     // Discard the hash from the key and return to the format of the input data.
@@ -537,7 +537,8 @@ where
     })
 }
 
-fn build_mins_maxes_stage<G>(
+// Renders one stage of a fused reduction tree for a set of min / max aggregations.
+fn build_min_max_stage<G>(
     collection: Collection<G, ((Row, u64), Vec<Row>)>,
     aggrs: Vec<AggregateFunc>,
     modulus: u64,
@@ -561,10 +562,6 @@ where
                         }
                     }
                 } else {
-                    // We ignore the count here under the belief that it cannot affect
-                    // hierarchical aggregations; should that belief be incorrect, we
-                    // should certainly revise this implementation.
-
                     let mut output = Vec::with_capacity(aggrs.len());
                     for (aggr_index, func) in aggrs.iter().enumerate() {
                         let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
@@ -573,10 +570,6 @@ where
                     // We only want to arrange the parts of the input that are not part of the output.
                     // More specifically, we want to arrange it so that `input.concat(&output.negate())`
                     // gives us the intended value of this aggregate function.
-                    // Thankfully, we don't have to do a lot to manage that because we assume that
-                    // the output of this aggregation function will be one of the inputs, and we can
-                    // let Differential correctly handle compacting away insertions and deletions to the
-                    // same key.
 
                     target.push((output, -1));
                     target.extend(source.iter().map(|(values, cnt)| ((*values).clone(), *cnt)));
