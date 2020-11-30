@@ -210,7 +210,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_sts",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -261,7 +261,7 @@ dependencies = [
  "rand_distr",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
  "uuid",
 ]
@@ -366,7 +366,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
  "url",
 ]
 
@@ -395,7 +395,7 @@ dependencies = [
  "rand",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -461,7 +461,7 @@ dependencies = [
  "predicates",
  "rand",
  "serde",
- "tokio",
+ "tokio 0.2.22",
  "tokio-serde",
  "tokio-util",
  "uuid",
@@ -527,7 +527,7 @@ dependencies = [
  "sql",
  "symbiosis",
  "timely",
- "tokio",
+ "tokio 0.2.22",
  "transform",
  "unicase",
  "url",
@@ -756,7 +756,7 @@ dependencies = [
  "serde",
  "serde_json",
  "timely",
- "tokio",
+ "tokio 0.2.22",
  "tokio-util",
  "url",
  "uuid",
@@ -1305,7 +1305,7 @@ dependencies = [
  "rand",
  "sqllogictest",
  "testdrive",
- "tokio",
+ "tokio 0.2.22",
  "walkdir",
 ]
 
@@ -1366,7 +1366,7 @@ dependencies = [
  "indexmap",
  "log",
  "slab",
- "tokio",
+ "tokio 0.2.22",
  "tokio-util",
 ]
 
@@ -1491,7 +1491,7 @@ dependencies = [
  "itoa",
  "pin-project 1.0.1",
  "socket2",
- "tokio",
+ "tokio 0.2.22",
  "tower-service",
  "tracing",
  "want",
@@ -1505,7 +1505,7 @@ checksum = "ab58a31960b2f78c5c24cf255216789863754438a1e48849a956846f899e762e"
 dependencies = [
  "hyper",
  "native-tls",
- "tokio",
+ "tokio 0.2.22",
  "tokio-tls",
 ]
 
@@ -1714,7 +1714,7 @@ dependencies = [
  "rdkafka",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
  "url",
 ]
 
@@ -1909,7 +1909,7 @@ dependencies = [
  "sysctl",
  "sysinfo",
  "tempfile",
- "tokio",
+ "tokio 0.2.22",
  "tokio-openssl",
  "tokio-postgres",
  "tracing",
@@ -1939,7 +1939,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -2001,7 +2001,7 @@ dependencies = [
  "log",
  "metabase",
  "ore",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
 ]
 
@@ -2438,7 +2438,7 @@ dependencies = [
  "log",
  "phf_shared",
  "smallvec",
- "tokio",
+ "tokio 0.2.22",
  "tracing-subscriber",
 ]
 
@@ -2541,7 +2541,7 @@ dependencies = [
  "prometheus",
  "regex",
  "serde",
- "tokio",
+ "tokio 0.2.22",
  "toml",
 ]
 
@@ -2570,7 +2570,7 @@ dependencies = [
  "rusoto_kinesis",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
 ]
 
@@ -2591,7 +2591,7 @@ dependencies = [
  "rand_distr",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
 ]
 
@@ -2649,7 +2649,7 @@ dependencies = [
  "rand",
  "repr",
  "sql",
- "tokio",
+ "tokio 0.2.22",
  "tokio-openssl",
  "tokio-util",
 ]
@@ -2740,6 +2740,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "237844750cfbb86f67afe27eee600dfbbcb6188d734139b534cbfbf4f96792ae"
 
 [[package]]
+name = "pin-project-lite"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b063f57ec186e6140e2b8b6921e5f1bd89c7356dda5b33acc5401203ca6131c"
+
+[[package]]
 name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2773,7 +2779,7 @@ dependencies = [
  "fallible-iterator",
  "futures",
  "log",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
 ]
 
@@ -2786,7 +2792,7 @@ dependencies = [
  "bytes",
  "futures",
  "openssl",
- "tokio",
+ "tokio 0.2.22",
  "tokio-openssl",
  "tokio-postgres",
 ]
@@ -2967,7 +2973,7 @@ dependencies = [
  "lazy_static",
  "pprof",
  "tempfile",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -3140,8 +3146,8 @@ dependencies = [
 
 [[package]]
 name = "rdkafka"
-version = "0.24.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#2901a4b9027c3cce6fcae48c124fe5296397704a"
+version = "0.25.0-dev"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#4d44ab60cb345523b87bf9c84e0412fd8696ba44"
 dependencies = [
  "futures",
  "libc",
@@ -3150,13 +3156,13 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "tokio",
+ "tokio 0.3.4",
 ]
 
 [[package]]
 name = "rdkafka-sys"
 version = "2.1.0+1.5.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#2901a4b9027c3cce6fcae48c124fe5296397704a"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#4d44ab60cb345523b87bf9c84e0412fd8696ba44"
 dependencies = [
  "cmake",
  "libc",
@@ -3268,11 +3274,11 @@ dependencies = [
  "mime_guess",
  "native-tls",
  "percent-encoding",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "serde",
  "serde_json",
  "serde_urlencoded",
- "tokio",
+ "tokio 0.2.22",
  "tokio-tls",
  "url",
  "wasm-bindgen",
@@ -3320,7 +3326,7 @@ dependencies = [
  "rustc_version",
  "serde",
  "serde_json",
- "tokio",
+ "tokio 0.2.22",
  "xml-rs",
 ]
 
@@ -3340,7 +3346,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
- "tokio",
+ "tokio 0.2.22",
  "zeroize",
 ]
 
@@ -3380,7 +3386,7 @@ dependencies = [
  "serde",
  "sha2",
  "time 0.2.23",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -3704,7 +3710,7 @@ dependencies = [
  "serde_json",
  "structopt",
  "test-util",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
  "url",
 ]
@@ -3754,7 +3760,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sql-parser",
- "tokio",
+ "tokio 0.2.22",
  "unicase",
  "url",
  "uuid",
@@ -3803,7 +3809,7 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
- "tokio",
+ "tokio 0.2.22",
  "walkdir",
 ]
 
@@ -3941,7 +3947,7 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
  "uuid",
  "whoami",
@@ -4066,7 +4072,7 @@ dependencies = [
  "prometheus",
  "regex",
  "serde",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
  "toml",
 ]
@@ -4082,7 +4088,7 @@ dependencies = [
  "ore",
  "rand",
  "rdkafka",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
 ]
 
@@ -4130,7 +4136,7 @@ dependencies = [
  "sql-parser",
  "tempfile",
  "termcolor",
- "tokio",
+ "tokio 0.2.22",
  "tokio-postgres",
  "url",
  "uuid",
@@ -4295,11 +4301,22 @@ dependencies = [
  "mio-named-pipes",
  "mio-uds",
  "num_cpus",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "signal-hook-registry",
  "slab",
  "tokio-macros",
  "winapi 0.3.8",
+]
+
+[[package]]
+name = "tokio"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dfe2523e6fa84ddf5e688151d4e5fddc51678de9752c6512a24714c23818d61"
+dependencies = [
+ "autocfg",
+ "pin-project-lite 0.2.0",
+ "slab",
 ]
 
 [[package]]
@@ -4320,7 +4337,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c4b08c5f4208e699ede3df2520aca2e82401b2de33f45e96696a074480be594"
 dependencies = [
  "openssl",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -4338,10 +4355,10 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "phf",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "postgres-protocol",
  "postgres-types",
- "tokio",
+ "tokio 0.2.22",
  "tokio-util",
 ]
 
@@ -4366,7 +4383,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bde02a3a5291395f59b06ec6945a3077602fac2b07eeeaf0dee2122f3619828"
 dependencies = [
  "native-tls",
- "tokio",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -4379,8 +4396,8 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "log",
- "pin-project-lite",
- "tokio",
+ "pin-project-lite 0.1.4",
+ "tokio 0.2.22",
 ]
 
 [[package]]
@@ -4406,7 +4423,7 @@ checksum = "b0987850db3733619253fe60e17cb59b82d37c7e6c0236bb81e4d6b87c879f27"
 dependencies = [
  "cfg-if 0.1.10",
  "log",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "tracing-attributes",
  "tracing-core",
 ]
