@@ -182,6 +182,8 @@ where
             } else {
                 // Collect aggregates with their indexes, so they can be sliced and diced.
                 let mut accumulable = Vec::new();
+                // Aggregates for non-monotonic mins and maxes that can be fused together.
+                // TODO(rkhaitan): we should be able to fuse monotonic mins and maxes together as well.
                 let mut min_max = Vec::new();
                 let mut remaining = Vec::new();
                 for index in 0..aggregates.len() {
@@ -265,7 +267,7 @@ where
                         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
                             let mut row_packer = RowPacker::new();
                             move |key, mut input, output| {
-                                // The inputs are pairs of an optional index and row to decode.
+                                // The inputs are triples of a reduction type, an optional index and row to decode.
 
                                 // There can be at most one `None` index, and it indicates the accumulable aggregates.
                                 let new_row = Row::new(Vec::new());
