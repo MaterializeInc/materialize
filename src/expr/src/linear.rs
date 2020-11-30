@@ -6,6 +6,7 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -131,7 +132,7 @@ impl MapFilterProject {
 
     /// Retain only rows satisfing these predicates.
     ///
-    /// This method introduces predicates as eagerly as the can be evaluated,
+    /// This method introduces predicates as eagerly as they can be evaluated,
     /// which may not be desired for predicates that may cause exceptions.
     /// If fine manipulation is required, the predicates can be added manually.
     pub fn filter<I>(mut self, predicates: I) -> Self
@@ -141,6 +142,13 @@ impl MapFilterProject {
         for mut predicate in predicates {
             // Correct column references.
             predicate.permute(&self.projection[..]);
+
+            // Validate column references.
+            assert!(predicate
+                .support()
+                .into_iter()
+                .all(|c| c < self.expressions.len()));
+
             // Insert predicate as eagerly as it can be evaluated:
             // just after the largest column in its support is formed.
             let max_support = predicate
@@ -165,10 +173,19 @@ impl MapFilterProject {
         for mut expression in expressions {
             // Correct column references.
             expression.permute(&self.projection[..]);
+
+            // Validate column references.
+            assert!(expression
+                .support()
+                .into_iter()
+                .all(|c| c < self.expressions.len()));
+
+            // Introduce expression and produce as output.
             self.expressions.push(expression);
             self.projection
                 .push(self.input_arity + self.expressions.len() - 1);
         }
+
         self
     }
 
@@ -256,6 +273,141 @@ impl MapFilterProject {
             }
             x => (Self::new(x.arity()), x),
         }
+    }
+
+    /// Partitions `self` into two instances, one of which can be eagerly applied.
+    ///
+    /// The `available` argument indicates which input columns are available (keys)
+    /// and in which positions (values). This information may allow some maps and
+    /// filters to execute. The `input_arity` argument reports the total number of
+    /// input columns (which may include some not present in `available`)
+    ///
+    /// This method partitions `self` in two parts, `(before, after)`, where `before`
+    /// can be applied on columns present as keys in `available`, and `after` must
+    /// await the introduction of the other input columns.
+    ///
+    /// The `before` instance will *append* any columns that can be determined from
+    /// `available` but will project away any of its columns that are not needed by
+    /// `after`. Importantly, this means that `before` will leave intact *all* input
+    /// columns including those not referenced in `available`.
+    ///
+    /// The `after` instance will presume all input columns are available, followed
+    /// by the appended columns of the `before` instance. It may be that some input
+    /// columns can be projected away in `before` if `after` does not need them, but
+    /// we leave that as something the caller can apply if needed (it is otherwise
+    /// complicated to negotiate which input columns `before` should retain).
+    ///
+    /// To correctly reconstruct `self` from `before` and `after`, one must introduce
+    /// additional input columns, permute all input columns to their locations as
+    /// expected by `self`, follow this by new columns appended by `before`, and
+    /// remove all other columns that may be present.
+    pub fn partition(self, available: &HashMap<usize, usize>, input_arity: usize) -> (Self, Self) {
+        // Map expressions, filter predicates, and projections for `before` and `after`.
+        let mut before_expr = Vec::new();
+        let mut before_pred = Vec::new();
+        let mut before_proj = Vec::new();
+        let mut after_expr = Vec::new();
+        let mut after_pred = Vec::new();
+        let mut after_proj = Vec::new();
+
+        // Track which output columns must be preserved in the output of `before`.
+        let mut demanded = HashSet::new();
+        demanded.extend(0..self.input_arity);
+        demanded.extend(self.projection.iter());
+
+        // Determine which map expressions can be computed from the available subset.
+        // Some expressions may depend on other expressions, but by evaluating them
+        // in forward order we should accurately determine the available expressions.
+        let mut available_expr = vec![false; self.input_arity];
+        // Initialize available columns from `available`, which is then not used again.
+        for index in available.keys() {
+            available_expr[*index] = true;
+        }
+        for expr in self.expressions.into_iter() {
+            let is_available = expr.support().into_iter().all(|i| available_expr[i]);
+            if is_available {
+                before_expr.push(expr);
+            } else {
+                demanded.extend(expr.support());
+                after_expr.push(expr);
+            }
+            available_expr.push(is_available);
+        }
+
+        // Determine which predicates can be computed from the available subset.
+        for (_when, pred) in self.predicates.into_iter() {
+            let is_available = pred.support().into_iter().all(|i| available_expr[i]);
+            if is_available {
+                before_pred.push(pred);
+            } else {
+                demanded.extend(pred.support());
+                after_pred.push(pred);
+            }
+        }
+
+        // Map from prior output location to location in un-projected `before`.
+        // This map is used to correct references in `before` but it should be
+        // adjusted to reflect `before`s projection prior to use in `after`.
+        let mut before_map = available.clone();
+        // Input columns include any additional undescribed columns that may
+        // not be captured by the `available` argument.
+        let mut input_columns = input_arity;
+        for index in self.input_arity..available_expr.len() {
+            if available_expr[index] {
+                before_map.insert(index, input_columns);
+                input_columns += 1;
+            }
+        }
+
+        // Permute the column references in `before` expressions and predicates.
+        for expr in before_expr.iter_mut() {
+            expr.permute_map(&before_map);
+        }
+        for pred in before_pred.iter_mut() {
+            pred.permute_map(&before_map);
+        }
+
+        // Demand information determines `before`s output projection.
+        demanded.retain(|col| available_expr[*col]);
+        before_proj.extend(demanded);
+        before_proj.sort();
+
+        // Map from prior output locations to location in post-`before` columns.
+        // This map is used to correct references in `after`.
+        // The presumption is that `after` will be presented with all input columns,
+        // followed by the output columns introduced by `before` in order.
+        let mut after_map = HashMap::new();
+        for index in 0..self.input_arity {
+            after_map.insert(index, index);
+        }
+        for index in before_proj.iter() {
+            if *index >= self.input_arity {
+                after_map.insert(*index, after_map.len());
+            }
+        }
+
+        // Permute the column references in `after` expressions and predicates.
+        for expr in after_expr.iter_mut() {
+            expr.permute_map(&after_map);
+        }
+        for pred in after_pred.iter_mut() {
+            pred.permute_map(&after_map);
+        }
+        // Populate `after` projection with the new locations of `self.projection`.
+        for index in self.projection {
+            after_proj.push(after_map[&index]);
+        }
+
+        // Form and return the before and after MapFilterProject instances.
+        let before = Self::new(self.input_arity)
+            .map(before_expr)
+            .filter(before_pred)
+            .project(before_proj);
+        let after = Self::new(before_map.len())
+            .map(after_expr)
+            .filter(after_pred)
+            .project(after_proj);
+        (before, after)
     }
 
     /// Optimize the internal expression evaluation order.
