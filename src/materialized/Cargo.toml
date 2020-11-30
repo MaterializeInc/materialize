@@ -12,7 +12,7 @@ license = "proprietary"
 [dependencies]
 anyhow = "1.0.34"
 askama = { version = "0.10.3", features = ["serde-json"] }
-async-trait = "0.1.41"
+async-trait = "0.1.42"
 backtrace = { version = "0.3.54" }
 cfg-if = "1.0.0"
 comm = { path = "../comm" }
