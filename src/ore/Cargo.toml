@@ -18,4 +18,4 @@ tokio = { version = "0.2", features = ["io-util", "rt-threaded", "tcp", "time"] 
 tracing-subscriber = "0.2.7"
 
 [dev-dependencies]
-crossbeam-utils = "0.7.2"
+crossbeam-utils = "0.8.1"
