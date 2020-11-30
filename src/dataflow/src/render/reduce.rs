@@ -27,10 +27,12 @@ use repr::{Datum, Row, RowArena, RowPacker};
 use super::context::Context;
 use crate::render::context::Arrangement;
 
+// This enum indicates to the collation operator what results correspond to what types of reductions. Need
+// to keep all of the fused results ahead of the unfused results so that they can be extracted out efficiently
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 enum ReductionType {
-    Accumulable,
-    MinMax,
+    FusedAccumulable,
+    FusedMinMax,
     Other,
 }
 
@@ -217,7 +219,10 @@ where
                         let accumulables_collection =
                             build_accumulables(ok_input.clone(), accumulable, false).as_collection(
                                 |key, val| {
-                                    (key.clone(), (ReductionType::Accumulable, None, val.clone()))
+                                    (
+                                        key.clone(),
+                                        (ReductionType::FusedAccumulable, None, val.clone()),
+                                    )
                                 },
                             );
                         to_collect.push(accumulables_collection);
@@ -230,7 +235,7 @@ where
                             *expected_group_size,
                         )
                         .as_collection(|key, val| {
-                            (key.clone(), (ReductionType::MinMax, None, val.clone()))
+                            (key.clone(), (ReductionType::FusedMinMax, None, val.clone()))
                         });
                         to_collect.push(min_or_max_collection);
                     }
@@ -267,7 +272,7 @@ where
 
                                 // There can be at most one `None` index, and it indicates the accumulable aggregates.
                                 let new_row = Row::new(Vec::new());
-                                let mut accumulable = if (input[0].0).0 == ReductionType::Accumulable {
+                                let mut accumulable = if (input[0].0).0 == ReductionType::FusedAccumulable {
                                     // This input corresponds to our densely packed accumulable aggregates.
                                     let iter = (input[0].0).2.iter();
                                     // Make sure we never try to read from this input again.
@@ -277,7 +282,7 @@ where
                                     new_row.iter()
                                 };
 
-                                let mut min_or_max = if (input[0].0).0 == ReductionType::MinMax {
+                                let mut min_or_max = if (input[0].0).0 == ReductionType::FusedMinMax {
                                     // This input corresponds to our densely packed min/max aggregates.
                                     let iter = (input[0].0).2.iter();
                                     // Make sure we never try to read from this input again.
@@ -302,7 +307,7 @@ where
                                             row_packer.push(datum);
                                             input = &input[1..];
                                         }
-                                        _ => panic!("aggregation erroneously reported as both accumulable and min/max"),
+                                        _ => log::error!("Aggregation erroneously reported as both accumulable and min/max in ReduceCollation"),
                                     }
                                 }
                                 output.push((row_packer.finish_and_reuse(), 1));
