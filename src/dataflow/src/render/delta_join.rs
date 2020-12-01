@@ -67,6 +67,99 @@ where
                         let mut delta_queries = Vec::new();
 
                         let input_mapper = JoinInputMapper::new(inputs);
+
+                        // First let's prepare the input arrangements we will need.
+                        // This reduces redundant imports, and simplifies the dataflow structure.
+                        // As the arrangements are all shared, it should not dramatically improve
+                        // the efficiency, but the dataflow simplification is worth doing.
+                        //
+                        // The arrangements are keyed by input and arrangement key, and by whether
+                        // the arrangement is "alt" or "neu", which corresponds to whether the use
+                        // of the arrangement is by a relation before or after it in the order, resp.
+                        // Because the alt and neu variants have different types, we will maintain
+                        // them in different collections.
+                        let mut arrangements_alt = std::collections::HashMap::new();
+                        let mut arrangements_neu = std::collections::HashMap::new();
+                        for relation in 0 .. inputs.len() {
+                            let order = &orders[relation];
+                            for (other, next_key) in order.iter() {
+                                let subtract = subtract.clone();
+                                // Alt case
+                                if other > &relation {
+                                    arrangements_alt
+                                        .entry((&inputs[*other], &next_key[..]))
+                                        .or_insert_with(|| match self
+                                            .arrangement(&inputs[*other], &next_key[..])
+                                            .unwrap_or_else(|| {
+                                                panic!(
+                                                    "Arrangement alarmingly absent!: {}, {:?}",
+                                                    inputs[*other].pretty(),
+                                                    &next_key[..]
+                                                )
+                                            }) {
+                                            ArrangementFlavor::Local(oks, errs) => {
+                                                if local_err_dedup.insert((&inputs[*other], &next_key[..])) {
+                                                    scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                                }
+                                                Ok(oks
+                                                    .enter_at(
+                                                        inner,
+                                                        |_, _, t| AltNeu::alt(t.clone()),
+                                                        move |t| subtract(&t.time),
+                                                    ))
+                                            }
+                                            ArrangementFlavor::Trace(_gid, oks, errs) => {
+                                                if trace_err_dedup.insert((&inputs[*other], &next_key[..])) {
+                                                    scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                                }
+                                                Err(oks
+                                                    .enter_at(
+                                                        inner,
+                                                        |_, _, t| AltNeu::alt(t.clone()),
+                                                        move |t| subtract(&t.time),
+                                                    ))
+                                            }
+                                        });
+                                } else {
+                                    arrangements_neu
+                                    .entry((&inputs[*other], &next_key[..]))
+                                    .or_insert_with(|| match self
+                                        .arrangement(&inputs[*other], &next_key[..])
+                                        .unwrap_or_else(|| {
+                                            panic!(
+                                                "Arrangement alarmingly absent!: {}, {:?}",
+                                                inputs[*other].pretty(),
+                                                &next_key[..]
+                                            )
+                                        }) {
+                                        ArrangementFlavor::Local(oks, errs) => {
+                                            if local_err_dedup.insert((&inputs[*other], &next_key[..])) {
+                                                scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                            }
+                                            Ok(oks
+                                                .enter_at(
+                                                    inner,
+                                                    |_, _, t| AltNeu::neu(t.clone()),
+                                                    move |t| subtract(&t.time),
+                                                ))
+                                        }
+                                        ArrangementFlavor::Trace(_gid, oks, errs) => {
+                                            if trace_err_dedup.insert((&inputs[*other], &next_key[..])) {
+                                                scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                            }
+                                            Err(oks
+                                                .enter_at(
+                                                    inner,
+                                                    |_, _, t| AltNeu::neu(t.clone()),
+                                                    move |t| subtract(&t.time),
+                                                ))
+                                        }
+                                    });
+                                }
+                            }
+                        }
+
+
                         // Collects error streams for the inner scope. Concats before leaving.
                         let mut inner_errs = Vec::with_capacity(inputs.len());
                         for relation in 0..inputs.len() {
@@ -82,17 +175,24 @@ where
                             // This collection determines changes that result from updates inbound
                             // from `inputs[relation]` and reflects all strictly prior updates and
                             // concurrent updates from relations prior to `relation`.
-                            let delta_query = inner.clone().region(|region| {
+                            let name = format!("delta path {}", relation);
+                            let delta_query = inner.clone().region_named(&name, |region| {
 
                                 // Collects error streams for the region scope. Concats before leaving.
                                 let mut region_errs = Vec::with_capacity(inputs.len());
 
                                 // Ensure this input is rendered, and extract its update stream.
-                                let (update_stream, errs) = self
-                                    .collection(&inputs[relation])
-                                    .expect("Failed to render update stream");
-                                let update_stream = update_stream.enter(inner).enter_region(region);
-                                scope_errs.push(errs);
+                                let update_stream =
+                                if let Some((_key, val)) = arrangements_alt.iter().find(|(key, _val)| key.0 == &inputs[relation]) {
+                                    match val {
+                                        Ok(local) => local.as_collection(|_k,v| v.clone()).enter_region(region),
+                                        Err(trace) => trace.as_collection(|_k,v| v.clone()).enter_region(region),
+                                    }
+                                } else {
+                                    self
+                                        .collection(&inputs[relation])
+                                        .expect("Failed to render update stream").0.enter(inner).enter_region(region)
+                                };
 
                                 // We track the sources of each column in our update stream.
                                 let mut source_columns = input_mapper.global_columns(relation)
@@ -153,63 +253,15 @@ where
                                     // We require different logic based on the flavor of arrangement.
                                     // We may need to cache each of these if we want to re-use the same wrapped
                                     // arrangement, rather than re-wrap each time we use a thing.
-                                    let subtract = subtract.clone();
-                                    let (oks, errs) = match self
-                                        .arrangement(&inputs[*other], &next_key[..])
-                                        .unwrap_or_else(|| {
-                                            panic!(
-                                                "Arrangement alarmingly absent!: {}, {:?}",
-                                                inputs[*other].pretty(),
-                                                &next_key[..]
-                                            )
-                                        }) {
-                                        ArrangementFlavor::Local(oks, errs) => {
-                                            if local_err_dedup.insert((&inputs[*other], &next_key[..])) {
-                                                scope_errs.push(errs.as_collection(|k, _v| k.clone()));
-                                            }
-                                            if other > &relation {
-                                                let oks = oks
-                                                    .enter_at(
-                                                        inner,
-                                                        |_, _, t| AltNeu::alt(t.clone()),
-                                                        move |t| subtract(&t.time),
-                                                    )
-                                                    .enter_region(region);
-                                                build_lookup(update_stream, oks, prev_key)
-                                            } else {
-                                                let oks = oks
-                                                    .enter_at(
-                                                        inner,
-                                                        |_, _, t| AltNeu::neu(t.clone()),
-                                                        move |t| subtract(&t.time),
-                                                    )
-                                                    .enter_region(region);
-                                                build_lookup(update_stream, oks, prev_key)
-                                            }
+                                    let (oks, errs) = if other > &relation {
+                                        match arrangements_alt.get(&(&inputs[*other], &next_key[..])).unwrap() {
+                                            Ok(local) => build_lookup(update_stream, local.enter_region(region), prev_key),
+                                            Err(trace) => build_lookup(update_stream, trace.enter_region(region), prev_key),
                                         }
-                                        ArrangementFlavor::Trace(_gid, oks, errs) => {
-                                            if trace_err_dedup.insert((&inputs[*other], &next_key[..])) {
-                                                scope_errs.push(errs.as_collection(|k, _v| k.clone()));
-                                            }
-                                            if other > &relation {
-                                                let oks = oks
-                                                    .enter_at(
-                                                        inner,
-                                                        |_, _, t| AltNeu::alt(t.clone()),
-                                                        move |t| subtract(&t.time),
-                                                    )
-                                                    .enter_region(region);
-                                                build_lookup(update_stream, oks, prev_key)
-                                            } else {
-                                                let oks = oks
-                                                    .enter_at(
-                                                        inner,
-                                                        |_, _, t| AltNeu::neu(t.clone()),
-                                                        move |t| subtract(&t.time),
-                                                    )
-                                                    .enter_region(region);
-                                                build_lookup(update_stream, oks, prev_key)
-                                            }
+                                    } else {
+                                        match arrangements_neu.get(&(&inputs[*other], &next_key[..])).unwrap() {
+                                            Ok(local) => build_lookup(update_stream, local.enter_region(region), prev_key),
+                                            Err(trace) => build_lookup(update_stream, trace.enter_region(region), prev_key),
                                         }
                                     };
                                     update_stream = oks;

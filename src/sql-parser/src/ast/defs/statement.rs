@@ -62,6 +62,9 @@ pub enum Statement {
     Rollback(RollbackStatement),
     Tail(TailStatement),
     Explain(ExplainStatement),
+    Declare(DeclareStatement),
+    Close(CloseStatement),
+    Fetch(FetchStatement),
 }
 
 impl AstDisplay for Statement {
@@ -102,6 +105,9 @@ impl AstDisplay for Statement {
             Statement::Rollback(stmt) => f.write_node(stmt),
             Statement::Tail(stmt) => f.write_node(stmt),
             Statement::Explain(stmt) => f.write_node(stmt),
+            Statement::Declare(stmt) => f.write_node(stmt),
+            Statement::Close(stmt) => f.write_node(stmt),
+            Statement::Fetch(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -1342,3 +1348,52 @@ pub enum IfExistsBehavior {
     Skip,
     Replace,
 }
+
+/// `DECLARE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeclareStatement {
+    pub name: Ident,
+    pub stmt: Box<Statement>,
+}
+
+impl AstDisplay for DeclareStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("DECLARE ");
+        f.write_node(&self.name);
+        f.write_str(" CURSOR FOR ");
+        f.write_node(&self.stmt);
+    }
+}
+impl_display!(DeclareStatement);
+
+/// `CLOSE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CloseStatement {
+    pub name: Ident,
+}
+
+impl AstDisplay for CloseStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CLOSE ");
+        f.write_node(&self.name);
+    }
+}
+impl_display!(CloseStatement);
+
+/// `FETCH ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FetchStatement {
+    pub name: Ident,
+    pub count: Option<u64>,
+}
+
+impl AstDisplay for FetchStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("FETCH ");
+        if let Some(count) = self.count {
+            f.write_str(format!("{} ", count));
+        }
+        f.write_node(&self.name);
+    }
+}
+impl_display!(FetchStatement);
