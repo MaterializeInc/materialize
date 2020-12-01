@@ -26,6 +26,14 @@ pub enum Command {
         tx: futures::channel::oneshot::Sender<Response<Vec<StartupMessage>>>,
     },
 
+    Declare {
+        name: String,
+        stmt: Statement,
+        param_types: Vec<Option<pgrepr::Type>>,
+        session: Session,
+        tx: futures::channel::oneshot::Sender<Response<()>>,
+    },
+
     Describe {
         name: String,
         stmt: Option<Statement>,

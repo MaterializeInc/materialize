@@ -139,6 +139,8 @@ pub fn describe_statement(
         | Statement::StartTransaction(_)
         | Statement::Rollback(_)
         | Statement::Commit(_)
+        | Statement::Close(_)
+        | Statement::Declare(_)
         | Statement::AlterObjectRename(_)
         | Statement::AlterIndexOptions(_) => StatementDesc::new(None),
 
@@ -266,6 +268,8 @@ pub fn describe_statement(
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
+
+        Statement::Fetch(_) => bail!("FETCH must be described with a Session"),
     })
 }
 
@@ -328,6 +332,10 @@ pub fn handle_statement(
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
+
+        Statement::Declare(_) => bail!("DECLARE statements should already be handled"),
+        Statement::Fetch(_) => bail!("FETCH statements should already be handled"),
+        Statement::Close(_) => bail!("CLOSE statements should already be handled"),
     }
 }
 

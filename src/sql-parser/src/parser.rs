@@ -213,6 +213,9 @@ impl<'a> Parser<'a> {
                 Token::Keyword(ROLLBACK) => Ok(self.parse_rollback()?),
                 Token::Keyword(TAIL) => Ok(self.parse_tail()?),
                 Token::Keyword(EXPLAIN) => Ok(self.parse_explain()?),
+                Token::Keyword(DECLARE) => Ok(self.parse_declare()?),
+                Token::Keyword(FETCH) => Ok(self.parse_fetch()?),
+                Token::Keyword(CLOSE) => Ok(self.parse_close()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -3369,6 +3372,38 @@ impl<'a> Parser<'a> {
             explainee,
             options,
         }))
+    }
+
+    /// Parse a `DECLARE` statement, assuming that the `DECLARE` token
+    /// has already been consumed.
+    fn parse_declare(&mut self) -> Result<Statement, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_keyword(CURSOR)?;
+        // WITHOUT HOLD is optional and the default behavior so we can ignore it.
+        let _ = self.parse_keywords(&[WITHOUT, HOLD]);
+        self.expect_keyword(FOR)?;
+        let stmt = self.parse_statement()?;
+        Ok(Statement::Declare(DeclareStatement {
+            name,
+            stmt: Box::new(stmt),
+        }))
+    }
+
+    /// Parse a `CLOSE` statement, assuming that the `CLOSE` token
+    /// has already been consumed.
+    fn parse_close(&mut self) -> Result<Statement, ParserError> {
+        let name = self.parse_identifier()?;
+        Ok(Statement::Close(CloseStatement { name }))
+    }
+
+    /// Parse a `FETCH` statement, assuming that the `FETCH` token
+    /// has already been consumed.
+    fn parse_fetch(&mut self) -> Result<Statement, ParserError> {
+        let _ = self.parse_keyword(FORWARD);
+        let count = self.maybe_parse(Parser::parse_literal_uint);
+        let _ = self.parse_keyword(FROM);
+        let name = self.parse_identifier()?;
+        Ok(Statement::Fetch(FetchStatement { name, count }))
     }
 
     /// Checks whether it is safe to descend another layer of nesting in the
