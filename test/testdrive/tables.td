@@ -259,26 +259,26 @@ cannot insert into system table 'mz_catalog.mz_kafka_sinks'
 
 # Test INSERT with column specifiers
 > DROP TABLE IF EXISTS t;
-> CREATE TABLE t (a int, b text not null)
-> INSERT INTO t (b, a) VALUES ('a', 1), ('b', NULL);
+> CREATE TABLE t (a int, b text not null, c int)
+> INSERT INTO t (b, c, a) VALUES ('a', 2, 1), ('b', NULL, 3);
 
 > select * from t;
-a    b
----------
-1    "a"
-<null> "b"
+a  b    c
+---------------
+1  "a"  2
+3  "b"  <null>
 
-! INSERT INTO t (notpresent, a) VALUES ('str', 1);
+! INSERT INTO t (notpresent, a, c) VALUES ('str', 1, 2);
 INSERT statement specifies column notpresent, but it is not present in table
 
-! INSERT INTO t (a, b) VALUES ('str', 1);
+! INSERT INTO t (a, b, c) VALUES ('str', 1, 2);
 invalid input syntax for int4: invalid digit found in string: "str"
 
-! INSERT INTO t (b, a) VALUES (1, 'str');
+! INSERT INTO t (b, a, c) VALUES (1, 'str', 2);
 invalid input syntax for int4: invalid digit found in string: "str"
 
-! INSERT INTO t (c, b, a) VALUES (1, 1, 'str');
-INSERT statement specifies column c, but it is not present in table
+! INSERT INTO t (d, c, b, a) VALUES (1, 1, 1, 'str');
+INSERT statement specifies column d, but it is not present in table
 
 ! INSERT INTO t (a) VALUES (1);
 INSERT statement with incomplete column set not yet supported
@@ -286,8 +286,8 @@ INSERT statement with incomplete column set not yet supported
 ! INSERT INTO t (a) VALUES (1, 'str');
 INSERT statement with incomplete column set not yet supported
 
-! INSERT INTO t (a, b) VALUES (1);
-INSERT statement specifies 1 columns, but table has 2 columns
+! INSERT INTO t (a, b, c) VALUES (1);
+INSERT statement specifies 1 columns, but table has 3 columns
 
 ! INSERT INTO t (a, a) VALUES (1, 'str')
 INSERT statement specifies duplicate column
