@@ -3805,25 +3805,22 @@ name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "bytes",
  "chrono",
  "comm",
- "coord",
- "dataflow",
- "dataflow-types",
  "expr",
  "futures",
  "getopts",
- "itertools",
  "lazy_static",
+ "materialized",
  "md-5",
  "ore",
  "pgrepr",
+ "postgres-protocol",
  "regex",
  "repr",
  "serde_json",
- "sql",
  "tokio",
+ "tokio-postgres",
  "walkdir",
 ]
 

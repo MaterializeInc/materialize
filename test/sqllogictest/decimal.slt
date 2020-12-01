@@ -221,7 +221,7 @@ CREATE TABLE casts (
     d float
 )
 
-query RRR
+query IRR
 SELECT
     CAST (0.1 AS int),
     CAST (0.1 AS decimal(15, 2)),

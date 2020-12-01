@@ -15,7 +15,7 @@ query error ARRAY expression does not have uniform type: Array\(Int32\) vs Array
 SELECT ARRAY[ARRAY[1, 2], ARRAY['3', '4']]
 
 query T
-SELECT ARRAY[ARRAY[1, 2], ARRAY['3', '4']]::int[]
+SELECT ARRAY[ARRAY[1, 2], ARRAY['3', '4']]::int[]::text
 ----
 {{1,2},{3,4}}
 

@@ -25,40 +25,37 @@
 //!       compare to expected results
 //!       if wrong, record the error
 
-use std::borrow::ToOwned;
+use std::error::Error;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops;
 use std::path::Path;
 use std::str;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use bytes::BytesMut;
-use itertools::izip;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
+use postgres_protocol::types;
 use regex::Regex;
+use tokio_postgres::types::FromSql;
+use tokio_postgres::types::Type as PgType;
+use tokio_postgres::{connect, Client, NoTls, Row};
 
-use coord::session::Session;
-use coord::{ExecuteResponse, TimestampConfig};
-use dataflow_types::PeekResponse;
-use ore::option::OptionExt;
-use ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
-use sql::ast::Statement;
+use materialized::{serve, Config, Server};
+use pgrepr::{Interval, Numeric};
+use repr::ColumnName;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
 
+// TODO: check that these are all needed still
 #[derive(Debug)]
 pub enum Outcome<'a> {
     Unsupported {
-        error: anyhow::Error,
-        location: Location,
-    },
-    ParseFailure {
         error: anyhow::Error,
         location: Location,
     },
@@ -71,19 +68,18 @@ pub enum Outcome<'a> {
         location: Location,
     },
     WrongNumberOfRowsInserted {
+        expected_count: u64,
+        actual_count: u64,
+        location: Location,
+    },
+    WrongColumnCount {
         expected_count: usize,
         actual_count: usize,
         location: Location,
     },
-    InferenceFailure {
-        expected_types: &'a [Type],
-        inferred_types: Vec<ColumnType>,
-        message: String,
-        location: Location,
-    },
     WrongColumnNames {
         expected_column_names: &'a Vec<ColumnName>,
-        inferred_column_names: Vec<ColumnName>,
+        actual_column_names: Vec<ColumnName>,
         location: Location,
     },
     OutputFailure {
@@ -97,21 +93,26 @@ pub enum Outcome<'a> {
         location: Location,
     },
     Success,
+    FormatFailure {
+        error: anyhow::Error,
+        location: Location,
+    },
 }
 
 const NUM_OUTCOMES: usize = 10;
+const SUCCESS_OUTCOME: usize = NUM_OUTCOMES - 1;
 
 impl<'a> Outcome<'a> {
     fn code(&self) -> usize {
         match self {
             Outcome::Unsupported { .. } => 0,
-            Outcome::ParseFailure { .. } => 1,
-            Outcome::PlanFailure { .. } => 2,
-            Outcome::UnexpectedPlanSuccess { .. } => 3,
-            Outcome::WrongNumberOfRowsInserted { .. } => 4,
-            Outcome::InferenceFailure { .. } => 5,
-            Outcome::WrongColumnNames { .. } => 6,
-            Outcome::OutputFailure { .. } => 7,
+            Outcome::PlanFailure { .. } => 1,
+            Outcome::UnexpectedPlanSuccess { .. } => 2,
+            Outcome::WrongNumberOfRowsInserted { .. } => 3,
+            Outcome::WrongColumnCount { .. } => 4,
+            Outcome::WrongColumnNames { .. } => 5,
+            Outcome::OutputFailure { .. } => 6,
+            Outcome::FormatFailure { .. } => 7,
             Outcome::Bail { .. } => 8,
             Outcome::Success => 9,
         }
@@ -128,9 +129,6 @@ impl fmt::Display for Outcome<'_> {
         const INDENT: &str = "\n        ";
         match self {
             Unsupported { error, location } => write!(f, "Unsupported:{}:\n{:#}", location, error),
-            ParseFailure { error, location } => {
-                write!(f, "ParseFailure:{}:\n{:#}", location, error)
-            }
             PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{:#}", location, error),
             UnexpectedPlanSuccess {
                 expected_error,
@@ -149,36 +147,18 @@ impl fmt::Display for Outcome<'_> {
                 "WrongNumberOfRowsInserted:{}{}expected: {}{}actually: {}",
                 location, INDENT, expected_count, INDENT, actual_count
             ),
-            InferenceFailure {
-                expected_types,
-                inferred_types,
-                message,
+            WrongColumnCount {
+                expected_count,
+                actual_count,
                 location,
             } => write!(
                 f,
-                "Inference Failure:{}{}\
-                 expected types: {}{}\
-                 inferred types: {}{}\
-                 message: {}",
-                location,
-                INDENT,
-                expected_types
-                    .iter()
-                    .map(|s| format!("{:?}", s))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                INDENT,
-                inferred_types
-                    .iter()
-                    .map(|s| format!("{}", s.scalar_type))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                INDENT,
-                message
+                "WrongColumnCount:{}{}expected: {}{}actually: {}",
+                location, INDENT, expected_count, INDENT, actual_count
             ),
             WrongColumnNames {
                 expected_column_names,
-                inferred_column_names,
+                actual_column_names,
                 location,
             } => write!(
                 f,
@@ -191,7 +171,7 @@ impl fmt::Display for Outcome<'_> {
                     .collect::<Vec<_>>()
                     .join(" "),
                 INDENT,
-                inferred_column_names
+                actual_column_names
                     .iter()
                     .map(|n| n.to_string())
                     .collect::<Vec<_>>()
@@ -207,6 +187,9 @@ impl fmt::Display for Outcome<'_> {
                 "OutputFailure:{}{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
                 location, INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
+            FormatFailure { error, location } => {
+                write!(f, "FormatFailure:{}:\n{:#}", location, error)
+            }
             Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
             Success => f.write_str("Success"),
         }
@@ -227,17 +210,25 @@ impl ops::AddAssign<Outcomes> for Outcomes {
 impl fmt::Display for Outcomes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let total: usize = self.0.iter().sum();
-        write!(f, "{}:", if self.0[9] == total { "PASS" } else { "FAIL" })?;
+        write!(
+            f,
+            "{}:",
+            if self.0[SUCCESS_OUTCOME] == total {
+                "PASS"
+            } else {
+                "FAIL"
+            }
+        )?;
         lazy_static! {
             static ref NAMES: Vec<&'static str> = vec![
                 "unsupported",
-                "parse-failure",
                 "plan-failure",
                 "unexpected-plan-success",
                 "wrong-number-of-rows-inserted",
                 "inference-failure",
                 "wrong-column-names",
                 "output-failure",
+                "format-failure",
                 "bail",
                 "success",
                 "total",
@@ -254,19 +245,19 @@ impl fmt::Display for Outcomes {
 
 impl Outcomes {
     pub fn any_failed(&self) -> bool {
-        self.0[9] < self.0.iter().sum::<usize>()
+        self.0[SUCCESS_OUTCOME] < self.0.iter().sum::<usize>()
     }
 
     pub fn as_json(&self) -> serde_json::Value {
         serde_json::json!({
             "unsupported": self.0[0],
-            "parse_failure": self.0[1],
-            "plan_failure": self.0[2],
-            "unexpected_plan_success": self.0[3],
-            "wrong_number_of_rows_affected": self.0[4],
-            "inference_failure": self.0[5],
-            "wrong_column_names": self.0[6],
-            "output_failure": self.0[7],
+            "plan_failure": self.0[1],
+            "unexpected_plan_success": self.0[2],
+            "wrong_number_of_rows_affected": self.0[3],
+            "inference_failure": self.0[4],
+            "wrong_column_names": self.0[5],
+            "output_failure": self.0[6],
+            "format_failure": self.0[7],
             "bail": self.0[8],
             "success": self.0[9],
         })
@@ -275,141 +266,201 @@ impl Outcomes {
 
 const NUM_TIMELY_WORKERS: usize = 3;
 
-pub(crate) struct State {
+pub(crate) struct Runner {
     // Drop order matters for these fields.
-    coord_client: coord::SessionClient,
-    _dataflow_workers: Box<dyn Drop>,
-    _coord_thread: JoinOnDropHandle<()>,
+    client: Client,
+    _server: Server,
+}
+
+struct SltI(i64);
+
+impl std::fmt::Display for SltI {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> FromSql<'a> for SltI {
+    fn from_sql(
+        ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn Error + 'static + Send + Sync>> {
+        Ok(Self(match ty {
+            &PgType::INT2 => types::int2_from_sql(raw)?.into(),
+            &PgType::INT4 => types::int4_from_sql(raw)?.into(),
+            &PgType::INT8 => types::int8_from_sql(raw)?,
+            _ => unreachable!(),
+        }))
+    }
+    fn accepts(ty: &PgType) -> bool {
+        match ty {
+            &PgType::INT2 | &PgType::INT4 | &PgType::INT8 => true,
+            _ => false,
+        }
+    }
+}
+
+enum SltR {
+    Float(f64),
+    Numeric(Numeric),
+}
+
+impl std::fmt::Display for SltR {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SltR::Float(v) => v.fmt(f),
+            SltR::Numeric(v) => v.fmt(f),
+        }
+    }
+}
+
+impl<'a> FromSql<'a> for SltR {
+    fn from_sql(
+        ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn Error + 'static + Send + Sync>> {
+        Ok(match ty {
+            &PgType::FLOAT4 => SltR::Float(types::float4_from_sql(raw)?.into()),
+            &PgType::FLOAT8 => SltR::Float(types::float8_from_sql(raw)?),
+            &PgType::NUMERIC => SltR::Numeric(Numeric::from_sql(ty, raw)?),
+            _ => unreachable!(),
+        })
+    }
+    fn accepts(ty: &PgType) -> bool {
+        match ty {
+            &PgType::FLOAT4 | &PgType::FLOAT8 | &PgType::NUMERIC => true,
+            _ => false,
+        }
+    }
+}
+
+struct SltT(String);
+
+impl std::fmt::Display for SltT {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> FromSql<'a> for SltT {
+    fn from_sql(
+        ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn Error + 'static + Send + Sync>> {
+        Ok(Self(match ty {
+            &PgType::TEXT => {
+                let s: String = types::text_from_sql(raw)?.into();
+                if s.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    s
+                }
+            }
+            &PgType::DATE => NaiveDate::from_sql(ty, raw)?.to_string(),
+            &PgType::TIMESTAMP => NaiveDateTime::from_sql(ty, raw)?.to_string(),
+            &PgType::TIMESTAMPTZ => DateTime::<Utc>::from_sql(ty, raw)?.to_string(),
+            &PgType::TIME => NaiveTime::from_sql(ty, raw)?.to_string(),
+            &PgType::INTERVAL => Interval::from_sql(ty, raw)?.to_string(),
+            _ => unreachable!(),
+        }))
+    }
+    fn accepts(ty: &PgType) -> bool {
+        match ty {
+            &PgType::TEXT
+            | &PgType::DATE
+            | &PgType::TIMESTAMP
+            | &PgType::TIMESTAMPTZ
+            | &PgType::TIME
+            | &PgType::INTERVAL => true,
+            _ => false,
+        }
+    }
+}
+
+fn maybe_null<T: std::fmt::Display>(
+    t: Result<Option<T>, tokio_postgres::error::Error>,
+) -> Result<String, anyhow::Error> {
+    let t = match t {
+        Ok(t) => t,
+        Err(e) => return Err(anyhow!(e)),
+    };
+    Ok(match t {
+        Some(t) => t.to_string(),
+        None => "NULL".to_string(),
+    })
 }
 
 fn format_row(
     row: &Row,
-    col_types: &[ColumnType],
-    slt_types: &[Type],
+    types: &Vec<Type>,
     mode: Mode,
     sort: &Sort,
-) -> Vec<String> {
-    let row = izip!(slt_types, col_types, row.iter()).map(|(slt_typ, col_typ, d)| {
-        if d.is_null() {
-            return "NULL".to_owned();
-        }
-
-        match (slt_typ, &col_typ.scalar_type) {
-            (Type::Bool, ScalarType::Bool) | (Type::Text, ScalarType::Bool) => {
-                d.unwrap_bool().to_string()
-            }
-
-            (Type::Integer, ScalarType::Int32) => d.unwrap_int32().to_string(),
-            (Type::Integer, ScalarType::Int64) => d.unwrap_int64().to_string(),
-            (Type::Integer, ScalarType::Decimal(_, s)) => {
-                let d = d.unwrap_decimal().with_scale(*s);
-                format!("{:.0}", d)
-            }
-            (Type::Integer, ScalarType::Float32) => format!("{:.0}", d.unwrap_float32().trunc()),
-            (Type::Integer, ScalarType::Float64) => format!("{:.0}", d.unwrap_float64().trunc()),
-            (Type::Integer, ScalarType::String) => "0".to_owned(),
-            (Type::Integer, ScalarType::Bool) => i8::from(d.unwrap_bool()).to_string(),
-
-            (Type::Real, ScalarType::Int32) => format!("{:.3}", d.unwrap_int32()),
-            (Type::Real, ScalarType::Int64) => format!("{:.3}", d.unwrap_int64()),
-            (Type::Real, ScalarType::Float32) => match mode {
-                Mode::Standard => format!("{:.3}", d.unwrap_float32()),
-                Mode::Cockroach => format!("{}", d.unwrap_float32()),
-            },
-            (Type::Real, ScalarType::Float64) => match mode {
-                Mode::Standard => format!("{:.3}", d.unwrap_float64()),
-                Mode::Cockroach => format!("{}", d.unwrap_float64()),
-            },
-            (Type::Real, ScalarType::Decimal(_, s)) => {
-                let d = d.unwrap_decimal().with_scale(*s);
-                match mode {
-                    Mode::Standard => format!("{:.3}", d),
-                    Mode::Cockroach => format!("{}", d),
-                }
-            }
-
-            (Type::Text, ScalarType::Int32) => format!("{}", d.unwrap_int32()),
-            (Type::Text, ScalarType::Int64) => format!("{}", d.unwrap_int64()),
-            (Type::Text, ScalarType::Float32) => format!("{:.3}", d.unwrap_float32()),
-            (Type::Text, ScalarType::Float64) => format!("{:.3}", d.unwrap_float64()),
-            // Bytes are printed as text iff they are valid UTF-8. This
-            // seems guaranteed to confuse everyone, but it is required for
-            // compliance with the CockroachDB sqllogictest runner. [0]
-            //
-            // [0]: https://github.com/cockroachdb/cockroach/blob/970782487/pkg/sql/logictest/logic.go#L2038-L2043
-            (Type::Text, ScalarType::Bytes) => match str::from_utf8(d.unwrap_bytes()) {
-                Ok(s) => s.to_owned(),
-                Err(_) => format!("{:?}", d.unwrap_bytes()),
-            },
-            (Type::Text, ScalarType::String) => match d.unwrap_str() {
-                "" => "(empty)".to_owned(),
-                s => s.to_owned(),
-            },
-            (Type::Text, _) => {
-                let mut buf = BytesMut::new();
-                pgrepr::Value::from_datum(d, &col_typ.scalar_type)
-                    .unwrap()
-                    .encode_text(&mut buf);
-                str::from_utf8(&buf).unwrap().to_owned()
-            }
-
-            (Type::Oid, ScalarType::Oid) => format!("{}", d.unwrap_int32()),
-
-            other => panic!("Don't know how to format {:?}", other),
-        }
-    });
-    if mode == Mode::Cockroach && sort.yes() {
-        row.flat_map(|s| {
-            crate::parser::split_cols(&s, slt_types.len())
-                .into_iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-        .collect()
-    } else {
-        row.collect()
+) -> Result<Vec<String>, anyhow::Error> {
+    let mut formatted: Vec<String> = vec![];
+    for i in 0..row.len() {
+        // Unmarshal into the SltX types. They have been designed to support a variety
+        // of source postgres types. The rust postgres driver has very strict type
+        // support (i.e., an INT4 can only be decoded into an i32, not an i64). We need
+        // much more lenient rules here because the SLT syntax only supports a small
+        // number of types. Implement our own FromSql implementations to achieve this.
+        let datum: String = match types[i] {
+            Type::Text => maybe_null(row.try_get::<usize, Option<SltT>>(i)),
+            Type::Integer => maybe_null(row.try_get::<usize, Option<SltI>>(i)),
+            Type::Real => maybe_null(row.try_get::<usize, Option<SltR>>(i)),
+            Type::Bool => maybe_null(row.try_get::<usize, Option<bool>>(i)),
+            Type::Oid => maybe_null(row.try_get::<usize, Option<u32>>(i)),
+        }?;
+        formatted.push(datum);
     }
+    Ok(if mode == Mode::Cockroach && sort.yes() {
+        formatted
+            .iter()
+            .flat_map(|s| {
+                crate::parser::split_cols(&s, types.len())
+                    .into_iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    } else {
+        formatted
+    })
 }
 
-impl State {
+impl Runner {
     pub async fn start() -> Result<Self, anyhow::Error> {
-        let process_id = 0;
-
-        let switchboard = comm::Switchboard::local()?;
-
-        let (cmd_tx, cmd_rx) = futures::channel::mpsc::unbounded();
-        let dataflow_workers = dataflow::serve(
-            vec![None],
-            NUM_TIMELY_WORKERS,
-            process_id,
-            switchboard.clone(),
-        )
-        .unwrap();
-
-        // Note that the coordinator must be initialized *after* launching the
-        // dataflow workers, as booting the coordinator can involve sending enough
-        // data to workers to fill up a `comm` channel buffer (#3280).
-        let (coord_thread, _cluster_id) = coord::serve(coord::Config {
-            switchboard,
-            cmd_rx,
-            num_timely_workers: NUM_TIMELY_WORKERS,
-            symbiosis_url: Some("postgres://"),
-            data_directory: None,
+        let config = Config {
             logging: None,
-            timestamp: TimestampConfig {
-                frequency: Duration::from_millis(10),
-            },
+            timestamp_frequency: Duration::from_millis(10),
             cache: None,
             logical_compaction_window: None,
+            threads: NUM_TIMELY_WORKERS,
+            process: 0,
+            addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
+            data_directory: None,
+            symbiosis_url: Some("postgres://".into()),
+            listen_addr: None,
+            tls: None,
             experimental_mode: true,
-        })
+            telemetry_url: None,
+        };
+        let server = serve(config).await?;
+        let addr = server.local_addr();
+        let (client, connection) = connect(
+            &format!("host={} port={} user=root", addr.ip(), addr.port()),
+            NoTls,
+        )
         .await?;
-        let coord_thread = coord_thread.join_on_drop();
 
-        Ok(State {
-            coord_client: coord::Client::new(cmd_tx).for_session(Session::dummy()),
-            _dataflow_workers: Box::new(dataflow_workers),
-            _coord_thread: coord_thread,
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+
+        Ok(Runner {
+            _server: server,
+            client,
         })
     }
 
@@ -456,7 +507,7 @@ impl State {
     async fn run_statement<'a>(
         &mut self,
         expected_error: Option<&'a str>,
-        expected_rows_affected: Option<usize>,
+        expected_rows_affected: Option<u64>,
         sql: &'a str,
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
@@ -469,8 +520,8 @@ impl State {
             return Ok(Outcome::Success);
         }
 
-        match self.run_sql(sql).await {
-            Ok((_desc, resp)) => {
+        match self.client.execute(sql, &[]).await {
+            Ok(actual) => {
                 if let Some(expected_error) = expected_error {
                     return Ok(Outcome::UnexpectedPlanSuccess {
                         expected_error,
@@ -479,26 +530,17 @@ impl State {
                 }
                 match expected_rows_affected {
                     None => Ok(Outcome::Success),
-                    Some(expected) => match resp {
-                        ExecuteResponse::Inserted(actual)
-                        | ExecuteResponse::Updated(actual)
-                        | ExecuteResponse::Deleted(actual) => {
-                            if expected != actual {
-                                Ok(Outcome::WrongNumberOfRowsInserted {
-                                    expected_count: expected,
-                                    actual_count: actual,
-                                    location,
-                                })
-                            } else {
-                                Ok(Outcome::Success)
-                            }
+                    Some(expected) => {
+                        if expected != actual {
+                            Ok(Outcome::WrongNumberOfRowsInserted {
+                                expected_count: expected,
+                                actual_count: actual,
+                                location,
+                            })
+                        } else {
+                            Ok(Outcome::Success)
                         }
-
-                        _ => Ok(Outcome::PlanFailure {
-                            error: anyhow!("Query did not insert any rows, expected {}", expected,),
-                            location,
-                        }),
-                    },
+                    }
                 }
             }
             Err(error) => {
@@ -507,7 +549,10 @@ impl State {
                         return Ok(Outcome::Success);
                     }
                 }
-                Ok(Outcome::PlanFailure { error, location })
+                Ok(Outcome::PlanFailure {
+                    error: anyhow!(error),
+                    location,
+                })
             }
         }
     }
@@ -518,60 +563,7 @@ impl State {
         output: &'a Result<QueryOutput<'_>, &'a str>,
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
-        // get statement
-        let statements = match sql::parse::parse(sql) {
-            Ok(statements) => statements,
-            Err(_) if output.is_err() => return Ok(Outcome::Success),
-            Err(e) => {
-                return Ok(Outcome::ParseFailure {
-                    error: e.into(),
-                    location,
-                })
-            }
-        };
-        let statement = match &*statements {
-            [] => bail!("Got zero statements?"),
-            [statement] => statement,
-            _ => bail!("Got multiple statements: {:?}", statements),
-        };
-        match statement {
-            Statement::CreateView { .. }
-            | Statement::Select { .. }
-            | Statement::ShowIndexes { .. } => (),
-            _ => {
-                if output.is_err() {
-                    // We're not interested in testing our hacky handling of INSERT etc
-                    return Ok(Outcome::Success);
-                }
-            }
-        }
-
-        // send plan, read response
-        let (desc, rows) = match self.run_sql(sql).await {
-            Ok((desc, ExecuteResponse::SendingRows(rx))) => {
-                let desc = desc.expect("RelationDesc missing for query that returns rows");
-                let rows = match rx.await? {
-                    PeekResponse::Rows(rows) => Ok(rows),
-                    PeekResponse::Error(e) => Err(anyhow!("{}", e)),
-                    PeekResponse::Canceled => {
-                        panic!("sqllogictest query cannot possibly be canceled")
-                    }
-                };
-                (desc, rows)
-            }
-            Ok(other) => {
-                return Ok(Outcome::PlanFailure {
-                    error: anyhow!(
-                        "Query did not result in SendingRows, instead got {:?}",
-                        other
-                    ),
-                    location,
-                });
-            }
-            Err(e) => (RelationDesc::empty(), Err(e)),
-        };
-
-        let raw_output = match rows {
+        let rows = match self.client.query(sql, &[]).await {
             Ok(rows) => rows,
             Err(error) => {
                 return match output {
@@ -579,16 +571,25 @@ impl State {
                         let error_string = format!("{}", error);
                         if error_string.contains("supported") || error_string.contains("overload") {
                             // this is a failure, but it's caused by lack of support rather than by bugs
-                            Ok(Outcome::Unsupported { error, location })
+                            Ok(Outcome::Unsupported {
+                                error: anyhow!(error),
+                                location,
+                            })
                         } else {
-                            Ok(Outcome::PlanFailure { error, location })
+                            Ok(Outcome::PlanFailure {
+                                error: anyhow!(error),
+                                location,
+                            })
                         }
                     }
                     Err(expected_error) => {
                         if Regex::new(expected_error)?.is_match(&format!("{:#}", error)) {
                             Ok(Outcome::Success)
                         } else {
-                            Ok(Outcome::PlanFailure { error, location })
+                            Ok(Outcome::PlanFailure {
+                                error: anyhow!(error),
+                                location,
+                            })
                         }
                     }
                 };
@@ -613,73 +614,40 @@ impl State {
             Ok(query_output) => query_output,
         };
 
-        // check that inferred types match expected types
-        let inferred_types = &desc.typ().column_types;
-        // sqllogictest coerces the output into the expected type, so `expected_types` is often wrong :(
-        // but at least it will be the correct length
-        if inferred_types.len() != expected_types.len() {
-            return Ok(Outcome::InferenceFailure {
-                expected_types,
-                inferred_types: inferred_types.to_vec(),
-                message: format!(
-                    "Expected {} types, got {} types",
-                    expected_types.len(),
-                    inferred_types.len()
-                ),
-                location,
-            });
-        }
-
-        // check that output matches inferred types
-        for row in &raw_output {
-            if row.unpack().len() != inferred_types.len() {
-                return Ok(Outcome::InferenceFailure {
-                    expected_types,
-                    inferred_types: inferred_types.to_vec(),
-                    message: format!(
-                        "Expected {} datums, got {} datums in row {:?}",
-                        expected_types.len(),
-                        inferred_types.len(),
-                        row
-                    ),
-                    location,
-                });
-            }
-            for (inferred_type, datum) in inferred_types.iter().zip(row.iter()) {
-                if !datum.is_instance_of(inferred_type) {
-                    return Ok(Outcome::InferenceFailure {
-                        expected_types,
-                        inferred_types: inferred_types.to_vec(),
-                        message: format!(
-                            "Inferred type {:?}, got datum {:?}",
-                            inferred_type, datum,
-                        ),
+        // Various checks as long as there are returned rows.
+        if let Some(row) = rows.iter().next() {
+            // check column names
+            if let Some(expected_column_names) = expected_column_names {
+                let actual_column_names = row
+                    .columns()
+                    .iter()
+                    .map(|t| ColumnName::from(t.name()))
+                    .collect::<Vec<_>>();
+                if expected_column_names != &actual_column_names {
+                    return Ok(Outcome::WrongColumnNames {
+                        expected_column_names,
+                        actual_column_names,
                         location,
                     });
                 }
             }
         }
 
-        // check column names
-        if let Some(expected_column_names) = expected_column_names {
-            let inferred_column_names = desc
-                .iter_names()
-                .map(|t| t.owned().unwrap_or_else(|| "?column?".into()))
-                .collect::<Vec<_>>();
-            if expected_column_names != &inferred_column_names {
-                return Ok(Outcome::WrongColumnNames {
-                    expected_column_names,
-                    inferred_column_names,
+        // format output
+        let mut formatted_rows = vec![];
+        for row in &rows {
+            if row.len() != expected_types.len() {
+                return Ok(Outcome::WrongColumnCount {
+                    expected_count: expected_types.len(),
+                    actual_count: row.len(),
                     location,
                 });
             }
+            match format_row(row, &expected_types, *mode, sort) {
+                Ok(row) => formatted_rows.push(row),
+                Err(error) => return Ok(Outcome::FormatFailure { error, location }),
+            }
         }
-
-        // format output
-        let mut formatted_rows = raw_output
-            .iter()
-            .map(|row| format_row(&row, inferred_types, &**expected_types, *mode, sort))
-            .collect::<Vec<_>>();
 
         // sort formatted output
         if let Sort::Row = sort {
@@ -696,7 +664,7 @@ impl State {
                 if values != *expected_values {
                     return Ok(Outcome::OutputFailure {
                         expected_output,
-                        actual_raw_output: raw_output,
+                        actual_raw_output: rows,
                         actual_output: Output::Values(values),
                         location,
                     });
@@ -715,7 +683,7 @@ impl State {
                 if values.len() != *num_values || md5 != *expected_md5 {
                     return Ok(Outcome::OutputFailure {
                         expected_output,
-                        actual_raw_output: raw_output,
+                        actual_raw_output: rows,
                         actual_output: Output::Hashed {
                             num_values: values.len(),
                             md5,
@@ -729,44 +697,8 @@ impl State {
         Ok(Outcome::Success)
     }
 
-    pub(crate) async fn run_sql(
-        &mut self,
-        sql: &str,
-    ) -> Result<(Option<RelationDesc>, ExecuteResponse), anyhow::Error> {
-        let stmts = sql::parse::parse(sql)?;
-        let stmt = if stmts.len() == 1 {
-            stmts.into_iter().next().unwrap()
-        } else {
-            bail!("Expected exactly one statement, got: {}", sql);
-        };
-        let statement_name = String::from("");
-        let portal_name = String::from("");
-
-        // Parse.
-        self.coord_client
-            .describe(statement_name.clone(), Some(stmt), vec![])
-            .await?;
-
-        // Bind.
-        let stmt = self
-            .coord_client
-            .session()
-            .get_prepared_statement(&statement_name)
-            .expect("unnamed prepared statement missing");
-        let desc = stmt.desc().clone();
-        let stmt = stmt.sql().cloned();
-        let result_formats = vec![pgrepr::Format::Text; desc.arity()];
-        self.coord_client.session().set_portal(
-            portal_name.clone(),
-            desc.clone(),
-            stmt,
-            vec![],
-            result_formats,
-        )?;
-
-        // Execute.
-        let res = self.coord_client.execute(portal_name).await?;
-        Ok((desc.relation_desc, res))
+    pub(crate) async fn run_sql(&mut self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
+        Ok(self.client.query(sql, &[]).await?)
     }
 }
 
@@ -785,7 +717,7 @@ pub async fn run_string(
     verbosity: usize,
 ) -> Result<Outcomes, anyhow::Error> {
     let mut outcomes = Outcomes::default();
-    let mut state = State::start().await.unwrap();
+    let mut state = Runner::start().await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
     println!("==> {}", source);
     for record in parser.parse_records()? {
@@ -846,7 +778,7 @@ pub async fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyh
 
     let mut buf = RewriteBuffer::new(&input);
 
-    let mut state = State::start().await?;
+    let mut state = Runner::start().await?;
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
     println!("==> {}", filename.display());
     for record in parser.parse_records()? {

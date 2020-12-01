@@ -74,14 +74,14 @@ SELECT a, sum(b) AS a FROM t GROUP BY a OPTION(expected_group_size = 0.1)
 
 # Test that an ordinal in a GROUP BY that refers to a column that is an
 # expression, rather than a simple column reference, works.
-query IT rowsort
+query II rowsort
 SELECT 2 * a, sum(b) FROM t GROUP BY 1
 ----
 2  3
 4  3
 6  1
 
-query TTT colnames
+query TBT colnames
 SHOW COLUMNS FROM t
 ----
 name  nullable  type
@@ -168,7 +168,7 @@ NULL true 0 1 5
 query error FILTER specified but abs\(\) is not an aggregate function
 SELECT abs(1) FILTER (WHERE false)
 
-query error syntax error at or near "filter"
+query error Expected end of statement, found left parenthesis
 SELECT column1 FILTER (WHERE column1 = 1) FROM (VALUES (1))
 
 query error aggregate functions are not allowed in FILTER

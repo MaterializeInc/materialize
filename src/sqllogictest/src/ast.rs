@@ -115,7 +115,7 @@ pub enum Record<'a> {
     Statement {
         location: Location,
         expected_error: Option<&'a str>,
-        rows_affected: Option<usize>,
+        rows_affected: Option<u64>,
         sql: &'a str,
     },
     /// A `query` directive.
