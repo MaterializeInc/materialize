@@ -7,24 +7,23 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.34"
-build-info = { path = "../build-info" }
-bytes = "0.5"
 chrono = "0.4"
 comm = { path = "../comm" }
-coord = { path = "../coord" }
-dataflow = { path = "../dataflow" }
-dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
+fallible-iterator = "0.2"
 futures = "0.3"
 getopts = "0.2"
-itertools = "0.9"
 lazy_static = "1"
+materialized = { path = "../materialized" }
 md-5 = "0.9"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
+postgres-protocol = "0.5"
 regex = "1"
 repr = { path = "../repr" }
 serde_json = "1"
 sql = { path = "../sql" }
 tokio = "0.2"
+tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4", "with-uuid-0_8", "with-serde_json-1"] }
+uuid = "0.8"
 walkdir = "2"

@@ -164,7 +164,7 @@ SELECT mod(-13, -123)
 query R
 SELECT mod(-5.6, -2.3)
 ----
--1.0
+-1
 
 query R
 SELECT mod(-10.4, -2)
@@ -333,7 +333,7 @@ DELETE FROM nums
 query R
 SELECT floor(1.5678)
 ----
-1.0000
+1
 
 query R
 SELECT round(1.5678, 3)
@@ -353,7 +353,7 @@ SELECT round(1.5678, 1)
 query R
 SELECT round(1.5678, 0)
 ----
-2.0000
+2
 
 query R
 SELECT round(1.5678, 7)
@@ -393,17 +393,17 @@ SELECT round(748.58, -4)
 query RR
 SELECT round(123.9994, 3), round(123.9995, 3)
 ----
-123.9990  124.0000
+123.9990  124
 
 query RR
 SELECT round(123.4545, 2), round(123.45, -2)
 ----
-123.4500  100.00
+123.4500  100
 
 query R
 SELECT round(150.75, 0)
 ----
-151.00
+151
 
 query R
 SELECT round(NULL)

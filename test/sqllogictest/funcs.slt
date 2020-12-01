@@ -177,7 +177,7 @@ SELECT floor(CAST (1.1 AS float))
 query RRRRR
 SELECT floor(1.1), floor(1.111), floor(100.1), floor(100.11), floor(-4.1)
 ----
-1.0 1.000 100.0 100.00 -5.0
+1  1  100  100  -5
 
 
 query R
@@ -193,7 +193,7 @@ SELECT ceil(CAST (1.1 AS float))
 query RRRRR
 SELECT ceil(1.1), ceil(1.111), ceil(100.1), ceil(100.11), ceil(-4.1)
 ----
-2.0 2.000 101.0 101.00 -4.0
+2  2  101  101  -4
 
 # postgres converts ints to floats on floor/ceil
 query R
@@ -238,20 +238,20 @@ INSERT INTO null_test VALUES (5.06, -1.59), (-12.58, NULL), (2.96, 2.2), (NULL, 
 query RR rowsort
 SELECT floor(decimal_col), floor(float_col) FROM null_test
 ----
--10.00  -49
--13.00  NULL
-2.00    2
-5.00    -2
-NULL    23
+-10  -49
+-13  NULL
+2  2
+5  -2
+NULL  23
 
 query RR rowsort
 SELECT ceil(decimal_col), ceil(float_col) FROM null_test
 ----
--12.00  NULL
--9.00  -48
-3.00    3
-6.00    -1
-NULL    24
+-12  NULL
+-9  -48
+3  3
+6  -1
+NULL  24
 
 # Tests for the sqrt function.
 #
