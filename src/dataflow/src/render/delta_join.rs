@@ -193,9 +193,6 @@ where
                                         .collection(&inputs[relation])
                                         .expect("Failed to render update stream").0.enter(inner).enter_region(region)
                                 };
-                                // let (update_stream, errs) =
-                                // let update_stream = update_stream.enter(inner).enter_region(region);
-                                // scope_errs.push(errs);
 
                                 // We track the sources of each column in our update stream.
                                 let mut source_columns = input_mapper.global_columns(relation)
