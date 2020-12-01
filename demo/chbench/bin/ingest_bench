@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+export MZ_THREADS=24
+export NUM_WAREHOUSES=10
+export OLAP_THREADS=1
+export OLTP_THREADS=64
+
+./bin/mzconduct run chbench -w ingest-performance-benchmark
