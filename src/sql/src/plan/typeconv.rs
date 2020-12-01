@@ -148,6 +148,7 @@ lazy_static! {
             (Oid, String) => Explicit: CastInt32ToString,
 
             // FLOAT32
+            (Float32, Int32) => Assignment: CastFloat32ToInt32,
             (Float32, Int64) => Assignment: CastFloat32ToInt64,
             (Float32, Float64) => Implicit: CastFloat32ToFloat64,
             (Float32, Decimal) => Assignment: CastOp::new(|_ecx, e, to_type| {
@@ -160,6 +161,7 @@ lazy_static! {
             // FLOAT64
             (Float64, Int32) => Assignment: CastFloat64ToInt32,
             (Float64, Int64) => Assignment: CastFloat64ToInt64,
+            (Float64, Float32) => Assignment: CastFloat64ToFloat32,
             (Float64, Decimal) => Assignment: CastOp::new(|_ecx, e, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 let s = ScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
