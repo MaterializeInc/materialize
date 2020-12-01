@@ -19,7 +19,11 @@ def view_names(conn):
 def view_matches(cursor, view, expected):
     """Return True if a SELECT from the VIEW matches the expected string."""
     stream = io.StringIO()
-    cursor.copy_expert(f"COPY (SELECT * FROM {view}) TO STDOUT", stream)
+    try:
+        cursor.copy_expert(f"COPY (SELECT * FROM {view}) TO STDOUT", stream)
+    except psycopg2.errors.InternalError_:
+        # The view is not yet ready to be queried
+        return False
     return stream.getvalue() == expected
 
 def snapshot_materialize_views(args):
