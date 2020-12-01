@@ -264,6 +264,8 @@ type_interval_val ::=
   'INTERVAL' "'" time_expr+ "'" ( ( head_time_unit 'TO' )? tail_time_unit )?
 type_jsonb ::=
     "'" json_string "'" '::JSONB'
+type_map ::=
+    "'" map_string "'" '::' 'MAP' '[' 'TEXT' '=>' value_type ']'
 type_list ::=
     'LIST' '[' (element (',' element)*)? ']'
 type_numeric_dec ::=
