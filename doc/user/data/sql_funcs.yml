@@ -279,9 +279,7 @@
       to timestamp
 
   - signature: 'to_char(val: timestamp, format: str)'
-    description: >-
-      Converts a timestamp into a string using the specified format, see the
-      detailed docs for the full specification language.
+    description: Converts a timestamp into a string using the specified format.
     url: to_char
 
 - type: UUID
