@@ -66,6 +66,13 @@ $ set writer-schema={
                             "size": 4
                         }
                     ]
+                },
+                {
+                    "name": "f6",
+                    "type": {
+                        "type": "map",
+                        "values": "long"
+                    }
                 }
             ]
         }
@@ -134,6 +141,13 @@ $ set reader-schema={
                       },
                       "long"
                     ]
+              },
+              {
+                  "name": "f6",
+                  "type": {
+                      "type": "map",
+                      "values": "long"
+                  }
               }
           ]
       }
@@ -141,10 +155,10 @@ $ set reader-schema={
 $ kafka-create-topic topic=avro-data
 
 $ kafka-ingest format=avro topic=avro-data schema=${writer-schema} publish=true timestamp=1
-{ "f5": 1234, "f4": {"variant1": [0]}, "f3": 2345, "f2": "Diamonds", "f1": {"variant4": [0, 1, 2, 3]} }
+{ "f5": 1234, "f4": {"variant1": [0]}, "f3": 2345, "f2": "Diamonds", "f1": {"variant4": [0, 1, 2, 3]}, "f6": {"hello": 123, "another": 2144} }
 
 $ kafka-ingest format=avro topic=avro-data schema=${reader-schema} publish=true timestamp=1
-{ "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]} }
+{ "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
 
 > CREATE MATERIALIZED SOURCE avro_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
@@ -156,3 +170,10 @@ f0 f11 f12 f13 f2 f51 f52
 ---
 (7777,bar) \x00\x01\x02\x03 <null> <null> Diamonds <null> 1234
 (9999,) <null> <null> 3456 Jokers \x00\x01\x02\x03\x04\x05\x06\x07\x08\t <null>
+
+# Testdrive prepares statements before they are executed.
+# Because maps are a non-standard Postgres type, we can't SELECT them directly.
+# TODO@jldlaughlin: Update this test case when we have a binary encoding for maps.
+> SELECT f6 -> 'hello' FROM avro_data
+<null>
+123
