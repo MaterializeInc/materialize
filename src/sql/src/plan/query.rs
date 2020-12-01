@@ -28,7 +28,6 @@ use std::mem;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use itertools::Itertools;
-use ore::iter::IteratorExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
@@ -39,7 +38,8 @@ use sql_parser::ast::{
 use ::expr::{GlobalId, Id, RowSetFinishing};
 use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{
-    strconv, ColumnName, Datum, RelationDesc, RelationType, RowArena, ScalarType, Timestamp,
+    strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
+    Timestamp,
 };
 
 use crate::catalog::CatalogItemType;
@@ -147,39 +147,43 @@ pub fn plan_insert_query(
         bail!("cannot insert into system table '{}'", table.name());
     }
 
+    let columns: Vec<_> = columns.into_iter().map(normalize::column_name).collect();
+
     // Validate target column order.
-    let mut project_key: Vec<_> = (0..desc.arity()).collect();
-    let mut ordering = Vec::with_capacity(desc.arity());
+    let mut source_types = Vec::with_capacity(columns.len());
+    let mut ordering = Vec::with_capacity(columns.len());
 
     if columns.is_empty() {
+        // Columns in source query must be in order. Let's guess the full shape and truncate to the
+        // right size later after planning the source query
+        source_types.extend(desc.iter_types().map(|x| &x.scalar_type));
         ordering.extend(0..desc.arity());
     } else {
-        let column_to_index: HashMap<&ColumnName, usize> = desc
-            .iter_names()
-            .filter_map(|x| x)
+        let column_by_name: HashMap<&ColumnName, (usize, &ColumnType)> = desc
+            .iter()
+            .filter_map(|(name, typ)| name.map(|n| (n, typ)))
             .enumerate()
-            .map(|(idx, name)| (name, idx))
+            .map(|(idx, (name, typ))| (name, (idx, typ)))
             .collect();
 
-        for (src_idx, c) in columns.into_iter().enumerate() {
-            let c = normalize::column_name(c);
-            if let Some(idx) = column_to_index.get(&c) {
+        let mut seen = HashSet::with_capacity(columns.len());
+
+        for c in &columns {
+            if let Some((idx, typ)) = column_by_name.get(c) {
                 ordering.push(*idx);
-                project_key[*idx] = src_idx;
+                source_types.push(&typ.scalar_type);
             } else {
                 bail!(
-                    "INSERT statement specifies column {}, but it is not present in table",
+                    "column \"{}\" of relation \"{}\" does not exist",
                     c.as_str(),
+                    table.name()
                 );
             }
+            if !seen.insert(c) {
+                bail!("column \"{}\" specified more than once", c.as_str());
+            }
         }
-    }
-    if ordering.iter().has_duplicates() {
-        bail!("INSERT statement specifies duplicate column");
-    }
-    if ordering.len() < desc.arity() {
-        unsupported!("INSERT statement with incomplete column set");
-    }
+    };
 
     // Plan the source.
     let expr = match source {
@@ -197,12 +201,7 @@ pub fn plan_insert_query(
                     limit: None,
                     offset: None,
                 } if ctes.is_empty() && order_by.is_empty() => {
-                    let col_types = &desc.typ().column_types;
-                    let type_hints = ordering
-                        .iter()
-                        .map(|idx| &col_types[*idx].scalar_type)
-                        .collect();
-                    let (expr, _scope) = plan_values(&qcx, &values.0, Some(type_hints))?;
+                    let (expr, _scope) = plan_values(&qcx, &values.0, Some(source_types.clone()))?;
                     expr
                 }
                 _ => {
@@ -214,26 +213,30 @@ pub fn plan_insert_query(
         InsertSource::DefaultValues => unsupported!("INSERT ... DEFAULT VALUES"),
     };
 
-    // Validate that the arity of the source query matches the arity of the
-    // target table.
     let typ = qcx.relation_type(&expr);
-    if typ.arity() != desc.arity() {
-        bail!(
-            "INSERT statement specifies {} columns, but table has {} columns",
-            typ.arity(),
-            desc.arity(),
-        );
+
+    // Validate that the arity of the source query is at most the size of declared columns or the
+    // size of the table if none are declared
+    let max_columns = if columns.is_empty() {
+        desc.arity()
+    } else {
+        columns.len()
+    };
+    if typ.arity() > max_columns {
+        bail!("INSERT has more expressions than target columns");
     }
+    // But it should never have less than the declared columns (or zero)
+    if typ.arity() < columns.len() {
+        bail!("INSERT has more target columns than expressions");
+    }
+
+    // Trim now that we know for sure the correct arity of the source query
+    source_types.truncate(typ.arity());
+    ordering.truncate(typ.arity());
 
     // Ensure the types of the source query match the types of the target table,
     // installing assignment casts where necessary and possible.
-    let expr = cast_relation(
-        &qcx,
-        CastContext::Assignment,
-        expr.project(project_key),
-        desc.iter_types().map(|ty| &ty.scalar_type),
-    )
-    .map_err(|e| {
+    let expr = cast_relation(&qcx, CastContext::Assignment, expr, source_types).map_err(|e| {
         anyhow!(
             "column \"{}\" is of type {} but expression is of type {}",
             desc.get_name(e.column)
@@ -243,7 +246,30 @@ pub fn plan_insert_query(
         )
     })?;
 
-    Ok((table.id(), expr))
+    // Fill in any omitted columns and rearrange into correct order
+    let mut map_exprs = vec![];
+    let mut project_key = vec![];
+
+    // Maps from table column index to position in the source query
+    let col_to_source: HashMap<_, _> = ordering.iter().enumerate().map(|(a, b)| (b, a)).collect();
+
+    for (col_idx, (name, col_typ)) in desc.iter().enumerate() {
+        let name = name.expect("cannot possibly insert into anonymous column");
+
+        if let Some(src_idx) = col_to_source.get(&col_idx) {
+            project_key.push(*src_idx);
+        } else if col_typ.nullable {
+            project_key.push(typ.arity() + map_exprs.len());
+            map_exprs.push(ScalarExpr::literal_null(col_typ.scalar_type.clone()));
+        } else {
+            bail!(
+                "null value in column \"{}\" violates not-null constraint",
+                name.as_str()
+            )
+        }
+    }
+
+    Ok((table.id(), expr.map(map_exprs).project(project_key)))
 }
 
 struct CastRelationError {
