@@ -186,6 +186,7 @@ where
                 // TODO(rkhaitan): we should be able to fuse monotonic mins and maxes together as well.
                 let mut min_max = Vec::new();
                 let mut remaining = Vec::new();
+                // We need to make sure that fused aggregates form a subsequence of the overall sequence of aggregates.
                 for index in 0..aggregates.len() {
                     if accumulable_hierarchical(&aggregates[index].func).0 {
                         accumulable.push((index, aggregates[index].clone()));
@@ -268,19 +269,42 @@ where
                             let mut row_packer = RowPacker::new();
                             move |key, mut input, output| {
                                 // The inputs are triples of a reduction type, an optional index and row to decode.
+                                // The `reduce_abelian` operator guarantees that values will be placed in sorted order
+                                // by the values Ord implementation. This means that fused reductions
+                                // (ReductionType's FusedAccumulable and FusedMinMax) will be the first entries in inputs
+                                // if any such ReductionType's are present.
+                                // We need to reconstitute the final value by:
+                                // 1. Extracting out the fused aggregates
+                                // 2. For each aggregate we are computing, figure out if it is either a fused accumulable,
+                                //    fused min-max or unfused aggregate
+                                // 3. Get the relevant value (either from the rows of fused aggregates, or from the input
+                                //    array for unfused aggregates)
+                                // 4. Stitch all the values together into one row.
 
-                                // There can be at most one `None` index, and it indicates the accumulable aggregates.
                                 let new_row = Row::new(Vec::new());
+
+                                // First, we are going to check to see if any of our inputs correspond to fused aggregates.
+                                // If so, we need to pull those out and treat them differently than unfused aggregates. The
+                                // code here assumes that fused accumulable aggregates will always be stored before fused
+                                // min-max aggregates, by virtue of the Ord implementation of ReductionType. If ReductionType
+                                // changes, this code will need to change as well.
                                 let mut accumulable = if (input[0].0).0 == ReductionType::FusedAccumulable {
                                     // This input corresponds to our densely packed accumulable aggregates.
                                     let iter = (input[0].0).2.iter();
-                                    // Make sure we never try to read from this input again.
+                                    // Once we've found fused accumulable aggregates, we need to be careful
+                                    // never to read from this entry in `input` again so that we don't reuse
+                                    // that row for something else.
                                     input = &input[1..];
                                     iter
                                 } else {
+                                    // If we don't have any fused accumulable aggregates we can use this empty
+                                    // iterator as a stand-in.
                                     new_row.iter()
                                 };
 
+                                // Do the same thing as above, but for min-maxes. Note that we are looking at the
+                                // first entry of inputs again and that's ok because if we had previously found fused
+                                // accumulable aggregates, we would have modified our input slice to skip that element.
                                 let mut min_max = if (input[0].0).0 == ReductionType::FusedMinMax {
                                     // This input corresponds to our densely packed min/max aggregates.
                                     let iter = (input[0].0).2.iter();
@@ -291,7 +315,18 @@ where
                                     new_row.iter()
                                 };
 
+                                // First, fill our output row with key information.
                                 row_packer.extend(key.iter());
+                                // Now, we need to reconstruct our data in the order that the aggregates were given to us.
+                                // We can think of the original list of aggregates. Then the fused accumulable aggregates
+                                // (stored in a Row), fused minmax aggregates (stored in another Row) and the unfused
+                                // aggregates (stored as individual Rows in input) each form disjoint subsequences that
+                                // partition the original sequence of aggregations. We know that each of these is a
+                                // subsequence because the fused aggregations were computed in order, and the unfused
+                                // aggregates are ordered by index (the second field in the input triple).
+                                // All of this to say, we can reconstruct our original sequence of aggregations for the
+                                // results by doing something that is very similar to a 3 way merge as long as we know
+                                // whether each aggregate was fused and accumulable, fused and minmax, or unfused.
                                 for flags in is_accumulable.iter().zip(is_min_max.iter()) {
                                     match flags {
                                         (true, false) => row_packer.push(accumulable.next().unwrap()),
