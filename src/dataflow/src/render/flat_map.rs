@@ -90,7 +90,7 @@ where
                                     // We ignore the demand analysis and just apply map_filter_project.
                                     mfp.evaluate(&mut datums, temp_storage, row_packer)
                                         .transpose()
-                                        .map(|x| (x.map_err(|e| DataflowError::from(e)), r))
+                                        .map(|x| (x.map_err(DataflowError::from), r))
                                 } else {
                                     Some((
                                         Ok::<_, DataflowError>(
