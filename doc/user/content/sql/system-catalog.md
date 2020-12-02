@@ -51,6 +51,15 @@ information about the sinks available in a Materialize.
 The following sections describe the available objects in the `mz_catalog`
 schema.
 
+### `mz_array_types`
+
+The `mz_array_types` table contains a row for each array type in the system.
+
+Field          | Type       | Meaning
+---------------|------------|----------
+`type_id`      | [`text`]   | The ID of the array type.
+`element_id`   | [`text`]   | The ID of the array's element type.
+
 ### `mz_avro_ocf_sinks`
 
 The `mz_avro_ocf_sinks` table contains a row for each Avro OCF sink in the
