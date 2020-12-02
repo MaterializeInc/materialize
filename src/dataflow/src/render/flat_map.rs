@@ -70,6 +70,12 @@ where
                             Err(e) => return vec![(Err(e.into()), 1)],
                         };
                         let output_rows = func.eval(exprs, &temp_storage);
+                        // Blank out entries in `datum` here, for simplicity later on.
+                        for index in 0..datums_len {
+                            if replace[index] {
+                                datums[index] = Datum::Dummy;
+                            }
+                        }
                         // Declare borrows outside the closure so that appropriately lifetimed
                         // borrows are moved in and used by `mfp.evaluate`.
                         let map_filter_project = &map_filter_project;
@@ -79,6 +85,7 @@ where
                             .into_iter()
                             .filter_map(move |(output_row, r)| {
                                 if let Some(mfp) = &map_filter_project {
+                                    // Remove any additional columns added in prior evaluation.
                                     datums.truncate(datums_len);
                                     // We ignore the demand analysis and just apply map_filter_project.
                                     mfp.evaluate(&mut datums, temp_storage, row_packer)
@@ -93,8 +100,8 @@ where
                                                     .cloned()
                                                     .chain(output_row.iter())
                                                     .zip(replace.iter())
-                                                    .map(|(datum, demand)| {
-                                                        if *demand {
+                                                    .map(|(datum, replace)| {
+                                                        if *replace {
                                                             Datum::Dummy
                                                         } else {
                                                             datum
