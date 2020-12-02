@@ -250,7 +250,7 @@
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
       to `expression` and any value of `s` evaluates to `true`"
 
-- type: Time
+- type: Date and Time
   description: Time functions take or produce a time-like type, e.g. [`date`](../types/date),
     [`timestamp`](../types/timestamp), [`timestamptz`](../types/timestamptz).
   functions:
@@ -277,6 +277,10 @@
   - signature: 'to_timestamp(val: double precision) -> timestamptz'
     description: Converts Unix epoch (seconds since 00:00:00 UTC on January 1, 1970)
       to timestamp
+
+  - signature: 'to_char(val: timestamp, format: str)'
+    description: Converts a timestamp into a string using the specified format.
+    url: to_char
 
 - type: UUID
   functions:
