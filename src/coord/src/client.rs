@@ -117,6 +117,23 @@ impl SessionClient {
         .await
     }
 
+    /// Binds a statement to a portal.
+    pub async fn declare(
+        &mut self,
+        name: String,
+        stmt: Statement,
+        param_types: Vec<Option<pgrepr::Type>>,
+    ) -> Result<(), anyhow::Error> {
+        self.send(|tx, session| Command::Declare {
+            name,
+            stmt,
+            param_types,
+            session,
+            tx,
+        })
+        .await
+    }
+
     /// Executes a previously-bound portal.
     pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, anyhow::Error> {
         self.send(|tx, session| Command::Execute {

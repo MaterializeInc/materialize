@@ -1,0 +1,8 @@
+Operator | RHS Type | Description
+---------|----------|-------------
+`->` | `string` | Access field by name, and return target field ([docs](/sql/types/map/#retrieve-value-with-key--))
+`@>` | `map` | Does element contain RHS? ([docs](/sql/types/map/#lhs-contains-rhs-))
+<code>&lt;@</code> | `map` | Does RHS contain element? ([docs](/sql/types/map/#rhs-contains-lhs-))
+`?` | `string` | Is RHS a top-level key? ([docs](/sql/types/map/#search-top-level-keys-))
+`?&` | `string[]` | Does LHS contain all RHS top-level keys? ([docs](/sql/types/map/#search-for-all-top-level-keys-))
+`?|` | `string[]` | Does LHS contain any RHS top-level keys? ([docs](/sql/types/map/#search-for-any-top-level-keys-))

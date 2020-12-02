@@ -139,6 +139,8 @@ pub fn describe_statement(
         | Statement::StartTransaction(_)
         | Statement::Rollback(_)
         | Statement::Commit(_)
+        | Statement::Close(_)
+        | Statement::Declare(_)
         | Statement::AlterObjectRename(_)
         | Statement::AlterIndexOptions(_) => StatementDesc::new(None),
 
@@ -266,6 +268,8 @@ pub fn describe_statement(
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
+
+        Statement::Fetch(_) => bail!("FETCH must be described with a Session"),
     })
 }
 
@@ -328,6 +332,10 @@ pub fn handle_statement(
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
+
+        Statement::Declare(_) => bail!("DECLARE statements should already be handled"),
+        Statement::Fetch(_) => bail!("FETCH statements should already be handled"),
+        Statement::Close(_) => bail!("CLOSE statements should already be handled"),
     }
 }
 
@@ -671,10 +679,11 @@ fn handle_create_sink(
     let suffix = format!(
         "{}-{}",
         scx.catalog
-            .startup_time()
+            .config()
+            .startup_time
             .duration_since(UNIX_EPOCH)?
             .as_secs(),
-        scx.catalog.nonce()
+        scx.catalog.config().nonce
     );
 
     let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
@@ -1937,7 +1946,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn experimental_mode(&self) -> bool {
-        self.catalog.experimental_mode()
+        self.catalog.config().experimental_mode
     }
 
     pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {

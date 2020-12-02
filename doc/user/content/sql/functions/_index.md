@@ -90,6 +90,10 @@ Operation | Computes
 
 {{% json-operators %}}
 
+### Map
+
+{{% map-operators %}}
+
 ### List
 
 List operators are [polymorphic](../types/list/#polymorphism).

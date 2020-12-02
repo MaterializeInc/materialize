@@ -7,7 +7,9 @@ use std::io::{Read, Write};
 use std::str::FromStr;
 
 use anyhow::Error;
-use libflate::deflate::{Decoder, Encoder};
+use flate2::read::DeflateDecoder;
+use flate2::write::DeflateEncoder;
+use flate2::Compression;
 
 use crate::error::{DecodeError, Error as AvroError};
 use crate::types::{ToAvro, Value};
@@ -63,9 +65,9 @@ impl Codec {
         match self {
             Codec::Null => (),
             Codec::Deflate => {
-                let mut encoder = Encoder::new(Vec::new());
+                let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
                 encoder.write_all(stream)?;
-                *stream = encoder.finish().into_result()?;
+                *stream = encoder.finish()?;
             }
             #[cfg(feature = "snappy")]
             Codec::Snappy => {
@@ -93,8 +95,7 @@ impl Codec {
             Codec::Deflate => {
                 let mut decoded = Vec::new();
                 {
-                    // either the compiler or I is dumb
-                    let mut decoder = Decoder::new(&stream[..]);
+                    let mut decoder = DeflateDecoder::new(&**stream);
                     decoder.read_to_end(&mut decoded)?;
                 }
                 *stream = decoded;

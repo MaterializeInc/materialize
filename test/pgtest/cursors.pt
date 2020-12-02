@@ -1,0 +1,514 @@
+# Verify we can pgwire Bind, Execute, then SQL FETCH and CLOSE, then
+# pgwire Execute fails (due to the close). This tests that pgwire portals
+# and SQL cursors are the same thing.
+send
+Query {"query": "BEGIN"}
+Parse {"name": "s", "query": "VALUES (2), (4), (6)"}
+Bind {"portal": "p", "statement": "s"}
+Execute {"portal": "p", "max_rows": 1}
+Sync
+Query {"query": "FETCH 1 p"}
+Query {"query": "CLOSE \"p\""}
+Execute {"portal": "p", "max_rows": 1}
+Sync
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+BindComplete
+DataRow {"fields":["2"]}
+PortalSuspended
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"column1"}]}
+DataRow {"fields":["4"]}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"CLOSE CURSOR"}
+ReadyForQuery {"status":"T"}
+ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"p\" does not exist"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+# Ensure FETCH with no count returns 1 row.
+send
+Query {"query": "BEGIN"}
+Query {"query": "DECLARE c CURSOR FOR VALUES (2), (4), (6)"}
+Query {"query": "FETCH c"}
+Query {"query": "CLOSE c"}
+Query {"query": "COMMIT"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"column1"}]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"CLOSE CURSOR"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+# FETCH with a high count.
+send
+Query {"query": "BEGIN"}
+Query {"query": "DECLARE c CURSOR FOR VALUES (2), (4), (6)"}
+Query {"query": "FETCH 2000 c"}
+Query {"query": "CLOSE c"}
+Query {"query": "COMMIT"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"column1"}]}
+DataRow {"fields":["2"]}
+DataRow {"fields":["4"]}
+DataRow {"fields":["6"]}
+CommandComplete {"tag":"FETCH 3"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"CLOSE CURSOR"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+# DECLARE outside a transaction should fail. A test like:
+# Query {"query": "DECLARE c CURSOR FOR VALUES (2), (4), (6)"}
+# would trigger this but we have slightly different transaction semantics
+# than Postgres that would require special casing this situation, and
+# it's safe to ignore, so we don't implement or test it.
+
+# Surprisingly, the same statement but with a SELECT added on passes. This
+# is because Postgres has some different transaction states. For a Query
+# message containing a single statement, it uses the DEFAULT state. If
+# there are multiple statements it uses INPROGRESS_IMPLICIT, which acts
+# similar to a BEGIN. The SELECT here triggers that, which then causes
+# DECLARE to error. Since we have fewer transaction states our DECLARE
+# doesn't detect this for the single statement case.
+send
+Query {"query": "DECLARE c CURSOR FOR VALUES (2), (4), (6); SELECT 1"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DECLARE CURSOR"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CLOSE c"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"cursor \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "FETCH c"}
+----
+
+until err_field_typs=M
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"M","value":"cursor \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}
+
+# Verify that cursor and portal close messages differ.
+send
+Execute {"portal": "c"}
+Sync
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}
+
+# Verify that Describe will fail before and after a transaction, but work within one.
+send
+Describe {"variant": "P", "name": "c"}
+Sync
+Query {"query": "BEGIN"}
+Query {"query": "DECLARE c CURSOR FOR VALUES (2), (4), (6)"}
+Describe {"variant": "P", "name": "c"}
+Query {"query": "COMMIT"}
+Describe {"variant": "P", "name": "c"}
+Sync
+----
+
+until
+ErrorResponse
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"column1"}]}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}
+
+# Verify that a single Query message can declare and fetch from a
+# portal. This tests that, even though DECLARE cannot be used outside
+# of a transaction, a single Query message with multiple statements is
+# a transaction. Also verify that it doesn't exist afterward.
+send
+Query {"query": "DECLARE c CURSOR FOR VALUES (2), (4), (6); FETCH 2 c; FETCH 10 c;"}
+Describe {"variant": "P", "name": "c"}
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DECLARE CURSOR"}
+RowDescription {"fields":[{"name":"column1"}]}
+DataRow {"fields":["2"]}
+DataRow {"fields":["4"]}
+CommandComplete {"tag":"FETCH 2"}
+RowDescription {"fields":[{"name":"column1"}]}
+DataRow {"fields":["6"]}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}
+
+# Test cursors in extended protocol.
+send
+Query {"query": "BEGIN"}
+Parse {"query": "DECLARE c CURSOR FOR VALUES (1), (2), (3)"}
+Describe
+Bind
+Execute
+Parse {"query": "FETCH c"}
+Describe
+Bind
+Execute
+Execute {"portal": "c"}
+Parse {"query": "CLOSE c"}
+Describe
+Bind
+Execute
+Sync
+Query {"query": "COMMIT"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+ParameterDescription {"parameters":[]}
+NoData
+BindComplete
+CommandComplete {"tag":"DECLARE CURSOR"}
+ParseComplete
+ParameterDescription {"parameters":[]}
+RowDescription {"fields":[{"name":"column1"}]}
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"FETCH 1"}
+DataRow {"fields":["2"]}
+DataRow {"fields":["3"]}
+CommandComplete {"tag":"SELECT 2"}
+ParseComplete
+ParameterDescription {"parameters":[]}
+NoData
+BindComplete
+CommandComplete {"tag":"CLOSE CURSOR"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+# Here's a tricky one. Create a portal ("c") with 6 rows in it. Create
+# and bind another portal ("a") that fetches 2 rows from "c", but don't
+# execute "a" at all. Execute the empty portal pulling 2 rows from c
+# (1, 2). Execute portal "a" but only request 1 row (3). At this point
+# "a" has also cached row 4 because it's a 2 row FETCH. Row 4 is in some
+# cache somewhere, and no longer in portal "c". Verify this by pulling
+# 2 more rows from "c" (5, 6). Finally pull the remaining rows from "a"
+# (4). This test verifies that the first execution of a FETCH will pull
+# N rows from its target portal and cache them.
+# NOTE: We differ from postgres here so don't actually test this. The
+# test and comment are left here so future readers can understand what
+# should be happening if we were fully compliant.
+#send
+#Query {"query": "BEGIN"}
+#Query {"query": "DECLARE c CURSOR FOR VALUES (1), (2), (3), (4), (5), (6)"}
+#Parse {"query": "FETCH 2 c"}
+#Bind {"portal": "a"}
+#Sync
+#Query {"query": "FETCH 2 c"}
+#Execute {"portal": "a", "max_rows": 1}
+#Sync
+#Query {"query": "FETCH 2 c"}
+#Execute {"portal": "a"}
+#Sync
+#Query {"query": "FETCH 2 c"}
+#Query {"query": "COMMIT"}
+#----
+#
+#until
+#ReadyForQuery
+#ReadyForQuery
+#ReadyForQuery
+#ReadyForQuery
+#ReadyForQuery
+#ReadyForQuery
+#ReadyForQuery
+#ReadyForQuery
+#ReadyForQuery
+#----
+#CommandComplete {"tag":"BEGIN"}
+#ReadyForQuery {"status":"T"}
+#CommandComplete {"tag":"DECLARE CURSOR"}
+#ReadyForQuery {"status":"T"}
+#ParseComplete
+#BindComplete
+#ReadyForQuery {"status":"T"}
+#RowDescription {"fields":[{"name":"column1"}]}
+#DataRow {"fields":["1"]}
+#DataRow {"fields":["2"]}
+#CommandComplete {"tag":"FETCH 2"}
+#ReadyForQuery {"status":"T"}
+#DataRow {"fields":["3"]}
+#PortalSuspended
+#ReadyForQuery {"status":"T"}
+#RowDescription {"fields":[{"name":"column1"}]}
+#DataRow {"fields":["5"]}
+#DataRow {"fields":["6"]}
+#CommandComplete {"tag":"FETCH 2"}
+#ReadyForQuery {"status":"T"}
+#DataRow {"fields":["4"]}
+#CommandComplete {"tag":"FETCH 2"}
+#ReadyForQuery {"status":"T"}
+#RowDescription {"fields":[{"name":"column1"}]}
+#CommandComplete {"tag":"FETCH 0"}
+#ReadyForQuery {"status":"T"}
+#CommandComplete {"tag":"COMMIT"}
+#ReadyForQuery {"status":"I"}
+
+# Test FETCH 0. This should return 0 rows (not all remaining, like Execute).
+send
+Query {"query": "BEGIN"}
+Query {"query": "DECLARE c CURSOR FOR VALUES (1), (2), (3), (4), (5), (6)"}
+Query {"query": "FETCH 0 c"}
+Query {"query": "COMMIT"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"column1"}]}
+CommandComplete {"tag":"FETCH 0"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+# Executing a DECLARE twice fails.
+send
+Query {"query": "BEGIN"}
+Parse {"query": "DECLARE c CURSOR FOR VALUES (1), (2), (3)"}
+Bind
+Execute
+Execute
+Sync
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DECLARE CURSOR"}
+ErrorResponse {"fields":[{"typ":"C","value":"55000"},{"typ":"M","value":"portal \"\" cannot be run"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+# Executing a FETCH twice does nothing the second time. It must be
+# rebound to get more rows.
+# Executing a CLOSE twice fails like DECLARE.
+send
+Query {"query": "BEGIN"}
+Parse {"query": "DECLARE c CURSOR FOR VALUES (1), (2), (3)"}
+Bind
+Execute
+Parse {"query": "FETCH c"}
+Bind
+Execute
+Execute
+Bind
+Execute
+Execute
+Parse {"query": "CLOSE c"}
+Bind
+Execute
+Execute
+Sync
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DECLARE CURSOR"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"FETCH 1"}
+CommandComplete {"tag":"FETCH 1"}
+BindComplete
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"FETCH 1"}
+CommandComplete {"tag":"FETCH 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"CLOSE CURSOR"}
+ErrorResponse {"fields":[{"typ":"C","value":"55000"},{"typ":"M","value":"portal \"\" cannot be run"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+# Test FETCH with various combinations of row and execute counts. And
+# recall that since we don't support Execute with max_rows < FETCH's
+# count, we aren't testing that here, but should be if we add it.
+send
+Query {"query": "BEGIN"}
+Parse {"query": "DECLARE c CURSOR FOR VALUES (1), (2), (3), (4), (5), (6), (7), (8)"}
+Bind
+Execute
+Parse {"query": "FETCH 2 c"}
+Bind
+Execute
+Execute
+Bind
+Execute {"max_rows": 4}
+Execute {"max_rows": 4}
+Execute
+Parse {"query": "FETCH c"}
+Bind
+Execute {"max_rows": 2}
+Execute {"max_rows": 2}
+Sync
+Query {"query": "COMMIT"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DECLARE CURSOR"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"FETCH 2"}
+CommandComplete {"tag":"FETCH 2"}
+BindComplete
+DataRow {"fields":["3"]}
+DataRow {"fields":["4"]}
+CommandComplete {"tag":"FETCH 2"}
+CommandComplete {"tag":"FETCH 2"}
+CommandComplete {"tag":"FETCH 2"}
+ParseComplete
+BindComplete
+DataRow {"fields":["5"]}
+CommandComplete {"tag":"FETCH 1"}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+# Verify that the empty portal is removed after Query.
+send
+Query {"query": "BEGIN; DECLARE c CURSOR FOR VALUES (1), (2); FETCH c;"}
+Execute
+Sync
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+RowDescription {"fields":[{"name":"column1"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
+ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"\" does not exist"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}

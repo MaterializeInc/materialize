@@ -576,6 +576,7 @@ impl ScalarExpr {
 pub enum EvalError {
     DivisionByZero,
     NumericFieldOverflow,
+    FloatOutOfRange,
     IntegerOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
@@ -605,6 +606,7 @@ impl fmt::Display for EvalError {
         match self {
             EvalError::DivisionByZero => f.write_str("division by zero"),
             EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
+            EvalError::FloatOutOfRange => f.write_str("float out of range"),
             EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),

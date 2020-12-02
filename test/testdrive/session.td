@@ -50,8 +50,11 @@ off
 
 > SET extra_float_digits = 1
 
+> SET DateStyle = 'ISO'
+> SET DateStyle = 'MDY'
+> SET DateStyle = 'ISO,MDY'
 ! SET DateStyle = 'ooga booga'
-parameter DateStyle is read only
+parameter DateStyle can only be set to ISO, MDY
 
 # `search_path` is tested elsewhere.
 
