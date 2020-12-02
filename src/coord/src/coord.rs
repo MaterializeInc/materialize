@@ -2172,7 +2172,11 @@ where
             // original sources on which they depend.
             PeekWhen::Immediately => {
                 if !indexes_complete {
-                    bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
+                    bail!(
+                        "Unable to automatically determine a timestamp for your query; \
+                        this can happen if your query depends on non-materialized sources.\n\
+                        For more details, see https://materialize.com/s/non-materialized-error"
+                    );
                 }
                 let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
                     // If the view depends on any tables, we enforce
