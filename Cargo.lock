@@ -525,6 +525,7 @@ dependencies = [
  "mz-avro",
  "ore",
  "pgrepr",
+ "postgres-types",
  "prometheus",
  "rand",
  "rdkafka",
@@ -2837,9 +2838,9 @@ dependencies = [
 
 [[package]]
 name = "postgres-types"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d14b0a4f433b0e0b565bb0fbc0ac9fc3d79ca338ba265ad0e7eef0f3bcc5e94"
+checksum = "cfc08a7d94a80665de4a83942fa8db2fdeaf2f123fc0535e384dc4fff251efae"
 dependencies = [
  "bytes",
  "chrono",

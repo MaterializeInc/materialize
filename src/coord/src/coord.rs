@@ -66,9 +66,9 @@ use transform::Optimizer;
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
-    MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_MAP_TYPES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES,
-    MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    BUILTINS, MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_MAP_TYPES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type, TypeInner};
 use crate::command::{
@@ -1197,11 +1197,14 @@ where
         )
         .await;
         match typ.inner {
+            TypeInner::Base => self.report_base_type_update(id, diff).await,
+            TypeInner::Array { element_id } => {
+                self.report_array_type_update(id, element_id, diff).await
+            }
             TypeInner::Map { key_id, value_id } => {
                 self.report_map_type_update(id, key_id, value_id, diff)
                     .await
             }
-            TypeInner::Base => self.report_base_type_update(id, diff).await,
         }
     }
 
@@ -1213,7 +1216,25 @@ where
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
+    async fn report_array_type_update(
+        &mut self,
+        type_id: GlobalId,
+        element_id: GlobalId,
+        diff: isize,
+    ) {
+        self.update_catalog_view(
+            MZ_ARRAY_TYPES.id,
+            iter::once((
+                Row::pack(&[
+                    Datum::String(&type_id.to_string()),
+                    Datum::String(&element_id.to_string()),
+                ]),
+                diff,
+            )),
+        )
+        .await
+    }
+
     async fn report_map_type_update(
         &mut self,
         id: GlobalId,
