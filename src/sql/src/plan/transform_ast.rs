@@ -233,8 +233,9 @@ impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
             if ident.len() != 1 {
                 return;
             }
-            if normalize::ident(ident[0].clone()) == "current_timestamp" {
-                *expr = Expr::call_nullary(vec!["current_timestamp"]);
+            let ident = normalize::ident(ident[0].clone());
+            if ident == "current_schema" || ident == "current_timestamp" {
+                *expr = Expr::call_nullary(vec![&ident]);
             }
         }
     }
