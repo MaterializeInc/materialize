@@ -83,15 +83,21 @@ where
                         let row_packer = &mut row_packer;
                         let temp_storage = &temp_storage;
                         output_rows
-                            .into_iter()
+                            .iter()
                             .filter_map(move |(output_row, r)| {
                                 if let Some(mfp) = &map_filter_project {
                                     // Remove any additional columns added in prior evaluation.
                                     datums.truncate(datums_len);
-                                    // We ignore the demand analysis and just apply map_filter_project.
+                                    // Extend datums with additional columns, replace some with dummy values.
+                                    datums.extend(output_row.iter());
+                                    for index in datums_len..datums.len() {
+                                        if replace[index] {
+                                            datums[index] = Datum::Dummy;
+                                        }
+                                    }
                                     mfp.evaluate(&mut datums, temp_storage, row_packer)
                                         .transpose()
-                                        .map(|x| (x.map_err(DataflowError::from), r))
+                                        .map(|x| (x.map_err(DataflowError::from), *r))
                                 } else {
                                     Some((
                                         Ok::<_, DataflowError>(
@@ -110,7 +116,7 @@ where
                                                     }),
                                             ),
                                         ),
-                                        r,
+                                        *r,
                                     ))
                                 }
                             })
