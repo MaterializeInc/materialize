@@ -586,3 +586,50 @@ NULL
 
 query error Cannot call function array_upper\(unknown, i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT array_upper(NULL, 1)
+
+# pg_crypto functions
+# Includes tests partially ported over from pg_crypto
+# https://github.com/postgres/postgres/tree/ca7f8e2b86e5f15a40b67e6199d714f45a467ff1/contrib/pgcrypto/expected
+
+query error invalid hash algorithm 'nonsense'
+SELECT digest('hi'::text, 'nonsense'::text)
+
+query T
+SELECT digest(''::text, 'md5'::text)::text
+----
+\xd41d8cd98f00b204e9800998ecf8427e
+
+query T
+SELECT digest(''::bytea, 'md5'::text)::text
+----
+\xd41d8cd98f00b204e9800998ecf8427e
+
+query T
+SELECT digest('a'::text, 'md5'::text)::text
+----
+\x0cc175b9c0f1b6a831c399e269772661
+
+query T
+SELECT digest('abc'::bytea, 'md5'::text)::text
+----
+\x900150983cd24fb0d6963f7d28e17f72
+
+query T
+SELECT digest('message digest'::text, 'md5'::text)::text
+----
+\xf96b697d7cb7938d525a2f31aaf161d0
+
+query T
+SELECT digest('abcdefghijklmnopqrstuvwxyz'::bytea, 'md5'::text)::text
+----
+\xc3fcd3d76192e4007dfb496cca67e13b
+
+query T
+SELECT digest('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'::text, 'md5'::text)::text
+----
+\xd174ab98d277d9f5a5611c2c9f419d9f
+
+query T
+SELECT digest('12345678901234567890123456789012345678901234567890123456789012345678901234567890'::bytea, 'md5'::text)::text
+----
+\x57edf4a22be3c955ac49da2e2107b67a
