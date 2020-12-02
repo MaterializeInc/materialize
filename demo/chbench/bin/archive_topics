@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+#
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Script to list and archive all topics from a Kafka cluster
+# Writes topic contents as Arrow encoded Tables into the working directory of the script
+
+import argparse
+import time
+
+import kafka
+import pyarrow
+import pyarrow.fs
+import requests
+
+# We only care to record the key, value, timestamp fields because the rest are empty or can be computed
+SCHEMA = pyarrow.schema([('key', pyarrow.binary()),
+                         ('value', pyarrow.binary()),
+                         ('timestamp', pyarrow.timestamp('ms')),
+                        ])
+
+
+def archive_topic(args, topic):
+
+    consumer = kafka.KafkaConsumer(topic,
+                                   auto_offset_reset='earliest',
+                                   consumer_timeout_ms=1000,
+                                   bootstrap_servers=[f'{args.kafkahost}:{args.port}'],
+                                   enable_auto_commit=True)
+
+    keys = []
+    values = []
+    timestamps = []
+    for message in consumer:
+
+        assert message.topic == topic, f"Expected topic name {topic}, got {message.topic}"
+        assert message.partition == 0, f"Expected partition 0, got {message.partion}"
+        assert message.timestamp_type == 0, "Expected timestamp to be 0 (CreateTime) but got {message.timestamp_type}"
+        assert message.headers == [], f"Expected empty list of headers, got {message.headers}"
+        assert message.serialized_header_size == -1, f"Expected negative serialized header size, got {message.serialized_header_size}"
+
+        keys.append(message.key)
+        values.append(message.value)
+        timestamps.append(message.timestamp)
+
+    data = [
+            pyarrow.array(keys, type=pyarrow.binary()),
+            pyarrow.array(values, type=pyarrow.binary()),
+            pyarrow.array(timestamps, type=pyarrow.timestamp('ms')),
+          ]
+
+    table = pyarrow.Table.from_arrays(data, schema=SCHEMA)
+
+    local = pyarrow.fs.LocalFileSystem()
+
+    with local.open_output_stream(f"{topic}.arrow") as f:
+        with pyarrow.RecordBatchFileWriter(f, table.schema) as writer:
+            writer.write_table(table)
+
+    print(f'Topic {topic} archived to local file')
+
+def archive_topics(args):
+
+    consumer = kafka.KafkaConsumer(bootstrap_servers=[f'{args.kafkahost}:{args.port}'])
+    topics = sorted([t for t in consumer.topics() if t.startswith(args.topic_prefix)])
+
+    for topic in topics:
+        archive_topic(args, topic)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-k', '--kafkahost', help='Filter topics by prefix string', type=str,
+                        default='localhost')
+    parser.add_argument('-p', '--port', help='Filter topics by prefix string', type=int,
+                        default=9092)
+    parser.add_argument('-t', '--topic-prefix', help='Filter topics by prefix string', type=str,
+                        default='debezium.tpcch')
+
+    args = parser.parse_args()
+    archive_topics(args)
