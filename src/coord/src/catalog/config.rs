@@ -9,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
+use build_info::BuildInfo;
+
 /// Configures a catalog.
 #[derive(Debug)]
 pub struct Config<'a> {
@@ -25,4 +27,6 @@ pub struct Config<'a> {
     ///
     /// If set to `None`, indicates that source caching is disabled.
     pub cache_directory: Option<PathBuf>,
+    /// Information about this build of Materialize.
+    pub build_info: &'static BuildInfo,
 }

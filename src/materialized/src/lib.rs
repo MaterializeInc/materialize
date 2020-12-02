@@ -28,6 +28,7 @@ use tokio::io;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
+use build_info::BuildInfo;
 use comm::Switchboard;
 use coord::{CacheConfig, LoggingConfig};
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
@@ -51,37 +52,29 @@ mod version_check;
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-/// The version of the crate.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// The SHA identifying the Git commit at which the crate was built.
-pub const BUILD_SHA: &str = run_command_str!(
-    "sh",
-    "-c",
-    r#"if [ -n "$MZ_DEV_BUILD_SHA" ]; then
-        echo "$MZ_DEV_BUILD_SHA"
-    else
-        # Unfortunately we need to suppress error messages from `git`, as
-        # run_command_str will display no error message at all if we print
-        # more than one line of output to stderr.
-        git rev-parse --verify HEAD 2>/dev/null || {
-            printf "error: unable to determine Git SHA; " >&2
-            printf "either build from working Git clone " >&2
-            printf "(see https://materialize.com/docs/install/#build-from-source), " >&2
-            printf "or specify SHA manually by setting MZ_DEV_BUILD_SHA environment variable" >&2
-            exit 1
-        }
-    fi"#
-);
-
-/// The time in UTC at which the crate was built as an ISO 8601-compliant
-/// string.
-pub const BUILD_TIME: &str = run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ");
-
-/// Returns a human-readable version string.
-pub fn version() -> String {
-    format!("v{} ({})", VERSION, &BUILD_SHA[..9])
-}
+pub const BUILD_INFO: BuildInfo = BuildInfo {
+    version: env!("CARGO_PKG_VERSION"),
+    sha: run_command_str!(
+        "sh",
+        "-c",
+        r#"if [ -n "$MZ_DEV_BUILD_SHA" ]; then
+            echo "$MZ_DEV_BUILD_SHA"
+        else
+            # Unfortunately we need to suppress error messages from `git`, as
+            # run_command_str will display no error message at all if we print
+            # more than one line of output to stderr.
+            git rev-parse --verify HEAD 2>/dev/null || {
+                printf "error: unable to determine Git SHA; " >&2
+                printf "either build from working Git clone " >&2
+                printf "(see https://materialize.com/docs/install/#build-from-source), " >&2
+                printf "or specify SHA manually by setting MZ_DEV_BUILD_SHA environment variable" >&2
+                exit 1
+            }
+        fi"#
+    ),
+    time: run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
+    target_triple: env!("TARGET_TRIPLE"),
+};
 
 /// Configuration for a `materialized` server.
 #[derive(Debug, Clone)]
@@ -271,6 +264,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             cache: config.cache,
             logical_compaction_window: config.logical_compaction_window,
             experimental_mode: config.experimental_mode,
+            build_info: &BUILD_INFO,
         })
         .await?;
 
