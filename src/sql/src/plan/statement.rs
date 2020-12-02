@@ -679,10 +679,11 @@ fn handle_create_sink(
     let suffix = format!(
         "{}-{}",
         scx.catalog
-            .startup_time()
+            .config()
+            .startup_time
             .duration_since(UNIX_EPOCH)?
             .as_secs(),
-        scx.catalog.nonce()
+        scx.catalog.config().nonce
     );
 
     let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
@@ -1945,7 +1946,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn experimental_mode(&self) -> bool {
-        self.catalog.experimental_mode()
+        self.catalog.config().experimental_mode
     }
 
     pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {

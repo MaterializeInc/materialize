@@ -18,8 +18,8 @@ use hyper::{Body, Request, Response};
 
 use prof::{collate_stacks, time::prof_time, ProfStartTime, StackProfile};
 
-use super::util;
-use crate::http::Server;
+use crate::http::{util, Server};
+use crate::BUILD_INFO;
 
 impl Server {
     pub fn handle_prof(
@@ -113,7 +113,7 @@ fn flamegraph(
     );
     let data_json = &*data_json.borrow();
     Ok(util::template_response(FlamegraphTemplate {
-        version: crate::VERSION,
+        version: BUILD_INFO.version,
         title,
         data_json,
         display_bytes,
@@ -122,17 +122,19 @@ fn flamegraph(
 }
 
 mod disabled {
+    use std::collections::HashMap;
+
     use hyper::{Body, Method, Request, Response, StatusCode};
+    use url::form_urlencoded;
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;
-    use std::collections::HashMap;
-    use url::form_urlencoded;
+    use crate::BUILD_INFO;
 
     pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
         match req.method() {
             &Method::GET => Ok(util::template_response(ProfTemplate {
-                version: crate::VERSION,
+                version: BUILD_INFO.version,
                 mem_prof: MemProfilingStatus::Disabled,
             })),
             &Method::POST => handle_post(req).await,
@@ -167,9 +169,9 @@ mod disabled {
 
 #[cfg(not(target_os = "macos"))]
 mod enabled {
-
+    use std::collections::HashMap;
     use std::io::{BufReader, Read};
-    use std::{collections::HashMap, sync::Arc};
+    use std::sync::Arc;
 
     use hyper::{header, Body, Method, Request, Response, StatusCode};
     use tokio::sync::Mutex;
@@ -179,6 +181,7 @@ mod enabled {
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;
+    use crate::BUILD_INFO;
 
     struct HumanFormattedBytes(usize);
     impl std::fmt::Display for HumanFormattedBytes {
@@ -290,7 +293,7 @@ mod enabled {
 
     pub fn handle_get(prof_md: JemallocProfMetadata) -> anyhow::Result<Response<Body>> {
         Ok(util::template_response(ProfTemplate {
-            version: crate::VERSION,
+            version: BUILD_INFO.version,
             mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
         }))
     }

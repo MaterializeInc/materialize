@@ -41,6 +41,7 @@ use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use regex::Regex;
 
+use build_info::DUMMY_BUILD_INFO;
 use coord::session::Session;
 use coord::{ExecuteResponse, TimestampConfig};
 use dataflow_types::PeekResponse;
@@ -402,6 +403,7 @@ impl State {
             cache: None,
             logical_compaction_window: None,
             experimental_mode: true,
+            build_info: &DUMMY_BUILD_INFO,
         })
         .await?;
         let coord_thread = coord_thread.join_on_drop();
