@@ -195,6 +195,9 @@ pub struct Type {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TypeInner {
     Base,
+    Array {
+        element_id: GlobalId,
+    },
     Map {
         key_id: GlobalId,
         value_id: GlobalId,
@@ -236,6 +239,7 @@ impl CatalogItem {
             CatalogItem::Index(idx) => vec![idx.on],
             CatalogItem::Type(typ) => match &typ.inner {
                 TypeInner::Base { .. } => vec![],
+                TypeInner::Array { element_id } => vec![*element_id],
                 TypeInner::Map { key_id, value_id } => vec![*key_id, *value_id],
             },
         }
@@ -547,16 +551,23 @@ impl Catalog {
                 Builtin::Type(typ) => {
                     events.push(catalog.insert_item(
                         typ.id,
-                        typ.oid,
+                        typ.oid(),
                         FullName {
                             database: DatabaseSpecifier::Ambient,
                             schema: PG_CATALOG_SCHEMA.into(),
-                            item: typ.name.to_owned(),
+                            item: typ.name().to_owned(),
                         },
                         CatalogItem::Type(Type {
-                            create_sql: format!("CREATE TYPE {}", typ.name),
+                            create_sql: format!("CREATE TYPE {}", typ.name()),
                             plan_cx: PlanContext::default(),
-                            inner: TypeInner::Base,
+                            inner: match typ.kind() {
+                                postgres_types::Kind::Array(element_type) => {
+                                    let element_id = catalog.ambient_schemas[PG_CATALOG_SCHEMA]
+                                        .items[element_type.name()];
+                                    TypeInner::Array { element_id }
+                                }
+                                _ => TypeInner::Base,
+                            },
                         }),
                     ));
                 }
