@@ -13,6 +13,7 @@
 # Writes topic contents as Arrow encoded Tables into the working directory of the script
 
 import argparse
+import os
 import time
 
 import kafka
@@ -26,6 +27,18 @@ SCHEMA = pyarrow.schema([('key', pyarrow.binary()),
                          ('timestamp', pyarrow.timestamp('ms')),
                         ])
 
+def archive_schema(args, topic):
+    """Record the raw value of the key/value schema fields for the named topic."""
+
+    for field in ['key', 'value']:
+        response = requests.get(f"http://127.0.0.1:8081/subjects/{topic}-{field}/versions/latest")
+        if response.status_code != 200:
+            print(f"WARNING: Failed to query {field} schema for {topic}")
+            continue
+
+        outfile = os.path.join(topic, f"{field}.schema")
+        with open(outfile, 'w') as f:
+            f.write(response.json()['schema'])
 
 def archive_topic(args, topic):
 
@@ -60,7 +73,8 @@ def archive_topic(args, topic):
 
     local = pyarrow.fs.LocalFileSystem()
 
-    with local.open_output_stream(f"{topic}.arrow") as f:
+    outfile = os.path.join(topic, "messages.arrow")
+    with local.open_output_stream(outfile) as f:
         with pyarrow.RecordBatchFileWriter(f, table.schema) as writer:
             writer.write_table(table)
 
@@ -72,14 +86,18 @@ def archive_topics(args):
     topics = sorted([t for t in consumer.topics() if t.startswith(args.topic_prefix)])
 
     for topic in topics:
+        os.mkdir(topic)
+        archive_schema(args, topic)
         archive_topic(args, topic)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-k', '--kafkahost', help='Filter topics by prefix string', type=str,
+    parser.add_argument('-k', '--kafkahost', help='Hostname of the Kafka Broker', type=str,
                         default='localhost')
-    parser.add_argument('-p', '--port', help='Filter topics by prefix string', type=int,
+    parser.add_argument('-s', '--schemahost', help='Hostname of the Schema Registry', type=str,
+                        default='localhost')
+    parser.add_argument('-p', '--port', help='Port to use for connecting to the Kafka Broker', type=int,
                         default=9092)
     parser.add_argument('-t', '--topic-prefix', help='Filter topics by prefix string', type=str,
                         default='debezium.tpcch')
