@@ -95,6 +95,14 @@ Wrap your release notes at the 80 character mark.
 
 - Allow slightly more complicated [`INSERT`](/sql/insert) bodies, e.g. inserting
   `SELECT`ed literals {{% gh 4748 %}}.
+  characters, e.g., `SELECT ’1’` {{% gh 4755 %}}.
+- [`TAIL`](/sql/tail) now supports timestamp progress.
+- Log messages are no longer emitted to stderr if an explicit `--log-file` is
+  supplied at startup. {{ gh 4777 }}
+- Add the [`version`](/sql/functions#postgresql-compatibility-func) and
+  [`mz_version`](/sql/functions/#system-information-func) functions to report
+  PostgreSQL-specific and Materialize-specific version information,
+  respectively.
 
 {{% version-header v0.5.1 %}}
 
