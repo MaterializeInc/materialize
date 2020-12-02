@@ -1036,6 +1036,9 @@ lazy_static! {
             "convert_from" => Scalar {
                 params!(Bytes, String) => BinaryFunc::ConvertFrom
             },
+            "current_schema" => Scalar {
+                params!() => sql_op!("current_schemas(false)[1]")
+            },
             "current_schemas" => Scalar {
                 params!(Bool) => Operation::unary(|ecx, e| {
                     let with_sys = ScalarExpr::literal_1d_array(
