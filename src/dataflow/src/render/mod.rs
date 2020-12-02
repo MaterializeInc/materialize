@@ -779,7 +779,8 @@ where
             }
             RelationExpr::FlatMap { input: input2, .. } => {
                 self.ensure_rendered(&input2, scope, worker_index);
-                self.render_flat_map(input, Some(mfp));
+                let (oks, err) = self.render_flat_map(input, Some(mfp));
+                self.collections.insert(relation_expr.clone(), (oks, err));
                 true
             }
             _ => false,
@@ -895,7 +896,8 @@ where
 
                 RelationExpr::FlatMap { input, .. } => {
                     self.ensure_rendered(input, scope, worker_index);
-                    self.render_flat_map(relation_expr, None);
+                    let (oks, err) = self.render_flat_map(relation_expr, None);
+                    self.collections.insert(relation_expr.clone(), (oks, err));
                 }
 
                 RelationExpr::Filter { input, predicates } => {

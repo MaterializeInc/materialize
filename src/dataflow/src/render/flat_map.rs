@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
@@ -29,7 +30,7 @@ where
         &mut self,
         relation_expr: &RelationExpr,
         map_filter_project: Option<expr::MapFilterProject>,
-    ) {
+    ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
         if let RelationExpr::FlatMap {
             input,
             func,
@@ -121,9 +122,9 @@ where
                     }
                 });
             let err_collection = err_collection.concat(&new_err_collection);
-
-            self.collections
-                .insert(relation_expr.clone(), (ok_collection, err_collection));
+            (ok_collection, err_collection)
+        } else {
+            panic!("Non-FlatMap expression provided to `render_flat_map`");
         }
     }
 }
