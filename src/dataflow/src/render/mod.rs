@@ -777,8 +777,8 @@ where
                     .insert(relation_expr.clone(), (oks.as_collection(), err_collection));
                 true
             }
-            RelationExpr::FlatMap { .. } => {
-                self.ensure_rendered(&input, scope, worker_index);
+            RelationExpr::FlatMap { input: input2, .. } => {
+                self.ensure_rendered(&input2, scope, worker_index);
                 self.render_flat_map(input, Some(mfp));
                 true
             }
