@@ -2382,7 +2382,7 @@ where
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
                         if datum == &Datum::Null && !typ.nullable {
                             bail!(
-                                "NULL value in column {} violates not-null constraint",
+                                "null value in column \"{}\" violates not-null constraint",
                                 name.unwrap_or(&ColumnName::from("unnamed column"))
                             )
                         }
