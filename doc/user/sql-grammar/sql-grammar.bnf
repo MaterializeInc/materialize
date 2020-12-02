@@ -205,6 +205,8 @@ op_cast ::=
 schema_spec ::=
   'SCHEMA' ('FILE' schema_file_path | inline_schema)
 select_stmt ::=
+    ('WITH' cte_ident ('(' col_ident (',' col_ident )* ')')? 'AS' '(' select_stmt ')'
+      (',' cte_ident ('(' col_ident (',' col_ident )*')')? 'AS' '(' select_stmt ')') * )
     'SELECT'  (
         ( 'ALL' )? ( ( target_elem ) ( ( ',' target_elem ) )* ) ( 'FROM' ( ( table_expr ) ( ( ',' table_expr ) )* )  )? join_expr? ( ( 'WHERE' expr ) )? ( 'GROUP' 'BY' ( ( col_ref ) ( ( ',' col_ref ) )* ) )? ( 'HAVING' expr )? ( 'ORDER' 'BY' ( ( col_ref ( 'ASC' | 'DESC' )? ) ( ( ',' col_ref ( 'ASC' | 'DESC' )? ) )* ) )? ( 'LIMIT' expr )? ( 'OFFSET' expr )?
 	    | ( 'DISTINCT' ) ( ( target_elem ) ( ( ',' target_elem ) )* ) ( 'FROM' ( ( table_expr ) ( ( ',' table_expr ) )* )  )? join_expr? ( ( 'WHERE' expr ) )? ( 'GROUP' 'BY' ( ( col_ref ) ( ( ',' col_ref ) )* ) )? ( 'HAVING' expr )? ( 'ORDER' 'BY' ( ( col_ref ( 'ASC' | 'DESC' )? ) ( ( ',' col_ref ( 'ASC' | 'DESC' )? ) )* ) )? ( 'LIMIT' expr )? ( 'OFFSET' expr )?
