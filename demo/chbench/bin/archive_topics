@@ -13,13 +13,19 @@
 # Writes topic contents as Arrow encoded Tables into the working directory of the script
 
 import argparse
+import logging
 import os
-import time
+import sys
 
 import kafka
 import pyarrow
 import pyarrow.fs
 import requests
+
+# Setup basic formatting for logging output
+logging.basicConfig(format='%(asctime)s %(levelname)s %(name)s %(message)s')
+log = logging.getLogger('restore.topics')
+log.setLevel(logging.INFO)
 
 # We only care to record the key, value, timestamp fields because the rest are empty or can be computed
 SCHEMA = pyarrow.schema([('key', pyarrow.binary()),
@@ -31,9 +37,9 @@ def archive_schema(args, topic):
     """Record the raw value of the key/value schema fields for the named topic."""
 
     for field in ['key', 'value']:
-        response = requests.get(f"http://127.0.0.1:8081/subjects/{topic}-{field}/versions/latest")
+        response = requests.get(f"http://{args.schemahost}:8081/subjects/{topic}-{field}/versions/latest")
         if response.status_code != 200:
-            print(f"WARNING: Failed to query {field} schema for {topic}")
+            log.warning(f"WARNING: Failed to query {field} schema for {topic}")
             continue
 
         outfile = os.path.join(topic, f"{field}.schema")
@@ -43,6 +49,7 @@ def archive_schema(args, topic):
 def archive_topic(args, topic):
 
     consumer = kafka.KafkaConsumer(topic,
+                                   group_id='archive.topics',
                                    auto_offset_reset='earliest',
                                    consumer_timeout_ms=1000,
                                    bootstrap_servers=[f'{args.kafkahost}:{args.port}'],
@@ -63,11 +70,10 @@ def archive_topic(args, topic):
         values.append(message.value)
         timestamps.append(message.timestamp)
 
-    data = [
-            pyarrow.array(keys, type=pyarrow.binary()),
+    data = [pyarrow.array(keys, type=pyarrow.binary()),
             pyarrow.array(values, type=pyarrow.binary()),
             pyarrow.array(timestamps, type=pyarrow.timestamp('ms')),
-          ]
+           ]
 
     table = pyarrow.Table.from_arrays(data, schema=SCHEMA)
 
@@ -78,19 +84,26 @@ def archive_topic(args, topic):
         with pyarrow.RecordBatchFileWriter(f, table.schema) as writer:
             writer.write_table(table)
 
-    print(f'Topic {topic} archived to local file')
+    log.info(f'Topic {topic} archived to local file')
 
 def archive_topics(args):
 
-    consumer = kafka.KafkaConsumer(bootstrap_servers=[f'{args.kafkahost}:{args.port}'])
+    consumer = kafka.KafkaConsumer(bootstrap_servers=[f'{args.kafkahost}:{args.port}'],
+                                   group_id='archive.topics')
     topics = sorted([t for t in consumer.topics() if t.startswith(args.topic_prefix)])
 
     for topic in topics:
+        if os.path.exists(topic):
+            log.error(f'ERROR: {topic} directory already exists; will not overwrite')
+            sys.exit(1)
+
+    for topic in topics:
+        log.info(f'Archiving {topic}')
         os.mkdir(topic)
         archive_schema(args, topic)
         archive_topic(args, topic)
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-k', '--kafkahost', help='Hostname of the Kafka Broker', type=str,
@@ -104,3 +117,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     archive_topics(args)
+
+if __name__ == '__main__':
+    main()
