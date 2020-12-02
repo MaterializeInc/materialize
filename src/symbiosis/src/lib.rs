@@ -342,61 +342,9 @@ fn push_column(
     // NOTE this needs to stay in sync with materialize::sql::scalar_type_from_sql
     // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
     match sql_type {
-        DataType::Boolean => {
-            let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
-            row.push(bool.into());
-        }
-        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => {
+        DataType::Char(_) | DataType::Varchar(_) => {
             let string = get_column_inner::<String>(postgres_row, i, nullable)?;
             row.push(string.as_deref().into());
-        }
-        DataType::SmallInt => {
-            let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(i32::from);
-            row.push(i.into());
-        }
-        DataType::Int | DataType::Oid => {
-            let i = get_column_inner::<i32>(postgres_row, i, nullable)?;
-            row.push(i.into());
-        }
-        DataType::BigInt => {
-            let i = get_column_inner::<i64>(postgres_row, i, nullable)?;
-            row.push(i.into());
-        }
-        DataType::Float(p) => {
-            if p.unwrap_or(53) <= 24 {
-                let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f64::from);
-                row.push(f.into());
-            } else {
-                let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
-                row.push(f.into());
-            }
-        }
-        DataType::Real => {
-            let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f64::from);
-            row.push(f.into());
-        }
-        DataType::Double => {
-            let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
-            row.push(f.into());
-        }
-        DataType::Date => {
-            let d: chrono::NaiveDate =
-                get_column_inner::<chrono::NaiveDate>(postgres_row, i, nullable)?.unwrap();
-            row.push(Datum::Date(d));
-        }
-        DataType::Timestamp => {
-            let d: chrono::NaiveDateTime =
-                get_column_inner::<chrono::NaiveDateTime>(postgres_row, i, nullable)?.unwrap();
-            row.push(Datum::Timestamp(d));
-        }
-        DataType::TimestampTz => {
-            let d: chrono::DateTime<Utc> =
-                get_column_inner::<chrono::DateTime<Utc>>(postgres_row, i, nullable)?.unwrap();
-            row.push(Datum::TimestampTz(d));
-        }
-        DataType::Interval => {
-            let iv = get_column_inner::<pgrepr::Interval>(postgres_row, i, nullable)?.unwrap();
-            row.push(Datum::Interval(iv.0));
         }
         DataType::Decimal(_, _) => {
             let desired_scale = match scalar_type_from_sql(sql_type).unwrap() {
@@ -421,22 +369,84 @@ fn push_column(
                 }
             }
         }
-        DataType::Bytea => {
-            let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
-            row.push(bytes.as_deref().into());
-        }
-        DataType::Jsonb => {
-            let jsonb = get_column_inner::<Jsonb>(postgres_row, i, nullable)?;
-            if let Some(jsonb) = jsonb {
-                row.extend_by_row(&jsonb.0.into_row())
+        DataType::Float(p) => {
+            if p.unwrap_or(53) <= 24 {
+                let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f64::from);
+                row.push(f.into());
             } else {
-                row.push(Datum::Null)
+                let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
+                row.push(f.into());
             }
         }
-        DataType::Uuid => {
-            let u = get_column_inner::<Uuid>(postgres_row, i, nullable)?.unwrap();
-            row.push(Datum::Uuid(u));
-        }
+        DataType::Other(n) => match n.as_str() {
+            "bool" | "boolean" => {
+                let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
+                row.push(bool.into());
+            }
+            "bytea" | "bytes" => {
+                let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
+                row.push(bytes.as_deref().into());
+            }
+            "date" => {
+                let d: chrono::NaiveDate =
+                    get_column_inner::<chrono::NaiveDate>(postgres_row, i, nullable)?.unwrap();
+                row.push(Datum::Date(d));
+            }
+            "float4" | "real" => {
+                let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f64::from);
+                row.push(f.into());
+            }
+            "float8" => {
+                let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
+                row.push(f.into());
+            }
+            "interval" => {
+                let iv = get_column_inner::<pgrepr::Interval>(postgres_row, i, nullable)?.unwrap();
+                row.push(Datum::Interval(iv.0));
+            }
+            "int" | "integer" | "int4" | "oid" => {
+                let i = get_column_inner::<i32>(postgres_row, i, nullable)?;
+                row.push(i.into());
+            }
+            "bigint" | "int8" => {
+                let i = get_column_inner::<i64>(postgres_row, i, nullable)?;
+                row.push(i.into());
+            }
+            "jsonb" => {
+                let jsonb = get_column_inner::<Jsonb>(postgres_row, i, nullable)?;
+                if let Some(jsonb) = jsonb {
+                    row.extend_by_row(&jsonb.0.into_row())
+                } else {
+                    row.push(Datum::Null)
+                }
+            }
+            "uuid" => {
+                let u = get_column_inner::<Uuid>(postgres_row, i, nullable)?.unwrap();
+                row.push(Datum::Uuid(u));
+            }
+            "smallint" => {
+                let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(i32::from);
+                row.push(i.into());
+            }
+            "string" | "text" => {
+                let string = get_column_inner::<String>(postgres_row, i, nullable)?;
+                row.push(string.as_deref().into());
+            }
+            "timestamp" => {
+                let d: chrono::NaiveDateTime =
+                    get_column_inner::<chrono::NaiveDateTime>(postgres_row, i, nullable)?.unwrap();
+                row.push(Datum::Timestamp(d));
+            }
+            "timestamptz" => {
+                let d: chrono::DateTime<Utc> =
+                    get_column_inner::<chrono::DateTime<Utc>>(postgres_row, i, nullable)?.unwrap();
+                row.push(Datum::TimestampTz(d));
+            }
+            _ => bail!(
+                "Postgres to materialize conversion not yet supported for {:?}",
+                sql_type
+            ),
+        },
         _ => bail!(
             "Postgres to materialize conversion not yet supported for {:?}",
             sql_type

@@ -291,7 +291,7 @@ impl<'a> Parser<'a> {
         // "date".
         maybe!(self.maybe_parse(|parser| {
             match parser.parse_data_type()? {
-                DataType::Interval => parser.parse_literal_interval(),
+                DataType::Other(n) if n.as_str() == "interval" => parser.parse_literal_interval(),
                 data_type => Ok(Expr::Cast {
                     expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
                     data_type,
@@ -2189,21 +2189,10 @@ impl<'a> Parser<'a> {
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
     fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
+        let other = |n: &str| -> DataType { DataType::Other(Ident::new(n)) };
         let mut data_type = match self.next_token() {
             Some(Token::Keyword(kw)) => match kw {
-                BOOL | BOOLEAN => DataType::Boolean,
-                DOUBLE => {
-                    let _ = self.parse_keyword(PRECISION);
-                    DataType::Double
-                }
-                FLOAT => DataType::Float(self.parse_optional_precision()?),
-                FLOAT4 | REAL => DataType::Real,
-                FLOAT8 => DataType::Double,
-                SMALLINT => DataType::SmallInt,
-                INT | INTEGER | INT4 => DataType::Int,
-                INT8 | BIGINT => DataType::BigInt,
-                OID => DataType::Oid,
-                VARCHAR => DataType::Varchar(self.parse_optional_precision()?),
+                // Text-like types
                 CHAR | CHARACTER => {
                     if self.parse_keyword(VARYING) {
                         DataType::Varchar(self.parse_optional_precision()?)
@@ -2211,50 +2200,52 @@ impl<'a> Parser<'a> {
                         DataType::Char(self.parse_optional_precision()?)
                     }
                 }
-                UUID => DataType::Uuid,
-                DATE => DataType::Date,
-                TIMESTAMP => {
-                    if self.parse_keyword(WITH) {
-                        self.expect_keywords(&[TIME, ZONE])?;
-                        DataType::TimestampTz
-                    } else {
-                        if self.parse_keyword(WITHOUT) {
-                            self.expect_keywords(&[TIME, ZONE])?;
-                        }
-                        DataType::Timestamp
-                    }
-                }
-                TIMESTAMPTZ => DataType::TimestampTz,
-                TIME => {
-                    if self.parse_keyword(WITH) {
-                        self.expect_keywords(&[TIME, ZONE])?;
-                        DataType::TimeTz
-                    } else {
-                        if self.parse_keyword(WITHOUT) {
-                            self.expect_keywords(&[TIME, ZONE])?;
-                        }
-                        DataType::Time
-                    }
-                }
-                INTERVAL => DataType::Interval,
-                REGCLASS => DataType::Regclass,
-                TEXT | STRING => DataType::Text,
-                BYTEA | BYTES => DataType::Bytea,
-                NUMERIC | DECIMAL | DEC => {
+                VARCHAR => DataType::Varchar(self.parse_optional_precision()?),
+
+                // Number-like types
+                DEC | DECIMAL | NUMERIC => {
                     let (precision, scale) = self.parse_optional_precision_scale()?;
                     DataType::Decimal(precision, scale)
                 }
-                JSON | JSONB => DataType::Jsonb,
+                DOUBLE => {
+                    let _ = self.parse_keyword(PRECISION);
+                    other("float8")
+                }
+                FLOAT => DataType::Float(self.parse_optional_precision()?),
+
+                // Time-like types
+                TIME => {
+                    if self.parse_keyword(WITH) {
+                        self.expect_keywords(&[TIME, ZONE])?;
+                        other("timetz")
+                    } else {
+                        if self.parse_keyword(WITHOUT) {
+                            self.expect_keywords(&[TIME, ZONE])?;
+                        }
+                        other("time")
+                    }
+                }
+                TIMESTAMP => {
+                    if self.parse_keyword(WITH) {
+                        self.expect_keywords(&[TIME, ZONE])?;
+                        other("timestamptz")
+                    } else {
+                        if self.parse_keyword(WITHOUT) {
+                            self.expect_keywords(&[TIME, ZONE])?;
+                        }
+                        other("timestamp")
+                    }
+                }
+                TIMESTAMPTZ => other("timestamptz"),
+
+                // MZ "proprietary" types
                 MAP => DataType::Map {
                     value_type: Box::new(self.parse_map()?),
                 },
-                _ => self.expected(
-                    self.peek_prev_pos(),
-                    "a known data type",
-                    Some(Token::Keyword(kw)),
-                )?,
+
+                kw => DataType::Other(kw.into_ident()),
             },
-            Some(Token::Ident(id)) => DataType::Custom(id),
+            Some(Token::Ident(id)) => other(&id),
             other => self.expected(self.peek_prev_pos(), "a data type name", other)?,
         };
         loop {
@@ -2453,7 +2444,7 @@ impl<'a> Parser<'a> {
 
     fn parse_map(&mut self) -> Result<DataType, ParserError> {
         self.expect_token(&Token::LBracket)?;
-        if self.parse_data_type()? != DataType::Text {
+        if self.parse_data_type()? != DataType::Other(Ident::new("text")) {
             self.prev_token();
             return self.expected(self.peek_prev_pos(), "TEXT", self.peek_token());
         }
