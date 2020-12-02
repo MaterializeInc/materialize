@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.34"
 aws-arn = "0.1.1"
+build-info = { path = "../build-info" }
 ccsr = { path = "../ccsr" }
 chrono = "0.4"
 dataflow-types = { path = "../dataflow-types" }

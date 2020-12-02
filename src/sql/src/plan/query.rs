@@ -55,6 +55,7 @@ use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
+use crate::plan::Catalog;
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
@@ -2869,6 +2870,10 @@ pub struct ExprContext<'a> {
 }
 
 impl<'a> ExprContext<'a> {
+    pub fn catalog(&self) -> &dyn Catalog {
+        self.qcx.scx.catalog
+    }
+
     fn with_name(&self, name: &'static str) -> ExprContext<'a> {
         let mut ecx = self.clone();
         ecx.name = name;

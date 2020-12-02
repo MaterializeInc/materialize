@@ -13,9 +13,10 @@
 
 use std::error::Error;
 use std::fmt;
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
+use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{GlobalId, ScalarExpr};
 use repr::RelationDesc;
 use uuid::Uuid;
@@ -48,21 +49,6 @@ use crate::plan::PlanContext;
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: Catalog::resolve_item
 pub trait Catalog: fmt::Debug {
-    /// Returns the time at which the catalog booted.
-    ///
-    /// NOTE(benesch): this is only necessary for producing unique Kafka sink
-    /// topics. Perhaps we can remove this when #2915 is complete.
-    fn startup_time(&self) -> SystemTime;
-
-    /// Returns a random integer associated with this instance of the catalog.
-    ///
-    /// NOTE(benesch): this is only necessary for producing unique Kafka sink
-    /// topics. Perhaps we can remove this when #2915 is complete.
-    fn nonce(&self) -> u64;
-
-    /// Returns a persistent UUID for the the catalog.
-    fn cluster_id(&self) -> Uuid;
-
     /// Returns the search path used by the catalog.
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str>;
 
@@ -127,32 +113,35 @@ pub trait Catalog: fmt::Debug {
     /// Panics if `id` does not specify a valid item.
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem;
 
-    /// Reports whether the specified catalog item is queryable.
-    ///
-    /// A queryable catalog item is one for which a timestamp can be determined.
-    /// In practice, this means a catalog item whose transitive dependency set
-    /// does not include any unmaterialized sources.
-    ///
-    /// Panics if `id` does not specify an object on which indexes can be built.
-    fn is_queryable(&self, id: GlobalId) -> bool;
-
-    /// Reports whether the specified catalog item is materialized.
-    ///
-    /// A materialized catalog item has at least one index.
-    ///
-    /// Panics if `id` does not specify an object on which indexes can be built.
-    fn is_materialized(&self, id: GlobalId) -> bool;
-
     /// Reports whether the specified type exists in the catalog.
     fn type_exists(&self, name: &FullName) -> bool;
 
-    /// Expresses whether or not the catalog allows experimental mode features.
-    fn experimental_mode(&self) -> bool;
+    /// Returns the configuration of the catalog.
+    fn config(&self) -> &CatalogConfig;
+}
 
-    /// Reports the top level directory where source caching information is stored.
+/// Configuration associated with a catalog.
+#[derive(Debug, Clone)]
+pub struct CatalogConfig {
+    /// Returns the time at which the catalog booted.
     ///
-    /// If set to `None`, indicates that source caching is disabled.
-    fn cache_directory(&self) -> Option<&Path>;
+    /// NOTE(benesch): this is only necessary for producing unique Kafka sink
+    /// topics. Perhaps we can remove this when #2915 is complete.
+    pub startup_time: SystemTime,
+    /// A random integer associated with this instance of the catalog.
+    ///
+    /// NOTE(benesch): this is only necessary for producing unique Kafka sink
+    /// topics. Perhaps we can remove this when #2915 is complete.
+    pub nonce: u64,
+    /// A persistent UUID associated with the catalog.
+    pub cluster_id: Uuid,
+    /// Expresses whether or not the catalog allows experimental mode features.
+    pub experimental_mode: bool,
+    /// The path in which source caching data is stored, if source caching is
+    /// enabled.
+    pub cache_directory: Option<PathBuf>,
+    /// Information about this build of Materialize.
+    pub build_info: &'static BuildInfo,
 }
 
 /// An item in a [`Catalog`].
@@ -193,9 +182,6 @@ pub trait CatalogItem {
     /// catalog item is an index.
     fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)>;
 }
-
-/// A type in a [`Catalog`].
-pub trait Type {}
 
 /// The type of a [`CatalogItem`].
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -278,19 +264,16 @@ impl Error for CatalogError {}
 #[derive(Debug)]
 pub struct DummyCatalog;
 
+const DUMMY_CONFIG: CatalogConfig = CatalogConfig {
+    startup_time: SystemTime::UNIX_EPOCH,
+    nonce: 0,
+    cluster_id: Uuid::from_u128(0),
+    experimental_mode: false,
+    cache_directory: None,
+    build_info: &DUMMY_BUILD_INFO,
+};
+
 impl Catalog for DummyCatalog {
-    fn startup_time(&self) -> SystemTime {
-        SystemTime::UNIX_EPOCH
-    }
-
-    fn nonce(&self) -> u64 {
-        0
-    }
-
-    fn cluster_id(&self) -> Uuid {
-        Uuid::from_u128(0)
-    }
-
     fn search_path(&self, _: bool) -> Vec<&str> {
         vec!["dummy"]
     }
@@ -331,23 +314,11 @@ impl Catalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn is_queryable(&self, _: GlobalId) -> bool {
-        false
-    }
-
-    fn is_materialized(&self, _: GlobalId) -> bool {
-        false
-    }
-
     fn type_exists(&self, _: &FullName) -> bool {
         false
     }
 
-    fn experimental_mode(&self) -> bool {
-        false
-    }
-
-    fn cache_directory(&self) -> Option<&Path> {
-        None
+    fn config(&self) -> &CatalogConfig {
+        &DUMMY_CONFIG
     }
 }

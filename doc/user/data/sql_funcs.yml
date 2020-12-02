@@ -353,6 +353,12 @@
       Null elements are omitted unless `ifnull` is non-null, in which case
       null elements are replaced with the value of `ifnull`.
 
+- type: System information
+  description: Functions that return information about the system
+  functions:
+  - signature: 'mz_version() -> text'
+    description: Returns the server's version information as a human-readable string.
+
 - type: PostgreSQL compatibility
   description: Functions whose primary purpose is to facilitate compatibility with PostgreSQL tools
   functions:
@@ -369,3 +375,5 @@
     description: Returns the type of its input argument as a string.
   - signature: 'pg_encoding_to_char(encoding_id: integer) -> text'
     description: PostgreSQL compatibility shim. Not intended for direct use.
+  - signature: 'version() -> text'
+    description: Returns a PostgreSQL-compatible version string.
