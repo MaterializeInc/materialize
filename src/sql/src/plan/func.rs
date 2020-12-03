@@ -1066,6 +1066,10 @@ lazy_static! {
                 params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp,
                 params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz
             },
+            "digest" => Scalar {
+                params!(String, String) => BinaryFunc::DigestString,
+                params!(Bytes, String) => BinaryFunc::DigestBytes
+            },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32,
                 params!(Float64) => UnaryFunc::FloorFloat64,

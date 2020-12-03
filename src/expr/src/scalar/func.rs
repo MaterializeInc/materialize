@@ -18,6 +18,7 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, 
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
 use itertools::Itertools;
+use md5::{Digest, Md5};
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 
@@ -1934,6 +1935,8 @@ pub enum BinaryFunc {
     ListListConcat,
     ListElementConcat,
     ElementListConcat,
+    DigestString,
+    DigestBytes,
 }
 
 impl BinaryFunc {
@@ -2060,6 +2063,8 @@ impl BinaryFunc {
             BinaryFunc::ListListConcat => Ok(eager!(list_list_concat, temp_storage)),
             BinaryFunc::ListElementConcat => Ok(eager!(list_element_concat, temp_storage)),
             BinaryFunc::ElementListConcat => Ok(eager!(element_list_concat, temp_storage)),
+            BinaryFunc::DigestString => eager!(digest_string, temp_storage),
+            BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
         }
     }
 
@@ -2215,6 +2220,7 @@ impl BinaryFunc {
             ListLengthMax { .. } | ArrayLower | ArrayUpper => ScalarType::Int64.nullable(true),
             ListListConcat | ListElementConcat => input1_type.scalar_type.nullable(true),
             ElementListConcat => input2_type.scalar_type.nullable(true),
+            DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
         }
     }
 
@@ -2379,7 +2385,9 @@ impl BinaryFunc {
             | TrimLeading
             | TrimTrailing
             | EncodedBytesCharLength
-            | ListLengthMax { .. } => false,
+            | ListLengthMax { .. }
+            | DigestString
+            | DigestBytes => false,
         }
     }
 }
@@ -2477,6 +2485,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListListConcat => f.write_str("||"),
             BinaryFunc::ListElementConcat => f.write_str("||"),
             BinaryFunc::ElementListConcat => f.write_str("||"),
+            BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
         }
     }
 }
@@ -3766,6 +3775,36 @@ fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
             }
         })
     })
+}
+
+fn digest_string<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let to_digest = a.unwrap_str().as_bytes();
+    digest_inner(to_digest, b, temp_storage)
+}
+
+fn digest_bytes<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let to_digest = a.unwrap_bytes();
+    digest_inner(to_digest, b, temp_storage)
+}
+
+fn digest_inner<'a>(
+    bytes: &[u8],
+    digest_fn: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    match digest_fn.unwrap_str() {
+        "md5" => Ok(temp_storage
+            .make_datum(|packer| packer.push(Datum::Bytes(Md5::digest(bytes).as_slice())))),
+        other => Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
+    }
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

@@ -586,6 +586,7 @@ pub enum EvalError {
     },
     InvalidArray(InvalidArrayError),
     InvalidEncodingName(String),
+    InvalidHashAlgorithm(String),
     InvalidByteSequence {
         byte_sequence: String,
         encoding_name: String,
@@ -617,6 +618,7 @@ impl fmt::Display for EvalError {
             ),
             EvalError::InvalidArray(e) => e.fmt(f),
             EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
+            EvalError::InvalidHashAlgorithm(alg) => write!(f, "invalid hash algorithm '{}'", alg),
             EvalError::InvalidByteSequence {
                 byte_sequence,
                 encoding_name,

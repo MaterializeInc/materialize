@@ -1052,6 +1052,7 @@ dependencies = [
  "encoding",
  "enum-iterator",
  "itertools",
+ "md-5",
  "num_enum",
  "ordered-float",
  "ore",

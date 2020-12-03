@@ -357,6 +357,17 @@
       Null elements are omitted unless `ifnull` is non-null, in which case
       null elements are replaced with the value of `ifnull`.
 
+- type: Cryptographic
+  functions:
+    - signature: 'digest(data: text, type: text) -> bytea'
+      desctription: >-
+        Computes a binary hash of the given text `data` using the specified `type` algorithm.
+        Currently, only the `md5` algorithm is supported.
+    - signature: 'digest(data: bytea, type: text) -> bytea'
+      desctription: >-
+        Computes a binary hash of the given bytea `data` using the specified `type` algorithm.
+        Currently, only the `md5` algorithm is supported.
+
 - type: System information
   description: Functions that return information about the system
   functions:
