@@ -1513,11 +1513,14 @@ fn handle_create_table(
 
     let names: Vec<_> = columns
         .iter()
-        .map(|c| Some(normalize::column_name(c.name.clone())))
+        .map(|c| normalize::column_name(c.name.clone()))
         .collect();
 
-    if names.iter().has_duplicates() {
-        bail!("cannot CREATE TABLE with duplicate column names");
+    if let Some(dup) = names.iter().duplicates().next() {
+        bail!(
+            "cannot CREATE TABLE: column \"{}\" specified more than once",
+            dup
+        );
     }
 
     // Build initial relation type that handles declared data types
@@ -1542,7 +1545,7 @@ fn handle_create_table(
     );
 
     let name = scx.allocate_name(normalize::object_name(name.clone())?);
-    let desc = RelationDesc::new(typ, names);
+    let desc = RelationDesc::new(typ, names.into_iter().map(Some));
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
     let table = Table { create_sql, desc };

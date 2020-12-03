@@ -9,11 +9,62 @@
 
 //! Iterator utilities.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::iter::{self, Chain, Once};
 
 pub use fallible_iterator::FallibleIterator;
+
+/// An iterator adapter that yields each element that appears more than once.
+#[derive(Debug)]
+pub struct Duplicates<I>
+where
+    I: Iterator,
+{
+    iter: I,
+    seen: HashMap<I::Item, bool>,
+}
+
+impl<I> Duplicates<I>
+where
+    I: Iterator,
+    I::Item: Hash + Eq,
+{
+    fn new(iter: I) -> Self {
+        let (lower, _) = iter.size_hint();
+        Self {
+            iter,
+            seen: HashMap::with_capacity(lower),
+        }
+    }
+}
+
+impl<I> Iterator for Duplicates<I>
+where
+    I: Iterator,
+    I::Item: Hash + Eq,
+{
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(v) = self.iter.next() {
+            match self.seen.get_mut(&v) {
+                // New element. Record it as seen but unyielded.
+                None => {
+                    self.seen.insert(v, false);
+                }
+                // Duplicate element that we've not yielded. Yield it.
+                Some(yielded @ false) => {
+                    *yielded = true;
+                    return Some(v);
+                }
+                // Duplicate element that we've already yielded. Suppress it.
+                Some(true) => (),
+            }
+        }
+        None
+    }
+}
 
 /// Extension methods for iterators.
 pub trait IteratorExt
@@ -27,14 +78,18 @@ where
     where
         Self::Item: Hash + Eq,
     {
-        let (lower, _) = self.size_hint();
-        let mut seen = HashSet::with_capacity(lower);
-        for item in self {
-            if !seen.insert(item) {
-                return true;
-            }
-        }
-        false
+        self.duplicates().next().is_some()
+    }
+
+    /// Creates an iterator that produces each duplicate item exactly once.
+    /// Duplicates are detected using the item's hash.
+    ///
+    /// The algorithm requires O(n) space.
+    fn duplicates(self) -> Duplicates<Self>
+    where
+        Self::Item: Hash + Eq,
+    {
+        Duplicates::new(self)
     }
 
     /// Chains a single `item` onto the end of this iterator.
@@ -76,3 +131,29 @@ where
 }
 
 impl<I> FallibleIteratorExt for I where I: FallibleIterator {}
+
+#[cfg(test)]
+mod tests {
+    use super::IteratorExt;
+
+    #[test]
+    fn test_duplicates() {
+        let a = vec![1, 2, 3, 4, 5];
+        assert_eq!(a.iter().duplicates().next(), None);
+
+        let a = vec![1, 2, 1, 4, 5, 2, 1, 5];
+        assert_eq!(
+            a.into_iter().duplicates().collect::<Vec<_>>(),
+            vec![1, 2, 5]
+        );
+    }
+
+    #[test]
+    fn test_has_duplicates() {
+        let a = vec![1, 2, 3, 4, 5];
+        assert_eq!(a.iter().has_duplicates(), false);
+
+        let a = vec![1, 2, 1, 4, 5];
+        assert_eq!(a.iter().has_duplicates(), true);
+    }
+}
