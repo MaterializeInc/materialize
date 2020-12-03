@@ -332,6 +332,14 @@ impl MapFilterProject {
     /// assert_eq!(after, MapFilterProject::new(5).map(vec![
     ///    ScalarExpr::column(3).call_binary(ScalarExpr::column(4), BinaryFunc::AddInt64)
     /// ]).project(vec![5]));
+    ///
+    /// // To reconstruct `self`, we must introduce columns that are not present
+    /// // (in this example `d`) project away irrelevant columns (`x` and `y`),
+    /// // and permute existing columns to the order expected by `self`.
+    ///
+    /// // The `after` instance expects to be provided with all inputs, but it
+    /// // may not need all inputs. The `demand()` and `permute()` methods can
+    /// // optimize the representation.
     /// ```
     pub fn partition(self, available: &HashMap<usize, usize>, input_arity: usize) -> (Self, Self) {
         // Map expressions, filter predicates, and projections for `before` and `after`.
@@ -466,6 +474,50 @@ impl MapFilterProject {
             .filter(after_pred)
             .project(after_proj);
         (before, after)
+    }
+
+    /// Lists input columns whose values are used in outputs.
+    ///
+    /// It is entirely appropriate to determine the demand of an instance
+    /// and then both apply a projection to the subject of the instance and
+    /// `self.permute` this instance.
+    pub fn demand(&self) -> HashSet<usize> {
+        let mut demanded = HashSet::new();
+        demanded.extend(self.projection.iter().cloned());
+        for index in (0..self.expressions.len()).rev() {
+            if demanded.contains(&(self.input_arity + index)) {
+                demanded.extend(self.expressions[index].support());
+            }
+        }
+        demanded.retain(|col| col < &self.input_arity);
+        demanded
+    }
+
+    /// Update input column references, due to an input projection or permutation.
+    ///
+    /// The `shuffle` argument remaps expected column identifiers to new locations,
+    /// with the expectation that `shuffle` describes all input columns, and so the
+    /// intermediate results will be able to start at position `shuffle.len()`.
+    pub fn permute(self, mut shuffle: HashMap<usize, usize>) -> Self {
+        let new_input_arity = shuffle.len();
+        let (mut map, mut filter, mut project) = self.as_map_filter_project();
+        for index in 0..map.len() {
+            // Intermediate columns are just shifted.
+            shuffle.insert(self.input_arity + index, new_input_arity + index);
+        }
+        for expr in map.iter_mut() {
+            expr.permute_map(&shuffle);
+        }
+        for pred in filter.iter_mut() {
+            pred.permute_map(&shuffle);
+        }
+        for proj in project.iter_mut() {
+            *proj = shuffle[proj];
+        }
+        Self::new(new_input_arity)
+            .map(map)
+            .filter(filter)
+            .project(project)
     }
 
     /// Optimize the internal expression evaluation order.
