@@ -71,22 +71,31 @@ def restore_topic(args, topic):
 
 def restore_topics(args):
 
-    for topic in glob.glob(f'{args.topic_prefix}*'):
-        log.info(f'Restoring topic {topic}')
+    restore_topics = glob.glob(f'{args.topic_filter}')
+    if not restore_topics:
+        log.error(f'No topics matching filter {args.topic_filter}')
+        sys.exit(1)
+
+    # Restore all schemas so that Peeker can create sources properly
+    for topic in glob.glob('debezium.*'):
+        log.info(f'Restoring schema for topic {topic}')
         restore_schema(args, topic)
+
+    for topic in restore_topics:
+        log.info(f'Restoring messages to topic {topic}')
         restore_topic(args, topic)
 
 def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-k', '--kafkahost', help='Hostname of the Kafka Broker', type=str,
-                        default='localhost')
+                        default='kafka')
     parser.add_argument('-s', '--schemahost', help='Hostname of the Schema Registry', type=str,
-                        default='localhost')
+                        default='schema-registry')
     parser.add_argument('-p', '--port', help='Port to use for connecting to the Kafka Broker', type=int,
                         default=9092)
-    parser.add_argument('-t', '--topic-prefix', help='Filter topics by prefix string', type=str,
-                        default='debezium.tpcch')
+    parser.add_argument('-t', '--topic-filter', help='Only restore messagges from topics that match filter string', type=str,
+                        default='debezium.tpcch.*')
 
     args = parser.parse_args()
     restore_topics(args)

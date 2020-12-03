@@ -179,6 +179,10 @@ services:
       - view-snapshots:/snapshot
   kafka-util:
     mzbuild: kafka-util
+    volumes:
+      - type: bind
+        source: ${MZ_TOPIC_SNAPSHOTS}
+        target: /snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -400,6 +404,38 @@ mzconduct:
       - step: run
         service: mzutil
         command: await_view_states.py
+
+    # Run a test that populates Kafka with data from topic snapshots
+    # Then run Materialize and measure time until it catches up to snapshotted view state
+    kafka-replay-benchmark:
+      steps:
+      # start the dashboard before the load data get started so that we have data from
+      # the beginning of time
+      - step: start-services
+        services: [dashboard]
+      - step: start-services
+        services: [kafka, schema-registry]
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
+      - step: wait-for-tcp
+        host: kafka
+        port: 9092
+      - step: drop-kafka-topics
+        kafka-container: chbench_kafka_1
+        topic_pattern: debezium.tpcch.*
+      # Kafka connect / debezium takes forever to initialize (well, 5 minutes or so)
+      - step: run
+        service: kafka-util
+        command: restore_topics.py --topic-filter ${KAFKA_TOPIC_FILTER:-debezium.tpcch.*}
+      - step: start-services
+        services: [materialized]
+      - step: run
+        service: peeker
+        command: --only-initialize --queries ${PEEKER_QUERIES:-count-sources}
+      - step: ensure-stays-up
+        container: dashboard
+        seconds: 1
 
 
     load-test:

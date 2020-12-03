@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+export MZ_THREADS=24
+export MZ_TOPIC_SNAPSHOTS=/home/chris/snapshots
+export KAFKA_TOPIC_FILTER=debezium.tpcch.item
+export PEEKER_QUERIES=count_item
+
+./bin/mzconduct run chbench -w kafka-replay-benchmark
