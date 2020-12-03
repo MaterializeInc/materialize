@@ -2595,6 +2595,9 @@ pub enum UnaryFunc {
         // The expression to cast List1's elements to List2's elements' type
         cast_expr: Box<ScalarExpr>,
     },
+    CastMapToString {
+        ty: ScalarType,
+    },
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -2730,7 +2733,8 @@ impl UnaryFunc {
             UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
             UnaryFunc::CastRecordToString { ty }
             | UnaryFunc::CastArrayToString { ty }
-            | UnaryFunc::CastListToString { ty } => {
+            | UnaryFunc::CastListToString { ty }
+            | UnaryFunc::CastMapToString { ty } => {
                 Ok(cast_collection_to_string(a, ty, temp_storage))
             }
             UnaryFunc::CastList1ToList2 { cast_expr, .. } => {
@@ -2827,6 +2831,7 @@ impl UnaryFunc {
             | CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
+            | CastMapToString { .. }
             | TrimWhitespace
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace => ScalarType::String.nullable(in_nullable),
@@ -3046,6 +3051,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastArrayToString { .. } => f.write_str("arraytostr"),
             UnaryFunc::CastListToString { .. } => f.write_str("listtostr"),
             UnaryFunc::CastList1ToList2 { .. } => f.write_str("list1tolist2"),
+            UnaryFunc::CastMapToString { .. } => f.write_str("maptostr"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),

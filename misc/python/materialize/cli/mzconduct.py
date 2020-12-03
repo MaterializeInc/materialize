@@ -602,11 +602,11 @@ class PrintEnvStep(WorkflowStep):
 
 
 @Steps.register("sleep")
-class PrintEnvStep(WorkflowStep):
+class Sleep(WorkflowStep):
     """Waits for the defined duration of time."""
 
     def __init__(self, path: Path, duration: int) -> None:
-        super().__init__(path=Path)
+        super().__init__(path)
         self._duration = duration
 
     def run(self, comp: Composition, workflow: Workflow) -> None:

@@ -84,6 +84,12 @@ SELECT '{31=> \ normal }'::map[text=>text]
 query error unterminated quoted string
 SELECT '{"a"=>"hello there!}'::map[text=>text]
 
+### Can be cast back to text
+query T
+SELECT '{a=>1}'::map[text=>int]::text
+----
+{a=>1}
+
 ## Nested maps
 
 query error expected '\{', found a: "a": "\{a=>a\}"
