@@ -34,13 +34,9 @@ Asc
 Avro
 Begin
 Between
-Bigint
-Bool
-Boolean
 Both
 Broker
 By
-Bytea
 Bytes
 Cascade
 Case
@@ -65,7 +61,6 @@ Current
 Cursor
 Database
 Databases
-Date
 Day
 Days
 Debezium
@@ -96,8 +91,6 @@ File
 Filter
 First
 Float
-Float4
-Float8
 Following
 For
 Foreign
@@ -119,10 +112,6 @@ Index
 Indexes
 Inner
 Insert
-Int
-Int4
-Int8
-Integer
 Intersect
 Interval
 Into
@@ -130,7 +119,6 @@ Is
 Isolation
 Join
 Json
-Jsonb
 Kafka
 Key
 Keys
@@ -161,7 +149,6 @@ Numeric
 Ocf
 Of
 Offset
-Oid
 On
 Only
 Optimized
@@ -180,9 +167,7 @@ Protobuf
 Range
 Raw
 Read
-Real
 References
-Regclass
 Regex
 Registry
 Rename
@@ -207,7 +192,6 @@ Set
 Show
 Sink
 Sinks
-Smallint
 Snapshot
 Some
 Source
@@ -215,7 +199,6 @@ Sources
 Start
 Stdin
 Stdout
-String
 Table
 Tables
 Tail
@@ -243,7 +226,6 @@ Unique
 Update
 Upsert
 Using
-Uuid
 Value
 Values
 Varchar

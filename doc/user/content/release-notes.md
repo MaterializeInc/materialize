@@ -420,7 +420,7 @@ Wrap your release notes at the 80 character mark.
 
 - Allow dropping databases with cross-schema dependencies {{% gh 3558 %}}.
 
-- Avoid crashing if [`date_trunc('week', ...)`](/sql/functions/#time-func) is
+- Avoid crashing if [`date_trunc('week', ...)`](/sql/functions/#date-and-time-func) is
   called on a date that is in the first week of a month {{% gh 3651 %}}.
 
 - Ensure the built-in `mz_avro_ocf_sinks`, `mz_catalog_names`, and

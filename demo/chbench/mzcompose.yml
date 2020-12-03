@@ -174,9 +174,11 @@ services:
     volumes:
       - chbench-gen:/gen
   mzutil:
-    build: mzutil
+    mzbuild: mzutil
     volumes:
       - view-snapshots:/snapshot
+  kafka-util:
+    mzbuild: kafka-util
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -352,47 +354,52 @@ mzconduct:
         duration: 64800
       - step: stop-services
         services: [chbench, postgres]
-      # Give Materialize a few seconds to catch up with topics / drain
+      # Give Materialize a few seconds to catch up with topics / drain before snapshotting views
       - step: sleep
         duration: 15
       - step: run
         service: mzutil
-        command: snapshot_view_states
+        command: snapshot_view_states.py
+      # Output summary information about the topics
+      - step: run
+        service: kafka-util
+        command: summarize_topics.py
+      # Restart Materialize and see how quickly it catches up
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states
+        command: await_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states
+        command: await_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states
+        command: await_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states
+        command: await_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states
+        command: await_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states
+        command: await_view_states.py
 
 
     load-test:

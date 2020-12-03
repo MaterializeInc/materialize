@@ -1,4 +1,3 @@
-#!/usr/bin/env bash
 # Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -8,9 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-export MZ_THREADS=24
-export NUM_WAREHOUSES=10
-export OLAP_THREADS=1
-export OLTP_THREADS=64
+FROM python:3.9-slim
 
-./bin/mzconduct run chbench -w ingest-performance-benchmark
+RUN pip install kafka-python
+
+COPY summarize_topics.py /usr/local/bin/summarize_topics.py
+RUN chmod +x /usr/local/bin/summarize_topics.py

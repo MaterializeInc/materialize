@@ -83,7 +83,7 @@ Op { op: "!~*", expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo")
 parse-scalar
 a !x 'foo'
 ----
-Op { op: "!", expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Custom("x") }) }
+Op { op: "!", expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other(Ident("x")) }) }
 
 parse-scalar
 a !x
@@ -105,22 +105,22 @@ id::bigint
 parse-scalar roundtrip
 id::double precision
 ----
-id::double precision
+id::float8
 
 parse-scalar roundtrip
 id::timestamp with time zone
 ----
-id::timestamp with time zone
+id::timestamptz
 
 parse-scalar roundtrip
 (id::timestamp with time zone::timestamp without time zone  )  ::  double precision::text
 ----
-(id::timestamp with time zone::timestamp)::double precision::text
+(id::timestamptz::timestamp)::float8::text
 
 parse-scalar roundtrip
 CAST(c::jsonb->>'f' AS timestamptz)
 ----
-(c::jsonb ->> 'f')::timestamp with time zone
+(c::jsonb ->> 'f')::timestamptz
 
 parse-scalar roundtrip
 id::numeric FROM customer
@@ -347,17 +347,17 @@ SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2")
 parse-scalar
 ARRAY[]::int[]
 ----
-Cast { expr: Array([]), data_type: Array(Int) }
+Cast { expr: Array([]), data_type: Array(Other(Ident("int"))) }
 
 parse-scalar
 ARRAY[]::int[][][][]
 ----
-Cast { expr: Array([]), data_type: Array(Int) }
+Cast { expr: Array([]), data_type: Array(Other(Ident("int"))) }
 
 parse-scalar
 ARRAY[]::int[2][2]
 ----
-Cast { expr: Array([]), data_type: Array(Int) }
+Cast { expr: Array([]), data_type: Array(Other(Ident("int"))) }
 
 parse-scalar
 a -> b
