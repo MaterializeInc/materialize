@@ -15,6 +15,7 @@ use std::fmt;
 use std::io::Read;
 use std::{cell::RefCell, iter, rc::Rc};
 
+use anyhow::Context;
 use anyhow::{anyhow, bail};
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::format::{DelayedFormat, StrftimeItems};
@@ -1957,7 +1958,10 @@ impl ConfluentAvroResolver {
         }
 
         let resolved_schema = match &mut self.writer_schemas {
-            Some(cache) => cache.get(schema_id, &self.reader_schema).await?,
+            Some(cache) => cache
+                .get(schema_id, &self.reader_schema)
+                .await
+                .with_context(|| format!("Failed to fetch schema with ID {}", schema_id))?,
             // If we haven't been asked to use a schema registry, we have no way
             // to discover the writer's schema. That's ok; we'll just use the
             // reader's schema and hope it lines up.
