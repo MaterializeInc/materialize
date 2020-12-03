@@ -107,9 +107,9 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-k', '--kafkahost', help='Hostname of the Kafka Broker', type=str,
-                        default='localhost')
+                        default='kafka')
     parser.add_argument('-s', '--schemahost', help='Hostname of the Schema Registry', type=str,
-                        default='localhost')
+                        default='schema-registry')
     parser.add_argument('-p', '--port', help='Port to use for connecting to the Kafka Broker', type=int,
                         default=9092)
     parser.add_argument('-t', '--topic-prefix', help='Filter topics by prefix string', type=str,
