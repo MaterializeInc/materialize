@@ -322,11 +322,13 @@ impl MapFilterProject {
     /// // Partition `original` using the available columns and input arity.
     /// let (before, after) = original.partition(&available_columns, 5);
     ///
+    /// // `before` sees all five input columns, and should append `a + b + c`.
     /// assert_eq!(before, MapFilterProject::new(5).map(vec![
     ///    ScalarExpr::column(2).call_binary(ScalarExpr::column(0), BinaryFunc::AddInt64),
     ///    ScalarExpr::column(4).call_binary(ScalarExpr::column(5), BinaryFunc::AddInt64),
     /// ]).project(vec![0, 1, 2, 3, 4, 6]));
     ///
+    /// // `after` expects to see `(a, b, c, d, a + b + c)`.
     /// assert_eq!(after, MapFilterProject::new(5).map(vec![
     ///    ScalarExpr::column(3).call_binary(ScalarExpr::column(4), BinaryFunc::AddInt64)
     /// ]).project(vec![5]));
