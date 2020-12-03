@@ -3346,6 +3346,12 @@ pub fn hmac_inner<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let key = datums[1].unwrap_str().as_bytes();
     let bytes = match datums[2].unwrap_str() {
+        "md5" => {
+            type HmacMd5 = Hmac<Md5>;
+            let mut mac = HmacMd5::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
         "sha224" => {
             type HmacSha224 = Hmac<Sha224>;
             let mut mac = HmacSha224::new_varkey(key).expect("HMAC can take key of any size");

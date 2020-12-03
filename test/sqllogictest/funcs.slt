@@ -747,6 +747,40 @@ SELECT digest('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm
 
 #hmac
 
+## hmac with md5
+query T
+SELECT hmac(''::text, ''::text, 'md5'::text)::text
+----
+\x74e6f7298a9c2d168935f58c001bad88
+
+query T
+SELECT hmac(''::bytea, ''::text, 'md5'::text)::text
+----
+\x74e6f7298a9c2d168935f58c001bad88
+
+query T
+SELECT hmac(''::text, 'some key here'::text, 'md5'::text)::text
+----
+\xc8ca20116ea2cf24dce475f4c3b8cf79
+
+query T
+SELECT hmac('some text here'::bytea, ''::text, 'md5'::text)::text
+----
+\x8816cf958d363c75ebd6db9795995f8b
+
+query T
+SELECT hmac('some text here'::text, 'some key here'::text, 'md5'::text)::text
+----
+\xf34204642f7f1c3ffc2a05170f4a3b84
+
+# sha224's block-size is 64 bytes
+query T
+SELECT hmac('Test Using Larger Than Block-Size Key and Larger Than Block-Size Data'::bytea,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::text,
+            'md5'::text)::text
+----
+\xf4d787e9ad2aef45765ef18b7f055cfd
+
 ## hmac with sha224
 query T
 SELECT hmac(''::text, ''::text, 'sha224'::text)::text
