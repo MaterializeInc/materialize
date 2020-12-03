@@ -29,11 +29,12 @@ use crate::render::context::Arrangement;
 
 // This enum indicates to the collation operator what results correspond to what types of reductions. Need
 // to keep all of the fused results ahead of the unfused results so that they can be extracted out efficiently
+// The code also currently relies on FusedAccumulable being less than FusedMax.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 enum ReductionType {
-    FusedAccumulable,
-    FusedMinMax,
-    Other,
+    FusedAccumulable = 1,
+    FusedMinMax = 2,
+    Other = 3,
 }
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
