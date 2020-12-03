@@ -147,7 +147,7 @@ impl MapFilterProject {
             assert!(predicate
                 .support()
                 .into_iter()
-                .all(|c| c < self.expressions.len()));
+                .all(|c| c < self.input_arity + self.expressions.len()));
 
             // Insert predicate as eagerly as it can be evaluated:
             // just after the largest column in its support is formed.
@@ -178,7 +178,7 @@ impl MapFilterProject {
             assert!(expression
                 .support()
                 .into_iter()
-                .all(|c| c < self.expressions.len()));
+                .all(|c| c < self.input_arity + self.expressions.len()));
 
             // Introduce expression and produce as output.
             self.expressions.push(expression);
@@ -287,7 +287,7 @@ impl MapFilterProject {
     /// await the introduction of the other input columns.
     ///
     /// The `before` instance will *append* any columns that can be determined from
-    /// `available` but will project away any of its columns that are not needed by
+    /// `available` but will project away any of these columns that are not needed by
     /// `after`. Importantly, this means that `before` will leave intact *all* input
     /// columns including those not referenced in `available`.
     ///
@@ -301,6 +301,36 @@ impl MapFilterProject {
     /// additional input columns, permute all input columns to their locations as
     /// expected by `self`, follow this by new columns appended by `before`, and
     /// remove all other columns that may be present.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use expr::{BinaryFunc, MapFilterProject, ScalarExpr};
+    ///
+    /// // imagine an action on columns (a, b, c, d).
+    /// let original = MapFilterProject::new(4).map(vec![
+    ///    ScalarExpr::column(0).call_binary(ScalarExpr::column(1), BinaryFunc::AddInt64),
+    ///    ScalarExpr::column(2).call_binary(ScalarExpr::column(4), BinaryFunc::AddInt64),
+    ///    ScalarExpr::column(3).call_binary(ScalarExpr::column(5), BinaryFunc::AddInt64),
+    /// ]).project(vec![6]);
+    ///
+    /// // Imagine we start with columns (b, x, a, y, c).
+    /// let mut available_columns = std::collections::HashMap::new();
+    /// available_columns.insert(0, 2);
+    /// available_columns.insert(1, 0);
+    /// available_columns.insert(2, 4);
+    /// // Partition `original` using the available columns and input arity.
+    /// let (before, after) = original.partition(&available_columns, 5);
+    ///
+    /// assert_eq!(before, MapFilterProject::new(5).map(vec![
+    ///    ScalarExpr::column(2).call_binary(ScalarExpr::column(0), BinaryFunc::AddInt64),
+    ///    ScalarExpr::column(4).call_binary(ScalarExpr::column(5), BinaryFunc::AddInt64),
+    /// ]).project(vec![0, 1, 2, 3, 4, 6]));
+    ///
+    /// assert_eq!(after, MapFilterProject::new(5).map(vec![
+    ///    ScalarExpr::column(3).call_binary(ScalarExpr::column(4), BinaryFunc::AddInt64)
+    /// ]).project(vec![5]));
+    /// ```
     pub fn partition(self, available: &HashMap<usize, usize>, input_arity: usize) -> (Self, Self) {
         // Map expressions, filter predicates, and projections for `before` and `after`.
         let mut before_expr = Vec::new();
@@ -350,7 +380,8 @@ impl MapFilterProject {
         // adjusted to reflect `before`s projection prior to use in `after`.
         let mut before_map = available.clone();
         // Input columns include any additional undescribed columns that may
-        // not be captured by the `available` argument.
+        // not be captured by the `available` argument, so we must independently
+        // track the current number of columns (vs relying on `before_map.len()`).
         let mut input_columns = input_arity;
         for index in self.input_arity..available_expr.len() {
             if available_expr[index] {
@@ -368,9 +399,17 @@ impl MapFilterProject {
         }
 
         // Demand information determines `before`s output projection.
-        demanded.retain(|col| available_expr[*col]);
-        before_proj.extend(demanded);
-        before_proj.sort();
+        // Specifically, we produce all input columns in the output, as well as
+        // any columns that are available and demanded.
+        before_proj.extend(0..input_arity);
+        for index in self.input_arity..available_expr.len() {
+            // If an intermediate result is both available and demanded,
+            // we should produce it as output.
+            if available_expr[index] && demanded.contains(&index) {
+                // Use the new location of `index`.
+                before_proj.push(before_map[&index]);
+            }
+        }
 
         // Map from prior output locations to location in post-`before` columns.
         // This map is used to correct references in `after`.
@@ -380,9 +419,26 @@ impl MapFilterProject {
         for index in 0..self.input_arity {
             after_map.insert(index, index);
         }
-        for index in before_proj.iter() {
-            if *index >= self.input_arity {
-                after_map.insert(*index, after_map.len());
+        for index in self.input_arity..available_expr.len() {
+            // If an intermediate result is both available and demanded,
+            // it was produced as output.
+            if available_expr[index] && demanded.contains(&index) {
+                // We expect to find the output as far after `self.input_arity` as
+                // it was produced after `input_arity` in the output of `before`.
+                let location = self.input_arity
+                    + (before_proj
+                        .iter()
+                        .position(|x| x == &before_map[&index])
+                        .unwrap()
+                        - input_arity);
+                after_map.insert(index, location);
+            }
+        }
+        // We must now re-map the remaining non-demanded expressions, which are
+        // contiguous rather than potentially interspersed.
+        for index in self.input_arity..available_expr.len() {
+            if !available_expr[index] {
+                after_map.insert(index, after_map.len());
             }
         }
 
@@ -399,11 +455,11 @@ impl MapFilterProject {
         }
 
         // Form and return the before and after MapFilterProject instances.
-        let before = Self::new(self.input_arity)
+        let before = Self::new(input_arity)
             .map(before_expr)
             .filter(before_pred)
-            .project(before_proj);
-        let after = Self::new(before_map.len())
+            .project(before_proj.clone());
+        let after = Self::new(self.input_arity + (before_proj.len() - input_arity))
             .map(after_expr)
             .filter(after_pred)
             .project(after_proj);
