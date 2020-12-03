@@ -591,6 +591,7 @@ SELECT array_upper(NULL, 1)
 # Includes tests partially ported over from pg_crypto
 # https://github.com/postgres/postgres/tree/ca7f8e2b86e5f15a40b67e6199d714f45a467ff1/contrib/pgcrypto/expected
 
+# digest
 query error invalid hash algorithm 'nonsense'
 SELECT digest('hi'::text, 'nonsense'::text)
 
@@ -743,3 +744,175 @@ query T
 SELECT digest('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz'::bytea, 'sha512'::text)::text
 ----
 \x930d0cefcb30ff1133b6898121f1cf3d27578afcafe8677c5257cf069911f75d8f5831b56ebfda67b278e66dff8b84fe2b2870f742a580d8edb41987232850c9
+
+#hmac
+
+## hmac with md5
+query T
+SELECT hmac(''::text, ''::text, 'md5'::text)::text
+----
+\x74e6f7298a9c2d168935f58c001bad88
+
+query T
+SELECT hmac(''::bytea, ''::text, 'md5'::text)::text
+----
+\x74e6f7298a9c2d168935f58c001bad88
+
+query T
+SELECT hmac(''::text, 'some key here'::text, 'md5'::text)::text
+----
+\xc8ca20116ea2cf24dce475f4c3b8cf79
+
+query T
+SELECT hmac('some text here'::bytea, ''::text, 'md5'::text)::text
+----
+\x8816cf958d363c75ebd6db9795995f8b
+
+query T
+SELECT hmac('some text here'::text, 'some key here'::text, 'md5'::text)::text
+----
+\xf34204642f7f1c3ffc2a05170f4a3b84
+
+# sha224's block-size is 64 bytes
+query T
+SELECT hmac('Test Using Larger Than Block-Size Key and Larger Than Block-Size Data'::bytea,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::text,
+            'md5'::text)::text
+----
+\xf4d787e9ad2aef45765ef18b7f055cfd
+
+## hmac with sha224
+query T
+SELECT hmac(''::text, ''::text, 'sha224'::text)::text
+----
+\x5ce14f72894662213e2748d2a6ba234b74263910cedde2f5a9271524
+
+query T
+SELECT hmac(''::bytea, ''::text, 'sha224'::text)::text
+----
+\x5ce14f72894662213e2748d2a6ba234b74263910cedde2f5a9271524
+
+query T
+SELECT hmac(''::text, 'some key here'::text, 'sha224'::text)::text
+----
+\xea4c7e7c38e93c4ed536e074e3243471098399f5050721b871cbe050
+
+query T
+SELECT hmac('some text here'::bytea, ''::text, 'sha224'::text)::text
+----
+\xcd2ca3aa6ced91b60c8925107bcb28f0afb7c2eab141d2e5de8165cd
+
+query T
+SELECT hmac('some text here'::text, 'some key here'::text, 'sha224'::text)::text
+----
+\xbb81579cab6947e27d3dec8641e23d00ec7bd9c2a8556f896969f88e
+
+# sha224's block-size is 64 bytes
+query T
+SELECT hmac('Test Using Larger Than Block-Size Key and Larger Than Block-Size Data'::bytea,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::text,
+            'sha224'::text)::text
+----
+\x3575d11b6a03629992b587f5abcbb4564c13d0989b4668346ac5baeb
+
+## hmac with sha256
+query T
+SELECT hmac(''::text, ''::text, 'sha256'::text)::text
+----
+\xb613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad
+
+query T
+SELECT hmac(''::bytea, ''::text, 'sha256'::text)::text
+----
+\xb613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad
+
+query T
+SELECT hmac(''::text, 'some key here'::text, 'sha256'::text)::text
+----
+\x10c496cd3c86c1873978f4f5b9ba28436f7b99ac09c05498558f9e1500373e1b
+
+query T
+SELECT hmac('some text here'::bytea, ''::text, 'sha256'::text)::text
+----
+\xb126917dc129d588aa8be1b0de4a245242890d947651179f94c560f2ad2dec03
+
+query T
+SELECT hmac('some text here'::text, 'some key here'::text, 'sha256'::text)::text
+----
+\xfed2237056af610704ab8d910f718aef08e684dbe6e38afe404f17ec77eb9808
+
+# sha256's block-size is 64 bytes
+query T
+SELECT hmac('Test Using Larger Than Block-Size Key and Larger Than Block-Size Data'::bytea,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::text,
+            'sha256'::text)::text
+----
+\x02c8c554c5931b331ca1436f2efbd05e8ad53a84c6e7bb3973fa22ca2a5a4926
+
+## hmac with sha384
+query T
+SELECT hmac(''::text, ''::text, 'sha384'::text)::text
+----
+\x6c1f2ee938fad2e24bd91298474382ca218c75db3d83e114b3d4367776d14d3551289e75e8209cd4b792302840234adc
+
+query T
+SELECT hmac(''::bytea, ''::text, 'sha384'::text)::text
+----
+\x6c1f2ee938fad2e24bd91298474382ca218c75db3d83e114b3d4367776d14d3551289e75e8209cd4b792302840234adc
+
+query T
+SELECT hmac(''::text, 'some key here'::text, 'sha384'::text)::text
+----
+\xdec33afd5bfa9684d50288c17ea9a4b44b79d01cd0e24d7a384b6930679da25a617ea04dd8a7741b3cee89a3046471a1
+
+query T
+SELECT hmac('some text here'::bytea, ''::text, 'sha384'::text)::text
+----
+\x40983943a05c34f9070f77c91ab56d9f40b88c3e4830eee6b6d90ef4e48c4d8729c4c65d92fa4402b9409f2123388b37
+
+query T
+SELECT hmac('some text here'::text, 'some key here'::text, 'sha384'::text)::text
+----
+\x52be88c80306c8fe2a9c13e10ba4b317a0e88369c0e639ba7325951cb67221a2e4bfdd1a48afe4d07c4fc1775dc58aaf
+
+# sha384's block-size is 128 bytes
+query T
+SELECT hmac('Test Using Larger Than Block-Size Key and Larger Than Block-Size Data Test Using Larger Than Block-Size Key and Larger Than Block-Size Data'::bytea,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::text,
+            'sha384'::text)::text
+----
+\xf60bc806a9f11ec560e8129d7933c8bafb58c876c49c5bc2955973043b5dfc54daa7c09361e73478cd91c73fcbea3416
+
+## hmac with sha256
+query T
+SELECT hmac(''::text, ''::text, 'sha256'::text)::text
+----
+\xb613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad
+
+query T
+SELECT hmac(''::bytea, ''::text, 'sha256'::text)::text
+----
+\xb613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad
+
+query T
+SELECT hmac(''::text, 'some key here'::text, 'sha256'::text)::text
+----
+\x10c496cd3c86c1873978f4f5b9ba28436f7b99ac09c05498558f9e1500373e1b
+
+query T
+SELECT hmac('some text here'::bytea, ''::text, 'sha256'::text)::text
+----
+\xb126917dc129d588aa8be1b0de4a245242890d947651179f94c560f2ad2dec03
+
+query T
+SELECT hmac('some text here'::text, 'some key here'::text, 'sha256'::text)::text
+----
+\xfed2237056af610704ab8d910f718aef08e684dbe6e38afe404f17ec77eb9808
+
+# sha384's block-size is 64 bytes
+query T
+SELECT hmac('Test Using Larger Than Block-Size Key and Larger Than Block-Size Data'::bytea,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::text,
+            'sha256'::text)::text
+----
+\x02c8c554c5931b331ca1436f2efbd05e8ad53a84c6e7bb3973fa22ca2a5a4926
