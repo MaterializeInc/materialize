@@ -1078,6 +1078,10 @@ lazy_static! {
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
                 })
             },
+            "hmac" => Scalar {
+                params!(String, String, String) => VariadicFunc::HmacString,
+                params!(Bytes, String, String) => VariadicFunc::HmacBytes
+            },
             "jsonb_array_length" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
             },
