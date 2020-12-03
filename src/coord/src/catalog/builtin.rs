@@ -99,7 +99,7 @@ pub struct BuiltinView {
 pub struct BuiltinType {
     pub schema: &'static str,
     pub id: GlobalId,
-    inner: Type,
+    inner: &'static Type,
 }
 
 impl BuiltinType {
@@ -860,206 +860,219 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
 pub const TYPE_BOOL: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4000),
-    inner: postgres_types::Type::BOOL,
+    inner: &postgres_types::Type::BOOL,
 };
 
 pub const TYPE_BYTEA: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4001),
-    inner: postgres_types::Type::BYTEA,
+    inner: &postgres_types::Type::BYTEA,
 };
 
 pub const TYPE_INT8: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4002),
-    inner: postgres_types::Type::INT8,
+    inner: &postgres_types::Type::INT8,
 };
 
 pub const TYPE_INT4: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4003),
-    inner: postgres_types::Type::INT4,
+    inner: &postgres_types::Type::INT4,
 };
 
 pub const TYPE_TEXT: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4004),
-    inner: postgres_types::Type::TEXT,
+    inner: &postgres_types::Type::TEXT,
 };
 
 pub const TYPE_OID: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4005),
-    inner: postgres_types::Type::OID,
+    inner: &postgres_types::Type::OID,
 };
 
 pub const TYPE_FLOAT4: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4006),
-    inner: postgres_types::Type::FLOAT4,
+    inner: &postgres_types::Type::FLOAT4,
 };
 
 pub const TYPE_FLOAT8: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4007),
-    inner: postgres_types::Type::FLOAT8,
+    inner: &postgres_types::Type::FLOAT8,
 };
 
 pub const TYPE_BOOL_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4008),
-    inner: postgres_types::Type::BOOL_ARRAY,
+    inner: &postgres_types::Type::BOOL_ARRAY,
 };
 
 pub const TYPE_BYTEA_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4009),
-    inner: postgres_types::Type::BYTEA_ARRAY,
+    inner: &postgres_types::Type::BYTEA_ARRAY,
 };
 
 pub const TYPE_INT4_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4010),
-    inner: postgres_types::Type::INT4_ARRAY,
+    inner: &postgres_types::Type::INT4_ARRAY,
 };
 
 pub const TYPE_TEXT_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4011),
-    inner: postgres_types::Type::TEXT_ARRAY,
+    inner: &postgres_types::Type::TEXT_ARRAY,
 };
 
 pub const TYPE_INT8_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4012),
-    inner: postgres_types::Type::INT8_ARRAY,
+    inner: &postgres_types::Type::INT8_ARRAY,
 };
 
 pub const TYPE_FLOAT4_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4013),
-    inner: postgres_types::Type::FLOAT4_ARRAY,
+    inner: &postgres_types::Type::FLOAT4_ARRAY,
 };
 
 pub const TYPE_FLOAT8_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4014),
-    inner: postgres_types::Type::FLOAT8_ARRAY,
+    inner: &postgres_types::Type::FLOAT8_ARRAY,
 };
 
 pub const TYPE_OID_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4015),
-    inner: postgres_types::Type::OID_ARRAY,
+    inner: &postgres_types::Type::OID_ARRAY,
 };
 
 pub const TYPE_DATE: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4016),
-    inner: postgres_types::Type::DATE,
+    inner: &postgres_types::Type::DATE,
 };
 
 pub const TYPE_TIME: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4017),
-    inner: postgres_types::Type::TIME,
+    inner: &postgres_types::Type::TIME,
 };
 
 pub const TYPE_TIMESTAMP: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4018),
-    inner: postgres_types::Type::TIMESTAMP,
+    inner: &postgres_types::Type::TIMESTAMP,
 };
 
 pub const TYPE_TIMESTAMP_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4019),
-    inner: postgres_types::Type::TIMESTAMP_ARRAY,
+    inner: &postgres_types::Type::TIMESTAMP_ARRAY,
 };
 
 pub const TYPE_DATE_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4020),
-    inner: postgres_types::Type::DATE_ARRAY,
+    inner: &postgres_types::Type::DATE_ARRAY,
 };
 
 pub const TYPE_TIME_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4021),
-    inner: postgres_types::Type::TIME_ARRAY,
+    inner: &postgres_types::Type::TIME_ARRAY,
 };
 
 pub const TYPE_TIMESTAMPTZ: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4022),
-    inner: postgres_types::Type::TIMESTAMPTZ,
+    inner: &postgres_types::Type::TIMESTAMPTZ,
 };
 
 pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4023),
-    inner: postgres_types::Type::TIMESTAMPTZ_ARRAY,
+    inner: &postgres_types::Type::TIMESTAMPTZ_ARRAY,
 };
 
 pub const TYPE_INTERVAL: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4024),
-    inner: postgres_types::Type::INTERVAL,
+    inner: &postgres_types::Type::INTERVAL,
 };
 
 pub const TYPE_INTERVAL_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4025),
-    inner: postgres_types::Type::INTERVAL_ARRAY,
+    inner: &postgres_types::Type::INTERVAL_ARRAY,
 };
 
 pub const TYPE_NUMERIC: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4026),
-    inner: postgres_types::Type::NUMERIC,
+    inner: &postgres_types::Type::NUMERIC,
 };
 
 pub const TYPE_NUMERIC_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4027),
-    inner: postgres_types::Type::NUMERIC_ARRAY,
+    inner: &postgres_types::Type::NUMERIC_ARRAY,
 };
 
 pub const TYPE_RECORD: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4028),
-    inner: postgres_types::Type::RECORD,
+    inner: &postgres_types::Type::RECORD,
 };
 
 pub const TYPE_RECORD_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4029),
-    inner: postgres_types::Type::RECORD_ARRAY,
+    inner: &postgres_types::Type::RECORD_ARRAY,
 };
 
 pub const TYPE_UUID: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4030),
-    inner: postgres_types::Type::UUID,
+    inner: &postgres_types::Type::UUID,
 };
 
 pub const TYPE_UUID_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4031),
-    inner: postgres_types::Type::UUID_ARRAY,
+    inner: &postgres_types::Type::UUID_ARRAY,
 };
 
 pub const TYPE_JSONB: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4032),
-    inner: postgres_types::Type::JSONB,
+    inner: &postgres_types::Type::JSONB,
 };
 
 pub const TYPE_JSONB_ARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(4033),
-    inner: postgres_types::Type::JSONB_ARRAY,
+    inner: &postgres_types::Type::JSONB_ARRAY,
 };
+
+lazy_static! {
+    pub static ref TYPE_LIST: BuiltinType = BuiltinType {
+        schema: PG_CATALOG_SCHEMA,
+        id: GlobalId::System(4034),
+        inner: &pgrepr::LIST,
+    };
+    pub static ref TYPE_MAP: BuiltinType = BuiltinType {
+        schema: PG_CATALOG_SCHEMA,
+        id: GlobalId::System(4035),
+        inner: &*pgrepr::MAP,
+    };
+}
 
 lazy_static! {
     pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
@@ -1154,6 +1167,8 @@ lazy_static! {
             Builtin::Type(&TYPE_UUID_ARRAY),
             Builtin::Type(&TYPE_OID),
             Builtin::Type(&TYPE_OID_ARRAY),
+            Builtin::Type(&TYPE_LIST),
+            Builtin::Type(&TYPE_MAP),
         ];
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
