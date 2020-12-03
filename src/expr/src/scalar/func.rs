@@ -21,6 +21,7 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
+use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
@@ -3800,11 +3801,15 @@ fn digest_inner<'a>(
     digest_fn: Datum<'a>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    match digest_fn.unwrap_str() {
-        "md5" => Ok(temp_storage
-            .make_datum(|packer| packer.push(Datum::Bytes(Md5::digest(bytes).as_slice())))),
-        other => Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
-    }
+    let bytes = match digest_fn.unwrap_str() {
+        "md5" => Md5::digest(bytes).to_vec(),
+        "sha224" => Sha224::digest(bytes).to_vec(),
+        "sha256" => Sha256::digest(bytes).to_vec(),
+        "sha384" => Sha384::digest(bytes).to_vec(),
+        "sha512" => Sha512::digest(bytes).to_vec(),
+        other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
+    };
+    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

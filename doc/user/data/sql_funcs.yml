@@ -362,11 +362,11 @@
     - signature: 'digest(data: text, type: text) -> bytea'
       desctription: >-
         Computes a binary hash of the given text `data` using the specified `type` algorithm.
-        Currently, only the `md5` algorithm is supported.
+        Supported hash algorithms are: `md5`, `sha224`, `sha256`, `sha384`, `sha512`.
     - signature: 'digest(data: bytea, type: text) -> bytea'
       desctription: >-
         Computes a binary hash of the given bytea `data` using the specified `type` algorithm.
-        Currently, only the `md5` algorithm is supported.
+        The hash algorithms that are supported are the same as for the text variant of this function.
 
 - type: System information
   description: Functions that return information about the system
