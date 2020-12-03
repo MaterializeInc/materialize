@@ -14,6 +14,7 @@ Basic script to print messages count and number of bytes within a Kafka topic
 """
 
 import argparse
+import fnmatch
 import time
 
 import kafka
@@ -48,7 +49,7 @@ def summarize_topics(args):
     """Read messages from topics matching prefix and print basic information about the topic."""
 
     consumer = kafka.KafkaConsumer(bootstrap_servers=[f"{args.kafkahost}:{args.port}"])
-    topics = sorted([t for t in consumer.topics() if t.startswith(args.topic_prefix)])
+    topics = sorted(fnmatch.filter(consumer.topics(), args.topic_filter))
 
     print("Topic,NumMessages,KeyBytes,ValueBytes,PythonConsumerTimeElapsed")
     for topic in topics:
@@ -65,17 +66,17 @@ def main():
         "--kafkahost",
         help="Filter topics by prefix string",
         type=str,
-        default="localhost",
+        default="kafka",
     )
     parser.add_argument(
         "-p", "--port", help="Filter topics by prefix string", type=int, default=9092
     )
     parser.add_argument(
         "-t",
-        "--topic-prefix",
-        help="Filter topics by prefix string",
+        "--topic-filter",
+        help="Filter topics by fnmatch pattern string",
         type=str,
-        default="debezium.tpcch",
+        default="debezium.tpcch.*",
     )
 
     args = parser.parse_args()
