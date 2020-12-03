@@ -13,6 +13,7 @@
 # Writes topic contents as Arrow encoded Tables into the working directory of the script
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -33,18 +34,28 @@ SCHEMA = pyarrow.schema([('key', pyarrow.binary()),
                          ('timestamp', pyarrow.timestamp('ms')),
                         ])
 
-def archive_schema(args, topic):
+def query_subjects(args):
+    """Return all subjects stored in the schema registry."""
+    response = requests.get(f"http://{args.schemahost}:8081/subjects")
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_schema(args, subject):
+    """Get the latest schema definition for a subject."""
+    response = requests.get(f"http://{args.schemahost}:8081/subjects/{subject}/versions/latest")
+    response.raise_for_status()
+    return response.json()
+
+
+def archive_schemas(args):
     """Record the raw value of the key/value schema fields for the named topic."""
 
-    for field in ['key', 'value']:
-        response = requests.get(f"http://{args.schemahost}:8081/subjects/{topic}-{field}/versions/latest")
-        if response.status_code != 200:
-            log.warning(f"WARNING: Failed to query {field} schema for {topic}")
-            continue
+    # Create a json file that maps subject name to schema definition, including ID
+    schemas = {subject: fetch_schema(args, subject) for subject in query_subjects(args)}
+    with open('schemas.json', 'w') as fd:
+        json.dump(schemas, fd)
 
-        outfile = os.path.join(topic, f"{field}.schema")
-        with open(outfile, 'w') as f:
-            f.write(response.json()['schema'])
 
 def archive_topic(args, topic):
 
@@ -97,10 +108,12 @@ def archive_topics(args):
             log.error(f'ERROR: {topic} directory already exists; will not overwrite')
             sys.exit(1)
 
+    # Archive all schemas so that we can reconstruct them with the same IDs
+    archive_schemas(args)
+
     for topic in topics:
         log.info(f'Archiving {topic}')
         os.mkdir(topic)
-        archive_schema(args, topic)
         archive_topic(args, topic)
 
 def main():
