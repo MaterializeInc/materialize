@@ -9,20 +9,12 @@
 
 //! Fuzz testing via sqllogictest.
 
-use coord::ExecuteResponse;
-
-use crate::runner::State;
+use crate::runner::Runner;
 
 pub async fn fuzz(sqls: &str) {
-    let mut state = State::start().await.unwrap();
+    let mut runner = Runner::start().await.unwrap();
     for sql in sqls.split(';') {
-        if let Ok((Some(desc), ExecuteResponse::SendingRows(rx))) = state.run_sql(sql).await {
-            for row in rx.await.unwrap().unwrap_rows() {
-                for (typ, datum) in desc.iter_types().zip(row.iter()) {
-                    assert!(datum.is_instance_of(typ));
-                }
-            }
-        }
+        let _ = runner.run_sql(sql).await;
     }
 }
 

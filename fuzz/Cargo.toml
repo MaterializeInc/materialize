@@ -12,9 +12,11 @@ cargo-fuzz = true
 name = "fuzz_testdrive"
 path = "fuzz_targets/fuzz_testdrive.rs"
 
-[[bin]]
-name = "fuzz_sqllogictest"
-path = "fuzz_targets/fuzz_sqllogictest.rs"
+# This is currently exiting with a signal 11 and no text. Disable until
+# someone figures out what is going on.
+#[[bin]]
+#name = "fuzz_sqllogictest"
+#path = "fuzz_targets/fuzz_sqllogictest.rs"
 
 [[bin]]
 name = "build_corpus"

@@ -9,6 +9,14 @@
 
 mode cockroach
 
+# The MAP type has an uncommon OID. If tokio-postres (the driver used
+# by sqllogictest) encounters an OID it doesn't recognize (MAP in
+# this case), then it queries pg_type (a wrapper around mz_types) for
+# information about it. Our MAP type currently doesn't have an entry in
+# mz_types, so that query fails and tokio-postgres is unable to execute
+# queries with MAPs. As a workaround until MAP is reflected in pg_type,
+# we just convert everything to `text`.
+
 # Test basic string to map casts.
 query error value_type parameter required
 CREATE TYPE custom AS MAP (key_type=text)
@@ -16,22 +24,22 @@ CREATE TYPE custom AS MAP (key_type=text)
 query error key_type parameter required
 CREATE TYPE custom AS MAP (value_type='bool')
 
-query error unexpected parameters for CREATE TYPE: extra_type
+query error unknown catalog item 'customthing'
 CREATE TYPE custom AS MAP (key_type=text, value_type='bool', extra_type=customthing)
 
 query error CREATE TYPE not yet supported
 CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
 
 query error expected '\{', found a: "a=>1"
-SELECT 'a=>1'::map[text=>int]
+SELECT ('a=>1'::map[text=>int])::text
 
 query T
-SELECT '{a=>1}'::map[text=>int]
+SELECT ('{a=>1}'::map[text=>int])::text
 ----
 {a=>1}
 
 query T
-SELECT '{  c  =>3, a=>     2, a => 1 }'::map[text=>int]
+SELECT ('{  c  =>3, a=>     2, a => 1 }'::map[text=>int])::text
 ----
 {a=>1,c=>3}
 
@@ -39,50 +47,50 @@ query error Expected TEXT, found INT
 SELECT '{1=>true}'::map[int=>bool]
 
 query T
-SELECT '{1=>true}'::map[text=>bool]
+SELECT ('{1=>true}'::map[text=>bool])::text
 ----
 {1=>t}
 
 query T
-SELECT '{}'::map[text=>int]
+SELECT ('{}'::map[text=>int])::text
 ----
 {}
 
 query error invalid input syntax for bool: "2.0"
-SELECT '{a=>1, b=>false, c=>2.0}'::map[text=>bool]
+SELECT ('{a=>1, b=>false, c=>2.0}'::map[text=>bool])::text
 
 query T
-SELECT '{a\=\>=>2}'::map[text=>int]
+SELECT ('{a\=\>=>2}'::map[text=>int])::text
 ----
 {"a=>"=>2}
 
 query T
-SELECT '{13=>hello \[\=\>     value\], 31=>  normal  }'::map[text=>text]
+SELECT ('{13=>hello \[\=\>     value\], 31=>  normal  }'::map[text=>text])::text
 ----
 {13=>"hello [=>     value]",31=>normal}
 
 query T
-SELECT '{"a"=>"hello there!", b=>"129387123"}'::map[text=>text]
+SELECT ('{"a"=>"hello there!", b=>"129387123"}'::map[text=>text])::text
 ----
 {a=>"hello there!",b=>129387123}
 
 query T
-SELECT '{key=>"here is a string => with a map operator in it"}'::map[text=>text]
+SELECT ('{key=>"here is a string => with a map operator in it"}'::map[text=>text])::text
 ----
 {key=>"here is a string => with a map operator in it"}
 
 query T
-SELECT '{31=> normal \ }'::map[text=>text]
+SELECT ('{31=> normal \ }'::map[text=>text])::text
 ----
 {31=>"normal  "}
 
 query T
-SELECT '{31=> \ normal }'::map[text=>text]
+SELECT ('{31=> \ normal }'::map[text=>text])::text
 ----
 {31=>" normal"}
 
 query error unterminated quoted string
-SELECT '{"a"=>"hello there!}'::map[text=>text]
+SELECT ('{"a"=>"hello there!}'::map[text=>text])::text
 
 ### Can be cast back to text
 query T
@@ -93,22 +101,22 @@ SELECT '{a=>1}'::map[text=>int]::text
 ## Nested maps
 
 query error expected '\{', found a: "a": "\{a=>a\}"
-SELECT '{a=>a}'::map[text=>map[text=>text]]
+SELECT (('{a=>a}'::map[text=>map[text=>text]])::text)::text
 
 query error expected =>: "\{a\}": "\{a=>\{a\}\}"
-SELECT '{a=>{a}}'::map[text=>map[text=>text]]
+SELECT ('{a=>{a}}'::map[text=>map[text=>text]])::text
 
 query error expected '\{', found b: "b": "\{a=>\{a=>a\}, b=>b\}"
-SELECT '{a=>{a=>a}, b=>b}'::map[text=>map[text=>text]]
+SELECT ('{a=>{a=>a}, b=>b}'::map[text=>map[text=>text]])::text
 
 query error unterminated embedded element
-SELECT '{hello=>{world=>broken'::map[text=>map[text=>text]]
+SELECT ('{hello=>{world=>broken'::map[text=>map[text=>text]])::text
 
 query error unescaped '\{' at beginning of value; perhaps you want a nested map
-SELECT '{hello=>{world=>true}}'::map[text=>bool]
+SELECT ('{hello=>{world=>true}}'::map[text=>bool])::text
 
 query T
-SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>text]]
+SELECT ('{hello=>{world=>nested}}'::map[text=>map[text=>text]])::text
 ----
 {hello=>{world=>nested}}
 
@@ -116,12 +124,12 @@ query error expected TEXT, found INT
 SELECT '{hello=>{1=>false}}'::map[text=>map[int=>bool]]
 
 query T
-SELECT '{hello=>{world=>"2020-11-23"}}'::map[text=>map[text=>timestamp]]
+SELECT ('{hello=>{world=>"2020-11-23"}}'::map[text=>map[text=>timestamp]])::text
 ----
 {hello=>{world=>"2020-11-23 00:00:00"}}
 
 query T
-SELECT '{hello=>{\{\}=>\"\"}}'::map[text=>map[text=>text]]
+SELECT ('{hello=>{\{\}=>\"\"}}'::map[text=>map[text=>text]])::text
 ----
 {hello=>{"{}"=>"\"\""}}
 
@@ -385,37 +393,37 @@ SELECT '{a=>true, b=>false}'::map[text=>bool] -> 'b'
 false
 
 query T
-SELECT '{a=>true, b=>false}'::map[text=>bool] -> ARRAY[]::text[]
+SELECT ('{a=>true, b=>false}'::map[text=>bool] -> ARRAY[]::text[])::text
 ----
 {}
 
 query T
-SELECT '{a=>true, b=>false}'::map[text=>bool] -> ARRAY['']::text[]
+SELECT ('{a=>true, b=>false}'::map[text=>bool] -> ARRAY['']::text[])::text
 ----
 {NULL}
 
 query T
-SELECT '{a=>1, b=>2}'::map[text=>int] -> ARRAY['a']
+SELECT ('{a=>1, b=>2}'::map[text=>int] -> ARRAY['a'])::text
 ----
 {1}
 
 query T
-SELECT '{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a']
+SELECT ('{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a'])::text
 ----
 {2,1}
 
 query T
-SELECT '{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a', 'c']
+SELECT ('{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a', 'c'])::text
 ----
 {2,1,NULL}
 
 query T
-SELECT '{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'missing'::text
+SELECT ('{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'missing'::text)::text
 ----
 NULL
 
 query T
-SELECT '{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'hello'::text
+SELECT ('{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'hello'::text)::text
 ----
 {world=>nested}
 
