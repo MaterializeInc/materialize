@@ -13,6 +13,7 @@
 # Writes topic contents as Arrow encoded Tables into the working directory of the script
 
 import argparse
+import json
 import logging
 import glob
 import os
@@ -28,22 +29,35 @@ logging.basicConfig(format='%(asctime)s %(levelname)s %(name)s %(message)s')
 log = logging.getLogger('restore.topics')
 log.setLevel(logging.INFO)
 
-def restore_schema(args, topic):
+def load_sorted_schemas():
+    """Load the list of schemas, sorted by schema registry's internal ID."""
+
+    with open('schemas.json') as fd:
+        schemas = json.load(fd)
+
+    yield from sorted((definition['id'], subject, definition['schema']) for subject, definition in schemas.items())
+
+
+def restore_schemas(args):
     """Create key and value schemas for this topic."""
 
-    for schemafile in glob.glob(os.path.join(topic, '*.schema')):
-        field = os.path.splitext(os.path.basename(schemafile))[0]
-        with open(schemafile) as f:
-            contents = f.read()
+    for subject_id, subject, schema in load_sorted_schemas():
 
         headers = {'Content-Type': 'application/vnd.schemaregistry.v1+json'}
-        response = requests.post(f"http://{args.schemahost}:8081/subjects/{topic}-{field}/versions",
-                                 json={'schema': contents},
+        response = requests.post(f"http://{args.schemahost}:8081/subjects/{subject}/versions",
+                                 json={'schema': schema},
                                  headers=headers)
 
         response.raise_for_status()
+        if not response.json()['id'] == subject_id:
+            log.fatal(f'Failed to reproduce subject {subject} with id {subject_id}')
+            sys.exit(1)
 
-def restore_topic(args, topic):
+
+def restore_topic(args, archive):
+
+    topic = os.path.splitext(archive)[0]
+    log.info(f'Restoring messages to topic {topic}')
 
     producer = kafka.KafkaProducer(bootstrap_servers=[f'{args.kafkahost}:{args.port}'],
                                    retries=3)
@@ -54,7 +68,7 @@ def restore_topic(args, topic):
 
     local = pyarrow.fs.LocalFileSystem()
 
-    with local.open_input_file(os.path.join(topic, 'messages.arrow')) as f:
+    with local.open_input_file(f'{topic}.arrow') as f:
         with pyarrow.RecordBatchFileReader(f) as reader:
             table = reader.read_all()
 
@@ -71,19 +85,17 @@ def restore_topic(args, topic):
 
 def restore_topics(args):
 
-    restore_topics = glob.glob(f'{args.topic_filter}')
-    if not restore_topics:
+    topic_archives = glob.glob(f'{args.topic_filter}.arrow')
+    if not topic_archives:
         log.error(f'No topics matching filter {args.topic_filter}')
         sys.exit(1)
 
-    # Restore all schemas so that Peeker can create sources properly
-    for topic in glob.glob('debezium.*'):
-        log.info(f'Restoring schema for topic {topic}')
-        restore_schema(args, topic)
+    # Restore all schemas so that Peeker can create sources properly and so that Avro decoding
+    # works correctly (schema ID, not subject name, is embedded in each message)
+    restore_schemas(args)
 
-    for topic in restore_topics:
-        log.info(f'Restoring messages to topic {topic}')
-        restore_topic(args, topic)
+    for archive in topic_archives:
+        restore_topic(args, archive)
 
 def main():
     parser = argparse.ArgumentParser()

@@ -462,9 +462,6 @@ mzconduct:
       - step: wait-for-tcp
         host: kafka
         port: 9092
-      - step: drop-kafka-topics
-        kafka-container: chbench_kafka_1
-        topic_pattern: debezium.tpcch.*
       # Kafka connect / debezium takes forever to initialize (well, 5 minutes or so)
       - step: run
         service: kafka-util
@@ -477,6 +474,40 @@ mzconduct:
       - step: ensure-stays-up
         container: dashboard
         seconds: 1
+      - step: run
+        service: mzutil
+        command: await_view_states.py
+      # Repeat measurements 5 times
+      # Run it again
+      - step: restart-services
+        services: [materialized]
+      - step: run
+        service: mzutil
+        command: await_view_states.py
+      # Run it again
+      - step: restart-services
+        services: [materialized]
+      - step: run
+        service: mzutil
+        command: await_view_states.py
+      # Run it again
+      - step: restart-services
+        services: [materialized]
+      - step: run
+        service: mzutil
+        command: await_view_states.py
+      # Run it again
+      - step: restart-services
+        services: [materialized]
+      - step: run
+        service: mzutil
+        command: await_view_states.py
+      # Run it again
+      - step: restart-services
+        services: [materialized]
+      - step: run
+        service: mzutil
+        command: await_view_states.py
 
 
     load-test:

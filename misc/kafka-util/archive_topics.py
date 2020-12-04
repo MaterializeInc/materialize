@@ -60,7 +60,6 @@ def archive_schemas(args):
 def archive_topic(args, topic):
 
     consumer = kafka.KafkaConsumer(topic,
-                                   group_id='archive.topics',
                                    auto_offset_reset='earliest',
                                    consumer_timeout_ms=1000,
                                    bootstrap_servers=[f'{args.kafkahost}:{args.port}'],
@@ -90,12 +89,11 @@ def archive_topic(args, topic):
 
     local = pyarrow.fs.LocalFileSystem()
 
-    outfile = os.path.join(topic, "messages.arrow")
-    with local.open_output_stream(outfile) as f:
+    with local.open_output_stream(f'{topic}.arrow') as f:
         with pyarrow.RecordBatchFileWriter(f, table.schema) as writer:
             writer.write_table(table)
 
-    log.info(f'Topic {topic} archived to local file')
+    log.info(f'Topic {topic} archived to local file ({len(keys)} messages)')
 
 def archive_topics(args):
 
@@ -105,7 +103,7 @@ def archive_topics(args):
 
     for topic in topics:
         if os.path.exists(topic):
-            log.error(f'ERROR: {topic} directory already exists; will not overwrite')
+            log.error(f'ERROR: {topic} archive already exists; will not overwrite')
             sys.exit(1)
 
     # Archive all schemas so that we can reconstruct them with the same IDs
@@ -113,7 +111,6 @@ def archive_topics(args):
 
     for topic in topics:
         log.info(f'Archiving {topic}')
-        os.mkdir(topic)
         archive_topic(args, topic)
 
 def main():
