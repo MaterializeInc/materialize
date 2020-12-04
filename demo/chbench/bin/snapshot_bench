@@ -9,8 +9,8 @@
 # by the Apache License, Version 2.0.
 
 export MZ_THREADS=24
-export MZ_TOPIC_SNAPSHOTS=/home/chris/snapshots
-export KAFKA_TOPIC_FILTER=debezium.tpcch.item
-export PEEKER_QUERIES=count_item
+export MZ_TOPIC_SNAPSHOTS=/home/chris/snapshots2
+export KAFKA_TOPIC_FILTER=debezium.tpcch.orderline
+export PEEKER_QUERIES=count_orderline
 
 ./bin/mzconduct run chbench -w kafka-replay-benchmark

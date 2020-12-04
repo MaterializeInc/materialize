@@ -433,7 +433,7 @@ mzconduct:
       # Populate Kafka topics with sufficient data that Materialize will take a decent amount of
       # time to catch up
       - step: sleep
-        duration: 21600
+        duration: 43200
       - step: stop-services
         services: [chbench, postgres]
       # Give Materialize a few seconds to catch up with topics / drain before snapshotting views
