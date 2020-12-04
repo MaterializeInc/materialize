@@ -41,6 +41,8 @@ int4
 int8
 interval
 jsonb
+list
+map
 numeric
 oid
 record
@@ -79,6 +81,8 @@ int4             system
 int8             system
 interval         system
 jsonb            system
+list             system
+map              system
 numeric          system
 oid              system
 record           system
