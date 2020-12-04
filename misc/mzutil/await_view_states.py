@@ -67,7 +67,7 @@ def await_materialize_views(args):
     captured_views = set(view_snapshots.keys())
     if not captured_views.issuperset(installed_views):
         missing_views = installed_views.difference(captured_views)
-        print(f'ERROR: Missing final state for views: {missing_views}')
+        print(f"ERROR: Missing final state for views: {missing_views}")
         sys.exit(1)
 
     print("Recording time required until each view matches its snapshot")
@@ -87,6 +87,7 @@ def await_materialize_views(args):
                 pending_views.remove(view)
 
             time.sleep(0.1)
+
 
 def main():
     """Parse arguments and snapshot materialized views."""
