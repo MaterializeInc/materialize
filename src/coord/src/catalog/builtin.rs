@@ -99,20 +99,20 @@ pub struct BuiltinView {
 pub struct BuiltinType {
     pub schema: &'static str,
     pub id: GlobalId,
-    inner: &'static Type,
+    pgtype: &'static Type,
 }
 
 impl BuiltinType {
     pub fn name(&self) -> &str {
-        self.inner.name()
+        self.pgtype.name()
     }
 
     pub fn oid(&self) -> u32 {
-        self.inner.oid()
+        self.pgtype.oid()
     }
 
     pub fn kind(&self) -> &Kind {
-        self.inner.kind()
+        self.pgtype.kind()
     }
 }
 
@@ -131,126 +131,348 @@ impl BuiltinType {
 //
 // | Item type | ID range  |
 // | ----------|-----------|
-// | Logs      | 1000-1999 |
-// | Tables    | 2000-2999 |
-// | Views     | 3000-3999 |
-// | Types     | 4000-4999 |
+// | Types     | 1000-1999 |
+// | Logs      | 2000-2999 |
+// | Tables    | 3000-3999 |
+// | Views     | 4000-4999 |
 //
 // WARNING: if you change the definition of an existing builtin item, you must
 // be careful to maintain backwards compatibility! Adding new columns is safe.
 // Removing a column, changing the name of a column, or changing the type of a
 // column is not safe, as persisted user views may depend upon that column.
+// The following types are the list of builtin data types available
+// in Materialize. This list is derived from the Type variants supported
+// in pgrepr.
+//
+// Builtin types cannot be created, updated, or deleted. Their OIDs
+// are static, unlike other objects, to match the type OIDs defined by Postgres.
+pub const TYPE_BOOL: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1000),
+    pgtype: &postgres_types::Type::BOOL,
+};
+
+pub const TYPE_BYTEA: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1001),
+    pgtype: &postgres_types::Type::BYTEA,
+};
+
+pub const TYPE_INT8: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1002),
+    pgtype: &postgres_types::Type::INT8,
+};
+
+pub const TYPE_INT4: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1003),
+    pgtype: &postgres_types::Type::INT4,
+};
+
+pub const TYPE_TEXT: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1004),
+    pgtype: &postgres_types::Type::TEXT,
+};
+
+pub const TYPE_OID: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1005),
+    pgtype: &postgres_types::Type::OID,
+};
+
+pub const TYPE_FLOAT4: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1006),
+    pgtype: &postgres_types::Type::FLOAT4,
+};
+
+pub const TYPE_FLOAT8: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1007),
+    pgtype: &postgres_types::Type::FLOAT8,
+};
+
+pub const TYPE_BOOL_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1008),
+    pgtype: &postgres_types::Type::BOOL_ARRAY,
+};
+
+pub const TYPE_BYTEA_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1009),
+    pgtype: &postgres_types::Type::BYTEA_ARRAY,
+};
+
+pub const TYPE_INT4_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1010),
+    pgtype: &postgres_types::Type::INT4_ARRAY,
+};
+
+pub const TYPE_TEXT_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1011),
+    pgtype: &postgres_types::Type::TEXT_ARRAY,
+};
+
+pub const TYPE_INT8_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1012),
+    pgtype: &postgres_types::Type::INT8_ARRAY,
+};
+
+pub const TYPE_FLOAT4_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1013),
+    pgtype: &postgres_types::Type::FLOAT4_ARRAY,
+};
+
+pub const TYPE_FLOAT8_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1014),
+    pgtype: &postgres_types::Type::FLOAT8_ARRAY,
+};
+
+pub const TYPE_OID_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1015),
+    pgtype: &postgres_types::Type::OID_ARRAY,
+};
+
+pub const TYPE_DATE: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1016),
+    pgtype: &postgres_types::Type::DATE,
+};
+
+pub const TYPE_TIME: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1017),
+    pgtype: &postgres_types::Type::TIME,
+};
+
+pub const TYPE_TIMESTAMP: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1018),
+    pgtype: &postgres_types::Type::TIMESTAMP,
+};
+
+pub const TYPE_TIMESTAMP_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1019),
+    pgtype: &postgres_types::Type::TIMESTAMP_ARRAY,
+};
+
+pub const TYPE_DATE_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1020),
+    pgtype: &postgres_types::Type::DATE_ARRAY,
+};
+
+pub const TYPE_TIME_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1021),
+    pgtype: &postgres_types::Type::TIME_ARRAY,
+};
+
+pub const TYPE_TIMESTAMPTZ: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1022),
+    pgtype: &postgres_types::Type::TIMESTAMPTZ,
+};
+
+pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1023),
+    pgtype: &postgres_types::Type::TIMESTAMPTZ_ARRAY,
+};
+
+pub const TYPE_INTERVAL: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1024),
+    pgtype: &postgres_types::Type::INTERVAL,
+};
+
+pub const TYPE_INTERVAL_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1025),
+    pgtype: &postgres_types::Type::INTERVAL_ARRAY,
+};
+
+pub const TYPE_NUMERIC: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1026),
+    pgtype: &postgres_types::Type::NUMERIC,
+};
+
+pub const TYPE_NUMERIC_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1027),
+    pgtype: &postgres_types::Type::NUMERIC_ARRAY,
+};
+
+pub const TYPE_RECORD: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1028),
+    pgtype: &postgres_types::Type::RECORD,
+};
+
+pub const TYPE_RECORD_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1029),
+    pgtype: &postgres_types::Type::RECORD_ARRAY,
+};
+
+pub const TYPE_UUID: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1030),
+    pgtype: &postgres_types::Type::UUID,
+};
+
+pub const TYPE_UUID_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1031),
+    pgtype: &postgres_types::Type::UUID_ARRAY,
+};
+
+pub const TYPE_JSONB: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1032),
+    pgtype: &postgres_types::Type::JSONB,
+};
+
+pub const TYPE_JSONB_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1033),
+    pgtype: &postgres_types::Type::JSONB_ARRAY,
+};
+
+lazy_static! {
+    pub static ref TYPE_LIST: BuiltinType = BuiltinType {
+        schema: PG_CATALOG_SCHEMA,
+        id: GlobalId::System(4034),
+        pgtype: &pgrepr::LIST,
+    };
+    pub static ref TYPE_MAP: BuiltinType = BuiltinType {
+        schema: PG_CATALOG_SCHEMA,
+        id: GlobalId::System(4035),
+        pgtype: &pgrepr::MAP,
+    };
+}
 
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Operates),
-    id: GlobalId::System(1000),
-    index_id: GlobalId::System(1001),
+    id: GlobalId::System(2000),
+    index_id: GlobalId::System(2001),
 };
 
 pub const MZ_DATAFLOW_OPERATORS_ADDRESSES: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operator_addresses",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Addresses),
-    id: GlobalId::System(1002),
-    index_id: GlobalId::System(1003),
+    id: GlobalId::System(2002),
+    index_id: GlobalId::System(2003),
 };
 
 pub const MZ_DATAFLOW_CHANNELS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_channels",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Channels),
-    id: GlobalId::System(1004),
-    index_id: GlobalId::System(1005),
+    id: GlobalId::System(2004),
+    index_id: GlobalId::System(2005),
 };
 
 pub const MZ_SCHEDULING_ELAPSED: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_elapsed",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
-    id: GlobalId::System(1006),
-    index_id: GlobalId::System(1007),
+    id: GlobalId::System(2006),
+    index_id: GlobalId::System(2007),
 };
 
 pub const MZ_SCHEDULING_HISTOGRAM: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_histogram",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
-    id: GlobalId::System(1008),
-    index_id: GlobalId::System(1009),
+    id: GlobalId::System(2008),
+    index_id: GlobalId::System(2009),
 };
 
 pub const MZ_SCHEDULING_PARKS: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_parks",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
-    id: GlobalId::System(1010),
-    index_id: GlobalId::System(1011),
+    id: GlobalId::System(2010),
+    index_id: GlobalId::System(2011),
 };
 
 pub const MZ_ARRANGEMENT_SIZES: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_sizes",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::Arrangement),
-    id: GlobalId::System(1012),
-    index_id: GlobalId::System(1013),
+    id: GlobalId::System(2012),
+    index_id: GlobalId::System(2013),
 };
 
 pub const MZ_ARRANGEMENT_SHARING: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_sharing",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
-    id: GlobalId::System(1014),
-    index_id: GlobalId::System(1015),
+    id: GlobalId::System(2014),
+    index_id: GlobalId::System(2015),
 };
 
 pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
     name: "mz_materializations",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::DataflowCurrent),
-    id: GlobalId::System(1016),
-    index_id: GlobalId::System(1017),
+    id: GlobalId::System(2016),
+    index_id: GlobalId::System(2017),
 };
 
 pub const MZ_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
     name: "mz_materialization_dependencies",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::DataflowDependency),
-    id: GlobalId::System(1018),
-    index_id: GlobalId::System(1019),
+    id: GlobalId::System(2018),
+    index_id: GlobalId::System(2019),
 };
 
 pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
     name: "mz_worker_materialization_frontiers",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::FrontierCurrent),
-    id: GlobalId::System(1020),
-    index_id: GlobalId::System(1021),
+    id: GlobalId::System(2020),
+    index_id: GlobalId::System(2021),
 };
 
 pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
     name: "mz_peek_active",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::PeekCurrent),
-    id: GlobalId::System(1022),
-    index_id: GlobalId::System(1023),
+    id: GlobalId::System(2022),
+    index_id: GlobalId::System(2023),
 };
 
 pub const MZ_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
     name: "mz_peek_durations",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::PeekDuration),
-    id: GlobalId::System(1024),
-    index_id: GlobalId::System(1025),
+    id: GlobalId::System(2024),
+    index_id: GlobalId::System(2025),
 };
 
 pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
     name: "mz_source_info",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::SourceInfo),
-    id: GlobalId::System(1026),
-    index_id: GlobalId::System(1027),
+    id: GlobalId::System(2026),
+    index_id: GlobalId::System(2027),
 };
 
 lazy_static! {
@@ -261,8 +483,8 @@ lazy_static! {
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("column", ScalarType::Int64.nullable(false))
             .with_column("key_group", ScalarType::Int64.nullable(false)),
-        id: GlobalId::System(2001),
-        index_id: GlobalId::System(2002),
+        id: GlobalId::System(3001),
+        index_id: GlobalId::System(3002),
     };
     pub static ref MZ_VIEW_FOREIGN_KEYS: BuiltinTable = BuiltinTable {
         name: "mz_view_foreign_keys",
@@ -274,8 +496,8 @@ lazy_static! {
             .with_column("parent_column", ScalarType::Int64.nullable(false))
             .with_column("key_group", ScalarType::Int64.nullable(false))
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
-        id: GlobalId::System(2003),
-        index_id: GlobalId::System(2004),
+        id: GlobalId::System(3003),
+        index_id: GlobalId::System(3004),
     };
     pub static ref MZ_KAFKA_SINKS: BuiltinTable = BuiltinTable {
         name: "mz_kafka_sinks",
@@ -284,8 +506,8 @@ lazy_static! {
             .with_column("sink_id", ScalarType::String.nullable(false))
             .with_column("topic", ScalarType::String.nullable(false))
             .with_key(vec![0]),
-        id: GlobalId::System(2005),
-        index_id: GlobalId::System(2006),
+        id: GlobalId::System(3005),
+        index_id: GlobalId::System(3006),
     };
     pub static ref MZ_AVRO_OCF_SINKS: BuiltinTable = BuiltinTable {
         name: "mz_avro_ocf_sinks",
@@ -294,8 +516,8 @@ lazy_static! {
             .with_column("sink_id", ScalarType::String.nullable(false))
             .with_column("path", ScalarType::Bytes.nullable(false))
             .with_key(vec![0]),
-        id: GlobalId::System(2007),
-        index_id: GlobalId::System(2008),
+        id: GlobalId::System(3007),
+        index_id: GlobalId::System(3008),
     };
     pub static ref MZ_DATABASES: BuiltinTable = BuiltinTable {
         name: "mz_databases",
@@ -304,8 +526,8 @@ lazy_static! {
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2009),
-        index_id: GlobalId::System(2010),
+        id: GlobalId::System(3009),
+        index_id: GlobalId::System(3010),
     };
     pub static ref MZ_SCHEMAS: BuiltinTable = BuiltinTable {
         name: "mz_schemas",
@@ -315,8 +537,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("database_id", ScalarType::Int64.nullable(true))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2011),
-        index_id: GlobalId::System(2012),
+        id: GlobalId::System(3011),
+        index_id: GlobalId::System(3012),
     };
     pub static ref MZ_COLUMNS: BuiltinTable = BuiltinTable {
         name: "mz_columns",
@@ -327,8 +549,8 @@ lazy_static! {
             .with_column("position", ScalarType::Int64.nullable(false))
             .with_column("nullable", ScalarType::Bool.nullable(false))
             .with_column("type", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2013),
-        index_id: GlobalId::System(2014),
+        id: GlobalId::System(3013),
+        index_id: GlobalId::System(3014),
     };
     pub static ref MZ_INDEXES: BuiltinTable = BuiltinTable {
         name: "mz_indexes",
@@ -338,8 +560,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("on_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2015),
-        index_id: GlobalId::System(2016),
+        id: GlobalId::System(3015),
+        index_id: GlobalId::System(3016),
     };
     pub static ref MZ_INDEX_COLUMNS: BuiltinTable = BuiltinTable {
         name: "mz_index_columns",
@@ -350,8 +572,8 @@ lazy_static! {
             .with_column("on_position", ScalarType::Int64.nullable(true))
             .with_column("on_expression", ScalarType::String.nullable(true))
             .with_column("nullable", ScalarType::Bool.nullable(false)),
-        id: GlobalId::System(2017),
-        index_id: GlobalId::System(2018),
+        id: GlobalId::System(3017),
+        index_id: GlobalId::System(3018),
     };
     pub static ref MZ_TABLES: BuiltinTable = BuiltinTable {
         name: "mz_tables",
@@ -361,8 +583,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2019),
-        index_id: GlobalId::System(2020),
+        id: GlobalId::System(3019),
+        index_id: GlobalId::System(3020),
     };
     pub static ref MZ_SOURCES: BuiltinTable = BuiltinTable {
         name: "mz_sources",
@@ -372,8 +594,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2021),
-        index_id: GlobalId::System(2022),
+        id: GlobalId::System(3021),
+        index_id: GlobalId::System(3022),
     };
     pub static ref MZ_SINKS: BuiltinTable = BuiltinTable {
         name: "mz_sinks",
@@ -383,8 +605,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2023),
-        index_id: GlobalId::System(2024),
+        id: GlobalId::System(3023),
+        index_id: GlobalId::System(3024),
     };
     pub static ref MZ_VIEWS: BuiltinTable = BuiltinTable {
         name: "mz_views",
@@ -394,8 +616,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2025),
-        index_id: GlobalId::System(2026),
+        id: GlobalId::System(3025),
+        index_id: GlobalId::System(3026),
     };
     pub static ref MZ_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_types",
@@ -405,8 +627,8 @@ lazy_static! {
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2027),
-        index_id: GlobalId::System(2028),
+        id: GlobalId::System(3027),
+        index_id: GlobalId::System(3028),
     };
     pub static ref MZ_ARRAY_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_array_types",
@@ -414,16 +636,16 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("element_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2029),
-        index_id: GlobalId::System(2030),
+            id: GlobalId::System(3029),
+            index_id: GlobalId::System(3030),
     };
     pub static ref MZ_BASE_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_base_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2031),
-        index_id: GlobalId::System(2032),
+            id: GlobalId::System(3031),
+            index_id: GlobalId::System(3032),
     };
     pub static ref MZ_LIST_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_list_types",
@@ -431,8 +653,8 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("element_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2033),
-        index_id: GlobalId::System(2034),
+            id: GlobalId::System(3033),
+            index_id: GlobalId::System(3034),
     };
     pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_map_types",
@@ -441,8 +663,8 @@ lazy_static! {
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("key_id", ScalarType::String.nullable(false))
             .with_column("value_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2035),
-        index_id: GlobalId::System(2036),
+            id: GlobalId::System(3035),
+            index_id: GlobalId::System(3036),
     };
 }
 
@@ -453,7 +675,7 @@ pub const MZ_RELATIONS: BuiltinView = BuiltinView {
       SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
 UNION SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
 UNION SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views",
-    id: GlobalId::System(3000),
+    id: GlobalId::System(4000),
     needs_logs: false,
 };
 
@@ -468,7 +690,7 @@ UNION
     SELECT mz_indexes.id, mz_indexes.oid, schema_id, mz_indexes.name, 'index'
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id",
-    id: GlobalId::System(3001),
+    id: GlobalId::System(4001),
     needs_logs: false,
 };
 
@@ -491,7 +713,7 @@ pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
 FROM mz_catalog.mz_objects o
 JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
-    id: GlobalId::System(3002),
+    id: GlobalId::System(4002),
     needs_logs: false,
 };
 
@@ -507,7 +729,7 @@ GROUP BY
     mz_dataflow_operator_addresses.id,
     mz_dataflow_operator_addresses.worker
 HAVING count(*) = 1",
-    id: GlobalId::System(3003),
+    id: GlobalId::System(4003),
     needs_logs: true,
 };
 
@@ -529,7 +751,7 @@ WHERE
     mz_dataflow_operator_addresses.id = mz_addresses_with_unit_length.id AND
     mz_dataflow_operator_addresses.worker = mz_addresses_with_unit_length.worker AND
     mz_dataflow_operator_addresses.slot = 0",
-    id: GlobalId::System(3004),
+    id: GlobalId::System(4004),
     needs_logs: true,
 };
 
@@ -552,7 +774,7 @@ WHERE
     mz_dataflow_operator_addresses.slot = 0 AND
     mz_dataflow_names.local_id = mz_dataflow_operator_addresses.value AND
     mz_dataflow_names.worker = mz_dataflow_operator_addresses.worker",
-    id: GlobalId::System(3005),
+    id: GlobalId::System(4005),
     needs_logs: true,
 };
 
@@ -563,7 +785,7 @@ pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
     global_id, min(time) AS time
 FROM mz_catalog.mz_worker_materialization_frontiers
 GROUP BY global_id",
-    id: GlobalId::System(3006),
+    id: GlobalId::System(4006),
     needs_logs: true,
 };
 
@@ -582,7 +804,7 @@ FROM
 WHERE
     mz_dataflow_operator_dataflows.id = mz_arrangement_sizes.operator AND
     mz_dataflow_operator_dataflows.worker = mz_arrangement_sizes.worker",
-    id: GlobalId::System(3007),
+    id: GlobalId::System(4007),
     needs_logs: true,
 };
 
@@ -604,7 +826,7 @@ GROUP BY
     mz_records_per_dataflow_operator.dataflow_id,
     mz_dataflow_names.name,
     mz_records_per_dataflow_operator.worker",
-    id: GlobalId::System(3008),
+    id: GlobalId::System(4008),
     needs_logs: true,
 };
 
@@ -620,7 +842,7 @@ FROM
 GROUP BY
     mz_records_per_dataflow.id,
     mz_records_per_dataflow.name",
-    id: GlobalId::System(3009),
+    id: GlobalId::System(4009),
     needs_logs: true,
 };
 
@@ -631,7 +853,7 @@ pub const MZ_PERF_ARRANGEMENT_RECORDS: BuiltinView = BuiltinView {
         "CREATE VIEW mz_perf_arrangement_records AS SELECT mas.worker, name, records, operator
 FROM mz_catalog.mz_arrangement_sizes mas
 LEFT JOIN mz_catalog.mz_dataflow_operators mdo ON mdo.id = mas.operator AND mdo.worker = mas.worker",
-    id: GlobalId::System(3010),
+    id: GlobalId::System(4010),
     needs_logs: true,
 };
 
@@ -640,7 +862,7 @@ pub const MZ_PERF_PEEK_DURATIONS_CORE: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_perf_peek_durations_core AS SELECT
     d_upper.worker,
-    CAST(d_upper.duration_ns AS TEXT) AS le,
+    d_upper.duration_ns::text AS le,
     sum(d_summed.count) AS count
 FROM
     mz_catalog.mz_peek_durations AS d_upper,
@@ -649,7 +871,7 @@ WHERE
     d_upper.worker = d_summed.worker AND
     d_upper.duration_ns >= d_summed.duration_ns
 GROUP BY d_upper.worker, d_upper.duration_ns",
-    id: GlobalId::System(3011),
+    id: GlobalId::System(4011),
     needs_logs: true,
 };
 
@@ -663,7 +885,7 @@ pub const MZ_PERF_PEEK_DURATIONS_BUCKET: BuiltinView = BuiltinView {
     SELECT worker, '+Inf', max(count) AS count FROM mz_catalog.mz_perf_peek_durations_core
     GROUP BY worker
 )",
-    id: GlobalId::System(3012),
+    id: GlobalId::System(4012),
     needs_logs: true,
 };
 
@@ -673,7 +895,7 @@ pub const MZ_PERF_PEEK_DURATIONS_AGGREGATES: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_perf_peek_durations_aggregates AS SELECT worker, sum(duration_ns * count) AS sum, sum(count) AS count
 FROM mz_catalog.mz_peek_durations lpd
 GROUP BY worker",
-    id: GlobalId::System(3013),
+    id: GlobalId::System(4013),
     needs_logs: true,
 };
 
@@ -699,7 +921,7 @@ JOIN (SELECT source_id, MAX(timestamp) time FROM mz_catalog.mz_source_info GROUP
 JOIN mz_catalog.mz_materialization_frontiers frontier_df ON index_deps.dataflow = frontier_df.global_id
 JOIN mz_catalog.mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
 JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = source_info.source_id",
-    id: GlobalId::System(3014),
+    id: GlobalId::System(4014),
     needs_logs: true,
 };
 
@@ -712,7 +934,7 @@ name AS nspname,
 NULL::oid AS nspowner,
 NULL::text[] AS nspacl
 FROM mz_catalog.mz_schemas",
-    id: GlobalId::System(3015),
+    id: GlobalId::System(4015),
     needs_logs: false,
 };
 
@@ -733,7 +955,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     END relkind
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id",
-    id: GlobalId::System(3016),
+    id: GlobalId::System(4016),
     needs_logs: false,
 };
 
@@ -749,7 +971,7 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     'C' as datctype,
     NULL::text[] as datacl
 FROM mz_catalog.mz_databases",
-    id: GlobalId::System(3017),
+    id: GlobalId::System(4017),
     needs_logs: false,
 };
 
@@ -761,7 +983,7 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     mz_objects.oid as indrelid
 FROM mz_catalog.mz_indexes
 JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id",
-    id: GlobalId::System(3018),
+    id: GlobalId::System(4018),
     needs_logs: false,
 };
 
@@ -774,7 +996,7 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     0::int4 as objsubid,
     NULL::text as description
 FROM pg_catalog.pg_class",
-    id: GlobalId::System(3019),
+    id: GlobalId::System(4019),
     needs_logs: false,
 };
 
@@ -789,7 +1011,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     NOT nullable as attnotnull,
     FALSE as attisdropped
 FROM mz_catalog.mz_tables JOIN mz_catalog.mz_columns ON mz_tables.id = mz_columns.id",
-    id: GlobalId::System(3020),
+    id: GlobalId::System(4020),
     needs_logs: false,
 };
 
@@ -821,7 +1043,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     0::oid AS typbasetype
 FROM mz_catalog.mz_types
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id",
-    id: GlobalId::System(3021),
+    id: GlobalId::System(4021),
     needs_logs: false,
 };
 
@@ -832,7 +1054,7 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     NULL::oid AS oid,
     NULL::text AS proname
     WHERE false",
-    id: GlobalId::System(3022),
+    id: GlobalId::System(4022),
     needs_logs: false,
 };
 
@@ -843,7 +1065,7 @@ pub const PG_RANGE: BuiltinView = BuiltinView {
     NULL::oid AS rngtypid,
     NULL::oid AS rngsubtype
     WHERE false",
-    id: GlobalId::System(3023),
+    id: GlobalId::System(4023),
     needs_logs: false,
 };
 
@@ -853,239 +1075,52 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_enum AS SELECT
     NULL::oid AS oid,
     NULL::oid AS enumtypid,
-    NULL::float AS enumsortorder,
+    NULL::float4 AS enumsortorder,
     NULL::text AS enumlabel
     WHERE false",
-    id: GlobalId::System(3024),
+    id: GlobalId::System(4024),
     needs_logs: false,
 };
-
-// The following types are the list of builtin data types available
-// in Materialize. This list is derived from the Type variants supported
-// in pgrepr.
-//
-// Builtin types cannot be created, updated, or deleted. Their OIDs
-// are static, unlike other objects, to match the type OIDs defined by Postgres.
-pub const TYPE_BOOL: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4000),
-    inner: &postgres_types::Type::BOOL,
-};
-
-pub const TYPE_BYTEA: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4001),
-    inner: &postgres_types::Type::BYTEA,
-};
-
-pub const TYPE_INT8: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4002),
-    inner: &postgres_types::Type::INT8,
-};
-
-pub const TYPE_INT4: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4003),
-    inner: &postgres_types::Type::INT4,
-};
-
-pub const TYPE_TEXT: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4004),
-    inner: &postgres_types::Type::TEXT,
-};
-
-pub const TYPE_OID: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4005),
-    inner: &postgres_types::Type::OID,
-};
-
-pub const TYPE_FLOAT4: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4006),
-    inner: &postgres_types::Type::FLOAT4,
-};
-
-pub const TYPE_FLOAT8: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4007),
-    inner: &postgres_types::Type::FLOAT8,
-};
-
-pub const TYPE_BOOL_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4008),
-    inner: &postgres_types::Type::BOOL_ARRAY,
-};
-
-pub const TYPE_BYTEA_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4009),
-    inner: &postgres_types::Type::BYTEA_ARRAY,
-};
-
-pub const TYPE_INT4_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4010),
-    inner: &postgres_types::Type::INT4_ARRAY,
-};
-
-pub const TYPE_TEXT_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4011),
-    inner: &postgres_types::Type::TEXT_ARRAY,
-};
-
-pub const TYPE_INT8_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4012),
-    inner: &postgres_types::Type::INT8_ARRAY,
-};
-
-pub const TYPE_FLOAT4_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4013),
-    inner: &postgres_types::Type::FLOAT4_ARRAY,
-};
-
-pub const TYPE_FLOAT8_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4014),
-    inner: &postgres_types::Type::FLOAT8_ARRAY,
-};
-
-pub const TYPE_OID_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4015),
-    inner: &postgres_types::Type::OID_ARRAY,
-};
-
-pub const TYPE_DATE: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4016),
-    inner: &postgres_types::Type::DATE,
-};
-
-pub const TYPE_TIME: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4017),
-    inner: &postgres_types::Type::TIME,
-};
-
-pub const TYPE_TIMESTAMP: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4018),
-    inner: &postgres_types::Type::TIMESTAMP,
-};
-
-pub const TYPE_TIMESTAMP_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4019),
-    inner: &postgres_types::Type::TIMESTAMP_ARRAY,
-};
-
-pub const TYPE_DATE_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4020),
-    inner: &postgres_types::Type::DATE_ARRAY,
-};
-
-pub const TYPE_TIME_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4021),
-    inner: &postgres_types::Type::TIME_ARRAY,
-};
-
-pub const TYPE_TIMESTAMPTZ: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4022),
-    inner: &postgres_types::Type::TIMESTAMPTZ,
-};
-
-pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4023),
-    inner: &postgres_types::Type::TIMESTAMPTZ_ARRAY,
-};
-
-pub const TYPE_INTERVAL: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4024),
-    inner: &postgres_types::Type::INTERVAL,
-};
-
-pub const TYPE_INTERVAL_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4025),
-    inner: &postgres_types::Type::INTERVAL_ARRAY,
-};
-
-pub const TYPE_NUMERIC: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4026),
-    inner: &postgres_types::Type::NUMERIC,
-};
-
-pub const TYPE_NUMERIC_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4027),
-    inner: &postgres_types::Type::NUMERIC_ARRAY,
-};
-
-pub const TYPE_RECORD: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4028),
-    inner: &postgres_types::Type::RECORD,
-};
-
-pub const TYPE_RECORD_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4029),
-    inner: &postgres_types::Type::RECORD_ARRAY,
-};
-
-pub const TYPE_UUID: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4030),
-    inner: &postgres_types::Type::UUID,
-};
-
-pub const TYPE_UUID_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4031),
-    inner: &postgres_types::Type::UUID_ARRAY,
-};
-
-pub const TYPE_JSONB: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4032),
-    inner: &postgres_types::Type::JSONB,
-};
-
-pub const TYPE_JSONB_ARRAY: BuiltinType = BuiltinType {
-    schema: PG_CATALOG_SCHEMA,
-    id: GlobalId::System(4033),
-    inner: &postgres_types::Type::JSONB_ARRAY,
-};
-
-lazy_static! {
-    pub static ref TYPE_LIST: BuiltinType = BuiltinType {
-        schema: PG_CATALOG_SCHEMA,
-        id: GlobalId::System(4034),
-        inner: &pgrepr::LIST,
-    };
-    pub static ref TYPE_MAP: BuiltinType = BuiltinType {
-        schema: PG_CATALOG_SCHEMA,
-        id: GlobalId::System(4035),
-        inner: &*pgrepr::MAP,
-    };
-}
 
 lazy_static! {
     pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
         let builtins = vec![
+            Builtin::Type(&TYPE_BOOL),
+            Builtin::Type(&TYPE_BOOL_ARRAY),
+            Builtin::Type(&TYPE_BYTEA),
+            Builtin::Type(&TYPE_BYTEA_ARRAY),
+            Builtin::Type(&TYPE_DATE),
+            Builtin::Type(&TYPE_DATE_ARRAY),
+            Builtin::Type(&TYPE_FLOAT4),
+            Builtin::Type(&TYPE_FLOAT4_ARRAY),
+            Builtin::Type(&TYPE_FLOAT8),
+            Builtin::Type(&TYPE_FLOAT8_ARRAY),
+            Builtin::Type(&TYPE_INT4),
+            Builtin::Type(&TYPE_INT4_ARRAY),
+            Builtin::Type(&TYPE_INT8),
+            Builtin::Type(&TYPE_INT8_ARRAY),
+            Builtin::Type(&TYPE_INTERVAL),
+            Builtin::Type(&TYPE_INTERVAL_ARRAY),
+            Builtin::Type(&TYPE_JSONB),
+            Builtin::Type(&TYPE_JSONB_ARRAY),
+            Builtin::Type(&TYPE_LIST),
+            Builtin::Type(&TYPE_MAP),
+            Builtin::Type(&TYPE_NUMERIC),
+            Builtin::Type(&TYPE_NUMERIC_ARRAY),
+            Builtin::Type(&TYPE_RECORD),
+            Builtin::Type(&TYPE_RECORD_ARRAY),
+            Builtin::Type(&TYPE_TEXT),
+            Builtin::Type(&TYPE_TEXT_ARRAY),
+            Builtin::Type(&TYPE_TIME),
+            Builtin::Type(&TYPE_TIME_ARRAY),
+            Builtin::Type(&TYPE_TIMESTAMP),
+            Builtin::Type(&TYPE_TIMESTAMP_ARRAY),
+            Builtin::Type(&TYPE_TIMESTAMPTZ),
+            Builtin::Type(&TYPE_TIMESTAMPTZ_ARRAY),
+            Builtin::Type(&TYPE_UUID),
+            Builtin::Type(&TYPE_UUID_ARRAY),
+            Builtin::Type(&TYPE_OID),
+            Builtin::Type(&TYPE_OID_ARRAY),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
             Builtin::Log(&MZ_DATAFLOW_CHANNELS),
@@ -1143,42 +1178,6 @@ lazy_static! {
             Builtin::View(&PG_PROC),
             Builtin::View(&PG_RANGE),
             Builtin::View(&PG_ENUM),
-            Builtin::Type(&TYPE_BOOL),
-            Builtin::Type(&TYPE_BOOL_ARRAY),
-            Builtin::Type(&TYPE_BYTEA),
-            Builtin::Type(&TYPE_BYTEA_ARRAY),
-            Builtin::Type(&TYPE_DATE),
-            Builtin::Type(&TYPE_DATE_ARRAY),
-            Builtin::Type(&TYPE_FLOAT4),
-            Builtin::Type(&TYPE_FLOAT4_ARRAY),
-            Builtin::Type(&TYPE_FLOAT8),
-            Builtin::Type(&TYPE_FLOAT8_ARRAY),
-            Builtin::Type(&TYPE_INT4),
-            Builtin::Type(&TYPE_INT4_ARRAY),
-            Builtin::Type(&TYPE_INT8),
-            Builtin::Type(&TYPE_INT8_ARRAY),
-            Builtin::Type(&TYPE_INTERVAL),
-            Builtin::Type(&TYPE_INTERVAL_ARRAY),
-            Builtin::Type(&TYPE_JSONB),
-            Builtin::Type(&TYPE_JSONB_ARRAY),
-            Builtin::Type(&TYPE_NUMERIC),
-            Builtin::Type(&TYPE_NUMERIC_ARRAY),
-            Builtin::Type(&TYPE_RECORD),
-            Builtin::Type(&TYPE_RECORD_ARRAY),
-            Builtin::Type(&TYPE_TEXT),
-            Builtin::Type(&TYPE_TEXT_ARRAY),
-            Builtin::Type(&TYPE_TIME),
-            Builtin::Type(&TYPE_TIME_ARRAY),
-            Builtin::Type(&TYPE_TIMESTAMP),
-            Builtin::Type(&TYPE_TIMESTAMP_ARRAY),
-            Builtin::Type(&TYPE_TIMESTAMPTZ),
-            Builtin::Type(&TYPE_TIMESTAMPTZ_ARRAY),
-            Builtin::Type(&TYPE_UUID),
-            Builtin::Type(&TYPE_UUID_ARRAY),
-            Builtin::Type(&TYPE_OID),
-            Builtin::Type(&TYPE_OID_ARRAY),
-            Builtin::Type(&TYPE_LIST),
-            Builtin::Type(&TYPE_MAP),
         ];
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
