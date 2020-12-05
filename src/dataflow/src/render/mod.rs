@@ -145,6 +145,7 @@ use crate::{
 mod arrange_by;
 mod context;
 mod delta_join;
+mod flat_map;
 mod join;
 mod reduce;
 mod threshold;
@@ -749,33 +750,40 @@ where
     ) -> bool {
         // Extract a MapFilterProject and residual from `relation_expr`.
         let (mfp, input) = MapFilterProject::extract_from_expression(relation_expr);
-        if let RelationExpr::Get { .. } = input {
-            let mfp2 = mfp.clone();
-            self.ensure_rendered(&input, scope, worker_index);
-            let (ok_collection, mut err_collection) = self
-                .flat_map_ref(&input, move |exprs| mfp2.literal_constraints(exprs), {
-                    let mut row_packer = repr::RowPacker::new();
-                    move |row| {
-                        let temp_storage = RowArena::new();
-                        mfp.evaluate(&mut row.unpack(), &temp_storage, &mut row_packer)
-                            .map_err(|e| e.into())
-                            .transpose()
-                    }
-                })
-                .unwrap();
+        match input {
+            RelationExpr::Get { .. } => {
+                let mfp2 = mfp.clone();
+                self.ensure_rendered(&input, scope, worker_index);
+                let (ok_collection, mut err_collection) = self
+                    .flat_map_ref(&input, move |exprs| mfp2.literal_constraints(exprs), {
+                        let mut row_packer = repr::RowPacker::new();
+                        move |row| {
+                            let temp_storage = RowArena::new();
+                            mfp.evaluate(&mut row.unpack(), &temp_storage, &mut row_packer)
+                                .map_err(|e| e.into())
+                                .transpose()
+                        }
+                    })
+                    .unwrap();
 
-            use timely::dataflow::operators::ok_err::OkErr;
-            let (oks, errors) = ok_collection.inner.ok_err(|(x, t, d)| match x {
-                Ok(x) => Ok((x, t, d)),
-                Err(x) => Err((x, t, d)),
-            });
-            err_collection = err_collection.concat(&errors.as_collection());
+                use timely::dataflow::operators::ok_err::OkErr;
+                let (oks, errors) = ok_collection.inner.ok_err(|(x, t, d)| match x {
+                    Ok(x) => Ok((x, t, d)),
+                    Err(x) => Err((x, t, d)),
+                });
+                err_collection = err_collection.concat(&errors.as_collection());
 
-            self.collections
-                .insert(relation_expr.clone(), (oks.as_collection(), err_collection));
-            true
-        } else {
-            false
+                self.collections
+                    .insert(relation_expr.clone(), (oks.as_collection(), err_collection));
+                true
+            }
+            RelationExpr::FlatMap { input: input2, .. } => {
+                self.ensure_rendered(&input2, scope, worker_index);
+                let (oks, err) = self.render_flat_map(input, Some(mfp));
+                self.collections.insert(relation_expr.clone(), (oks, err));
+                true
+            }
+            _ => false,
         }
     }
 
@@ -886,76 +894,10 @@ where
                     }
                 }
 
-                RelationExpr::FlatMap {
-                    input,
-                    func,
-                    exprs,
-                    demand,
-                } => {
+                RelationExpr::FlatMap { input, .. } => {
                     self.ensure_rendered(input, scope, worker_index);
-                    let func = func.clone();
-                    let exprs = exprs.clone();
-
-                    // Determine for each output column if it should be replaced by a
-                    // small default value. This information comes from the "demand"
-                    // analysis, and is meant to allow us to avoid reproducing the
-                    // input in each output, if at all possible.
-                    let types = relation_expr.typ();
-                    let arity = types.column_types.len();
-                    let replace = (0..arity)
-                        .map(|col| !demand.as_ref().map(|d| d.contains(&col)).unwrap_or(true))
-                        .collect::<Vec<_>>();
-
-                    let (ok_collection, err_collection) = self.collection(input).unwrap();
-                    let (ok_collection, new_err_collection) = ok_collection.explode_fallible({
-                        let mut row_packer = repr::RowPacker::new();
-                        move |input_row| {
-                            let datums = input_row.unpack();
-                            let replace = replace.clone();
-                            let temp_storage = RowArena::new();
-                            let exprs = exprs
-                                .iter()
-                                .map(|e| e.eval(&datums, &temp_storage))
-                                .collect::<Result<Vec<_>, _>>();
-                            let exprs = match exprs {
-                                Ok(exprs) => exprs,
-                                Err(e) => return vec![(Err(e.into()), 1)],
-                            };
-                            let output_rows = func.eval(exprs, &temp_storage);
-                            output_rows
-                                .into_iter()
-                                .map(|(output_row, r)| {
-                                    (
-                                        Ok::<_, DataflowError>(
-                                            row_packer.pack(
-                                                datums
-                                                    .iter()
-                                                    .cloned()
-                                                    .chain(output_row.iter())
-                                                    .zip(replace.iter())
-                                                    .map(|(datum, demand)| {
-                                                        if *demand {
-                                                            Datum::Dummy
-                                                        } else {
-                                                            datum
-                                                        }
-                                                    }),
-                                            ),
-                                        ),
-                                        r,
-                                    )
-                                })
-                                .collect::<Vec<_>>()
-                            // The collection avoids the lifetime issues of the `datums` borrow,
-                            // which allows us to avoid multiple unpackings of `input_row`. We
-                            // could avoid this allocation with a custom iterator that understands
-                            // the borrowing, but it probably isn't the leading order issue here.
-                        }
-                    });
-                    let err_collection = err_collection.concat(&new_err_collection);
-
-                    self.collections
-                        .insert(relation_expr.clone(), (ok_collection, err_collection));
+                    let (oks, err) = self.render_flat_map(relation_expr, None);
+                    self.collections.insert(relation_expr.clone(), (oks, err));
                 }
 
                 RelationExpr::Filter { input, predicates } => {
