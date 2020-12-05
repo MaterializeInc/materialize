@@ -315,11 +315,17 @@ impl MapFilterProject {
     /// ]).project(vec![6]);
     ///
     /// // Imagine we start with columns (b, x, a, y, c).
+    /// //
+    /// // The `partition` method requires a map from *expected* input columns to *actual*
+    /// // input columns. In the example above, the columns a, b, and c exist, and are at
+    /// // locations 2, 0, and 4 respectively. We must construct a map to this effect.
     /// let mut available_columns = std::collections::HashMap::new();
     /// available_columns.insert(0, 2);
     /// available_columns.insert(1, 0);
     /// available_columns.insert(2, 4);
-    /// // Partition `original` using the available columns and input arity.
+    /// // Partition `original` using the available columns and current input arity.
+    /// // This informs `partition` which columns are available, where they can be found,
+    /// // and how many columns are not relevant but should be preserved.
     /// let (before, after) = original.partition(&available_columns, 5);
     ///
     /// // `before` sees all five input columns, and should append `a + b + c`.
@@ -333,9 +339,11 @@ impl MapFilterProject {
     ///    ScalarExpr::column(3).call_binary(ScalarExpr::column(4), BinaryFunc::AddInt64)
     /// ]).project(vec![5]));
     ///
-    /// // To reconstruct `self`, we must introduce columns that are not present
-    /// // (in this example `d`) project away irrelevant columns (`x` and `y`),
-    /// // and permute existing columns to the order expected by `self`.
+    /// // To reconstruct `self`, we must introduce the columns that are not present,
+    /// // and present them in the order intended by `self`. In this example, we must
+    /// // introduce colunm d and permute the columns so that they begin (a, b, c, d).
+    /// // The columns x and y must be projected away, and any columns introduced by
+    /// // `begin` must be retained in their current order.
     ///
     /// // The `after` instance expects to be provided with all inputs, but it
     /// // may not need all inputs. The `demand()` and `permute()` methods can
