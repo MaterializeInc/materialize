@@ -635,14 +635,12 @@ impl Catalog {
         }
     }
 
-    // Leaving the system's search path empty allows us to catch issues
-    // where catalog object names have not been normalized correctly.
     pub fn for_system_session(&self) -> ConnCatalog {
         ConnCatalog {
             catalog: self,
             conn_id: SYSTEM_CONN_ID,
             database: "materialize".into(),
-            search_path: &[],
+            search_path: &[PG_CATALOG_SCHEMA],
         }
     }
 
