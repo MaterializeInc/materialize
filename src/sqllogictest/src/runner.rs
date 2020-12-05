@@ -791,10 +791,6 @@ impl Runner {
 
         Ok(Outcome::Success)
     }
-
-    pub(crate) async fn run_sql(&mut self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
-        Ok(self.client.query(sql, &[]).await?)
-    }
 }
 
 fn print_record(record: &Record) {
