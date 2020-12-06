@@ -39,7 +39,7 @@ pub enum Statement {
     CreateView(CreateViewStatement),
     CreateTable(CreateTableStatement),
     CreateIndex(CreateIndexStatement),
-    CreateMapType(CreateMapTypeStatement),
+    CreateType(CreateTypeStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndexOptions(AlterIndexOptionsStatement),
     Discard(DiscardStatement),
@@ -82,7 +82,7 @@ impl AstDisplay for Statement {
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
-            Statement::CreateMapType(stmt) => f.write_node(stmt),
+            Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndexOptions(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
@@ -555,29 +555,49 @@ impl AstDisplay for CreateIndexStatement {
 }
 impl_display!(CreateIndexStatement);
 
-/// `CREATE TYPE .. AS MAP`
+/// `CREATE TYPE ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateMapTypeStatement {
+pub struct CreateTypeStatement {
     /// Name of the created type.
     pub name: ObjectName,
+    /// The new type's "base type".
+    pub as_type: CreateTypeAs,
     /// Provides the name and type for the key
     /// and value.
     pub with_options: Vec<SqlOption>,
 }
 
-impl AstDisplay for CreateMapTypeStatement {
+impl AstDisplay for CreateTypeStatement {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("CREATE TYPE ");
         f.write_node(&self.name);
-        f.write_str(" ");
-        f.write_str("AS MAP ( ");
+        f.write_str(" AS ");
+        f.write_str(&self.as_type);
+        f.write_str("( ");
         if !self.with_options.is_empty() {
             f.write_node(&display::comma_separated(&self.with_options));
         }
         f.write_str(" )");
     }
 }
-impl_display!(CreateMapTypeStatement);
+impl_display!(CreateTypeStatement);
+
+/// `CREATE TYPE .. AS <TYPE>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateTypeAs {
+    List,
+    Map,
+}
+
+impl AstDisplay for CreateTypeAs {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            CreateTypeAs::List => f.write_str("LIST "),
+            CreateTypeAs::Map => f.write_str("MAP "),
+        }
+    }
+}
+impl_display!(CreateTypeAs);
 
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
