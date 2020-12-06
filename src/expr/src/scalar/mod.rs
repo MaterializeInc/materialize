@@ -409,46 +409,53 @@ impl ScalarExpr {
                     }
                 }
             }
+            ScalarExpr::CallVariadic {
+                func: VariadicFunc::Coalesce,
+                exprs,
+            } => {
+                let mut last_i = 0;
+                for (i, e) in exprs.iter_mut().enumerate() {
+                    last_i = i;
+                    e.reduce_inner(temp_storage, relation_type);
+                    if e.is_literal_err() {
+                        // One of the remaining arguments is an error, so
+                        // just replace the entire coalesce with that error.
+                        *self = e.take();
+                        return;
+                    }
+                    if e.is_literal() && !e.is_literal_null() {
+                        break;
+                    }
+                }
+
+                // All arguments after the first literal are ignored, so throw them away. This
+                // intentionally throws away errors that can never happen.
+                exprs.truncate(last_i + 1);
+
+                // If all inputs are null, output is null. This check must
+                // be done before `exprs.retain...` because `self.typ` requires
+                // > 0 `exprs` remain.
+                if exprs.iter().all(|expr| expr.is_literal_null()) {
+                    *self = ScalarExpr::literal_null(self.typ(&relation_type));
+                    return;
+                }
+
+                // Remove any null values if not all values are null.
+                exprs.retain(|e| !e.is_literal_null());
+
+                // Deduplicate arguments in cases like `coalesce(#0, #0)`.
+                exprs.dedup();
+
+                if exprs.len() == 1 {
+                    // Only one argument, so the coalesce is a no-op.
+                    *self = exprs[0].take();
+                }
+            }
             ScalarExpr::CallVariadic { func, exprs } => {
                 for expr in exprs.iter_mut() {
                     expr.reduce_inner(temp_storage, relation_type);
                 }
-                if *func == VariadicFunc::Coalesce {
-                    // If all inputs are null, output is null. This check must
-                    // be done before `exprs.retain...` because `self.typ` requires
-                    // > 0 `exprs` remain.
-                    if exprs.iter().all(|expr| expr.is_literal_null()) {
-                        *self = ScalarExpr::literal_null(self.typ(&relation_type));
-                        return;
-                    }
-
-                    // Remove any null values if not all values are null.
-                    exprs.retain(|e| !e.is_literal_null());
-
-                    // Find the first argument that is a literal or non-nullable
-                    // column. All arguments after it get ignored, so throw them
-                    // away. This intentionally throws away errors that can
-                    // never happen.
-                    if let Some(i) = exprs
-                        .iter()
-                        .position(|e| e.is_literal() || !e.typ(&relation_type).nullable)
-                    {
-                        exprs.truncate(i + 1);
-                    }
-
-                    // Deduplicate arguments in cases like `coalesce(#0, #0)`.
-                    let mut prior_exprs = HashSet::new();
-                    exprs.retain(|e| prior_exprs.insert(e.clone()));
-
-                    if let Some(expr) = exprs.iter_mut().find(|e| e.is_literal_err()) {
-                        // One of the remaining arguments is an error, so
-                        // just replace the entire coalesce with that error.
-                        *self = expr.take();
-                    } else if exprs.len() == 1 {
-                        // Only one argument, so the coalesce is a no-op.
-                        *self = exprs[0].take();
-                    }
-                } else if exprs.iter().all(|e| e.is_literal()) {
+                if exprs.iter().all(|e| e.is_literal()) {
                     *self = eval(self);
                 } else if func.propagates_nulls() && exprs.iter().any(|e| e.is_literal_null()) {
                     *self = ScalarExpr::literal_null(self.typ(&relation_type));
@@ -750,7 +757,7 @@ mod tests {
                 },
                 output: ScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), col(2)],
+                    exprs: vec![col(0), col(2), col(1)],
                 },
             },
             TestCase {
