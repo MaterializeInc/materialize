@@ -276,7 +276,9 @@ impl MapFilterProject {
             x => (Self::new(x.arity()), x),
         }
     }
+}
 
+impl MapFilterProject {
     /// Partitions `self` into two instances, one of which can be eagerly applied.
     ///
     /// The `available` argument indicates which input columns are available (keys)
@@ -547,11 +549,126 @@ impl MapFilterProject {
             .filter(filter)
             .project(project)
     }
+}
+
+// Optimization routines.
+impl MapFilterProject {
 
     /// Optimize the internal expression evaluation order.
     pub fn optimize(&mut self) {
-        // This should probably resemble existing scalar cse.
-        unimplemented!()
+        // Optimization memoizes individual `ScalarExpr` expressions that
+        // are sure to be evaluated, canonicalizes references to the first
+        // occurrence of each, inlines expressions that have a reference
+        // count of one, and then removes any expressions that are not
+        // referenced.
+        self.memoize_expressions();
+        self.inline_expressions();
+        self.remove_undemanded();
+
+        // Re-build `self` from parts to restore evaluation order invariants.
+        let (map, filter, project) = self.as_map_filter_project();
+        *self = Self::new(self.input_arity)
+            .map(map)
+            .filter(filter)
+            .project(project);
+    }
+
+    /// Place each certainly evaluated expression in its own column.
+    ///
+    /// This method places each non-trivial, certainly evaluated expression
+    /// in its own column, and deduplicates them so that all references to
+    /// the same expression reference the same column.
+    ///
+    /// This tranformation is restricted to expressions we are certain will
+    /// be evaluated, which does not include expressions in `if` statements.
+    pub fn memoize_expressions(&mut self) {
+        // Record the mapping from starting column references to new column
+        // references.
+        let mut remaps = HashMap::new();
+        for index in 0..self.input_arity {
+            remaps.insert(index, index);
+        }
+        let mut new_expressions = Vec::new();
+
+        // A helper method which memoizes expressions by recursively memoizing their parts.
+        fn memoize_expr(
+            expr: &mut ScalarExpr,
+            new_scalars: &mut Vec<ScalarExpr>,
+            projection: &HashMap<usize, usize>,
+            input_arity: usize,
+        ) {
+            match expr {
+                ScalarExpr::Column(index) => {
+                    // Column references need to be rewritten, but do not need to be memoized.
+                    *index = projection[index];
+                }
+                ScalarExpr::Literal(_, _) => {
+                    // Literals do not need to be memoized.
+                }
+                _ => {
+                    // We should not eagerly memoize `if` branches that might not be taken.
+                    // TODO: Memoize expressions in the intersection of `then` and `els`.
+                    if let ScalarExpr::If { cond, then, els } = expr {
+                        memoize_expr(cond, new_scalars, projection, input_arity);
+                        // Conditionally evaluated expressions still need to update their
+                        // column references.
+                        then.permute_map(projection);
+                        els.permute_map(projection);
+                    } else {
+                        expr.visit1_mut(|e| memoize_expr(e, new_scalars, projection, input_arity));
+                    }
+                    if let Some(position) = new_scalars.iter().position(|e| e == expr) {
+                        // Any complex expression that already exists as a prior column can
+                        // be replaced by a reference to that column.
+                        *expr = ScalarExpr::Column(input_arity + position);
+                    } else {
+                        // A complex expression that does not exist should be memoized, and
+                        // replaced by a reference to the column.
+                        new_scalars.push(std::mem::replace(
+                            expr,
+                            ScalarExpr::Column(input_arity + new_scalars.len()),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // We follow the same order as for evaluation, to ensure that all
+        // column references exist in time for their evaluation. We could
+        // prioritize predicates, but we would need to be careful to chase
+        // down column references to expressions and memoize those as well.
+        let mut expression = 0;
+        for (support, predicate) in self.predicates.iter_mut() {
+            while self.input_arity + expression < *support {
+                memoize_expr(
+                    &mut self.expressions[expression],
+                    &mut new_expressions,
+                    &remaps,
+                    self.input_arity,
+                );
+                remaps.insert(
+                    self.input_arity + expression,
+                    self.input_arity + new_expressions.len(),
+                );
+                new_expressions.push(self.expressions[expression].clone());
+                expression += 1;
+            }
+            memoize_expr(predicate, &mut new_expressions, &remaps, self.input_arity);
+        }
+        while expression < self.expressions.len() {
+            memoize_expr(
+                &mut self.expressions[expression],
+                &mut new_expressions,
+                &remaps,
+                self.input_arity,
+            );
+            remaps.insert(
+                self.input_arity + expression,
+                self.input_arity + new_expressions.len(),
+            );
+            new_expressions.push(self.expressions[expression].clone());
+            expression += 1;
+        }
     }
 
     /// Removes unused expressions from `self.expressions`.
@@ -609,5 +726,68 @@ impl MapFilterProject {
                 p
             }))
             .project(projection.into_iter().map(|c| remap[&c]));
+    }
+
+    /// This method inlines expressions with a single use.
+    ///
+    /// This method only inlines expressions; it does not delete expressions
+    /// that are no longer referenced. The `remove_undemanded()` method should
+    /// be used to do that.
+    fn inline_expressions(&mut self) {
+        // Local copy of input_arity to avoid borrowing `self` in closures.
+        let input_arity = self.input_arity;
+        // Reference counts track the number of places that a reference occurs.
+        let mut reference_count = vec![0; input_arity + self.expressions.len()];
+        // Increment reference counts for each use
+        for expr in self.expressions.iter() {
+            for col in expr.support().into_iter() {
+                reference_count[col] += 1;
+            }
+        }
+        for (_, pred) in self.predicates.iter() {
+            for col in pred.support().into_iter() {
+                reference_count[col] += 1;
+            }
+        }
+        for proj in self.projection.iter() {
+            reference_count[*proj] += 1;
+        }
+
+        // Inline only those columns that 1. are expressions not inputs, and
+        // 2a. are column references or literals or 2b. have a refcount of 1.
+        let should_inline = (0..input_arity + self.expressions.len())
+            .map(|i| {
+                if i < input_arity {
+                    false
+                } else {
+                    match self.expressions[i - input_arity] {
+                        ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => true,
+                        _ => reference_count[i] == 1,
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Inline expressions that are single uses, or reference columns, or literals.
+        for index in 0..self.expressions.len() {
+            let (prior, expr) = self.expressions.split_at_mut(index);
+            expr[0].visit_mut(&mut |e| {
+                if let ScalarExpr::Column(i) = e {
+                    if should_inline[*i] {
+                        *e = prior[*i - input_arity].clone();
+                    }
+                }
+            });
+        }
+        for (_index, pred) in self.predicates.iter_mut() {
+            let expressions = &self.expressions;
+            pred.visit_mut(&mut |e| {
+                if let ScalarExpr::Column(i) = e {
+                    if should_inline[*i] {
+                        *e = expressions[*i - input_arity].clone();
+                    }
+                }
+            });
+        }
     }
 }
