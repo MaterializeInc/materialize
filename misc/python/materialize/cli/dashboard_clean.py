@@ -147,7 +147,7 @@ def main(
     data["panels"] = [p for p in data["panels"] if p["title"] != "Meta"]
     for p in data["panels"]:
         if p["title"] == "Materialize Build Info":
-            p["gridPos"] = {"h": 4, "w": 7, "x": 17, "y": 1}
+            p["gridPos"] = {"h": 4, "w": 7, "x": 17, "y": 5}
 
     if for_web:
         data["uid"] = uid
