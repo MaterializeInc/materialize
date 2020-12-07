@@ -1057,6 +1057,7 @@ dependencies = [
  "repr",
  "serde",
  "serde_json",
+ "sha-1",
  "sha2",
  "unicase",
 ]
@@ -3608,6 +3609,19 @@ dependencies = [
  "itoa",
  "serde",
  "url",
+]
+
+[[package]]
+name = "sha-1"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce3cdf1b5e620a498ee6f2a171885ac7e22f0e12089ec4b3d22b84921792507c"
+dependencies = [
+ "block-buffer",
+ "cfg-if 1.0.0",
+ "cpuid-bool",
+ "digest",
+ "opaque-debug",
 ]
 
 [[package]]
