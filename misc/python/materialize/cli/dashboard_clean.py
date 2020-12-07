@@ -149,6 +149,9 @@ def main(
         if p["title"] == "Materialize Build Info":
             p["gridPos"] = {"h": 4, "w": 7, "x": 17, "y": 5}
 
+        elif p["title"] == "SQL Queries/second":
+            p["fieldConfig"]["defaults"]["thresholds"]["steps"][0]["color"] = "green"
+
     if for_web:
         data["uid"] = uid
         if id is not None:
