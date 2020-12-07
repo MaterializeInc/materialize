@@ -182,32 +182,43 @@ where
                 self.set_local_columns(relation_expr, &index[..], (oks, errs.arrange()));
             } else {
                 // Collect aggregates with their indexes, so they can be sliced and diced.
+                // Accumulable aggregates can be fused together.
                 let mut accumulable = Vec::new();
-                // Aggregates for non-monotonic mins and maxes that can be fused together.
-                // TODO(rkhaitan): we should be able to fuse monotonic mins and maxes together as well.
-                let mut min_max = Vec::new();
+                // Hierarchical aggregates can also be fused together.
+                let mut hierarchical = Vec::new();
                 let mut remaining = Vec::new();
                 // We need to make sure that fused aggregates form a subsequence of the overall sequence of aggregates.
                 for index in 0..aggregates.len() {
-                    if accumulable_hierarchical(&aggregates[index].func).0 {
+                    let (is_accumulable, is_hierarchical) =
+                        accumulable_hierarchical(&aggregates[index].func);
+
+                    if is_accumulable {
                         accumulable.push((index, aggregates[index].clone()));
-                    } else if is_min_or_max(&aggregates[index].func) && !monotonic {
-                        min_max.push((index, aggregates[index].clone()));
+                    } else if is_hierarchical {
+                        hierarchical.push((index, aggregates[index].clone()));
                     } else {
                         remaining.push((index, aggregates[index].clone()));
                     }
                 }
 
                 let arrangement = if !accumulable.is_empty()
-                    && min_max.is_empty()
+                    && hierarchical.is_empty()
                     && remaining.is_empty()
                 {
                     // If we have only accumulable aggregations, they can be arranged and returned.
                     build_accumulables(ok_input, accumulable, true)
-                } else if accumulable.is_empty() && !min_max.is_empty() && remaining.is_empty() {
-                    // If we only have min/max aggregations, they can be arranged and returned.
-                    build_min_max(ok_input, min_max, true, *expected_group_size)
-                } else if remaining.len() == 1 && accumulable.is_empty() && min_max.is_empty() {
+                } else if accumulable.is_empty() && !hierarchical.is_empty() && remaining.is_empty()
+                {
+                    // If we only have hierarchical aggregations, they can be arranged and returned.
+                    build_min_max(
+                        ok_input,
+                        hierarchical,
+                        true,
+                        *monotonic,
+                        *expected_group_size,
+                    )
+                } else if remaining.len() == 1 && accumulable.is_empty() && hierarchical.is_empty()
+                {
                     // If we have a single non-fusable aggregation, it can be arranged and returned.
                     build_aggregate_stage(
                         ok_input,
@@ -232,12 +243,17 @@ where
                             );
                         to_collect.push(accumulables_collection);
                     }
-                    if !min_max.is_empty() {
-                        let min_max_collection =
-                            build_min_max(ok_input.clone(), min_max, false, *expected_group_size)
-                                .as_collection(|key, val| {
-                                    (key.clone(), (ReductionType::FusedMinMax, None, val.clone()))
-                                });
+                    if !hierarchical.is_empty() {
+                        let min_max_collection = build_min_max(
+                            ok_input.clone(),
+                            hierarchical,
+                            false,
+                            *monotonic,
+                            *expected_group_size,
+                        )
+                        .as_collection(|key, val| {
+                            (key.clone(), (ReductionType::FusedMinMax, None, val.clone()))
+                        });
                         to_collect.push(min_max_collection);
                     }
                     for (index, aggr) in remaining {
@@ -262,7 +278,7 @@ where
                         .collect::<Vec<_>>();
                     let is_min_max = aggregates
                         .iter()
-                        .map(|a| is_min_or_max(&a.func) && !monotonic)
+                        .map(|a| accumulable_hierarchical(&a.func).1)
                         .collect::<Vec<_>>();
 
                     differential_dataflow::collection::concatenate(scope, to_collect)
@@ -495,6 +511,7 @@ fn build_min_max<G>(
     collection: Collection<G, (Row, Row)>,
     aggrs: Vec<(usize, AggregateExpr)>,
     prepend_key: bool,
+    monotonic: bool,
     expected_group_size: Option<usize>,
 ) -> Arrangement<G, Row>
 where
@@ -522,6 +539,50 @@ where
 
         (key, values)
     });
+
+    if monotonic {
+        use differential_dataflow::operators::consolidate::ConsolidateStream;
+        use timely::dataflow::operators::Map;
+
+        let collection = collection
+            .consolidate()
+            .inner
+            .map(move |((key, values), time, diff)| {
+                assert!(diff > 0);
+                let aggr_funcs = aggr_funcs.clone();
+                let mut output = Vec::new();
+                for (row, func) in values.into_iter().zip(aggr_funcs.iter()) {
+                    output.push(monoids::get_monoid(row, func).expect(
+                        "hierarchical aggregations are expected to have monoid implementations",
+                    ));
+                }
+
+                ((key, ()), time, DiffVector::new(output))
+            })
+            .as_collection();
+        let arrangement = collection
+            .consolidate_stream()
+            .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMonotonicHierarchical", {
+                let mut row_packer = RowPacker::new();
+                move |key, input, output| {
+                    let accum = &input[0].1;
+                    // Pack the value with the key as the result.
+                    if prepend_key {
+                        row_packer.extend(key.iter());
+                    }
+
+                    for monoid in accum.iter() {
+                        match monoid {
+                            monoids::ReductionMonoid::Min(row) => row_packer.extend(row.iter()),
+                            monoids::ReductionMonoid::Max(row) => row_packer.extend(row.iter()),
+                        }
+                    }
+                    output.push((row_packer.finish_and_reuse(), 1));
+                }
+            });
+
+        return arrangement;
+    }
 
     // Plan a fused hierarchical reduction
     let mut shifts = vec![];
@@ -1027,6 +1088,7 @@ pub mod monoids {
     // will not have such elements in this case (they would correspond to positive and
     // negative infinity, which we do not represent).
 
+    use expr::AggregateFunc;
     use repr::{Datum, Row};
     use serde::{Deserialize, Serialize};
 
@@ -1090,6 +1152,87 @@ pub mod monoids {
     impl Semigroup for MaxMonoid {
         fn is_zero(&self) -> bool {
             false
+        }
+    }
+
+    /// A monoid containing a single-datum row.
+    #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    pub enum ReductionMonoid {
+        Min(Row),
+        Max(Row),
+    }
+
+    impl<'a> AddAssign<&'a Self> for ReductionMonoid {
+        fn add_assign(&mut self, rhs: &'a Self) {
+            match (self, rhs) {
+                (ReductionMonoid::Min(lhs), ReductionMonoid::Min(rhs)) => {
+                    let swap = {
+                        let lhs_val = lhs.unpack_first();
+                        let rhs_val = rhs.unpack_first();
+                        // Datum::Null is the identity, not a small element.
+                        match (lhs_val, rhs_val) {
+                            (_, Datum::Null) => false,
+                            (Datum::Null, _) => true,
+                            (lhs, rhs) => rhs < lhs,
+                        }
+                    };
+                    if swap {
+                        lhs.clone_from(&rhs);
+                    }
+                }
+                (ReductionMonoid::Max(lhs), ReductionMonoid::Max(rhs)) => {
+                    let swap = {
+                        let lhs_val = lhs.unpack_first();
+                        let rhs_val = rhs.unpack_first();
+                        // Datum::Null is the identity, not a large element.
+                        match (lhs_val, rhs_val) {
+                            (_, Datum::Null) => false,
+                            (Datum::Null, _) => true,
+                            (lhs, rhs) => rhs > lhs,
+                        }
+                    };
+                    if swap {
+                        lhs.clone_from(&rhs);
+                    }
+                }
+                (lhs, rhs) => log::error!(
+                    "Mismatched monoid variants in reduction! lhs: {:?} rhs: {:?}",
+                    lhs,
+                    rhs
+                ),
+            }
+        }
+    }
+
+    impl Semigroup for ReductionMonoid {
+        fn is_zero(&self) -> bool {
+            false
+        }
+    }
+
+    pub fn get_monoid(row: Row, func: &AggregateFunc) -> Option<ReductionMonoid> {
+        match func {
+            AggregateFunc::MaxInt32
+            | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxFloat32
+            | AggregateFunc::MaxFloat64
+            | AggregateFunc::MaxDecimal
+            | AggregateFunc::MaxBool
+            | AggregateFunc::MaxString
+            | AggregateFunc::MaxDate
+            | AggregateFunc::MaxTimestamp
+            | AggregateFunc::MaxTimestampTz => Some(ReductionMonoid::Max(row)),
+            AggregateFunc::MinInt32
+            | AggregateFunc::MinInt64
+            | AggregateFunc::MinFloat32
+            | AggregateFunc::MinFloat64
+            | AggregateFunc::MinDecimal
+            | AggregateFunc::MinBool
+            | AggregateFunc::MinString
+            | AggregateFunc::MinDate
+            | AggregateFunc::MinTimestamp
+            | AggregateFunc::MinTimestampTz => Some(ReductionMonoid::Min(row)),
+            _ => None,
         }
     }
 }
