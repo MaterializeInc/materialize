@@ -187,6 +187,11 @@ def clean_prop(prop: Dict[str, Any], for_web: bool) -> None:
             prop["expr"] = insert_instance_filter(prop["expr"])
         if "datasource" in prop:
             prop["datasource"] = "$datasource"
+        if prop.get("legendFormat") is not None:
+            # id is an internal property, instance is unique for all users
+            prop["legendFormat"] = prop["legendFormat"].replace(
+                "{{id}}", "{{instance}}"
+            )
     else:
         if "expr" in prop:
             prop["expr"] = strip_empty_labels(prop["expr"])
