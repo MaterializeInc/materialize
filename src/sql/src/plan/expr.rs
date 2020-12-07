@@ -1093,7 +1093,7 @@ impl ScalarExpr {
 
     fn simplify_to_literal(self) -> Option<Row> {
         let mut expr = self.lower_uncorrelated().ok()?;
-        expr.reduce(&repr::RelationType::empty());
+        expr.reduce(&repr::RelationType::empty()).ok()?;
         match expr {
             expr::ScalarExpr::Literal(Ok(row), _) => Some(row),
             _ => None,

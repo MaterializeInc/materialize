@@ -335,7 +335,7 @@ pub fn optimize(
         ScalarExpr::Literal(res, typ) => {
             let row = match res {
                 Ok(row) => row,
-                Err(err) => return Err(err.clone().into()),
+                Err(_) => unreachable!(),
             };
             DatumKnowledge {
                 value: Some((row.clone(), typ.clone())),
@@ -343,13 +343,13 @@ pub fn optimize(
             }
         }
         ScalarExpr::CallNullary(_) => {
-            expr.reduce(input_type);
+            expr.reduce(input_type)?;
             optimize(expr, input_type, column_knowledge)?
         }
         ScalarExpr::CallUnary { func, expr: inner } => {
             let knowledge = optimize(inner, input_type, column_knowledge)?;
             if knowledge.value.is_some() {
-                expr.reduce(input_type);
+                expr.reduce(input_type)?;
                 optimize(expr, input_type, column_knowledge)?
             } else if func == &UnaryFunc::IsNull && !knowledge.nullable {
                 *expr = ScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
@@ -366,7 +366,7 @@ pub fn optimize(
             let knowledge1 = optimize(expr1, input_type, column_knowledge)?;
             let knowledge2 = optimize(expr2, input_type, column_knowledge)?;
             if knowledge1.value.is_some() && knowledge2.value.is_some() {
-                expr.reduce(input_type);
+                expr.reduce(input_type)?;
                 optimize(expr, input_type, column_knowledge)?
             } else {
                 DatumKnowledge::default()
@@ -379,7 +379,7 @@ pub fn optimize(
             }
 
             if knows.iter().all(|k| k.value.is_some()) {
-                expr.reduce(input_type);
+                expr.reduce(input_type)?;
                 optimize(expr, input_type, column_knowledge)?
             } else {
                 DatumKnowledge::default()
