@@ -318,7 +318,7 @@ mod tests {
                                 .iter()
                                 .map(|e| match e {
                                     ScalarExpr::Literal(r, _) => {
-                                        Ok(r.as_ref().unwrap().iter().next().unwrap().clone())
+                                        Ok(r.iter().next().unwrap().clone())
                                     }
                                     _ => bail!("exprs in constant must be literals"),
                                 })
@@ -405,14 +405,14 @@ mod tests {
             // TODO(justin): support more scalar exprs.
             Sexp::Atom(s) => match s.as_str() {
                 "true" => Ok(ScalarExpr::literal(
-                    Ok(Datum::True),
+                    Datum::True,
                     ColumnType {
                         nullable: false,
                         scalar_type: ScalarType::Bool,
                     },
                 )),
                 "false" => Ok(ScalarExpr::literal(
-                    Ok(Datum::False),
+                    Datum::False,
                     ColumnType {
                         nullable: false,
                         scalar_type: ScalarType::Bool,
@@ -429,7 +429,7 @@ mod tests {
                         }
                         Some('0') | Some('1') | Some('2') | Some('3') | Some('4') | Some('5')
                         | Some('6') | Some('7') | Some('8') | Some('9') => Ok(ScalarExpr::literal(
-                            Ok(Datum::Int64(s.parse::<i64>()?)),
+                            Datum::Int64(s.parse::<i64>()?),
                             ScalarType::Int64.nullable(false),
                         )),
                         _ => Err(anyhow!("couldn't parse scalar: {}", s)),

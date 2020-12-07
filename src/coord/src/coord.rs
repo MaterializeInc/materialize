@@ -2783,7 +2783,7 @@ where
         expr.visit_mut(&mut |e| {
             if let ScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
                 observes_ts = true;
-                *e = ScalarExpr::literal_ok(Datum::from(i128::from(ts)), f.output_type());
+                *e = ScalarExpr::literal(Datum::from(i128::from(ts)), f.output_type());
             }
         });
         if observes_ts && matches!(style, ExprPrepStyle::Static) {

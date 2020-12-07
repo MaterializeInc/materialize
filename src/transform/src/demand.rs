@@ -106,8 +106,7 @@ impl Demand {
                         // Leave literals as they are, to benefit explain.
                         if !scalar.is_literal() {
                             let typ = relation_type.column_types[arity + index].clone();
-                            *scalar =
-                                ScalarExpr::Literal(Ok(row_packer.pack(Some(Datum::Dummy))), typ);
+                            *scalar = ScalarExpr::Literal(row_packer.pack(Some(Datum::Dummy)), typ);
                         }
                     }
                 }
@@ -222,7 +221,7 @@ impl Demand {
                         let typ = aggregates[index].typ(&input_type);
                         aggregates[index] = AggregateExpr {
                             func: AggregateFunc::Dummy,
-                            expr: ScalarExpr::literal_ok(Datum::Dummy, typ),
+                            expr: ScalarExpr::literal(Datum::Dummy, typ),
                             distinct: false,
                         };
                     }

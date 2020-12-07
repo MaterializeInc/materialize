@@ -1095,7 +1095,7 @@ impl ScalarExpr {
         let mut expr = self.lower_uncorrelated().ok()?;
         expr.reduce(&repr::RelationType::empty()).ok()?;
         match expr {
-            expr::ScalarExpr::Literal(Ok(row), _) => Some(row),
+            expr::ScalarExpr::Literal(row, _) => Some(row),
             _ => None,
         }
     }
