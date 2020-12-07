@@ -19,4 +19,4 @@ http://materialize.com/* https://materialize.com/:splat 301!
 /s/bug https://github.com/MaterializeInc/materialize/issues/new?labels=C-bug&template=bug.md
 
 # Forward all paths unknown to Netlify to the marketing site.
-/* https://materializeinc.wpengine.com/:splat 200
+/* http://materializeinc.wpengine.com/:splat 200
