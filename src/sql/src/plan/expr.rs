@@ -148,6 +148,37 @@ pub enum ScalarExpr {
     Select(Box<RelationExpr>),
 }
 
+impl From<expr::ScalarExpr> for ScalarExpr {
+    fn from(expr: expr::ScalarExpr) -> Self {
+        use expr::ScalarExpr as FromExpr;
+        use ScalarExpr::*;
+
+        match expr {
+            FromExpr::Column(column) => Column(ColumnRef { level: 0, column }),
+            FromExpr::Literal(row, column_type) => Literal(row, column_type),
+            FromExpr::CallNullary(f) => CallNullary(f),
+            FromExpr::CallUnary { func, expr } => CallUnary {
+                func,
+                expr: Box::new((*expr).into()),
+            },
+            FromExpr::CallBinary { func, expr1, expr2 } => CallBinary {
+                func,
+                expr1: Box::new((*expr1).into()),
+                expr2: Box::new((*expr2).into()),
+            },
+            FromExpr::CallVariadic { func, exprs } => CallVariadic {
+                func,
+                exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
+            },
+            FromExpr::If { cond, then, els } => If {
+                cond: Box::new((*cond).into()),
+                then: Box::new((*then).into()),
+                els: Box::new((*els).into()),
+            },
+        }
+    }
+}
+
 /// A `CoercibleScalarExpr` is a [`ScalarExpr`] whose type is not fully
 /// determined. Several SQL expressions can be freely coerced based upon where
 /// in the expression tree they appear. For example, the string literal '42'
