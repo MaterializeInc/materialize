@@ -147,7 +147,10 @@ def main(
     data["panels"] = [p for p in data["panels"] if p["title"] != "Meta"]
     for p in data["panels"]:
         if p["title"] == "Materialize Build Info":
-            p["gridPos"] = {"h": 4, "w": 7, "x": 17, "y": 1}
+            p["gridPos"] = {"h": 4, "w": 7, "x": 17, "y": 5}
+
+        elif p["title"] == "SQL Queries/second":
+            p["fieldConfig"]["defaults"]["thresholds"]["steps"][0]["color"] = "green"
 
     if for_web:
         data["uid"] = uid
@@ -187,6 +190,11 @@ def clean_prop(prop: Dict[str, Any], for_web: bool) -> None:
             prop["expr"] = insert_instance_filter(prop["expr"])
         if "datasource" in prop:
             prop["datasource"] = "$datasource"
+        if prop.get("legendFormat") is not None:
+            # id is an internal property, instance is unique for all users
+            prop["legendFormat"] = prop["legendFormat"].replace(
+                "{{id}}", "{{instance}}"
+            )
     else:
         if "expr" in prop:
             prop["expr"] = strip_empty_labels(prop["expr"])
