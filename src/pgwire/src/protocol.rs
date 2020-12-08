@@ -1013,9 +1013,22 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
     ) -> Result<State, comm::Error> {
-        let portal = self
-            .coord_client
-            .session()
+        let session = self.coord_client.session();
+
+        // If this portal is being executed from a FETCH then we need to use the result
+        // format type of the outer portal.
+        let result_format_portal_name: &str = if let Some(ref name) = fetch_portal_name {
+            name
+        } else {
+            &portal_name
+        };
+        let result_formats = session
+            .get_portal(result_format_portal_name)
+            .expect("valid fetch portal name for send rows")
+            .result_formats
+            .clone();
+
+        let portal = session
             .get_portal_mut(&portal_name)
             .expect("valid portal name for send rows");
 
@@ -1056,7 +1069,7 @@ where
                 .column_types
                 .iter()
                 .map(|ty| pgrepr::Type::from(&ty.scalar_type))
-                .zip(portal.result_formats.iter().copied())
+                .zip(result_formats)
                 .collect(),
         );
 

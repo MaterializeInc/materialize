@@ -1066,6 +1066,10 @@ lazy_static! {
                 params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp,
                 params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz
             },
+            "digest" => Scalar {
+                params!(String, String) => BinaryFunc::DigestString,
+                params!(Bytes, String) => BinaryFunc::DigestBytes
+            },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32,
                 params!(Float64) => UnaryFunc::FloorFloat64,
@@ -1073,6 +1077,10 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
                 })
+            },
+            "hmac" => Scalar {
+                params!(String, String, String) => VariadicFunc::HmacString,
+                params!(Bytes, String, String) => VariadicFunc::HmacBytes
             },
             "jsonb_array_length" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength

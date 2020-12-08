@@ -24,7 +24,7 @@ materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" int,
 CREATE TABLE with column constraint: DEFAULT 1 not yet supported
 
 ! CREATE TABLE t (a int, b int, a int);
-cannot CREATE TABLE with duplicate column names
+cannot CREATE TABLE: column "a" specified more than once
 
 > SELECT * FROM t;
 

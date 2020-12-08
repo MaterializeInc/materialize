@@ -193,6 +193,19 @@ impl ScalarExpr {
         });
     }
 
+    /// Rewrites column indices with their value in `permutation`.
+    ///
+    /// This method is applicable even when `permutation` is not a
+    /// strict permutation, and it only needs to have entries for
+    /// each column referenced in `self`.
+    pub fn permute_map(&mut self, permutation: &std::collections::HashMap<usize, usize>) {
+        self.visit_mut(&mut |e| {
+            if let ScalarExpr::Column(old_i) = e {
+                *old_i = permutation[old_i];
+            }
+        });
+    }
+
     pub fn support(&self) -> HashSet<usize> {
         let mut support = HashSet::new();
         self.visit(&mut |e| {
@@ -586,6 +599,7 @@ pub enum EvalError {
     },
     InvalidArray(InvalidArrayError),
     InvalidEncodingName(String),
+    InvalidHashAlgorithm(String),
     InvalidByteSequence {
         byte_sequence: String,
         encoding_name: String,
@@ -617,6 +631,7 @@ impl fmt::Display for EvalError {
             ),
             EvalError::InvalidArray(e) => e.fmt(f),
             EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
+            EvalError::InvalidHashAlgorithm(alg) => write!(f, "invalid hash algorithm '{}'", alg),
             EvalError::InvalidByteSequence {
                 byte_sequence,
                 encoding_name,

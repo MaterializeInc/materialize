@@ -15,7 +15,7 @@ mode cockroach
 query R
 SELECT COALESCE(1, 2.000)
 ----
-1.000
+1
 
 query RR
 SELECT + 3 + + COALESCE ( 33, + + AVG ( - 81 ) + + + CAST ( - 37 AS INTEGER ) ) / - 52, + 98 AS col0

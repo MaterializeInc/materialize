@@ -16,6 +16,7 @@ use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
+use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
@@ -25,6 +26,16 @@ use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
+
+// This enum indicates to the collation operator what results correspond to what types of reductions. Need
+// to keep all of the fused results ahead of the unfused results so that they can be extracted out efficiently
+// The code also currently relies on FusedAccumulable being less than FusedMax.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+enum ReductionType {
+    FusedAccumulable = 1,
+    FusedMinMax = 2,
+    Other = 3,
+}
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G, RelationExpr, Row, repr::Timestamp>
@@ -172,20 +183,32 @@ where
             } else {
                 // Collect aggregates with their indexes, so they can be sliced and diced.
                 let mut accumulable = Vec::new();
+                // Aggregates for non-monotonic mins and maxes that can be fused together.
+                // TODO(rkhaitan): we should be able to fuse monotonic mins and maxes together as well.
+                let mut min_max = Vec::new();
                 let mut remaining = Vec::new();
+                // We need to make sure that fused aggregates form a subsequence of the overall sequence of aggregates.
                 for index in 0..aggregates.len() {
                     if accumulable_hierarchical(&aggregates[index].func).0 {
                         accumulable.push((index, aggregates[index].clone()));
+                    } else if is_min_or_max(&aggregates[index].func) && !monotonic {
+                        min_max.push((index, aggregates[index].clone()));
                     } else {
                         remaining.push((index, aggregates[index].clone()));
                     }
                 }
 
-                let arrangement = if remaining.is_empty() {
+                let arrangement = if !accumulable.is_empty()
+                    && min_max.is_empty()
+                    && remaining.is_empty()
+                {
                     // If we have only accumulable aggregations, they can be arranged and returned.
                     build_accumulables(ok_input, accumulable, true)
-                } else if remaining.len() == 1 && accumulable.is_empty() {
-                    // If we have a single non-accumulable aggregation, it can be arranged and returned.
+                } else if accumulable.is_empty() && !min_max.is_empty() && remaining.is_empty() {
+                    // If we only have min/max aggregations, they can be arranged and returned.
+                    build_min_max(ok_input, min_max, true, *expected_group_size)
+                } else if remaining.len() == 1 && accumulable.is_empty() && min_max.is_empty() {
+                    // If we have a single non-fusable aggregation, it can be arranged and returned.
                     build_aggregate_stage(
                         ok_input,
                         0,
@@ -199,9 +222,23 @@ where
                     let mut to_collect = Vec::new();
                     if !accumulable.is_empty() {
                         let accumulables_collection =
-                            build_accumulables(ok_input.clone(), accumulable, false)
-                                .as_collection(|key, val| (key.clone(), (None, val.clone())));
+                            build_accumulables(ok_input.clone(), accumulable, false).as_collection(
+                                |key, val| {
+                                    (
+                                        key.clone(),
+                                        (ReductionType::FusedAccumulable, None, val.clone()),
+                                    )
+                                },
+                            );
                         to_collect.push(accumulables_collection);
+                    }
+                    if !min_max.is_empty() {
+                        let min_max_collection =
+                            build_min_max(ok_input.clone(), min_max, false, *expected_group_size)
+                                .as_collection(|key, val| {
+                                    (key.clone(), (ReductionType::FusedMinMax, None, val.clone()))
+                                });
+                        to_collect.push(min_max_collection);
                     }
                     for (index, aggr) in remaining {
                         let collection = build_aggregate_stage(
@@ -213,24 +250,65 @@ where
                             *expected_group_size,
                         );
                         to_collect.push(collection.as_collection(move |key, val| {
-                            (key.clone(), (Some(index), val.clone()))
+                            (
+                                key.clone(),
+                                (ReductionType::Other, Some(index), val.clone()),
+                            )
                         }));
                     }
                     let is_accumulable = aggregates
                         .iter()
                         .map(|a| accumulable_hierarchical(&a.func).0)
                         .collect::<Vec<_>>();
+                    let is_min_max = aggregates
+                        .iter()
+                        .map(|a| is_min_or_max(&a.func) && !monotonic)
+                        .collect::<Vec<_>>();
+
                     differential_dataflow::collection::concatenate(scope, to_collect)
                         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
                             let mut row_packer = RowPacker::new();
                             move |key, mut input, output| {
-                                // The inputs are pairs of an optional index and row to decode.
+                                // The inputs are triples of a reduction type, an optional index and row to decode.
+                                // The `reduce_abelian` operator guarantees that values will be placed in sorted order
+                                // by the values Ord implementation. This means that fused reductions
+                                // (ReductionType's FusedAccumulable and FusedMinMax) will be the first entries in inputs
+                                // if any such ReductionType's are present.
+                                // We need to reconstitute the final value by:
+                                // 1. Extracting out the fused aggregates
+                                // 2. For each aggregate we are computing, figure out if it is either a fused accumulable,
+                                //    fused min-max or unfused aggregate
+                                // 3. Get the relevant value (either from the rows of fused aggregates, or from the input
+                                //    array for unfused aggregates)
+                                // 4. Stitch all the values together into one row.
 
-                                // There can be at most one `None` index, and it indicates the accumulable aggregates.
                                 let new_row = Row::new(Vec::new());
-                                let mut accumulable = if (input[0].0).0 == None {
+
+                                // First, we are going to check to see if any of our inputs correspond to fused aggregates.
+                                // If so, we need to pull those out and treat them differently than unfused aggregates. The
+                                // code here assumes that fused accumulable aggregates will always be stored before fused
+                                // min-max aggregates, by virtue of the Ord implementation of ReductionType. If ReductionType
+                                // changes, this code will need to change as well.
+                                let mut accumulable = if (input[0].0).0 == ReductionType::FusedAccumulable {
                                     // This input corresponds to our densely packed accumulable aggregates.
-                                    let iter = (input[0].0).1.iter();
+                                    let iter = (input[0].0).2.iter();
+                                    // Once we've found fused accumulable aggregates, we need to be careful
+                                    // never to read from this entry in `input` again so that we don't reuse
+                                    // that row for something else.
+                                    input = &input[1..];
+                                    iter
+                                } else {
+                                    // If we don't have any fused accumulable aggregates we can use this empty
+                                    // iterator as a stand-in.
+                                    new_row.iter()
+                                };
+
+                                // Do the same thing as above, but for min-maxes. Note that we are looking at the
+                                // first entry of inputs again and that's ok because if we had previously found fused
+                                // accumulable aggregates, we would have modified our input slice to skip that element.
+                                let mut min_max = if (input[0].0).0 == ReductionType::FusedMinMax {
+                                    // This input corresponds to our densely packed min/max aggregates.
+                                    let iter = (input[0].0).2.iter();
                                     // Make sure we never try to read from this input again.
                                     input = &input[1..];
                                     iter
@@ -238,19 +316,33 @@ where
                                     new_row.iter()
                                 };
 
+                                // First, fill our output row with key information.
                                 row_packer.extend(key.iter());
-                                for is_accum in is_accumulable.iter() {
-                                    if *is_accum {
-                                        row_packer.push(accumulable.next().unwrap());
-                                    } else {
-                                        // Since this is not an accumulable aggregate, we need to grab
-                                        // the next result from other reduction dataflows and put them
-                                        // in our output.
-                                        let elem = input[0].0;
-                                        let row = &elem.1;
-                                        let datum = row.unpack_first();
-                                        row_packer.push(datum);
-                                        input = &input[1..];
+                                // Now, we need to reconstruct our data in the order that the aggregates were given to us.
+                                // We can think of the original list of aggregates. Then the fused accumulable aggregates
+                                // (stored in a Row), fused minmax aggregates (stored in another Row) and the unfused
+                                // aggregates (stored as individual Rows in input) each form disjoint subsequences that
+                                // partition the original sequence of aggregations. We know that each of these is a
+                                // subsequence because the fused aggregations were computed in order, and the unfused
+                                // aggregates are ordered by index (the second field in the input triple).
+                                // All of this to say, we can reconstruct our original sequence of aggregations for the
+                                // results by doing something that is very similar to a 3 way merge as long as we know
+                                // whether each aggregate was fused and accumulable, fused and minmax, or unfused.
+                                for flags in is_accumulable.iter().zip(is_min_max.iter()) {
+                                    match flags {
+                                        (true, false) => row_packer.push(accumulable.next().unwrap()),
+                                        (false, true) => row_packer.push(min_max.next().unwrap()),
+                                        (false, false) => {
+                                            // Since this is not an accumulable aggregate, we need to grab
+                                            // the next result from other reduction dataflows and put them
+                                            // in our output.
+                                            let elem = input[0].0;
+                                            let row = &elem.2;
+                                            let datum = row.unpack_first();
+                                            row_packer.push(datum);
+                                            input = &input[1..];
+                                        }
+                                        _ => log::error!("Aggregation erroneously reported as both accumulable and min/max in ReduceCollation"),
                                     }
                                 }
                                 output.push((row_packer.finish_and_reuse(), 1));
@@ -394,6 +486,136 @@ where
             }
         }
     })
+}
+
+// Render a single reduction tree that computes a set of mins and max aggregations
+// hierarchically. Note that because we know all the aggregations are mins and maxes
+// we can also ignore the distinct bit here.
+fn build_min_max<G>(
+    collection: Collection<G, (Row, Row)>,
+    aggrs: Vec<(usize, AggregateExpr)>,
+    prepend_key: bool,
+    expected_group_size: Option<usize>,
+) -> Arrangement<G, Row>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    let aggr_funcs: Vec<_> = aggrs.iter().cloned().map(|(_, expr)| expr.func).collect();
+    // Gather the relevant values into a vec of rows ordered by aggregation_index
+    let mut packer = RowPacker::new();
+    let collection = collection.map(move |(key, row)| {
+        let aggrs = aggrs.clone();
+        let mut values = Vec::with_capacity(aggrs.len());
+        let mut row_iter = row.iter().enumerate();
+        // Go through all the elements of the row with one iterator
+        for (aggr_index, _) in aggrs.iter() {
+            let mut index_datum = row_iter.next().unwrap();
+            // Skip over the ones we don't care about
+            while *aggr_index != index_datum.0 {
+                index_datum = row_iter.next().unwrap();
+            }
+            let datum = index_datum.1;
+            packer.push(datum);
+            values.push(packer.finish_and_reuse());
+        }
+
+        (key, values)
+    });
+
+    // Plan a fused hierarchical reduction
+    let mut shifts = vec![];
+    let mut current = 4u64;
+
+    let limit = expected_group_size.unwrap_or(4_000_000_000);
+
+    while (1 << current) < limit {
+        shifts.push(current);
+        current += 4;
+    }
+
+    shifts.reverse();
+
+    // Repeatedly apply hierarchical reduction with a progressively coarser key.
+    let mut stage = collection.map(move |(key, values)| ((key, values.hashed()), values));
+    for log_modulus in shifts.iter() {
+        stage = build_min_max_stage(stage, aggr_funcs.clone(), 1u64 << log_modulus);
+    }
+
+    // Discard the hash from the key and return to the format of the input data.
+    let partial = stage.map(|((key, _hash), values)| (key, values));
+
+    // Build a series of stages for the reduction
+    // Arrange the final result into (key, Row)
+    partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMinsMaxes", {
+        let mut row_packer = RowPacker::new();
+        move |key, source, target| {
+            // Negative counts would be surprising, but until we are 100% certain we wont
+            // see them, we should report when we do. We may want to bake even more info
+            // in here in the future.
+            if source.iter().any(|(_val, cnt)| cnt < &0) {
+                // XXX: This reports user data, which we perhaps should not do!
+                for (val, cnt) in source.iter() {
+                    if cnt < &0 {
+                        log::error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?}", val, cnt);
+                    }
+                }
+            } else {
+                // Pack the value with the key as the result.
+                if prepend_key {
+                    row_packer.extend(key.iter());
+                }
+                for (aggr_index, func) in aggr_funcs.iter().enumerate() {
+                    let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                    row_packer.push(func.eval(iter, &RowArena::new()));
+                }
+                target.push((row_packer.finish_and_reuse(), 1));
+            }
+        }
+    })
+}
+
+// Renders one stage of a fused reduction tree for a set of min / max aggregations.
+fn build_min_max_stage<G>(
+    collection: Collection<G, ((Row, u64), Vec<Row>)>,
+    aggrs: Vec<AggregateFunc>,
+    modulus: u64,
+) -> Collection<G, ((Row, u64), Vec<Row>)>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    let input = collection.map(move |((key, hash), values)| ((key, hash % modulus), values));
+
+    let negated_output = input
+        .reduce_named("MinsMaxesHierarchical", {
+            let mut row_packer = repr::RowPacker::new();
+            move |key, source, target| {
+                // Should negative accumulations reach us, we should loudly complain.
+                if source.iter().any(|(_val, cnt)| cnt <= &0) {
+                    for (val, cnt) in source.iter() {
+                        if cnt <= &0 {
+                            // XXX: This reports user data, which we perhaps should not do!
+                            log::error!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}", key, val, cnt);
+                        }
+                    }
+                } else {
+                    let mut output = Vec::with_capacity(aggrs.len());
+                    for (aggr_index, func) in aggrs.iter().enumerate() {
+                        let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                        output.push(row_packer.pack(Some(func.eval(iter, &RowArena::new()))));
+                    }
+                    // We only want to arrange the parts of the input that are not part of the output.
+                    // More specifically, we want to arrange it so that `input.concat(&output.negate())`
+                    // gives us the intended value of this aggregate function.
+
+                    target.push((output, -1));
+                    target.extend(source.iter().map(|(values, cnt)| ((*values).clone(), *cnt)));
+                }
+            }
+        });
+
+    negated_output.negate().concat(&input).consolidate()
 }
 
 /// Builds the dataflow for reductions that can be performed in-place.

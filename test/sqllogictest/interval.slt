@@ -582,15 +582,17 @@ SELECT INTERVAL '-1-2 -3 -4:5:6.7' + INTERVAL '1-2 3 4:5:6.7'
 00:00:00
 
 ## Largest values
-query T
-SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds'
-----
-2236962132 days 07:59:59.999999
+# See #4926
+#query T
+#SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds'
+#----
+#2236962132 days 07:59:59.999999
 
-query T
-SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds'
-----
--2236962132 days -07:59:59.999999
+# See #4927
+#query T
+#SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds'
+#----
+#-2236962132 days -07:59:59.999999
 
 statement error invalid input syntax for interval: exceeds min/max interval duration
 SELECT INTERVAL '2147483647 days 2147483648 hours'

@@ -24,7 +24,7 @@ mod types;
 mod value;
 
 pub use format::Format;
-pub use types::Type;
+pub use types::{Type, LIST, MAP};
 pub use value::interval::Interval;
 pub use value::jsonb::Jsonb;
 pub use value::numeric::Numeric;
