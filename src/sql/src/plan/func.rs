@@ -1178,6 +1178,18 @@ lazy_static! {
                     Ok(ScalarExpr::literal(Datum::String(name), ScalarType::String))
                 })
             },
+            "pgp_pub_decrypt" => Scalar {
+                params!(Bytes, Bytes) => VariadicFunc::PgpPubDecryptString
+            },
+            "pgp_pub_decrypt_bytea" => Scalar {
+                params!(Bytes, Bytes) => VariadicFunc::PgpPubDecryptBytes
+            },
+            "pgp_pub_encrypt" => Scalar {
+                params!(String, Bytes) => VariadicFunc::PgpPubEncryptString
+            },
+            "pgp_pub_encrypt_bytea" => Scalar {
+                params!(Bytes, Bytes) => VariadicFunc::PgpPubEncryptBytes
+            },
             "regexp_match" => Scalar {
                 params!(String, String) => VariadicFunc::RegexpMatch,
                 params!(String, String, String) => VariadicFunc::RegexpMatch

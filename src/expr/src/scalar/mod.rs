@@ -677,6 +677,18 @@ impl From<regex::Error> for EvalError {
     }
 }
 
+impl From<anyhow::Error> for EvalError {
+    fn from(e: anyhow::Error) -> EvalError {
+        EvalError::Internal(e.to_string())
+    }
+}
+
+impl From<std::io::Error> for EvalError {
+    fn from(e: std::io::Error) -> EvalError {
+        EvalError::Internal(e.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

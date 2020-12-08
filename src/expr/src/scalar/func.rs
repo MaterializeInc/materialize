@@ -9,8 +9,10 @@
 
 use std::borrow::Cow;
 use std::cmp::{self, Ordering};
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
+use std::io::{Read, Write};
 use std::iter;
 use std::str;
 
@@ -21,6 +23,16 @@ use hmac::{Hmac, Mac, NewMac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use regex::RegexBuilder;
+use sequoia_openpgp::cert::amalgamation::key::ValidErasedKeyAmalgamation;
+use sequoia_openpgp::crypto::{KeyPair, SessionKey};
+use sequoia_openpgp::packet::key::PublicParts;
+use sequoia_openpgp::parse::{
+    stream::{DecryptionHelper, DecryptorBuilder, MessageStructure, VerificationHelper},
+    Parse,
+};
+use sequoia_openpgp::policy::Policy;
+use sequoia_openpgp::serialize::stream::{Encryptor, LiteralWriter, Message};
+use sequoia_openpgp::types::{DataFormat, SymmetricAlgorithm};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
@@ -3388,6 +3400,157 @@ pub fn hmac_inner<'a>(
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
 
+pub fn pgp_pub_decrypt_string<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let decrypted = pgp_pub_decrypt_inner(datums)?;
+    Ok(Datum::String(
+        temp_storage.push_string(
+            str::from_utf8(&decrypted)
+                .map_err(|e| EvalError::Internal(format!("decrypting text: {}", e.to_string())))?
+                .to_owned(),
+        ),
+    ))
+}
+
+pub fn pgp_pub_decrypt_bytes<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    Ok(Datum::Bytes(
+        temp_storage.push_bytes(pgp_pub_decrypt_inner(datums)?),
+    ))
+}
+
+pub fn pgp_pub_decrypt_inner(datums: &[Datum]) -> Result<Vec<u8>, EvalError> {
+    struct Helper {
+        keys: HashMap<sequoia_openpgp::KeyID, KeyPair>,
+    }
+
+    impl Helper {
+        fn new(p: &dyn Policy, cert: sequoia_openpgp::Cert) -> Self {
+            let mut keys = HashMap::new();
+            for ka in cert
+                .keys()
+                .unencrypted_secret()
+                .with_policy(p, None)
+                .for_storage_encryption()
+            {
+                keys.insert(ka.key().keyid(), ka.key().clone().into_keypair().unwrap());
+            }
+
+            Helper { keys }
+        }
+    }
+
+    impl DecryptionHelper for Helper {
+        fn decrypt<D>(
+            &mut self,
+            pkesks: &[sequoia_openpgp::packet::PKESK],
+            _skesks: &[sequoia_openpgp::packet::SKESK],
+            sym_algo: Option<SymmetricAlgorithm>,
+            mut decrypt: D,
+        ) -> sequoia_openpgp::Result<Option<sequoia_openpgp::Fingerprint>>
+        where
+            D: FnMut(SymmetricAlgorithm, &SessionKey) -> bool,
+        {
+            for pkesk in pkesks {
+                if let Some(pair) = self.keys.get_mut(pkesk.recipient()) {
+                    if pkesk
+                        .decrypt(pair, sym_algo)
+                        .map(|(algo, session_key)| decrypt(algo, &session_key))
+                        .unwrap_or(false)
+                    {
+                        break;
+                    }
+                }
+            }
+            Ok(None)
+        }
+    }
+
+    impl VerificationHelper for Helper {
+        fn get_certs(
+            &mut self,
+            _ids: &[sequoia_openpgp::KeyHandle],
+        ) -> sequoia_openpgp::Result<Vec<sequoia_openpgp::Cert>> {
+            Ok(Vec::new())
+        }
+        fn check(&mut self, _structure: MessageStructure) -> sequoia_openpgp::Result<()> {
+            Ok(())
+        }
+    }
+
+    let key = datums[1].unwrap_bytes();
+    let cert = sequoia_openpgp::cert::Cert::from_bytes(key)?;
+
+    let to_decrypt = datums[0].unwrap_bytes();
+    let p = &sequoia_openpgp::policy::StandardPolicy::new();
+    let mut decryptor =
+        DecryptorBuilder::from_bytes(to_decrypt)?.with_policy(p, None, Helper::new(p, cert))?;
+
+    let mut sink = vec![];
+    decryptor.read_to_end(&mut sink)?;
+
+    Ok(sink)
+}
+
+pub fn pgp_pub_encrypt_string<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    pgp_pub_encrypt_inner(
+        datums[0].unwrap_str().as_bytes(),
+        datums[1].unwrap_bytes(),
+        temp_storage,
+    )
+}
+
+pub fn pgp_pub_encrypt_bytes<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    pgp_pub_encrypt_inner(
+        datums[0].unwrap_bytes(),
+        datums[1].unwrap_bytes(),
+        temp_storage,
+    )
+}
+
+pub fn pgp_pub_encrypt_inner<'a>(
+    to_encrypt: &[u8],
+    key: &[u8],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let cert = sequoia_openpgp::cert::Cert::from_bytes(key)?;
+
+    let p = &sequoia_openpgp::policy::StandardPolicy::new();
+    let recipients: Vec<ValidErasedKeyAmalgamation<PublicParts>> = cert
+        .keys()
+        .with_policy(p, None)
+        .alive()
+        .revoked(false)
+        .for_storage_encryption()
+        .collect();
+    if recipients.is_empty() {
+        return Err(EvalError::Internal("invalid public key".into()));
+    }
+
+    let mut sink = vec![];
+    let message = Message::new(&mut sink);
+    let message = Encryptor::for_recipients(message, recipients)
+        .symmetric_algo(SymmetricAlgorithm::AES128)
+        .build()?;
+    let mut message = LiteralWriter::new(message)
+        .format(DataFormat::Text)
+        .build()?;
+    message.write_all(to_encrypt)?;
+    message.finalize()?;
+
+    Ok(Datum::Bytes(temp_storage.push_bytes(sink)))
+}
+
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(
         temp_storage.push_string(
@@ -3908,6 +4071,10 @@ pub enum VariadicFunc {
     RegexpMatch,
     HmacString,
     HmacBytes,
+    PgpPubDecryptBytes,
+    PgpPubDecryptString,
+    PgpPubEncryptString,
+    PgpPubEncryptBytes,
 }
 
 impl VariadicFunc {
@@ -3953,6 +4120,10 @@ impl VariadicFunc {
             VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
             VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
             VariadicFunc::HmacBytes => eager!(hmac_bytes, temp_storage),
+            VariadicFunc::PgpPubDecryptString => eager!(pgp_pub_decrypt_string, temp_storage),
+            VariadicFunc::PgpPubDecryptBytes => eager!(pgp_pub_decrypt_bytes, temp_storage),
+            VariadicFunc::PgpPubEncryptString => eager!(pgp_pub_encrypt_string, temp_storage),
+            VariadicFunc::PgpPubEncryptBytes => eager!(pgp_pub_encrypt_bytes, temp_storage),
         }
     }
 
@@ -4006,6 +4177,9 @@ impl VariadicFunc {
             SplitPart => ScalarType::String.nullable(true),
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
             HmacString | HmacBytes => ScalarType::Bytes.nullable(true),
+            PgpPubDecryptBytes => ScalarType::Bytes.nullable(true),
+            PgpPubDecryptString => ScalarType::String.nullable(true),
+            PgpPubEncryptString | PgpPubEncryptBytes => ScalarType::Bytes.nullable(true),
         }
     }
 
@@ -4041,6 +4215,10 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::SplitPart => f.write_str("split_string"),
             VariadicFunc::RegexpMatch => f.write_str("regexp_match"),
             VariadicFunc::HmacString | VariadicFunc::HmacBytes => f.write_str("hmac"),
+            VariadicFunc::PgpPubDecryptBytes => f.write_str("pgp_pub_decrypt_bytea"),
+            VariadicFunc::PgpPubDecryptString => f.write_str("pgp_pub_decrypt"),
+            VariadicFunc::PgpPubEncryptBytes => f.write_str("pgp_pub_encrypt_bytea"),
+            VariadicFunc::PgpPubEncryptString => f.write_str("pgp_pub_encrypt"),
         }
     }
 }
