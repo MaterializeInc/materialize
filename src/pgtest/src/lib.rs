@@ -144,9 +144,14 @@ impl PgTest {
                                     .ranges()
                                     .map(|range| {
                                         let range = range.unwrap();
-                                        // TODO(mjibson): support not strings.
+                                        // Attempt to convert to a String. If not utf8, print as array of bytes instead.
                                         Ok(String::from_utf8(buf[range.start..range.end].to_vec())
-                                            .unwrap())
+                                            .unwrap_or_else(|_| {
+                                                format!(
+                                                    "{:?}",
+                                                    buf[range.start..range.end].to_vec()
+                                                )
+                                            }))
                                     })
                                     .collect()
                                     .unwrap(),
@@ -380,7 +385,7 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                                     buf.put_slice(t.as_bytes());
                                     Ok(IsNull::No)
                                 }, // serializer
-                                vec![], // result_formats
+                                v.result_formats.unwrap_or_default(),
                                 buf,
                             )
                             .is_err()
@@ -457,6 +462,7 @@ pub struct Bind {
     pub portal: Option<String>,
     pub statement: Option<String>,
     pub values: Option<Vec<String>>,
+    pub result_formats: Option<Vec<i16>>,
 }
 
 #[derive(Deserialize)]

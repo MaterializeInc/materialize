@@ -9,79 +9,87 @@
 
 mode cockroach
 
+# The LIST type has an uncommon OID. If tokio-postres (the driver used
+# by sqllogictest) encounters an OID it doesn't recognize (LIST in
+# this case), then it queries pg_type (a wrapper around mz_types) for
+# information about it. Our LIST type currently doesn't have an entry in
+# mz_types, so that query fails and tokio-postgres is unable to execute
+# queries with LISTs. As a workaround until LIST is reflected in pg_type,
+# we just convert everything to `text`.
+
 query T
-select LIST[1,2,3]
+SELECT (LIST[1,2,3])::text
 ----
 {1,2,3}
 
 query error LIST expression does not have uniform type: Int32 vs List\(Int32\)
-select LIST[1,LIST[2,3]]
+SELECT LIST[1,LIST[2,3]]
 
 query T
-select LIST[[1],[2,3]]
+SELECT (LIST[[1],[2,3]])::text
 ----
 {{1},{2,3}}
 
 query error cannot determine type of empty list
-select LIST[]
+SELECT LIST[]
 
 query T
-select LIST[] :: INT LIST
+SELECT (LIST[] :: INT LIST)::text
 ----
 {}
 
 query T
-select LIST[null]
+SELECT (LIST[null])::text
 ----
 {NULL}
 
 query T
-select LIST[1, null]
+SELECT (LIST[1, null])::text
 ----
 {1,NULL}
 
 query T
-select LIST[1, null] :: INT LIST
+SELECT (LIST[1, null] :: INT LIST)::text
 ----
 {1,NULL}
 
 query T
-select LIST[[1, null], []] :: INT LIST LIST
+SELECT (LIST[[1, null], []] :: INT LIST LIST)::text
 ----
 {{1,NULL},{}}
 
 # Lists support arbitrarily deep nesting
 query T
-SELECT LIST[[[[1], [2]]], [[[3]]]]
+SELECT (LIST[[[[1], [2]]], [[[3]]]])::text
 ----
 {{{{1},{2}}},{{{3}}}}
 
 # List(Int) cannot be cast to List(List(Int))
 query error CAST does not support casting from i32 list to i32 list list
-select LIST[1, null] :: INT LIST LIST
+SELECT LIST[1, null] :: INT LIST LIST
 
 query T
-select LIST[1, null] :: TEXT LIST
+SELECT (LIST[1, null] :: TEXT LIST)::text
 ----
 {1,NULL}
 
 query T
-select LIST['foo', 'f}o', '"\', null, 'null', 'NULL']
+SELECT (LIST['foo', 'f}o', '"\', null, 'null', 'NULL'])::text
 ----
 {foo,"f}o","\"\\",NULL,null,"NULL"}
 
 query T
-select list[list[list['"']]];
+SELECT (list[list[list['"']]])::text
 ----
 {{{"\""}}}
 
 query T
-select list['{1}']
+SELECT (list['{1}'])::text
 ----
 {"{1}"}
 
 query T
-SELECT LIST[LIST[]::text list, LIST['a', 'b'], LIST['z']]
+SELECT (LIST[LIST[]::text list, LIST['a', 'b'], LIST['z']])::text
 ----
 {{},{a,b},{z}}
 
@@ -90,51 +98,51 @@ SELECT LIST[LIST[]::text list, LIST['a', 'b'], LIST['z']]
 # 🔬🔬 list indexes
 
 query R
-SELECT LIST [1, 2, 3][2];
+SELECT LIST [1, 2, 3][2]
 ----
 2
 
 # exceeds maximum index
 query R
-SELECT LIST [1, 2, 3][100];
+SELECT LIST [1, 2, 3][100]
 ----
 NULL
 
 # exceeds maximum dimension
 query error cannot subscript type i32
-SELECT LIST [1, 2, 3][1][1];
+SELECT LIST [1, 2, 3][1][1]
 
 # 🔬🔬 list slices
 
 query T
-SELECT LIST [1, 2, 3][2:3];
+SELECT (LIST [1, 2, 3][2:3])::text
 ----
 {2,3}
 
 query T
-SELECT LIST [1, 2, 3][2:];
+SELECT (LIST [1, 2, 3][2:])::text
 ----
 {2,3}
 
 query T
-SELECT LIST [1, 2, 3][:2];
+SELECT (LIST [1, 2, 3][:2])::text
 ----
 {1,2}
 
 query T
-SELECT LIST [1, 2, 3][:];
+SELECT (LIST [1, 2, 3][:])::text
 ----
 {1,2,3}
 
 # start exceeds maximum index
-query R
-SELECT LIST [1, 2, 3][100:];
+query T
+SELECT (LIST [1, 2, 3][100:])::text
 ----
 NULL
 
 # end exceeds maximum index
 query T
-SELECT LIST [1, 2, 3][:100];
+SELECT (LIST [1, 2, 3][:100])::text
 ----
 {1,2,3}
 
@@ -144,14 +152,14 @@ SELECT LIST [1, 2, 3][:, :]
 
 # successive slices
 query T
-SELECT LIST [1, 2, 3][2:3][1:1];
+SELECT (LIST [1, 2, 3][2:3][1:1])::text
 ----
 {2}
 
 # 🔬🔬 list slices + index
 
 query T
-SELECT LIST [1, 2, 3][2:3][2];
+SELECT (LIST [1, 2, 3][2:3][2])::text
 ----
 3
 
@@ -160,7 +168,7 @@ SELECT LIST [1, 2, 3][2:3][2];
 # 🔬🔬 list list indexes
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][1]
+SELECT (LIST [[1, 2, 3], [4, 5]][1])::text
 ----
 {1,2,3}
 
@@ -171,17 +179,17 @@ SELECT LIST [[1, 2, 3], [4, 5]][1][3]
 
 # exceeds maximum index
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][100]
+SELECT (LIST [[1, 2, 3], [4, 5]][100])::text
 ----
 NULL
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][1][100]
+SELECT (LIST [[1, 2, 3], [4, 5]][1][100])::text
 ----
 NULL
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][100][1]
+SELECT (LIST [[1, 2, 3], [4, 5]][100][1])::text
 ----
 NULL
 
@@ -192,55 +200,55 @@ SELECT LIST [[1, 2, 3], [4, 5]][1][1][1]
 # 🔬🔬 list list slices
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][2:2]
+SELECT (LIST [[1, 2, 3], [4, 5]][2:2])::text
 ----
 {{4,5}}
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][1:2, 2:3];
+SELECT (LIST [[1, 2, 3], [4, 5]][1:2, 2:3])::text
 ----
 {{2,3},{5}}
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][2:]
+SELECT (LIST [[1, 2, 3], [4, 5]][2:])::text
 ----
 {{4,5}}
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][:2, 2:]
+SELECT (LIST [[1, 2, 3], [4, 5]][:2, 2:])::text
 ----
 {{2,3},{5}}
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][:, 2:]
+SELECT (LIST [[1, 2, 3], [4, 5]][:, 2:])::text
 ----
 {{2,3},{5}}
 
 # start exceeds maximum index
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][100:, :]
+SELECT (LIST [[1, 2, 3], [4, 5]][100:, :])::text
 ----
 NULL
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][:, 100:]
+SELECT (LIST [[1, 2, 3], [4, 5]][:, 100:])::text
 ----
 NULL
 
 # propagating NULL lists
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][:, 3:3]
+SELECT (LIST [[1, 2, 3], [4, 5]][:, 3:3])::text
 ----
 {{3},NULL}
 
 # end exceeds maximum index
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][:100, :];
+SELECT (LIST [[1, 2, 3], [4, 5]][:100, :])::text
 ----
 {{1,2,3},{4,5}}
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][:, :100]
+SELECT (LIST [[1, 2, 3], [4, 5]][:, :100])::text
 ----
 {{1,2,3},{4,5}}
 
@@ -250,24 +258,24 @@ SELECT LIST [[1, 2, 3], [4, 5]][:, :, :]
 
 # successive slice operations
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][2:2][1:1]
+SELECT (LIST [[1, 2, 3], [4, 5]][2:2][1:1])::text
 ----
 {{4,5}}
 
 # 🔬🔬 list list slices + index
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][1:2][2]
+SELECT (LIST [[1, 2, 3], [4, 5]][1:2][2])::text
 ----
 {4,5}
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][1:2][2][2:2]
+SELECT (LIST [[1, 2, 3], [4, 5]][1:2][2][2:2])::text
 ----
 {5}
 
 query T
-SELECT LIST [[1, 2, 3], [4, 5]][1:2][2][2:2][1]
+SELECT (LIST [[1, 2, 3], [4, 5]][1:2][2][2:2][1])::text
 ----
 5
 
@@ -276,12 +284,12 @@ SELECT LIST [[1, 2, 3], [4, 5]][1:2][2][2:2][1]
 # 🔬🔬 list list list indexes
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1]
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1])::text
 ----
 {{1,2},{3,4,5}}
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2]
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2])::text
 ----
 {3,4,5}
 
@@ -292,12 +300,12 @@ SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2][3]
 
 # exceeds maximum index
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100]
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100])::text
 ----
 NULL
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][100]
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][100])::text
 ----
 NULL
 
@@ -318,91 +326,91 @@ SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2][3][1]
 # 🔬🔬 list list list slices
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2]
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2])::text
 ----
 {{{1,2},{3,4,5}},{{6}}}
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 1:1];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 1:1])::text
 ----
 {{{1,2}},{{6}},{{7,8}}}
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, 1:1];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, 1:1])::text
 ----
 {{{1},{3}},{{6}},{{7},{9}}}
 
 # start exceeds maximum index
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100:100];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100:100])::text
 ----
 NULL
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 100:100];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 100:100])::text
 ----
 NULL
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, 100:100];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, 100:100])::text
 ----
 NULL
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 100:100, :];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 100:100, :])::text
 ----
 NULL
 
 # propagating NULL lists
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 2:2];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 2:2])::text
 ----
 {{{3,4,5}},NULL,{{9}}}
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 2:2, 2:2];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 2:2, 2:2])::text
 ----
 {{{4}},NULL,NULL}
 
 # end exceeds maximum index
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:100];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:100])::text
 ----
 {{{1,2},{3,4,5}},{{6}},{{7,8},{9}}}
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :100];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :100])::text
 ----
 {{{1,2},{3,4,5}},{{6}},{{7,8},{9}}}
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, :100];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, :100])::text
 ----
 {{{1,2},{3,4,5}},{{6}},{{7,8},{9}}}
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :100, :100];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :100, :100])::text
 ----
 {{{1,2},{3,4,5}},{{6}},{{7,8},{9}}}
 
 # exceeds maximum dimension
 query error cannot slice into 4 layers; list only has 3 layers
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, :, :];
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, :, :]
 
 # 🔬🔬 list list list slices + index
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2][1];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2][1])::text
 ----
 {{1,2},{3,4,5}}
 
 query T
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2][1][2:2][1];
+SELECT (LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2][1][2:2][1])::text
 ----
 {3,4,5}
 
 query R
-SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2][1][2:3][1][2:3][2];
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2][1][2:3][1][2:3][2]
 ----
 5
 
@@ -414,57 +422,57 @@ SELECT (LIST[[1, 2, 3], NULL, [4]]::INT LIST LIST)[2][1]
 NULL
 
 query T
-SELECT (LIST[[1, 2, 3], NULL, [4]]::INT LIST LIST)[2:3, 2:2]
+SELECT ((LIST[[1, 2, 3], NULL, [4]]::INT LIST LIST)[2:3, 2:2])::text
 ----
 NULL
 
 query T
-SELECT LIST[1, 2, 3][NULL]
+SELECT (LIST[1, 2, 3][NULL])::text
 ----
 NULL
 
 query T
-SELECT LIST[1, 2, 3][NULL:NULL]
+SELECT (LIST[1, 2, 3][NULL:NULL])::text
 ----
 NULL
 
 query T
-SELECT LIST[1, 2, 3][1:NULL]
+SELECT (LIST[1, 2, 3][1:NULL])::text
 ----
 NULL
 
 query T
-SELECT LIST[1, 2, 3][NULL:1]
+SELECT (LIST[1, 2, 3][NULL:1])::text
 ----
 NULL
 
 query T
-SELECT LIST[1, 2, 3][NULL:]
+SELECT (LIST[1, 2, 3][NULL:])::text
 ----
 NULL
 
 query T
-SELECT LIST[1, 2, 3][:NULL]
+SELECT (LIST[1, 2, 3][:NULL])::text
 ----
 NULL
 
 query T
-SELECT LIST[NULL][:]
+SELECT (LIST[NULL][:])::text
 ----
 {NULL}
 
 query T
-SELECT LIST[1, NULL, 3][:NULL]
+SELECT (LIST[1, NULL, 3][:NULL])::text
 ----
 NULL
 
 query T
-SELECT (LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:];
+SELECT ((LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:])::text
 ----
 {NULL,{4,NULL,6}}
 
 query T
-SELECT (LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3][1];
+SELECT ((LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3][1])::text
 ----
 NULL
 
@@ -472,74 +480,74 @@ NULL
 
 # NULL literals are not touched by slice operations
 query T
-SELECT (LIST[NULL]::INT LIST)[1:1];
+SELECT ((LIST[NULL]::INT LIST)[1:1])::text
 ----
 {NULL}
 
 # Slicing into a NULL list produces an empty result expressed as NULL; if all
 # results are empty, reduce them all to a single NULL
 query T
-SELECT (LIST[NULL, NULL]::INT LIST LIST)[:, 1:1];
+SELECT ((LIST[NULL, NULL]::INT LIST LIST)[:, 1:1])::text
 ----
 NULL
 
 # Literal NULLs are NOT empty results and don't get reduced
 query T
-SELECT (LIST[NULL, [NULL]]::INT LIST LIST)[:, 1:1];
+SELECT ((LIST[NULL, [NULL]]::INT LIST LIST)[:, 1:1])::text
 ----
 {NULL,{NULL}}
 
 # Results can mix values and empty-results-as-NULLs
 query T
-SELECT (LIST [[1, NULL, 3], NULL, [4, 5, 6]]::INT LIST LIST)[2:3, 2:2];
+SELECT ((LIST [[1, NULL, 3], NULL, [4, 5, 6]]::INT LIST LIST)[2:3, 2:2])::text
 ----
 {NULL,{5}}
 
 # Results can mix NULL values and empty-results-as-NULLs
 query T
-SELECT (LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3, 2:2];
+SELECT ((LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3, 2:2])::text
 ----
 {NULL,{NULL}}
 
 # Empty results across dimensions are still reduced
 query T
-SELECT (LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3, 4:4];
+SELECT ((LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3, 4:4])::text
 ----
 NULL
 
 # Outer list's second position produces empty results, but third position
 # produces value, so cannot be totally reduced
 query T
-SELECT (LIST [NULL, [NULL], [[NULL]]]::INT LIST LIST LIST)[:, :, :];
+SELECT ((LIST [NULL, [NULL], [[NULL]]]::INT LIST LIST LIST)[:, :, :])::text
 ----
 {NULL,NULL,{{NULL}}}
 
 # Third position returns empty results, along with the first and second
 # position, so all can be reduced to NULL
 query T
-SELECT (LIST [NULL, [NULL], [[NULL]]]::INT LIST LIST LIST)[:, :, 2:2];
+SELECT ((LIST [NULL, [NULL], [[NULL]]]::INT LIST LIST LIST)[:, :, 2:2])::text
 ----
 NULL
 
 # 🔬 Empty lists expressions
 
 query T
-SELECT (LIST[]::INT LIST)[1]
+SELECT ((LIST[]::INT LIST)[1])::text
 ----
 NULL
 
 query T
-SELECT (LIST[]::INT LIST)[:]
+SELECT ((LIST[]::INT LIST)[:])::text
 ----
 NULL
 
 query T
-SELECT (LIST[]::INT LIST)[1:1]
+SELECT ((LIST[]::INT LIST)[1:1])::text
 ----
 NULL
 
 query T
-SELECT (LIST[]::INT LIST LIST)[1:1, 1:1]
+SELECT ((LIST[]::INT LIST LIST)[1:1, 1:1])::text
 ----
 NULL
 
@@ -548,39 +556,39 @@ NULL
 # 🔬🔬 end > start
 
 query T
-SELECT LIST[1, 2, 3][2:1];
+SELECT (LIST[1, 2, 3][2:1])::text
 ----
 NULL
 
 # 🔬🔬 Negative values
 
 query T
-SELECT LIST[1, 2, 3][-100];
+SELECT (LIST[1, 2, 3][-100])::text
 ----
 NULL
 
 query T
-SELECT LIST[1, 2, 3][-100:];
+SELECT (LIST[1, 2, 3][-100:])::text
 ----
 {1,2,3}
 
 query T
-SELECT LIST[1, 2, 3][-100:99];
+SELECT (LIST[1, 2, 3][-100:99])::text
 ----
 {1,2,3}
 
 query T
-SELECT LIST[1, 2, 3][-100:-99];
+SELECT (LIST[1, 2, 3][-100:-99])::text
 ----
 NULL
 
 query T
-SELECT LIST[1, 2, 3][-100:-101];
+SELECT (LIST[1, 2, 3][-100:-101])::text
 ----
 NULL
 
 query T
-SELECT LIST[1, 2, 3][:-100];
+SELECT (LIST[1, 2, 3][:-100])::text
 ----
 NULL
 
@@ -596,23 +604,23 @@ SELECT LIST[1][-9223372036854775807::bigint]
 ----
 NULL
 
-query R
-SELECT LIST[1][9223372036854775807::bigint:9223372036854775807::bigint]
-----
-NULL
-
-query R
-SELECT LIST[1][9223372036854775807::bigint:-9223372036854775807::bigint]
+query T
+SELECT (LIST[1][9223372036854775807::bigint:9223372036854775807::bigint])::text
 ----
 NULL
 
 query T
-SELECT LIST[1][-9223372036854775807::bigint:9223372036854775807::bigint]
+SELECT (LIST[1][9223372036854775807::bigint:-9223372036854775807::bigint])::text
+----
+NULL
+
+query T
+SELECT (LIST[1][-9223372036854775807::bigint:9223372036854775807::bigint])::text
 ----
 {1}
 
-query R
-SELECT LIST[1][-9223372036854775807::bigint:-9223372036854775807::bigint]
+query T
+SELECT (LIST[1][-9223372036854775807::bigint:-9223372036854775807::bigint])::text
 ----
 NULL
 
@@ -621,37 +629,37 @@ NULL
 # 🔬🔬 Ok
 
 query R
-select LIST[1,2,3][1.4];
+SELECT LIST[1,2,3][1.4]
 ----
 1
 
 query R
-select LIST[1,2,3][1.5];
+SELECT LIST[1,2,3][1.5]
 ----
 2
 
 query R
-select LIST[1,2,3][1.5::real];
+SELECT LIST[1,2,3][1.5::real]
 ----
 2
 
 query R
-select LIST[1,2,3][1.5::float];
+SELECT LIST[1,2,3][1.5::float]
 ----
 2
 
 query R
-select LIST[1,2,3][1.5 + 1.6];
+SELECT LIST[1,2,3][1.5 + 1.6]
 ----
 3
 
 query T
-select LIST[1,2,3][0.1 * 2 : 0.5 + 1.6];
+SELECT (LIST[1,2,3][0.1 * 2 : 0.5 + 1.6])::text
 ----
 {1,2}
 
 query T
-select LIST[1,2,3][LIST[1][2.0 / 2]];
+SELECT (LIST[1,2,3][LIST[1][2.0 / 2]])::text
 ----
 1
 
@@ -667,7 +675,7 @@ query error subscript \(indexing\) does not support casting from timestamp to i6
 SELECT LIST [[1, 2, 3], [4, 5]][TIMESTAMP '2001-01-01']
 
 query error invalid input syntax for int8: invalid digit found in string: "dog"
-SELECT LIST[1,2,3][1:'dog']
+SELECT (LIST[1,2,3][1:'dog'])::text
 
 query error subscript \(slicing\) does not support casting from date to i64
 SELECT LIST [[1, 2, 3], [4, 5]][1:DATE '2001-01-01']
@@ -682,14 +690,14 @@ SELECT LIST [[1, 2, 3], [4, 5]][1:TIMESTAMP '2001-01-01']
 # 🔬🔬🔬 list + element
 
 query T
-SELECT list_append(LIST[1, 2], 3)
+SELECT (list_append(LIST[1, 2], 3))::text
 ----
 {1,2,3}
 
 # 🔬🔬🔬 list list + list (list + element)
 
 query T
-SELECT list_append(LIST[[1], [2]], LIST[3])
+SELECT (list_append(LIST[[1], [2]], LIST[3]))::text
 ----
 {{1},{2},{3}}
 
@@ -698,49 +706,49 @@ SELECT list_append(LIST[[1], [2]], LIST[3])
 # 🔬🔬🔬🔬 list + element
 
 query T
-SELECT list_append(LIST[1], NULL)
+SELECT (list_append(LIST[1], NULL))::text
 ----
 {1,NULL}
 
 query T
-SELECT list_append(NULL, 1)
+SELECT (list_append(NULL, 1))::text
 ----
 {1}
 
 query T
-SELECT list_append(LIST[1], NULL)
+SELECT (list_append(LIST[1], NULL))::text
 ----
 {1,NULL}
 
 query T
-SELECT list_append(NULL, NULL::INT)
+SELECT (list_append(NULL, NULL::INT))::text
 ----
 {NULL}
 
 query T
-SELECT list_append(NULL::INT LIST, NULL)
+SELECT (list_append(NULL::INT LIST, NULL))::text
 ----
 {NULL}
 
 # 🔬🔬🔬🔬 list list + list (list + element)
 
 query T
-SELECT list_append(LIST[[1]], NULL)
+SELECT (list_append(LIST[[1]], NULL))::text
 ----
 {{1},NULL}
 
 query T
-SELECT list_append(NULL, LIST[1])
+SELECT (list_append(NULL, LIST[1]))::text
 ----
 {{1}}
 
 query T
-SELECT list_append(NULL::INT LIST LIST, NULL)
+SELECT (list_append(NULL::INT LIST LIST, NULL))::text
 ----
 {NULL}
 
 query T
-SELECT list_append(NULL, NULL::INT LIST)
+SELECT (list_append(NULL, NULL::INT LIST))::text
 ----
 {NULL}
 
@@ -750,7 +758,7 @@ query error Cannot call function list_append\(unknown, unknown\): arguments cann
 SELECT list_append(NULL, NULL)
 
 query error
-SELECT list_append(LIST[1], 'a');
+SELECT list_append(LIST[1], 'a')
 
 query error
 SELECT list_append(LIST[1], LIST[2])
@@ -763,12 +771,12 @@ SELECT list_append(1, LIST[1])
 # 🔬🔬🔬 list + list
 
 query T
-SELECT list_cat(LIST[1, 2], LIST[3, 4])
+SELECT (list_cat(LIST[1, 2], LIST[3, 4]))::text
 ----
 {1,2,3,4}
 
 query T
-SELECT list_cat(LIST[[1]], LIST[[2]])
+SELECT (list_cat(LIST[[1]], LIST[[2]]))::text
 ----
 {{1},{2}}
 
@@ -777,27 +785,27 @@ SELECT list_cat(LIST[[1]], LIST[[2]])
 # 🔬🔬🔬🔬 list + list
 
 query T
-SELECT list_cat(LIST[1], NULL)
+SELECT (list_cat(LIST[1], NULL))::text
 ----
 {1}
 
 query T
-SELECT list_cat(LIST[1], NULL)
+SELECT (list_cat(LIST[1], NULL))::text
 ----
 {1}
 
 query T
-SELECT list_cat(NULL, LIST[1])
+SELECT (list_cat(NULL, LIST[1]))::text
 ----
 {1}
 
 query T
-SELECT list_cat(NULL::INT LIST, NULL)
+SELECT (list_cat(NULL::INT LIST, NULL))::text
 ----
 NULL
 
 query T
-SELECT list_cat(NULL, NULL::INT LIST)
+SELECT (list_cat(NULL, NULL::INT LIST))::text
 ----
 NULL
 
@@ -1042,7 +1050,7 @@ SELECT list_length_max(LIST [[[1, 2, 3], [4]], [[5]]][1][2], 1)
 # 🔬🔬🔬 NULL elements
 
 query R
-SELECT list_length_max(NULL::INT LIST, 1);
+SELECT list_length_max(NULL::INT LIST, 1)
 ----
 NULL
 
@@ -1062,7 +1070,7 @@ SELECT list_length_max((LIST[[1],NULL]::INT LIST LIST), 2)
 1
 
 query T
-SELECT list_length_max((LIST[NULL]::INT LIST LIST), 2)
+SELECT (list_length_max((LIST[NULL]::INT LIST LIST), 2))::text
 ----
 NULL
 
@@ -1091,14 +1099,14 @@ SELECT list_length_max((LIST[1]::INT LIST), LIST[-1][1])
 # 🔬🔬🔬 element + list
 
 query T
-SELECT list_prepend(1, LIST[2, 3])
+SELECT (list_prepend(1, LIST[2, 3]))::text
 ----
 {1,2,3}
 
 # 🔬🔬🔬 list + list list (element + list)
 
 query T
-SELECT list_prepend(LIST[1], LIST[[2], [3]])
+SELECT (list_prepend(LIST[1], LIST[[2], [3]]))::text
 ----
 {{1},{2},{3}}
 
@@ -1107,44 +1115,44 @@ SELECT list_prepend(LIST[1], LIST[[2], [3]])
 # 🔬🔬🔬🔬 element + list
 
 query T
-SELECT list_prepend(NULL, LIST[1])
+SELECT (list_prepend(NULL, LIST[1]))::text
 ----
 {NULL,1}
 
 query T
-SELECT list_prepend(NULL::INT, LIST[1])
+SELECT (list_prepend(NULL::INT, LIST[1]))::text
 ----
 {NULL,1}
 
 query T
-SELECT list_prepend(1, NULL::INT LIST)
+SELECT (list_prepend(1, NULL::INT LIST))::text
 ----
 {1}
 
 query T
-SELECT list_prepend(NULL::INT, NULL::INT LIST)
+SELECT (list_prepend(NULL::INT, NULL::INT LIST))::text
 ----
 {NULL}
 
 # 🔬🔬🔬🔬 list + list list (element + list)
 
 query T
-SELECT list_prepend(NULL, LIST[[1]])
+SELECT (list_prepend(NULL, LIST[[1]]))::text
 ----
 {NULL,{1}}
 
 query T
-SELECT list_prepend(LIST[1], NULL)
+SELECT (list_prepend(LIST[1], NULL))::text
 ----
 {{1}}
 
 query T
-SELECT list_prepend(NULL::INT LIST, NULL)
+SELECT (list_prepend(NULL::INT LIST, NULL))::text
 ----
 {NULL}
 
 query T
-SELECT list_prepend(NULL, NULL::INT LIST LIST)
+SELECT (list_prepend(NULL, NULL::INT LIST LIST))::text
 ----
 {NULL}
 
@@ -1172,13 +1180,13 @@ SELECT unnest FROM unnest(LIST[1,2,3])
 3
 
 query T rowsort
-SELECT unnest FROM unnest(LIST[[1,2],[3]])
+SELECT unnest::text FROM unnest(LIST[[1,2],[3]])
 ----
 {1,2}
 {3}
 
 query T
-SELECT unnest FROM unnest(LIST[NULL])
+SELECT unnest::text FROM unnest(LIST[NULL])
 ----
 NULL
 
@@ -1189,7 +1197,7 @@ NULL
 1
 
 query T
-SELECT unnest FROM unnest(NULL::int list)
+SELECT unnest::text FROM unnest(NULL::int list)
 ----
 
 query error Cannot call function unnest\(unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
@@ -1202,39 +1210,39 @@ SELECT * FROM unnest(NULL)
 # 🔬🔬🔬 Single-dimensional lists
 
 query T
-SELECT LIST['1']::int list
+SELECT (LIST['1']::int list)::text
 ----
 {1}
 
 query T
-SELECT LIST[NULL]::int list
+SELECT (LIST[NULL]::int list)::text
 ----
 {NULL}
 
 query T
-SELECT LIST[NULL, '1']::int list
+SELECT (LIST[NULL, '1']::int list)::text
 ----
 {NULL,1}
 
 query T
-SELECT LIST[1.4, 1.5]::int list;
+SELECT (LIST[1.4, 1.5]::int list)::text
 ----
 {1,2}
 
 query T
-SELECT LIST[1.4::float, -1.5::float]::int list;
+SELECT (LIST[1.4::float, -1.5::float]::int list)::text
 ----
 {1,-2}
 
 query T
-SELECT NULL::int list
+SELECT (NULL::int list)::text
 ----
 NULL
 
 # 🔬🔬🔬🔬 Errors
 
 query error invalid input syntax for int4: invalid digit found in string: "dog"
-SELECT LIST['1', 'dog']::int list
+SELECT (LIST['1', 'dog']::int list)::text
 
 query error CAST does not support casting from date list to i32 list
 SELECT LIST[DATE '2008-02-01']::int list
@@ -1242,71 +1250,71 @@ SELECT LIST[DATE '2008-02-01']::int list
 # 🔬🔬🔬 Multi-dimensional and jagged lists
 
 query T
-SELECT LIST[[1.4::float], [-1.5::float, 2.5::float]]::int list list;
+SELECT (LIST[[1.4::float], [-1.5::float, 2.5::float]]::int list list)::text
 ----
 {{1},{-2,3}}
 
 query T
-SELECT LIST[[1.4::float], [-1.5::float, 2.5::float], NULL::float list]::int list list;
+SELECT (LIST[[1.4::float], [-1.5::float, 2.5::float], NULL::float list]::int list list)::text
 ----
 {{1},{-2,3},NULL}
 
 # 🔬🔬🔬 Non-numeric types
 
 query T
-SELECT LIST[TIMESTAMP '2008-02-01 15:04:05', TIMESTAMP '2007-02-01 15:04:05']::date list
+SELECT (LIST[TIMESTAMP '2008-02-01 15:04:05', TIMESTAMP '2007-02-01 15:04:05']::date list)::text
 ----
 {2008-02-01,2007-02-01}
 
 query T
-SELECT LIST[DATE '2008-02-01', DATE '2007-02-01']::timestamp list
+SELECT (LIST[DATE '2008-02-01', DATE '2007-02-01']::timestamp list)::text
 ----
 {"2008-02-01 00:00:00","2007-02-01 00:00:00"}
 
 # 🔬🔬 list to text
 
 query T
-SELECT LIST['1']::text
+SELECT (LIST['1']::text)::text
 ----
 {1}
 
 query T
-SELECT LIST[NULL]::text
+SELECT (LIST[NULL]::text)::text
 ----
 {NULL}
 
 query T
-SELECT LIST[NULL, '1']::text
+SELECT (LIST[NULL, '1']::text)::text
 ----
 {NULL,1}
 
 query T
-SELECT LIST[NULL, 1]::text
+SELECT (LIST[NULL, 1]::text)::text
 ----
 {NULL,1}
 
 query T
-SELECT LIST[NULL, '1']::text
+SELECT (LIST[NULL, '1']::text)::text
 ----
 {NULL,1}
 
 query T
-SELECT LIST[NULL, 1]::text
+SELECT (LIST[NULL, 1]::text)::text
 ----
 {NULL,1}
 
 query T
-SELECT LIST[1.4, -1.5]::text
+SELECT (LIST[1.4, -1.5]::text)::text
 ----
 {1.4,-1.5}
 
 query T
-SELECT LIST[[1.4], [-1.5]]::text
+SELECT (LIST[[1.4], [-1.5]]::text)::text
 ----
 {{1.4},{-1.5}}
 
 query T
-SELECT LIST[[1.4::float], [-1.5::float, 2.5::float]]::text
+SELECT (LIST[[1.4::float], [-1.5::float, 2.5::float]]::text)::text
 ----
 {{1.4},{-1.5,2.5}}
 
@@ -1331,36 +1339,36 @@ SELECT * FROM unnest('{1,2,3}'::int list)
 3
 
 query T rowsort
-SELECT * FROM unnest('{{1,2},{3}}'::int list list)
+SELECT unnest::text FROM unnest('{{1,2},{3}}'::int list list)
 ----
 {1,2}
 {3}
 
 query T rowsort
-SELECT * FROM unnest('{{{1},{2}},{{3}}}'::int list list list);
+SELECT unnest::text FROM unnest('{{{1},{2}},{{3}}}'::int list list list)
 ----
 {{1},{2}}
 {{3}}
 
 query T
-SELECT '{NULL}'::int list;
+SELECT ('{NULL}'::int list)::text
 ----
 {NULL}
 
 query T
-SELECT '{}'::int list
+SELECT ('{}'::int list)::text
 ----
 {}
 
 # 🔬🔬🔬 text to text list
 
 query T
-SELECT '{"a"," b","c ", d,e }'::text list
+SELECT ('{"a"," b","c ", d,e }'::text list)::text
 ----
 {a," b","c ",d,e}
 
 query T
-SELECT '{{"a"," b","c "},{ d,e }}'::text list list
+SELECT ('{{"a"," b","c "},{ d,e }}'::text list list)::text
 ----
 {{a," b","c "},{d,e}}
 
@@ -1381,12 +1389,12 @@ a,b  3
 a\b"c\d"  8
 
 query T
-SELECT '{NULL}'::text list;
+SELECT ('{NULL}'::text list)::text
 ----
 {NULL}
 
 query T
-SELECT '{}'::text list
+SELECT ('{}'::text list)::text
 ----
 {}
 
@@ -1394,204 +1402,204 @@ SELECT '{}'::text list
 
 # Preserves leading and trailing spaces within escape, but not outside of escape
 query T
-SELECT '{ " a " }'::text list
+SELECT ('{ " a " }'::text list)::text
 ----
 {" a "}
 
 # Escapes content
 query T
-SELECT '{"} \""}'::text list
+SELECT ('{"} \""}'::text list)::text
 ----
 {"} \""}
 
 query T
-SELECT '{"{a}"}'::text list
+SELECT ('{"{a}"}'::text list)::text
 ----
 {"{a}"}
 
 query T
-SELECT '{"",""}'::text list
+SELECT ('{"",""}'::text list)::text
 ----
 {"",""}
 
 # This demos that the double quotes from the input are actually stripped
 query TI
-SELECT unnest, length(unnest) FROM unnest('{"",""}'::text list);
+SELECT unnest, length(unnest) FROM unnest('{"",""}'::text list)
 ----
 (empty) 0
 (empty) 0
 
 # Mixture of escape and non-escaped elements
 query T
-SELECT '{"{",a}'::text list
+SELECT ('{"{",a}'::text list)::text
 ----
 {"{",a}
 
 # Escape gets reset after each element
 query T
-SELECT '{"{",\\}'::text list
+SELECT ('{"{",\\}'::text list)::text
 ----
 {"{","\\"}
 
 # Elements within double quotes gets unescaped before being cast
 query T
-SELECT '{{a, "", "\""}, "{a, \"\", \"\\\"\"}"}'::text list list
+SELECT ('{{a, "", "\""}, "{a, \"\", \"\\\"\"}"}'::text list list)::text
 ----
 {{a,"","\""},{a,"","\""}}
 
 # Unquoted elements cannot have special characters interleaved within them
 query error invalid input syntax for list: malformed literal; must escape special character '"': "\{a"b"\}"
-SELECT '{a"b"}'::text list
+SELECT ('{a"b"}'::text list)::text
 
 query error invalid input syntax for list: malformed literal; must escape special character '\{': "\{a\{b\}"
-SELECT '{a{b}'::text list
+SELECT ('{a{b}'::text list)::text
 
 query error invalid input syntax for list: malformed array literal; contains 'b' after terminal '\}': "\{a\}b\}"
-SELECT '{a}b}'::text list
+SELECT ('{a}b}'::text list)::text
 
 # No non-whitespace characters after the escape
 query error invalid input syntax for list: expected ',' or '\}', got 'b': "\{"a"b\}"
-SELECT '{"a"b}'::text list
+SELECT ('{"a"b}'::text list)::text
 
 query error invalid input syntax for list: expected ',' or '\}', got '"': "\{""""\}"
-SELECT '{""""}'::text list
+SELECT ('{""""}'::text list)::text
 
 query error invalid input syntax for list: expected ',' or '\}', got '"': "\{"""\}"
-SELECT '{"""}'::text list
+SELECT ('{"""}'::text list)::text
 
 # 🔬🔬🔬🔬 Unquoted escapes
 
 # Escapes work on special characters
 query T
-SELECT '{\{, \}, \", \,}'::text list
+SELECT ('{\{, \}, \", \,}'::text list)::text
 ----
 {"{","}","\"",","}
 
 # Preserves escaped white space
 query T
-SELECT '{\ a}'::text list
+SELECT ('{\ a}'::text list)::text
 ----
 {" a"}
 
 query T
-SELECT '{a \ }'::text list
+SELECT ('{a \ }'::text list)::text
 ----
 {"a  "}
 
 query T
-SELECT '{\ a \ }'::text list
+SELECT ('{\ a \ }'::text list)::text
 ----
 {" a  "}
 
 query T
-SELECT '{a \ \ }'::text list
+SELECT ('{a \ \ }'::text list)::text
 ----
 {"a   "}
 
 # list lists are only escaped once; if they were escaped at each level, they
 # would no longer escape leading or trailing whitespace
 query T
-SELECT '{{\ a}}'::text list list
+SELECT ('{{\ a}}'::text list list)::text
 ----
 {{" a"}}
 
 query T
-SELECT '{{a \ }}'::text list list
+SELECT ('{{a \ }}'::text list list)::text
 ----
 {{"a  "}}
 
 query T
-SELECT '{{\ a \ }}'::text list list
+SELECT ('{{\ a \ }}'::text list list)::text
 ----
 {{" a  "}}
 
 query T
-SELECT '{{a \ \ }}'::text list list
+SELECT ('{{a \ \ }}'::text list list)::text
 ----
 {{"a   "}}
 
 # Unescaped space is trimmed
 query T
-SELECT '{\ \ a     ,     b \  }'::text list
+SELECT ('{\ \ a     ,     b \  }'::text list)::text
 ----
 {"  a","b  "}
 
 query T
-SELECT '{     a \ \ , \ b     }'::text list
+SELECT ('{     a \ \ , \ b     }'::text list)::text
 ----
 {"a   "," b"}
 
 query T
-SELECT '{a \ \     ,   \  b   }'::text list
+SELECT ('{a \ \     ,   \  b   }'::text list)::text
 ----
 {"a   ","  b"}
 
 query T
-SELECT '{ {     a \ }     }'::text list list
+SELECT ('{ {     a \ }     }'::text list list)::text
 ----
 {{"a  "}}
 
 query T
-SELECT '{     {a \     } }'::text list list
+SELECT ('{     {a \     } }'::text list list)::text
 ----
 {{"a  "}}
 
 query T
-SELECT '{     \ a}'::text list
+SELECT ('{     \ a}'::text list)::text
 ----
 {" a"}
 
 # Leading/trailing escaped special characters are honored
 query T
-SELECT '{\"a\"}'::text list
+SELECT ('{\"a\"}'::text list)::text
 ----
 {"\"a\""}
 
 query T
-SELECT '{\{a\}}'::text list
+SELECT ('{\{a\}}'::text list)::text
 ----
 {"{a}"}
 
 # Escaping backslashes works
 query T
-SELECT '{ \\\\a\\\\ }'::text list
+SELECT ('{ \\\\a\\\\ }'::text list)::text
 ----
 {"\\\\a\\\\"}
 
 # Escaping a non-special character has no visible effect on the output; normal
 # whitespacing rules apply
 query T
-SELECT '{ \a }'::text list
+SELECT ('{ \a }'::text list)::text
 ----
 {a}
 
 # Escaping a character in NULL turns it into the string "NULL"
 query T
-SELECT '{N\ULL}'::text list
+SELECT ('{N\ULL}'::text list)::text
 ----
 {"NULL"}
 
 # Escaping terminal character means it isn't available to close the list
 query error invalid input syntax for list: unterminated element
-SELECT '{\}'::text list
+SELECT ('{\}'::text list)::text
 
 query error invalid input syntax for list: unexpected end of input
-SELECT '{{\}}'::text list list
+SELECT ('{{\}}'::text list list)::text
 
 # 🔬🔬🔬 text to other lists
 
 query T
-SELECT '{1y 2d 3h, "4y 5d 6h"}'::interval list
+SELECT ('{1y 2d 3h, "4y 5d 6h"}'::interval list)::text
 ----
 {"1 year 2 days 03:00:00","4 years 5 days 06:00:00"}
 
 query T
-SELECT '{2001-02-03, "2004-05-06"}'::date list
+SELECT ('{2001-02-03, "2004-05-06"}'::date list)::text
 ----
 {2001-02-03,2004-05-06}
 
 query T
-SELECT '{NULL}'::date list;
+SELECT ('{NULL}'::date list)::text
 ----
 {NULL}
 
@@ -1600,33 +1608,33 @@ SELECT '{NULL}'::date list;
 # Elements within double quotes have their double quotes before being cast to
 # their element type
 query T
-SELECT '{"1"}'::int list
+SELECT ('{"1"}'::int list)::text
 ----
 {1}
 
 query T
-SELECT '{"1"}'::text list
+SELECT ('{"1"}'::text list)::text
 ----
 {1}
 
 query T
-SELECT '{"{}"}'::int list list
+SELECT ('{"{}"}'::int list list)::text
 ----
 {{}}
 
 query T
-SELECT '{"{}"}'::text list list
+SELECT ('{"{}"}'::text list list)::text
 ----
 {{}}
 
 # Empty lists
 query T
-SELECT '{  }'::text list
+SELECT ('{  }'::text list)::text
 ----
 {}
 
 query T
-SELECT '{ {   } }'::text list list
+SELECT ('{ {   } }'::text list list)::text
 ----
 {{}}
 
@@ -1634,44 +1642,44 @@ SELECT '{ {   } }'::text list list
 
 # Empty string is invalid
 query error invalid input syntax for list: expected '\{', found empty string: ""
-SELECT ''::text list
+SELECT (''::text list)::text
 
 # Not a list
 query error invalid input syntax for list: expected '\{', found 1: "1"
-SELECT '1'::int list
+SELECT ('1'::int list)::text
 
 # Invalid element
 query error invalid input syntax for list: invalid input syntax for int4: invalid digit found in string: "a": "\{a\}"
-SELECT '{a}'::int list
+SELECT ('{a}'::int list)::text
 
 # 'NULL' isn't a valid string for a list; just use unescaped NULL
 query error invalid input syntax for list: expected '\{', found N: "NULL"
-SELECT 'NULL'::int list
+SELECT ('NULL'::int list)::text
 
 # Too many leading brackets
 query error invalid input syntax for list: unescaped '\{' at beginning of element
-SELECT '{{1}}'::int list
+SELECT ('{{1}}'::int list)::text
 
 # Too many leading brackets
 query error invalid input syntax for list: unescaped '\{' at beginning of element
-SELECT '{{1}'::int list
+SELECT ('{{1}'::int list)::text
 
 query error invalid input syntax for list: unexpected end of input: "\{\{1\}"
-SELECT '{{1}'::int list list
+SELECT ('{{1}'::int list list)::text
 
 # Too many following brackets
 query error invalid input syntax for list: malformed array literal; contains '\}' after terminal '\}': "\{1\}\}"
-SELECT '{1}}'::int list
+SELECT ('{1}}'::int list)::text
 
 query error invalid input syntax for list: invalid input syntax for list: expected '\{', found 1: "1": "\{1\}\}"
-SELECT '{1}}'::int list list
+SELECT ('{1}}'::int list list)::text
 
 # Cannot have commas followed or preceded by empty elements
 query error invalid input syntax for list: malformed literal; missing element: "\{a,  \}"
-SELECT '{a,  }'::text list
+SELECT ('{a,  }'::text list)::text
 
 query error invalid input syntax for list: malformed literal; missing element: "\{  ,a\}"
-SELECT '{  ,a}'::text list
+SELECT ('{  ,a}'::text list)::text
 
 # 🔬 Built-in operations
 
@@ -1680,46 +1688,46 @@ SELECT '{  ,a}'::text list
 # 🔬🔬🔬 list + list
 
 query T
-SELECT LIST[1, 2] || LIST[3, 4]
+SELECT (LIST[1, 2] || LIST[3, 4])::text
 ----
 {1,2,3,4}
 
 query T
-SELECT LIST[[1], [2]] || LIST[[3], [4]]
+SELECT (LIST[[1], [2]] || LIST[[3], [4]])::text
 ----
 {{1},{2},{3},{4}}
 
 # Concatenation properly casts text to appropriate list type
 query T
-SELECT LIST[1] || '{2}'
+SELECT (LIST[1] || '{2}')::text
 ----
 {1,2}
 
 # 🔬🔬🔬 list + element
 
 query T
-SELECT LIST[1, 2] || 3
+SELECT (LIST[1, 2] || 3)::text
 ----
 {1,2,3}
 
 # 🔬🔬🔬 element + list
 
 query T
-SELECT 1 || LIST[2, 3]
+SELECT (1 || LIST[2, 3])::text
 ----
 {1,2,3}
 
 # 🔬🔬🔬 list list + list (list + element)
 
 query T
-SELECT LIST[[1], [2]] || LIST[3]
+SELECT (LIST[[1], [2]] || LIST[3])::text
 ----
 {{1},{2},{3}}
 
 # 🔬🔬🔬 list + list list (element + list)
 
 query T
-SELECT LIST[1] || LIST[[2], [3]]
+SELECT (LIST[1] || LIST[[2], [3]])::text
 ----
 {{1},{2},{3}}
 
@@ -1729,95 +1737,95 @@ SELECT LIST[1] || LIST[[2], [3]]
 
 # Our type system resolves `list || NULL` as a form of `list || list`
 query T
-SELECT LIST[1] || NULL
+SELECT (LIST[1] || NULL)::text
 ----
 {1}
 
 query T
-SELECT NULL || LIST[1]
+SELECT (NULL || LIST[1])::text
 ----
 {1}
 
 query T
-SELECT LIST[1] || NULL::INT LIST
+SELECT (LIST[1] || NULL::INT LIST)::text
 ----
 {1}
 
 query T
-SELECT  NULL::INT LIST || LIST[1]
+SELECT ( NULL::INT LIST || LIST[1])::text
 ----
 {1}
 
 query T
-SELECT NULL::INT LIST || NULL::INT LIST
+SELECT (NULL::INT LIST || NULL::INT LIST)::text
 ----
 NULL
 
 # 🔬🔬🔬🔬 list + element
 
 query T
-SELECT LIST[1] || NULL::INT
+SELECT (LIST[1] || NULL::INT)::text
 ----
 {1,NULL}
 
 query T
-SELECT NULL::INT LIST || 1
+SELECT (NULL::INT LIST || 1)::text
 ----
 {1}
 
 query T
-SELECT NULL::INT LIST || NULL::INT
+SELECT (NULL::INT LIST || NULL::INT)::text
 ----
 {NULL}
 
 # 🔬🔬🔬🔬 element + list
 
 query T
-SELECT NULL::INT || LIST[1]
+SELECT (NULL::INT || LIST[1])::text
 ----
 {NULL,1}
 
 query T
-SELECT 1 || NULL::INT LIST
+SELECT (1 || NULL::INT LIST)::text
 ----
 {1}
 
 query T
-SELECT NULL::INT || NULL::INT LIST
+SELECT (NULL::INT || NULL::INT LIST)::text
 ----
 {NULL}
 
 # 🔬🔬🔬🔬 list list + list (list + element)
 
 query T
-SELECT LIST[[1]] || NULL::INT LIST
+SELECT (LIST[[1]] || NULL::INT LIST)::text
 ----
 {{1},NULL}
 
 query T
-SELECT NULL::INT LIST LIST || LIST[1]
+SELECT (NULL::INT LIST LIST || LIST[1])::text
 ----
 {{1}}
 
 query T
-SELECT NULL::INT LIST LIST || NULL::INT LIST
+SELECT (NULL::INT LIST LIST || NULL::INT LIST)::text
 ----
 {NULL}
 
 # 🔬🔬🔬🔬 list + list list (element + list)
 
 query T
-SELECT NULL::INT LIST || LIST[[1]]
+SELECT (NULL::INT LIST || LIST[[1]])::text
 ----
 {NULL,{1}}
 
 query T
-SELECT LIST[1] || NULL::INT LIST LIST
+SELECT (LIST[1] || NULL::INT LIST LIST)::text
 ----
 {{1}}
 
 query T
-SELECT NULL::INT LIST || NULL::INT LIST LIST
+SELECT (NULL::INT LIST || NULL::INT LIST LIST)::text
 ----
 {NULL}
 
