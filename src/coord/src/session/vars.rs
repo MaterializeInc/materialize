@@ -237,7 +237,17 @@ impl Vars {
         } else if name == DATABASE.name {
             self.database.set(value)
         } else if name == DATE_STYLE.name {
-            bail!("parameter {} is read only", DATE_STYLE.name);
+            for value in value.split(',') {
+                let value = unicase::Ascii::new(value.trim());
+                if value != "ISO" && value != "MDY" {
+                    bail!(
+                        "parameter {} can only be set to {}",
+                        DATE_STYLE.name,
+                        DATE_STYLE.value
+                    );
+                }
+            }
+            Ok(())
         } else if name == EXTRA_FLOAT_DIGITS.name {
             self.extra_float_digits.set(value)
         } else if name == INTEGER_DATETIMES.name {

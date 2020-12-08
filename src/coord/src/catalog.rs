@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
@@ -19,8 +19,8 @@ use log::{info, trace};
 use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
+use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::RelationDesc;
@@ -80,13 +80,8 @@ pub struct Catalog {
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     storage: Arc<Mutex<storage::Connection>>,
-    startup_time: SystemTime,
-    nonce: u64,
-    experimental_mode: bool,
-    cluster_id: Uuid,
-    /// Used to assign a PostgreSQL object ID (OID) to each object in the catalog.
     oid_counter: u32,
-    cache_directory: Option<PathBuf>,
+    config: sql::catalog::CatalogConfig,
 }
 
 #[derive(Debug)]
@@ -199,11 +194,26 @@ pub struct Type {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TypeInner {
+    Array {
+        element_id: GlobalId,
+    },
     Base,
+    List {
+        element_id: GlobalId,
+    },
     Map {
         key_id: GlobalId,
         value_id: GlobalId,
     },
+}
+
+impl From<sql::plan::TypeInner> for TypeInner {
+    fn from(t: sql::plan::TypeInner) -> TypeInner {
+        match t {
+            sql::plan::TypeInner::List { element_id } => TypeInner::List { element_id },
+            sql::plan::TypeInner::Map { key_id, value_id } => TypeInner::Map { key_id, value_id },
+        }
+    }
 }
 
 impl CatalogItem {
@@ -240,7 +250,9 @@ impl CatalogItem {
             CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
             CatalogItem::Index(idx) => vec![idx.on],
             CatalogItem::Type(typ) => match &typ.inner {
+                TypeInner::Array { element_id } => vec![*element_id],
                 TypeInner::Base { .. } => vec![],
+                TypeInner::List { element_id } => vec![*element_id],
                 TypeInner::Map { key_id, value_id } => vec![*key_id, *value_id],
             },
         }
@@ -384,12 +396,15 @@ impl Catalog {
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
-            startup_time: SystemTime::now(),
-            nonce: rand::random(),
-            experimental_mode,
-            cluster_id,
             oid_counter: FIRST_USER_OID,
-            cache_directory: config.cache_directory,
+            config: sql::catalog::CatalogConfig {
+                startup_time: SystemTime::now(),
+                nonce: rand::random(),
+                experimental_mode,
+                cluster_id,
+                cache_directory: config.cache_directory,
+                build_info: config.build_info,
+            },
         };
         let mut events = vec![];
 
@@ -549,16 +564,23 @@ impl Catalog {
                 Builtin::Type(typ) => {
                     events.push(catalog.insert_item(
                         typ.id,
-                        typ.oid,
+                        typ.oid(),
                         FullName {
                             database: DatabaseSpecifier::Ambient,
                             schema: PG_CATALOG_SCHEMA.into(),
-                            item: typ.name.to_owned(),
+                            item: typ.name().to_owned(),
                         },
                         CatalogItem::Type(Type {
-                            create_sql: format!("CREATE TYPE {}", typ.name),
+                            create_sql: format!("CREATE TYPE {}", typ.name()),
                             plan_cx: PlanContext::default(),
-                            inner: TypeInner::Base,
+                            inner: match typ.kind() {
+                                postgres_types::Kind::Array(element_type) => {
+                                    let element_id = catalog.ambient_schemas[PG_CATALOG_SCHEMA]
+                                        .items[element_type.name()];
+                                    TypeInner::Array { element_id }
+                                }
+                                _ => TypeInner::Base,
+                            },
                         }),
                     ));
                 }
@@ -1487,11 +1509,7 @@ impl Catalog {
             Plan::CreateType { typ, .. } => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
                 plan_cx: pcx,
-                inner: match typ.inner {
-                    sql::plan::TypeInner::Map { key_id, value_id } => {
-                        TypeInner::Map { key_id, value_id }
-                    }
-                },
+                inner: typ.inner.into(),
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })
@@ -1580,12 +1598,8 @@ impl Catalog {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
 
-    pub fn cache_directory(&self) -> Option<&Path> {
-        self.cache_directory.as_deref()
-    }
-
-    pub fn cluster_id(&self) -> Uuid {
-        self.cluster_id
+    pub fn config(&self) -> &sql::catalog::CatalogConfig {
+        &self.config
     }
 }
 
@@ -1722,23 +1736,12 @@ pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
         enable_logging: true,
         experimental_mode: None,
         cache_directory: None,
+        build_info: &DUMMY_BUILD_INFO,
     })?;
     Ok(catalog.dump())
 }
 
 impl sql::catalog::Catalog for ConnCatalog<'_> {
-    fn startup_time(&self) -> SystemTime {
-        self.catalog.startup_time
-    }
-
-    fn nonce(&self) -> u64 {
-        self.catalog.nonce
-    }
-
-    fn cluster_id(&self) -> Uuid {
-        self.catalog.cluster_id
-    }
-
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
         if include_system_schemas {
             self.search_path.to_vec()
@@ -1810,25 +1813,12 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn is_queryable(&self, id: GlobalId) -> bool {
-        let (_, complete) = self.catalog.nearest_indexes(&[id]);
-        complete
-    }
-
-    fn is_materialized(&self, id: GlobalId) -> bool {
-        !self.catalog.indexes[&id].is_empty()
-    }
-
     fn type_exists(&self, name: &FullName) -> bool {
         self.catalog.try_get(name, self.conn_id).is_some()
     }
 
-    fn experimental_mode(&self) -> bool {
-        self.catalog.experimental_mode
-    }
-
-    fn cache_directory(&self) -> Option<&Path> {
-        self.catalog.cache_directory()
+    fn config(&self) -> &sql::catalog::CatalogConfig {
+        &self.catalog.config
     }
 }
 
@@ -1839,6 +1829,10 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn id(&self) -> GlobalId {
         self.id()
+    }
+
+    fn oid(&self) -> u32 {
+        self.oid()
     }
 
     fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
@@ -1894,5 +1888,3 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         self.used_by()
     }
 }
-
-impl sql::catalog::Type for Type {}

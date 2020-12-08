@@ -16,6 +16,7 @@ use futures::future;
 use hyper::{Body, Method, Request, Response, StatusCode};
 
 use crate::http::{util, Server};
+use crate::BUILD_INFO;
 
 #[derive(Template)]
 #[template(path = "http/templates/home.html")]
@@ -31,9 +32,9 @@ impl Server {
         _: Request<Body>,
     ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
         future::ok(util::template_response(HomeTemplate {
-            version: crate::VERSION,
-            build_time: crate::BUILD_TIME,
-            build_sha: crate::BUILD_SHA,
+            version: BUILD_INFO.version,
+            build_time: BUILD_INFO.time,
+            build_sha: BUILD_INFO.sha,
         }))
     }
 

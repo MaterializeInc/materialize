@@ -23,7 +23,6 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 - Numeric to float conversions are susceptible to floating point errors
   ([#1102](https://github.com/MaterializeInc/materialize/issues/1102))
 
-
 ### Syntax & Semantics
 
 - Column names generated in returned column set are not available to `GROUP BY`
@@ -33,6 +32,14 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 
 - `ANY` and `ALL` queries generate suboptimal plans
   ([#744](https://github.com/MaterializeInc/materialize/issues/744))
+
+### Common table expressions (CTEs)
+
+- CTEs only support `SELECT` queries. {{% gh 4867 %}}
+- Materialize inlines the CTE where it's referenced, which could cause
+  unexpected performance characteristics for especially complex expressions. {{%
+  gh 4867 %}}
+- `WTIH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
 
 ## Sources & Sinks
 

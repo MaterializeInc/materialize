@@ -384,8 +384,8 @@ pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     //
     // [0]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.9
     // [1]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.10
-    if s.starts_with("\\x") {
-        hex::decode(&s[2..]).map_err(|e| ParseError::new("bytea", s).with_details(e))
+    if let Some(remainder) = s.strip_prefix(r"\x") {
+        hex::decode(remainder).map_err(|e| ParseError::new("bytea", s).with_details(e))
     } else {
         parse_bytes_traditional(s)
     }
@@ -553,7 +553,7 @@ where
                         want a nested list, e.g. '{{a}}'::text list list"
                     )
                 }
-                gen(list_lex_embedded_list(buf)?)?
+                gen(lex_embedded_element(buf)?)?
             }
             Some(_) => match lex_unquoted_element(buf, is_special_char, is_end_of_literal)? {
                 Some(elem) => gen(elem)?,
@@ -600,7 +600,7 @@ fn lex_quoted_element<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, String> 
     Ok(s.into())
 }
 
-fn list_lex_embedded_list<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, String> {
+fn lex_embedded_element<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, String> {
     let pos = buf.pos();
     assert!(matches!(buf.next(), Some('{')));
     let mut depth = 1;
@@ -614,7 +614,7 @@ fn list_lex_embedded_list<'a>(buf: &mut LexBuf<'a>) -> Result<Cow<'a, str>, Stri
             Some('{') if !in_escape => depth += 1,
             Some('}') if !in_escape => depth -= 1,
             Some(_) => (),
-            None => bail!("unterminated embedded list"),
+            None => bail!("unterminated embedded element"),
         }
     }
     let s = &buf.inner()[pos..buf.pos()];
@@ -694,16 +694,19 @@ fn lex_unquoted_element<'a>(
 
 pub fn parse_map<'a, V, E>(
     s: &'a str,
+    is_value_type_map: bool,
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, ParseError>
 where
     E: fmt::Display,
 {
-    parse_map_inner(s, gen_elem).map_err(|details| ParseError::new("map", s).with_details(details))
+    parse_map_inner(s, is_value_type_map, gen_elem)
+        .map_err(|details| ParseError::new("map", s).with_details(details))
 }
 
 pub fn parse_map_inner<'a, V, E>(
     s: &'a str,
+    is_value_type_map: bool,
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, String>
 where
@@ -736,6 +739,18 @@ where
     let is_end_of_literal = |c| matches!(c, ',' | '}' | '=');
 
     loop {
+        // Check for terminals.
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        match buf.next() {
+            Some('}') => break,
+            _ if map.len() == 0 => {
+                buf.prev();
+            }
+            Some(',') => {}
+            Some(c) => bail!("expected ',' or end of input, got '{}'", c),
+            None => bail!("unexpected end of input"),
+        }
+
         // Get key.
         buf.take_while(|ch| ch.is_ascii_whitespace());
         let key = match buf.peek() {
@@ -755,6 +770,15 @@ where
         buf.take_while(|ch| ch.is_ascii_whitespace());
         let value = match buf.peek() {
             Some('"') => Some(lex_quoted_element(buf)?),
+            Some('{') => {
+                if !is_value_type_map {
+                    bail!(
+                        "unescaped '{{' at beginning of value; perhaps you \
+                           want a nested map, e.g. '{{a=>{{a=>1}}}}'::map[text=>map[text=>int]]"
+                    )
+                }
+                Some(lex_embedded_element(buf)?)
+            }
             Some(_) => lex_unquoted_element(buf, is_special_char, is_end_of_literal)?,
             None => bail!("unexpected end of input"),
         };
@@ -762,18 +786,6 @@ where
 
         // Insert elements.
         map.insert(key, value);
-
-        // Check for terminals.
-        buf.take_while(|ch| ch.is_ascii_whitespace());
-        match buf.next() {
-            _ if map.len() == 0 => {
-                buf.prev();
-            }
-            Some('}') => break,
-            Some(',') => {}
-            Some(c) => bail!("expected ',' or end of input, got '{}'", c),
-            None => bail!("unexpected end of input"),
-        }
     }
     Ok(map)
 }

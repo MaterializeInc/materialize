@@ -263,6 +263,7 @@ mz_source_info                       system true
 mz_worker_materialization_frontiers  system true
 
 > SHOW TABLES FROM mz_catalog
+mz_array_types
 mz_avro_ocf_sinks
 mz_base_types
 mz_columns
@@ -270,6 +271,7 @@ mz_databases
 mz_index_columns
 mz_indexes
 mz_kafka_sinks
+mz_list_types
 mz_map_types
 mz_schemas
 mz_sinks
@@ -283,6 +285,7 @@ mz_views
 > SHOW FULL TABLES FROM mz_catalog
 name                  type
 ----------------------------
+mz_array_types        system
 mz_avro_ocf_sinks     system
 mz_base_types         system
 mz_columns            system
@@ -290,6 +293,7 @@ mz_databases          system
 mz_index_columns      system
 mz_indexes            system
 mz_kafka_sinks        system
+mz_list_types         system
 mz_map_types          system
 mz_schemas            system
 mz_sinks              system
@@ -305,11 +309,11 @@ SHOW EXTENDED TABLES not yet supported
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-16
+18
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-30
+32
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

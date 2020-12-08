@@ -23,6 +23,7 @@ use std::fmt;
 use repr::adt::datetime::DateTimeField;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
+use crate::ast::Ident;
 
 #[derive(Debug)]
 pub struct ValueError(String);
@@ -176,96 +177,32 @@ mod test {
 /// SQL data types
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DataType {
+    /// Array
+    Array(Box<DataType>),
     /// Fixed-length character type e.g. CHAR(10)
     Char(Option<u64>),
-    /// Variable-length character type e.g. VARCHAR(10)
-    Varchar(Option<u64>),
-    /// Uuid type
-    Uuid,
-    /// Large character object e.g. CLOB(1000)
-    Clob(u64),
-    /// Fixed-length binary type e.g. BINARY(10)
-    Binary(u64),
-    /// Variable-length binary type e.g. VARBINARY(10)
-    Varbinary(u64),
-    /// Large binary object e.g. BLOB(1000)
-    Blob(u64),
     /// Decimal type with optional precision and scale e.g. DECIMAL(10,2)
     Decimal(Option<u64>, Option<u64>),
     /// Floating point with optional precision e.g. FLOAT(8)
     Float(Option<u64>),
-    /// Small integer
-    SmallInt,
-    /// Integer
-    Int,
-    /// Big integer
-    BigInt,
-    /// Floating point e.g. REAL
-    Real,
-    /// Double e.g. DOUBLE PRECISION
-    Double,
-    /// Boolean
-    Boolean,
-    /// Date
-    Date,
-    /// Time without time zone
-    Time,
-    /// Time with time zone
-    TimeTz,
-    /// Timestamp without time zone
-    Timestamp,
-    /// Timestamp with time zone
-    TimestampTz,
-    /// Interval
-    Interval,
-    /// Regclass used in postgresql serial
-    Regclass,
-    /// Text
-    Text,
-    /// Bytea
-    Bytea,
-    /// Array
-    Array(Box<DataType>),
     /// List
     List(Box<DataType>),
-    /// Binary JSON
-    Jsonb,
-    /// Object ID
-    Oid,
     /// Map
     Map { value_type: Box<DataType> },
-    /// User-defined type
-    Custom(String),
+    /// Types whose names don't accept parameters, e.g. INT
+    Other(Ident),
+    /// Variable-length character type e.g. VARCHAR(10)
+    Varchar(Option<u64>),
 }
 
 impl AstDisplay for DataType {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
+            DataType::Array(ty) => {
+                f.write_node(&ty);
+                f.write_str("[]");
+            }
             DataType::Char(size) => format_type_with_optional_length(f, "char", size),
-            DataType::Varchar(size) => {
-                format_type_with_optional_length(f, "character varying", size)
-            }
-            DataType::Uuid => f.write_str("uuid"),
-            DataType::Clob(size) => {
-                f.write_str("clob(");
-                f.write_str(size);
-                f.write_str(")");
-            }
-            DataType::Binary(size) => {
-                f.write_str("binary(");
-                f.write_str(size);
-                f.write_str(")");
-            }
-            DataType::Varbinary(size) => {
-                f.write_str("varbinary(");
-                f.write_str(size);
-                f.write_str(")");
-            }
-            DataType::Blob(size) => {
-                f.write_str("blob(");
-                f.write_str(size);
-                f.write_str(")");
-            }
             DataType::Decimal(precision, scale) => {
                 if let Some(scale) = scale {
                     f.write_str("numeric(");
@@ -278,37 +215,23 @@ impl AstDisplay for DataType {
                 }
             }
             DataType::Float(size) => format_type_with_optional_length(f, "float", size),
-            DataType::SmallInt => f.write_str("smallint"),
-            DataType::Int => f.write_str("int"),
-            DataType::BigInt => f.write_str("bigint"),
-            DataType::Real => f.write_str("real"),
-            DataType::Double => f.write_str("double precision"),
-            DataType::Boolean => f.write_str("boolean"),
-            DataType::Date => f.write_str("date"),
-            DataType::Time => f.write_str("time"),
-            DataType::TimeTz => f.write_str("time with time zone"),
-            DataType::Timestamp => f.write_str("timestamp"),
-            DataType::TimestampTz => f.write_str("timestamp with time zone"),
-            DataType::Interval => f.write_str("interval"),
-            DataType::Regclass => f.write_str("regclass"),
-            DataType::Text => f.write_str("text"),
-            DataType::Bytea => f.write_str("bytea"),
-            DataType::Array(ty) => {
-                f.write_node(&ty);
-                f.write_str("[]");
-            }
             DataType::List(ty) => {
                 f.write_node(&ty);
                 f.write_str(" list");
             }
-            DataType::Jsonb => f.write_str("jsonb"),
-            DataType::Oid => f.write_str("oid"),
             DataType::Map { value_type } => {
                 f.write_str("map(text=>");
                 f.write_node(&value_type);
                 f.write_str(")");
             }
-            DataType::Custom(c) => f.write_str(c),
+            DataType::Other(n) => match n.as_str() {
+                "bytes" => f.write_str("bytea"),
+                "string" => f.write_str("text"),
+                n => f.write_str(n),
+            },
+            DataType::Varchar(size) => {
+                format_type_with_optional_length(f, "character varying", size)
+            }
         }
     }
 }

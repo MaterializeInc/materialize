@@ -7,12 +7,12 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.34"
-env_logger = "0.8.1"
+env_logger = "0.8.2"
 futures = "0.3.8"
 log = "0.4.11"
 md-5 = "0.9"
 ore = { path = "../../src/ore" }
 rand = "0.7.3"
-structopt = "0.3.20"
+structopt = "0.3.21"
 test-util = { path = "../test-util" }
 tokio = { version = "0.2.22", features = ["full"] }

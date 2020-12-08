@@ -250,7 +250,7 @@
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
       to `expression` and any value of `s` evaluates to `true`"
 
-- type: Time
+- type: Date and Time
   description: Time functions take or produce a time-like type, e.g. [`date`](../types/date),
     [`timestamp`](../types/timestamp), [`timestamptz`](../types/timestamptz).
   functions:
@@ -277,6 +277,10 @@
   - signature: 'to_timestamp(val: double precision) -> timestamptz'
     description: Converts Unix epoch (seconds since 00:00:00 UTC on January 1, 1970)
       to timestamp
+
+  - signature: 'to_char(val: timestamp, format: str)'
+    description: Converts a timestamp into a string using the specified format.
+    url: to_char
 
 - type: UUID
   functions:
@@ -353,9 +357,39 @@
       Null elements are omitted unless `ifnull` is non-null, in which case
       null elements are replaced with the value of `ifnull`.
 
+- type: Cryptographic
+  functions:
+    - signature: 'digest(data: text, type: text) -> bytea'
+      desctription: >-
+        Computes a binary hash of the given text `data` using the specified `type` algorithm.
+        Supported hash algorithms are: `md5`, `sha224`, `sha256`, `sha384`, `sha512`.
+    - signature: 'digest(data: bytea, type: text) -> bytea'
+      desctription: >-
+        Computes a binary hash of the given bytea `data` using the specified `type` algorithm.
+        The supported hash algorithms are the same as for the text variant of this function.
+    - signature: 'hmac(data: text, key: text, type: text) -> bytea'
+      desctription: >-
+        Computes a hashed MAC of the given text `data` using the specified `key` and
+        `type` algorithm. Supported hash algorithms are: `md5`, `sha224`, `sha256`, `sha384`, `sha512`.
+    - signature: 'hmac(data: bytea, key: text, type: text) -> bytea'
+      desctription: >-
+        Computes a hashed MAC of the given bytea `data` using the specified `key` and
+        `type` algorithm. The supported hash algorithms are the same as for the text
+        variant of this function.
+
+- type: System information
+  description: Functions that return information about the system
+  functions:
+  - signature: 'mz_version() -> text'
+    description: Returns the server's version information as a human-readable string.
+
 - type: PostgreSQL compatibility
   description: Functions whose primary purpose is to facilitate compatibility with PostgreSQL tools
   functions:
+  - signature: 'current_schema() -> text'
+    description: >-
+      Returns the name of the first non-implicit schema on the search path, or
+      `NULL` if the search path is empty.
   - signature: 'current_schemas(include_implicit: bool) -> text[]'
     description: >-
       Returns the names of the schemas on the search path.
@@ -369,3 +403,5 @@
     description: Returns the type of its input argument as a string.
   - signature: 'pg_encoding_to_char(encoding_id: integer) -> text'
     description: PostgreSQL compatibility shim. Not intended for direct use.
+  - signature: 'version() -> text'
+    description: Returns a PostgreSQL-compatible version string.

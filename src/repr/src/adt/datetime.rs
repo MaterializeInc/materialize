@@ -454,7 +454,7 @@ impl ParsedDateTime {
     ///
     /// # Errors
     /// - If year, month, or day overflows their respective parameter in
-    ///   [chrono::naive::date::NaiveDate::from_ymd](https://docs.rs/chrono/0.3.0/chrono/naive/date/struct.NaiveDate.html).
+    ///   [chrono::naive::date::NaiveDate::from_ymd_opt](https://docs.rs/chrono/0.4/chrono/naive/struct.NaiveDate.html#method.from_ymd_opt).
     pub fn compute_date(&self) -> Result<chrono::NaiveDate, String> {
         match (self.year, self.month, self.day) {
             (Some(year), Some(month), Some(day)) => {
@@ -462,7 +462,8 @@ impl ParsedDateTime {
                 let year = year.unit.try_into().map_err(|e| p_err(e, "Year"))?;
                 let month = month.unit.try_into().map_err(|e| p_err(e, "Month"))?;
                 let day = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
-                Ok(NaiveDate::from_ymd(year, month, day))
+                NaiveDate::from_ymd_opt(year, month, day)
+                    .ok_or_else(|| "invalid or out-of-range date".into())
             }
             (_, _, _) => Err("YEAR, MONTH, DAY are all required".into()),
         }

@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-bin/doc --no-rustup
+bin/doc
 bin/pydoc
 rsync misc/www/index.html buildkite@mtrlz.dev:/var/www/html/index.html
 rsync --archive target/doc/ buildkite@mtrlz.dev:/var/www/html/api/rust

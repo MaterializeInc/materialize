@@ -48,7 +48,7 @@ impl Server {
             .await;
             match res {
                 Ok(res) => Ok(res),
-                Err(e) => return Ok(util::error_response(StatusCode::BAD_REQUEST, e.to_string())),
+                Err(e) => Ok(util::error_response(StatusCode::BAD_REQUEST, e.to_string())),
             }
         }
     }

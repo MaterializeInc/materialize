@@ -34,6 +34,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle;
 use uuid::Uuid;
 
+use build_info::BuildInfo;
 use dataflow::source::cache::CacheSender;
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
@@ -51,7 +52,7 @@ use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timest
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
-    ObjectType, Statement,
+    FetchStatement, ObjectType, Statement,
 };
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
@@ -65,9 +66,9 @@ use transform::Optimizer;
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{
-    BUILTINS, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES, MZ_INDEXES,
-    MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_MAP_TYPES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES,
-    MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    BUILTINS, MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_SCHEMAS,
+    MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type, TypeInner};
 use crate::command::{
@@ -123,6 +124,7 @@ where
     pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
+    pub build_info: &'static BuildInfo,
 }
 
 /// Glues the external world to the Timely workers.
@@ -447,7 +449,7 @@ where
                     let res = async {
                         let stmt = sql::pure::purify(stmt).await?;
                         let catalog = self.catalog.for_system_session();
-                        let desc = sql::plan::describe(&catalog, stmt.clone(), &[])?;
+                        let desc = describe(&catalog, stmt.clone(), &[], None)?;
                         let pcx = PlanContext::default();
                         let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
                         // At time of writing this comment, Peeks use the connection id only for
@@ -524,6 +526,17 @@ where
                         tx.send(Err(e), session);
                     }
                 },
+
+                Message::Command(Command::Declare {
+                    name,
+                    stmt,
+                    param_types,
+                    mut session,
+                    tx,
+                }) => {
+                    let result = self.handle_declare(&mut session, name, stmt, param_types);
+                    let _ = tx.send(Response { result, session });
+                }
 
                 Message::Command(Command::Describe {
                     name,
@@ -747,6 +760,27 @@ where
         }
     }
 
+    fn handle_declare(
+        &self,
+        session: &mut Session,
+        name: String,
+        stmt: Statement,
+        param_types: Vec<Option<pgrepr::Type>>,
+    ) -> Result<(), anyhow::Error> {
+        // handle_describe cares about symbiosis mode here. Declared cursors are
+        // perhaps rare enough we can ignore that worry and just error instead.
+        let desc = describe(
+            &self.catalog.for_session(session),
+            stmt.clone(),
+            &param_types,
+            Some(session),
+        )?;
+        let params = vec![];
+        let result_formats = vec![pgrepr::Format::Text; desc.arity()];
+        session.set_portal(name, desc, Some(stmt), params, result_formats)?;
+        Ok(())
+    }
+
     fn handle_describe(
         &self,
         session: &mut Session,
@@ -755,10 +789,11 @@ where
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         let desc = if let Some(stmt) = stmt.clone() {
-            match sql::plan::describe(
+            match describe(
                 &self.catalog.for_session(session),
                 stmt.clone(),
                 &param_types,
+                Some(session),
             ) {
                 Ok(desc) => desc,
                 // Describing the query failed. If we're running in symbiosis with
@@ -1161,39 +1196,26 @@ where
             )),
         )
         .await;
-        match typ.inner {
-            TypeInner::Map { key_id, value_id } => {
-                self.report_map_type_update(id, key_id, value_id, diff)
-                    .await
-            }
-            TypeInner::Base => self.report_base_type_update(id, diff).await,
-        }
-    }
 
-    async fn report_base_type_update(&mut self, id: GlobalId, diff: isize) {
+        let (index_id, update) = match typ.inner {
+            TypeInner::Array { element_id } => (
+                MZ_ARRAY_TYPES.id,
+                vec![id.to_string(), element_id.to_string()],
+            ),
+            TypeInner::Base => (MZ_BASE_TYPES.id, vec![id.to_string()]),
+            TypeInner::List { element_id } => (
+                MZ_LIST_TYPES.id,
+                vec![id.to_string(), element_id.to_string()],
+            ),
+            TypeInner::Map { key_id, value_id } => (
+                MZ_MAP_TYPES.id,
+                vec![id.to_string(), key_id.to_string(), value_id.to_string()],
+            ),
+        };
         self.update_catalog_view(
-            MZ_BASE_TYPES.id,
-            iter::once((Row::pack(&[Datum::String(&id.to_string())]), diff)),
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn report_map_type_update(
-        &mut self,
-        id: GlobalId,
-        key_id: GlobalId,
-        value_id: GlobalId,
-        diff: isize,
-    ) {
-        self.update_catalog_view(
-            MZ_MAP_TYPES.id,
+            index_id,
             iter::once((
-                Row::pack(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(&key_id.to_string()),
-                    Datum::String(&value_id.to_string()),
-                ]),
+                Row::pack(update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()),
                 diff,
             )),
         )
@@ -1786,11 +1808,7 @@ where
         let typ = catalog::Type {
             create_sql: typ.create_sql,
             plan_cx: pcx,
-            inner: match typ.inner {
-                sql::plan::TypeInner::Map { key_id, value_id } => {
-                    catalog::TypeInner::Map { key_id, value_id }
-                }
-            },
+            inner: typ.inner.into(),
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -2349,7 +2367,7 @@ where
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
                         if datum == &Datum::Null && !typ.nullable {
                             bail!(
-                                "NULL value in column {} violates not-null constraint",
+                                "null value in column \"{}\" violates not-null constraint",
                                 name.unwrap_or(&ColumnName::from("unnamed column"))
                             )
                         }
@@ -2807,11 +2825,13 @@ where
                     // If Materialize has caching enabled, check to see if the source has any
                     // already cached data that can be reused, and if so, augment the source
                     // connector to use that data before importing it into the dataflow.
-                    let connector = if let Some(path) = self.catalog.cache_directory() {
+                    let connector = if let Some(path) =
+                        self.catalog.config().cache_directory.as_deref()
+                    {
                         match crate::cache::augment_connector(
                             source.connector.clone(),
-                            path,
-                            self.catalog.cluster_id(),
+                            &path,
+                            self.catalog.config().cluster_id,
                             *id,
                         ) {
                             Ok(Some(connector)) => Some(connector),
@@ -3029,7 +3049,10 @@ where
             if connector.caching_enabled() {
                 if let Some(cache_tx) = &mut self.cache_tx {
                     cache_tx
-                        .send(CacheMessage::AddSource(self.catalog.cluster_id(), id))
+                        .send(CacheMessage::AddSource(
+                            self.catalog.config().cluster_id,
+                            id,
+                        ))
                         .await
                         .expect("failed to send CREATE SOURCE notification to caching thread");
                 } else {
@@ -3070,6 +3093,7 @@ pub async fn serve<C>(
         cache: cache_config,
         logical_compaction_window,
         experimental_mode,
+        build_info,
     }: Config<'_, C>,
 ) -> Result<(JoinHandle<()>, Uuid), anyhow::Error>
 where
@@ -3137,8 +3161,9 @@ where
             experimental_mode: Some(experimental_mode),
             enable_logging: logging.is_some(),
             cache_directory: cache_config.map(|c| c.path),
+            build_info,
         })?;
-        let cluster_id = catalog.cluster_id();
+        let cluster_id = catalog.config().cluster_id;
 
         let mut coord = Coordinator {
             broadcast_tx: switchboard.broadcast_tx(dataflow::BroadcastToken),
@@ -3268,5 +3293,34 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
         Timestamp::min_value()
     } else {
         millis as Timestamp
+    }
+}
+
+/// Creates a description of the statement `stmt`.
+///
+/// This function is identical to sql::plan::describe except this is also
+/// supports describing FETCH statements which need access to bound portals
+/// through the session.
+pub fn describe(
+    catalog: &dyn sql::catalog::Catalog,
+    stmt: Statement,
+    param_types: &[Option<pgrepr::Type>],
+    session: Option<&Session>,
+) -> Result<StatementDesc, anyhow::Error> {
+    match stmt {
+        // FETCH's description depends on the current session, which describe_statement
+        // doesn't (and shouldn't?) have access to, so intercept it here.
+        Statement::Fetch(FetchStatement { ref name, .. }) => {
+            match session
+                .map(|session| session.get_portal(name.as_str()).map(|p| p.desc.clone()))
+                .flatten()
+            {
+                Some(desc) => Ok(desc),
+                // TODO(mjibson): return a correct error code here (34000) once our error
+                // system supports it.
+                None => bail!("cursor {} does not exist", name.to_ast_string_stable()),
+            }
+        }
+        _ => sql::plan::describe(catalog, stmt, param_types),
     }
 }

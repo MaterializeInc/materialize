@@ -41,6 +41,8 @@ int4
 int8
 interval
 jsonb
+list
+map
 numeric
 oid
 record
@@ -79,6 +81,8 @@ int4             system
 int8             system
 interval         system
 jsonb            system
+list             system
+map              system
 numeric          system
 oid              system
 record           system
@@ -87,3 +91,18 @@ time             system
 timestamp        system
 timestamptz      system
 uuid             system
+
+# User-defined types
+
+> CREATE TYPE int_list_c AS LIST (element_type=int4);
+> CREATE TYPE int_map_c AS MAP (key_type=text, value_type=int4);
+
+# User-defined types can use other user-defined types
+> CREATE TYPE int_list_list_c AS LIST (element_type=int_list_c);
+
+> SHOW FULL TYPES
+name            type
+---------------------
+int_list_c      user
+int_map_c       user
+int_list_list_c user

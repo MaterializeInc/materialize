@@ -193,6 +193,7 @@ impl ColumnKnowledge {
                 group_key,
                 aggregates,
                 monotonic: _,
+                expected_group_size: _,
             } => {
                 let input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
                 let mut output = group_key

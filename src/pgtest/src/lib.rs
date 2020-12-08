@@ -25,6 +25,7 @@
 //! Supported `send` types:
 //! - [`Query`](struct.Query.html)
 //! - [`Parse`](struct.Parse.html)
+//! - [`Describe`](struct.Describe.html)
 //! - [`Bind`](struct.Bind.html)
 //! - [`Execute`](struct.Execute.html)
 //! - `Sync`
@@ -143,9 +144,14 @@ impl PgTest {
                                     .ranges()
                                     .map(|range| {
                                         let range = range.unwrap();
-                                        // TODO(mjibson): support not strings.
+                                        // Attempt to convert to a String. If not utf8, print as array of bytes instead.
                                         Ok(String::from_utf8(buf[range.start..range.end].to_vec())
-                                            .unwrap())
+                                            .unwrap_or_else(|_| {
+                                                format!(
+                                                    "{:?}",
+                                                    buf[range.start..range.end].to_vec()
+                                                )
+                                            }))
                                     })
                                     .collect()
                                     .unwrap(),
@@ -358,22 +364,28 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                         }
                         "Parse" => {
                             let v: Parse = serde_json::from_str(args).unwrap();
-                            frontend::parse("", &v.query, vec![], buf).unwrap();
+                            frontend::parse(
+                                &v.name.unwrap_or_else(|| "".into()),
+                                &v.query,
+                                vec![],
+                                buf,
+                            )
+                            .unwrap();
                         }
                         "Sync" => frontend::sync(buf),
                         "Bind" => {
                             let v: Bind = serde_json::from_str(args).unwrap();
                             let values = v.values.unwrap_or_default();
                             if frontend::bind(
-                                "",     // portal
-                                "",     // statement
+                                &v.portal.unwrap_or_else(|| "".into()),
+                                &v.statement.unwrap_or_else(|| "".into()),
                                 vec![], // formats
                                 values, // values
                                 |t, buf| {
                                     buf.put_slice(t.as_bytes());
                                     Ok(IsNull::No)
                                 }, // serializer
-                                vec![], // result_formats
+                                v.result_formats.unwrap_or_default(),
                                 buf,
                             )
                             .is_err()
@@ -382,11 +394,22 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                             }
                         }
                         "Describe" => {
-                            frontend::describe(b'S', "", buf).unwrap();
+                            let v: Describe = serde_json::from_str(args).unwrap();
+                            frontend::describe(
+                                v.variant.unwrap_or_else(|| "S".into()).as_bytes()[0],
+                                &v.name.unwrap_or_else(|| "".into()),
+                                buf,
+                            )
+                            .unwrap();
                         }
                         "Execute" => {
                             let v: Execute = serde_json::from_str(args).unwrap();
-                            frontend::execute("", v.max_rows.unwrap_or(0), buf).unwrap();
+                            frontend::execute(
+                                &v.portal.unwrap_or_else(|| "".into()),
+                                v.max_rows.unwrap_or(0),
+                                buf,
+                            )
+                            .unwrap();
                         }
                         _ => panic!("unknown message type {}", typ),
                     })
@@ -429,17 +452,29 @@ pub struct Query {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Parse {
+    pub name: Option<String>,
     pub query: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bind {
+    pub portal: Option<String>,
+    pub statement: Option<String>,
     pub values: Option<Vec<String>>,
+    pub result_formats: Option<Vec<i16>>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Execute {
+    pub portal: Option<String>,
     pub max_rows: Option<i32>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Describe {
+    pub variant: Option<String>,
+    pub name: Option<String>,
 }

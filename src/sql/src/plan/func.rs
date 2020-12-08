@@ -116,6 +116,7 @@ impl TypeCategory {
             | ParamType::ListElementAny
             | ParamType::NonVecAny
             | ParamType::MapAny => Self::Pseudo,
+            ParamType::DecimalAny => Self::Numeric,
             ParamType::Plain(t) => Self::from_type(t),
         }
     }
@@ -147,7 +148,7 @@ struct Operation<R>(
                 &ExprContext,
                 FuncSpec,
                 Vec<CoercibleScalarExpr>,
-                ParamList,
+                &ParamList,
             ) -> Result<R, anyhow::Error>
             + Send
             + Sync,
@@ -168,7 +169,7 @@ impl<R> Operation<R> {
                 &ExprContext,
                 FuncSpec,
                 Vec<CoercibleScalarExpr>,
-                ParamList,
+                &ParamList,
             ) -> Result<R, anyhow::Error>
             + Send
             + Sync
@@ -219,7 +220,7 @@ impl<R> Operation<R> {
         F: Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
     {
         Self::new(move |ecx, spec, cexprs, params| {
-            let exprs = coerce_args_to_type(ecx, spec, cexprs, params)?;
+            let exprs = coerce_args_to_types(ecx, spec, cexprs, params)?;
             f(ecx, exprs)
         })
     }
@@ -335,7 +336,7 @@ pub enum ParamList {
 
 impl ParamList {
     /// Determines whether `typs` are compatible with `self`.
-    fn matches_argtypes(&self, typs: &[Option<ScalarType>]) -> bool {
+    fn matches_argtypes(&self, ecx: &ExprContext, typs: &[Option<ScalarType>]) -> bool {
         if !self.validate_arg_len(typs.len()) {
             return false;
         }
@@ -349,13 +350,13 @@ impl ParamList {
                 //
                 // N.B. this will require more fallthrough checks once we
                 // support RECORD types in functions.
-                if !param.accepts_type(typ) {
+                if !param.accepts_type(ecx, typ) {
                     return false;
                 }
             }
         }
 
-        self.resolve_polymorphic_types(typs).is_ok()
+        !self.has_polymorphic() || self.resolve_polymorphic_types(typs).is_some()
     }
 
     /// Validates that the number of input elements are viable for `self`.
@@ -366,8 +367,17 @@ impl ParamList {
         }
     }
 
-    /// Enforces polymorphic type consistency by generating a new `ParamList`
-    /// with concretely typed parameters in place of polymorphic parameters.
+    /// Reports whether the parameter list contains any polymorphic parameters.
+    fn has_polymorphic(&self) -> bool {
+        let p = match self {
+            ParamList::Exact(p) | ParamList::Repeat(p) => p,
+        };
+        p.iter().any(|p| p.is_polymorphic())
+    }
+
+    /// Enforces polymorphic type consistency by finding the concrete type
+    /// that satisfies the constraints expressed by the polymorphic types in
+    /// the parameter list.
     ///
     /// Polymorphic type consistency constraints include:
     /// - All arguments passed to `ArrayAny` must be `ScalarType::Array`s with
@@ -378,28 +388,16 @@ impl ParamList {
     /// - All arguments passed to `MapAny` must be `ScalarType::Map`s with the
     ///   same type of value in each key, value pair.
     ///
-    /// # Errors
-    /// - If `typs` is inconsistent with these constraints.
-    fn resolve_polymorphic_types(
-        &self,
-        typs: &[Option<ScalarType>],
-    ) -> Result<ParamList, anyhow::Error> {
-        // Early return if polymorphic constraints are unnecessary.
-        let p = match self {
-            ParamList::Exact(p) | ParamList::Repeat(p) => p,
-        };
-
-        if !p.iter().any(|p| p.is_polymorphic()) {
-            return Ok(self.clone());
-        }
-
+    /// Returns `Some` if the constraints were successfully resolved, or `None`
+    /// otherwise.
+    fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
         let mut constrained_type: Option<ScalarType> = None;
         let mut set_or_check_constrained_type = |typ: &ScalarType| {
             match constrained_type {
                 None => constrained_type = Some(typ.clone()),
                 Some(ref t) => {
                     if typ != t {
-                        bail!("incompatible types; have {}, can only accept {}", typ, t)
+                        return Err(());
                     }
                 }
             }
@@ -413,10 +411,10 @@ impl ParamList {
                 (ParamType::ListAny, Some(ScalarType::List(typ)))
                 | (ParamType::ArrayAny, Some(ScalarType::Array(typ)))
                 | (ParamType::MapAny, Some(ScalarType::Map { value_type: typ })) => {
-                    set_or_check_constrained_type(typ)?
+                    set_or_check_constrained_type(typ).ok()?
                 }
                 (ParamType::ListElementAny, Some(typ)) | (ParamType::NonVecAny, Some(typ)) => {
-                    set_or_check_constrained_type(typ)?
+                    set_or_check_constrained_type(typ).ok()?
                 }
                 // These checks don't need to be more exhaustive (e.g. failing
                 // if arguments passed to `ListAny` are not `ScalartType::List`)
@@ -426,62 +424,7 @@ impl ParamList {
             }
         }
 
-        let constrained_type = match constrained_type {
-            None => bail!(
-                "could not constrain polymorphic type because all args to \
-                polymorphic parameters were of unknown type"
-            ),
-            Some(t) => t,
-        };
-
-        let mut param_types = Vec::new();
-        // Constrain polymorphic types.
-        for (i, typ) in typs.iter().enumerate() {
-            let param = &self[i];
-            match (param, typ) {
-                // If parameter is polymorphic and type is known, we already
-                // validated that it's consistent with the constrained type.
-                (p, Some(typ)) if p.is_polymorphic() => {
-                    param_types.push(ParamType::Plain(typ.clone()));
-                }
-                // Make unknown types into the constrained version of their
-                // parameter type.
-                (ParamType::ArrayAny, None) => {
-                    param_types.push(ParamType::Plain(ScalarType::Array(Box::new(
-                        constrained_type.clone(),
-                    ))));
-                }
-                (ParamType::ListAny, None) => {
-                    param_types.push(ParamType::Plain(ScalarType::List(Box::new(
-                        constrained_type.clone(),
-                    ))));
-                }
-                (ParamType::MapAny, None) => {
-                    param_types.push(ParamType::Plain(ScalarType::Map {
-                        value_type: Box::new(constrained_type.clone()),
-                    }));
-                }
-                (ParamType::ListElementAny, None) => {
-                    param_types.push(ParamType::Plain(constrained_type.clone()));
-                }
-                (ParamType::NonVecAny, None) => {
-                    if constrained_type.is_vec() {
-                        bail!(
-                            "could not constrain polymorphic type because {} used in \
-                            position that does not accept arrays or lists",
-                            constrained_type
-                        )
-                    }
-                    param_types.push(ParamType::Plain(constrained_type.clone()));
-                }
-                _ => param_types.push(param.clone()),
-            }
-        }
-
-        Ok(match self {
-            ParamList::Exact(_) => ParamList::Exact(param_types),
-            ParamList::Repeat(_) => ParamList::Repeat(param_types),
-        })
+        constrained_type
     }
 
     /// Matches a `&[ScalarType]` derived from the user's function argument
@@ -513,9 +456,15 @@ impl From<Vec<ParamType>> for ParamList {
 /// Describes parameter types; these are essentially just `ScalarType` with some
 /// added flexibility.
 pub enum ParamType {
-    /// A psuedotype permitting any type.
+    /// A pseudotype permitting any type.
     Any,
-    /// A polymorphic psuedotype permitting any array type.  For more details,
+    /// A special, Materialize-specific parameter type permitting a decimal of
+    /// any precision and scale. Note that while `DecimalAny` matches the
+    /// conceptual definition of the word "pseudotype", it does not match the
+    /// PostgreSQL definition, as parameters of type `DecimalAny` are considered
+    /// to exactly match arguments of decimal type.
+    DecimalAny,
+    /// A polymorphic pseudotype permitting any array type.  For more details,
     /// see [`resolve_polymorphic_types`].
     ArrayAny,
     /// A polymorphic pseudotype permitting a `ScalarType::List` of any element
@@ -539,23 +488,20 @@ pub enum ParamType {
 
 impl ParamType {
     /// Does `self` accept arguments of type `t`?
-    fn accepts_type(&self, t: &ScalarType) -> bool {
+    fn accepts_type(&self, ecx: &ExprContext, t: &ScalarType) -> bool {
         use ParamType::*;
         use ScalarType::*;
 
         match self {
-            // To support list (and, soon, array) concatenation, we must tell
-            // ourselves this white lie until
-            // https://github.com/MaterializeInc/materialize/issues/4627
-            ArrayAny => matches!(t, Array(..) | String),
-            ListAny => matches!(t, List(..) | String),
+            ArrayAny => matches!(t, Array(..)),
+            ListAny => matches!(t, List(..)),
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
-            MapAny => match t {
-                Map { value_type } => !value_type.is_map(),
-                _ => false,
-            },
-            Plain(to) => typeconv::get_cast(CastContext::Implicit, t, to).is_some(),
+            MapAny => matches!(t, Map { .. }),
+            DecimalAny => {
+                typeconv::can_cast(ecx, CastContext::Implicit, t, &ScalarType::Decimal(0, 0))
+            }
+            Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
         }
     }
 
@@ -579,17 +525,19 @@ impl ParamType {
     }
 
     fn is_polymorphic(&self) -> bool {
-        matches!(
-            self,
-            Self::ArrayAny | Self::ListAny | Self::ListElementAny | Self::NonVecAny
-        )
+        use ParamType::*;
+        match self {
+            ArrayAny | ListAny | MapAny | ListElementAny | NonVecAny => true,
+            Any | DecimalAny | Plain(_) => false,
+        }
     }
 }
 
 impl PartialEq<ScalarType> for ParamType {
     fn eq(&self, other: &ScalarType) -> bool {
         match self {
-            ParamType::Plain(s) => *s == other.desaturate(),
+            ParamType::Plain(s) => s == other,
+            ParamType::DecimalAny => matches!(other, ScalarType::Decimal(_, _)),
             // All other types are pseudotypes, which do not equal concrete
             // types.
             _ => false,
@@ -678,14 +626,12 @@ where
     // this purpose.
     let impls: Vec<_> = impls
         .iter()
-        .filter(|i| i.params.matches_argtypes(types))
+        .filter(|i| i.params.matches_argtypes(ecx, types))
         .collect();
 
-    let f = find_match(types, impls)?;
+    let f = find_match(ecx, types, impls)?;
 
-    // Coerce args to selected candidates' resolved types.
-    let params = f.params.resolve_polymorphic_types(types)?;
-    (f.op.0)(ecx, spec, cexprs, params)
+    (f.op.0)(ecx, spec, cexprs, &f.params)
 }
 
 /// Finds an exact match based on the arguments, or, if no exact match, finds
@@ -694,6 +640,7 @@ where
 ///
 /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
 fn find_match<'a, R: std::fmt::Debug>(
+    ecx: &ExprContext,
     types: &[Option<ScalarType>],
     impls: Vec<&'a FuncImpl<R>>,
 ) -> Result<&'a FuncImpl<R>, anyhow::Error> {
@@ -846,15 +793,15 @@ fn find_match<'a, R: std::fmt::Debug>(
                 let mut found_preferred_type_candidate = false;
                 candidates.retain(|c| {
                     if let Some(typ) = &preferred_type {
-                        found_preferred_type_candidate =
-                            c.fimpl.params[i].accepts_type(typ) || found_preferred_type_candidate;
+                        found_preferred_type_candidate = c.fimpl.params[i].accepts_type(ecx, typ)
+                            || found_preferred_type_candidate;
                     }
                     selected_category == TypeCategory::from_param(&c.fimpl.params[i])
                 });
 
                 if found_preferred_type_candidate {
                     let preferred_type = preferred_type.unwrap();
-                    candidates.retain(|c| c.fimpl.params[i].accepts_type(&preferred_type));
+                    candidates.retain(|c| c.fimpl.params[i].accepts_type(ecx, &preferred_type));
                 }
             }
             Some(typ) => {
@@ -886,7 +833,7 @@ fn find_match<'a, R: std::fmt::Debug>(
             })
             .collect();
 
-        candidates.retain(|c| c.fimpl.params.matches_argtypes(&common_typed));
+        candidates.retain(|c| c.fimpl.params.matches_argtypes(ecx, &common_typed));
 
         maybe_get_last_candidate!();
     }
@@ -897,59 +844,87 @@ fn find_match<'a, R: std::fmt::Debug>(
     )
 }
 
-/// Generates `ScalarExpr` necessary to coerce `Expr` into the `ScalarType`
-/// corresponding to `ParameterType`; errors if not possible. This can only
-/// work within the `func` module because it relies on `ParameterType`.
-fn coerce_arg_to_type(
+/// Coerces concrete arguments for a function according to the abstract
+/// parameters specified in the function definition.
+///
+/// You must only call this function if `ParamList::matches_argtypes` has
+/// verified that the `args` are valid for `params`.
+fn coerce_args_to_types(
     ecx: &ExprContext,
     spec: FuncSpec,
-    arg: CoercibleScalarExpr,
-    param: &ParamType,
-) -> Result<ScalarExpr, anyhow::Error> {
-    use ParamType::*;
-    use ScalarType::*;
-
-    match param {
-        // Concrete parameter type. Coerce then cast to that type.
-        Plain(ty) => {
-            let arg = typeconv::plan_coerce(ecx, arg, ty)?;
-            if matches!(ty, Decimal(..)) && matches!(ecx.scalar_type(&arg), Decimal(..)) {
-                // Suppress decimal -> decimal casts, to avoid casting to
-                // the default decimal scale of 0.
-                Ok(arg)
-            } else {
-                typeconv::plan_cast(spec, ecx, CastContext::Implicit, arg, ty)
-            }
-        }
-
-        // Polymorphic pseudotypes. As in PostgreSQL, these bail on
-        // uncoerced arguments.
-        ArrayAny | ListAny | ListElementAny | NonVecAny | MapAny => match arg {
-            CoercibleScalarExpr::Coerced(arg) => Ok(arg),
-            _ => bail!("could not determine polymorphic type because input has type unknown"),
-        },
-
-        // Special "any" psuedotype. Per PostgreSQL, uncoerced literals
-        // are acceptable, but uncoerced parameters are not.
-        Any => match arg {
-            CoercibleScalarExpr::Parameter(n) => {
-                bail!("could not determine data type of parameter ${}", n)
-            }
-            _ => arg.type_as_any(ecx),
-        },
-    }
-}
-
-/// Batch version of `coerce_arg_to_type`.
-fn coerce_args_to_type(
-    ecx: &ExprContext,
-    spec: FuncSpec,
-    cexprs: Vec<CoercibleScalarExpr>,
-    params: ParamList,
+    args: Vec<CoercibleScalarExpr>,
+    params: &ParamList,
 ) -> Result<Vec<ScalarExpr>, anyhow::Error> {
+    let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
+    let get_constrained_ty = || {
+        params
+            .resolve_polymorphic_types(&types)
+            .expect("function selection verifies that polymorphic types successfully resolved")
+    };
+
+    let do_convert = |arg, ty: &ScalarType| {
+        let arg = typeconv::plan_coerce(ecx, arg, ty)?;
+        typeconv::plan_cast(spec, ecx, CastContext::Implicit, arg, ty)
+    };
+
     let mut exprs = Vec::new();
-    for (i, cexpr) in cexprs.into_iter().enumerate() {
-        exprs.push(coerce_arg_to_type(ecx, spec, cexpr, &params[i])?);
+    for (i, arg) in args.into_iter().enumerate() {
+        let expr = match &params[i] {
+            // Concrete type. Direct conversion.
+            ParamType::Plain(ty) => do_convert(arg, ty)?,
+
+            // Polymorphic pseudotypes. Convert based on constrained type.
+            ParamType::ArrayAny => {
+                let ty = ScalarType::Array(Box::new(get_constrained_ty()));
+                do_convert(arg, &ty)?
+            }
+            ParamType::ListAny => {
+                let ty = ScalarType::List(Box::new(get_constrained_ty()));
+                do_convert(arg, &ty)?
+            }
+            ParamType::MapAny => {
+                let ty = ScalarType::Map {
+                    value_type: Box::new(get_constrained_ty()),
+                };
+                do_convert(arg, &ty)?
+            }
+            ParamType::ListElementAny => {
+                let ty = get_constrained_ty();
+                do_convert(arg, &ty)?
+            }
+            ParamType::NonVecAny => {
+                let ty = get_constrained_ty();
+                if ty.is_vec() {
+                    bail!(
+                        "could not constrain polymorphic type because {} used in \
+                        position that does not accept arrays or lists",
+                        ty
+                    )
+                }
+                do_convert(arg, &ty)?
+            }
+
+            // Arbitrary decimal parameter. Converts to decimal but suppresses
+            // decimal -> decimal casts, to avoid casting to the default scale
+            // of 0.
+            ParamType::DecimalAny => match (arg, &types[i]) {
+                (CoercibleScalarExpr::Coerced(arg), Some(ScalarType::Decimal(_, _))) => arg,
+                (arg, _) => {
+                    let ty = ScalarType::Decimal(0, 0);
+                    do_convert(arg, &ty)?
+                }
+            },
+
+            // Special "any" psuedotype. Per PostgreSQL, uncoerced literals
+            // are accepted, but uncoerced parameters are rejected.
+            ParamType::Any => match arg {
+                CoercibleScalarExpr::Parameter(n) => {
+                    bail!("could not determine data type of parameter ${}", n)
+                }
+                _ => arg.type_as_any(ecx)?,
+            },
+        };
+        exprs.push(expr);
     }
     Ok(exprs)
 }
@@ -1007,7 +982,7 @@ lazy_static! {
             "abs" => Scalar {
                 params!(Int32) => UnaryFunc::AbsInt32,
                 params!(Int64) => UnaryFunc::AbsInt64,
-                params!(Decimal(0, 0)) => UnaryFunc::AbsDecimal,
+                params!(DecimalAny) => UnaryFunc::AbsDecimal,
                 params!(Float32) => UnaryFunc::AbsFloat32,
                 params!(Float64) => UnaryFunc::AbsFloat64
             },
@@ -1035,7 +1010,7 @@ lazy_static! {
             "ceil" => Scalar {
                 params!(Float32) => UnaryFunc::CeilFloat32,
                 params!(Float64) => UnaryFunc::CeilFloat64,
-                params!(Decimal(0, 0)) => Operation::unary(|ecx, e| {
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::CeilDecimal(s)))
                 })
@@ -1060,6 +1035,9 @@ lazy_static! {
             },
             "convert_from" => Scalar {
                 params!(Bytes, String) => BinaryFunc::ConvertFrom
+            },
+            "current_schema" => Scalar {
+                params!() => sql_op!("current_schemas(false)[1]")
             },
             "current_schemas" => Scalar {
                 params!(Bool) => Operation::unary(|ecx, e| {
@@ -1088,13 +1066,21 @@ lazy_static! {
                 params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp,
                 params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz
             },
+            "digest" => Scalar {
+                params!(String, String) => BinaryFunc::DigestString,
+                params!(Bytes, String) => BinaryFunc::DigestBytes
+            },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32,
                 params!(Float64) => UnaryFunc::FloorFloat64,
-                params!(Decimal(0, 0)) => Operation::unary(|ecx, e| {
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
                 })
+            },
+            "hmac" => Scalar {
+                params!(String, String, String) => VariadicFunc::HmacString,
+                params!(Bytes, String, String) => VariadicFunc::HmacBytes
             },
             "jsonb_array_length" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
@@ -1183,7 +1169,7 @@ lazy_static! {
                     // For consistency with other functions, verify that
                     // coercion is possible, though we don't actually care about
                     // the coerced results.
-                    coerce_args_to_type(ecx, spec, exprs, params)?;
+                    coerce_args_to_types(ecx, spec, exprs, params)?;
 
                     // TODO(benesch): make this function have return type
                     // regtype, when we support that type. Document the function
@@ -1202,11 +1188,11 @@ lazy_static! {
             "round" => Scalar {
                 params!(Float32) => UnaryFunc::RoundFloat32,
                 params!(Float64) => UnaryFunc::RoundFloat64,
-                params!(Decimal(0,0)) => Operation::unary(|ecx, e| {
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::RoundDecimal(s)))
                 }),
-                params!(Decimal(0,0), Int64) => Operation::binary(|ecx, lhs, rhs| {
+                params!(DecimalAny, Int64) => Operation::binary(|ecx, lhs, rhs| {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::RoundDecimal(s)))
                 })
@@ -1229,7 +1215,7 @@ lazy_static! {
             "sqrt" => Scalar {
                 params!(Float32) => UnaryFunc::SqrtFloat32,
                 params!(Float64) => UnaryFunc::SqrtFloat64,
-                params!(Decimal(0,0)) => Operation::unary(|ecx, e| {
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 })
@@ -1253,6 +1239,16 @@ lazy_static! {
             },
             "to_timestamp" => Scalar {
                 params!(Float64) => UnaryFunc::ToTimestamp
+            },
+            "version" => Scalar {
+                params!() => Operation::nullary(|ecx| {
+                    let build_info = ecx.catalog().config().build_info;
+                    let version = format!(
+                        "PostgreSQL 9.6 on {} (materialized {})",
+                        build_info.target_triple, build_info.version,
+                    );
+                    Ok(ScalarExpr::literal(Datum::String(&version), ScalarType::String))
+                })
             },
 
             // Aggregates.
@@ -1280,7 +1276,7 @@ lazy_static! {
                 params!(Int64) => AggregateFunc::MaxInt64,
                 params!(Float32) => AggregateFunc::MaxFloat32,
                 params!(Float64) => AggregateFunc::MaxFloat64,
-                params!(Decimal(0, 0)) => AggregateFunc::MaxDecimal,
+                params!(DecimalAny) => AggregateFunc::MaxDecimal,
                 params!(Bool) => AggregateFunc::MaxBool,
                 params!(String) => AggregateFunc::MaxString,
                 params!(Date) => AggregateFunc::MaxDate,
@@ -1292,7 +1288,7 @@ lazy_static! {
                 params!(Int64) => AggregateFunc::MinInt64,
                 params!(Float32) => AggregateFunc::MinFloat32,
                 params!(Float64) => AggregateFunc::MinFloat64,
-                params!(Decimal(0, 0)) => AggregateFunc::MinDecimal,
+                params!(DecimalAny) => AggregateFunc::MinDecimal,
                 params!(Bool) => AggregateFunc::MinBool,
                 params!(String) => AggregateFunc::MinString,
                 params!(Date) => AggregateFunc::MinDate,
@@ -1325,7 +1321,7 @@ lazy_static! {
                 params!(Int64) => AggregateFunc::SumInt64,
                 params!(Float32) => AggregateFunc::SumFloat32,
                 params!(Float64) => AggregateFunc::SumFloat64,
-                params!(Decimal(0, 0)) => AggregateFunc::SumDecimal,
+                params!(DecimalAny) => AggregateFunc::SumDecimal,
                 params!(Interval) => Operation::unary(|_ecx, _e| {
                     // Explicitly providing this unsupported overload
                     // prevents `sum(NULL)` from choosing the `Float64`
@@ -1404,12 +1400,12 @@ lazy_static! {
                         None => bail!("source passed to internal_read_cached_data must be literal string"),
                     };
                     let item = ecx.qcx.scx.resolve_item(ObjectName(vec![Ident::new(source.clone())]))?;
-                    let entry = ecx.qcx.scx.catalog.get_item(&item);
+                    let entry = ecx.catalog().get_item(&item);
                     match entry.item_type() {
                         CatalogItemType::Source => {},
                         _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, entry.item_type()),
                     }
-                    let cache_directory = ecx.qcx.scx.catalog.cache_directory();
+                    let cache_directory = ecx.catalog().config().cache_directory.as_deref();
                     if cache_directory.is_none() {
                         bail!("source caching is currently disabled. Try rerunning Materialize with '--experimental'.");
                     }
@@ -1472,11 +1468,17 @@ lazy_static! {
             "list_prepend" => Scalar {
                 vec![ListElementAny, ListAny] => BinaryFunc::ElementListConcat
             },
+            "mz_cluster_id" => Scalar {
+                params!() => Operation::nullary(mz_cluster_id)
+            },
             "mz_logical_timestamp" => Scalar {
                 params!() => NullaryFunc::MzLogicalTimestamp
             },
-            "mz_cluster_id" => Scalar {
-                params!() => Operation::nullary(mz_cluster_id)
+            "mz_version" => Scalar {
+                params!() => Operation::nullary(|ecx| {
+                    let version = ecx.catalog().config().build_info.human_version();
+                    Ok(ScalarExpr::literal(Datum::String(&version), ScalarType::String))
+                })
             },
             "regexp_extract" => Table {
                 params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
@@ -1540,7 +1542,7 @@ lazy_static! {
                 // users (#549).
                 params!(Float32) => Operation::identity(),
                 params!(Float64) => Operation::identity(),
-                params!(Decimal(0, 0)) => Operation::identity(),
+                params!(DecimalAny) => Operation::identity(),
                 params!(Int32) => Operation::unary(|ecx, e| {
                       super::typeconv::plan_cast(
                           "internal.avg_promotion", ecx, CastContext::Explicit,
@@ -1576,7 +1578,7 @@ fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, a
 
 fn mz_cluster_id(ecx: &ExprContext) -> Result<ScalarExpr, anyhow::Error> {
     Ok(ScalarExpr::literal(
-        Datum::from(ecx.qcx.scx.catalog.cluster_id()),
+        Datum::from(ecx.catalog().config().cluster_id),
         ScalarType::Uuid,
     ))
 }
@@ -1655,7 +1657,7 @@ lazy_static! {
                 params!(Int64, Int64) => AddInt64,
                 params!(Float32, Float32) => AddFloat32,
                 params!(Float64, Float64) => AddFloat64,
-                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                params!(DecimalAny, DecimalAny) => {
                     Operation::binary(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, AddDecimal))
@@ -1688,13 +1690,13 @@ lazy_static! {
                 params!(Int64) => UnaryFunc::NegInt64,
                 params!(Float32) => UnaryFunc::NegFloat32,
                 params!(Float64) => UnaryFunc::NegFloat64,
-                params!(ScalarType::Decimal(0, 0)) => UnaryFunc::NegDecimal,
+                params!(DecimalAny) => UnaryFunc::NegDecimal,
                 params!(Interval) => UnaryFunc::NegInterval,
                 params!(Int32, Int32) => SubInt32,
                 params!(Int64, Int64) => SubInt64,
                 params!(Float32, Float32) => SubFloat32,
                 params!(Float64, Float64) => SubFloat64,
-                params!(Decimal(0, 0), Decimal(0, 0)) => Operation::binary(|ecx, lhs, rhs| {
+                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     Ok(lexpr.call_binary(rexpr, SubDecimal))
                 }),
@@ -1717,7 +1719,7 @@ lazy_static! {
                 params!(Int64, Int64) => MulInt64,
                 params!(Float32, Float32) => MulFloat32,
                 params!(Float64, Float64) => MulFloat64,
-                params!(Decimal(0, 0), Decimal(0, 0)) => Operation::binary(|ecx, lhs, rhs| {
+                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     use std::cmp::*;
                     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     let (_, s2) = ecx.scalar_type(&rhs).unwrap_decimal_parts();
@@ -1732,7 +1734,7 @@ lazy_static! {
                 params!(Int64, Int64) => DivInt64,
                 params!(Float32, Float32) => DivFloat32,
                 params!(Float64, Float64) => DivFloat64,
-                params!(Decimal(0, 0), Decimal(0, 0)) => Operation::binary(|ecx, lhs, rhs| {
+                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     use std::cmp::*;
                     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     let (_, s2) = ecx.scalar_type(&rhs).unwrap_decimal_parts();
@@ -1751,7 +1753,7 @@ lazy_static! {
                 params!(Int64, Int64) => ModInt64,
                 params!(Float32, Float32) => ModFloat32,
                 params!(Float64, Float64) => ModFloat64,
-                params!(Decimal(0, 0), Decimal(0, 0)) => Operation::binary(|ecx, lhs, rhs| {
+                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     Ok(lexpr.call_binary(rexpr, ModDecimal))
                 })
@@ -1822,10 +1824,12 @@ lazy_static! {
                 params!(ListElementAny, ListAny) => ElementListConcat
             },
 
-            //JSON
+            //JSON and MAP
             "->" => Scalar {
                 params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false },
-                params!(Jsonb, String) => JsonbGetString { stringify: false }
+                params!(Jsonb, String) => JsonbGetString { stringify: false },
+                params!(MapAny, String) => MapGetValue,
+                params!(MapAny, Plain(Array(Box::new(String)))) => MapGetValues
             },
             "->>" => Scalar {
                 params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true },
@@ -1842,7 +1846,8 @@ lazy_static! {
                 params!(String, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs.call_unary(UnaryFunc::CastStringToJsonb)
                           .call_binary(rhs, JsonbContainsJsonb))
-                })
+                }),
+                params!(MapAny, MapAny) => MapContainsMap
             },
             "<@" => Scalar {
                 params!(Jsonb, Jsonb) =>  Operation::binary(|_ecx, lhs, rhs| {
@@ -1860,17 +1865,26 @@ lazy_static! {
                         lhs.call_unary(UnaryFunc::CastStringToJsonb),
                         BinaryFunc::JsonbContainsJsonb,
                     ))
+                }),
+                params!(MapAny, MapAny) => Operation::binary(|_ecx, lhs, rhs| {
+                    Ok(rhs.call_binary(lhs, MapContainsMap))
                 })
             },
             "?" => Scalar {
                 params!(Jsonb, String) => JsonbContainsString,
                 params!(MapAny, String) => MapContainsKey
             },
+            "?&" => Scalar {
+                params!(MapAny, Plain(Array(Box::new(String)))) => MapContainsAllKeys
+            },
+            "?|" => Scalar {
+                params!(MapAny, Plain(Array(Box::new(String)))) => MapContainsAnyKeys
+            },
             // COMPARISON OPS
             // n.b. Decimal impls are separated from other types because they
             // require a function pointer, which you cannot dynamically generate.
             "<" => Scalar {
-                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                params!(DecimalAny, DecimalAny) => {
                     Operation::binary(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Lt))
@@ -1892,7 +1906,7 @@ lazy_static! {
                 params!(Jsonb, Jsonb) => BinaryFunc::Lt
             },
             "<=" => Scalar {
-                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                params!(DecimalAny, DecimalAny) => {
                     Operation::binary(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Lte))
@@ -1914,7 +1928,7 @@ lazy_static! {
                 params!(Jsonb, Jsonb) => BinaryFunc::Lte
             },
             ">" => Scalar {
-                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                params!(DecimalAny, DecimalAny) => {
                     Operation::binary(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Gt))
@@ -1936,7 +1950,7 @@ lazy_static! {
                 params!(Jsonb, Jsonb) => BinaryFunc::Gt
             },
             ">=" => Scalar {
-                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                params!(DecimalAny, DecimalAny) => {
                     Operation::binary(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Gte))
@@ -1958,7 +1972,7 @@ lazy_static! {
                 params!(Jsonb, Jsonb) => BinaryFunc::Gte
             },
             "=" => Scalar {
-                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                params!(DecimalAny, DecimalAny) => {
                     Operation::binary(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Eq))
@@ -1980,7 +1994,7 @@ lazy_static! {
                 params!(Jsonb, Jsonb) => BinaryFunc::Eq
             },
             "<>" => Scalar {
-                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                params!(DecimalAny, DecimalAny) => {
                     Operation::binary(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::NotEq))

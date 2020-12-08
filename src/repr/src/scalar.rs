@@ -11,6 +11,7 @@ use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use enum_kinds::EnumKind;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -630,7 +631,8 @@ impl fmt::Display for Datum<'_> {
 ///
 /// There is a direct correspondence between `Datum` variants and `ScalarType`
 /// variants.
-#[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd, EnumKind)]
+#[enum_kind(ScalarBaseType, derive(Hash))]
 pub enum ScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,
@@ -773,19 +775,6 @@ impl<'a> ScalarType {
         }
     }
 
-    /// Returns a copy of `Self` with any embedded fields "zeroed" out. Meant to
-    /// make comparisons easier, allowing you to mimic `std::mem::discriminant`
-    /// equality.
-    pub fn desaturate(&self) -> ScalarType {
-        match self {
-            ScalarType::Array(..) => ScalarType::Array(Box::new(ScalarType::String)),
-            ScalarType::Decimal(..) => ScalarType::Decimal(0, 0),
-            ScalarType::List(..) => ScalarType::List(Box::new(ScalarType::String)),
-            ScalarType::Record { .. } => ScalarType::Record { fields: vec![] },
-            _ => self.clone(),
-        }
-    }
-
     /// Derives a column type from this scalar type with the specified
     /// nullability.
     pub fn nullable(self, nullable: bool) -> ColumnType {
@@ -800,12 +789,6 @@ impl<'a> ScalarType {
     /// element type.
     pub fn is_vec(&self) -> bool {
         matches!(self, ScalarType::List(_) | ScalarType::Array(_))
-    }
-
-    /// Returns whether or not `self` is a [`ScalarType::Map`] irrespective
-    /// of its inner value type.
-    pub fn is_map(&self) -> bool {
-        matches!(self, ScalarType::Map { .. })
     }
 }
 

@@ -21,7 +21,7 @@
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{Expr, FunctionArgs, Ident, ObjectName};
+use crate::ast::{Expr, FunctionArgs, Ident, ObjectName, SqlOption};
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
@@ -187,6 +187,8 @@ pub struct Select {
     pub group_by: Vec<Expr>,
     /// HAVING
     pub having: Option<Expr>,
+    /// OPTION
+    pub options: Vec<SqlOption>,
 }
 
 impl AstDisplay for Select {
@@ -215,6 +217,11 @@ impl AstDisplay for Select {
         if let Some(ref having) = self.having {
             f.write_str(" HAVING ");
             f.write_node(having);
+        }
+        if !self.options.is_empty() {
+            f.write_str(" OPTION (");
+            f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
         }
     }
 }

@@ -38,12 +38,13 @@ use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
     ColumnOption, Connector, CopyDirection, CopyRelation, CopyStatement, CopyTarget,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement, CreateSchemaStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
-    DiscardStatement, DiscardTarget, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
-    ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement,
-    ObjectName, ObjectType, Query, SelectStatement, SetVariableStatement, SetVariableValue,
-    ShowVariableStatement, SqlOption, Statement, TailStatement, Value, WithOption, WithOptionValue,
+    CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
+    CreateViewStatement, DiscardStatement, DiscardTarget, DropDatabaseStatement,
+    DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
+    IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query, SelectStatement,
+    SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption, Statement,
+    TailStatement, Value, WithOption, WithOptionValue,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -131,7 +132,7 @@ pub fn describe_statement(
         | Statement::CreateTable(_)
         | Statement::CreateSink(_)
         | Statement::CreateView(_)
-        | Statement::CreateMapType(_)
+        | Statement::CreateType(_)
         | Statement::DropDatabase(_)
         | Statement::DropObjects(_)
         | Statement::SetVariable(_)
@@ -139,6 +140,8 @@ pub fn describe_statement(
         | Statement::StartTransaction(_)
         | Statement::Rollback(_)
         | Statement::Commit(_)
+        | Statement::Close(_)
+        | Statement::Declare(_)
         | Statement::AlterObjectRename(_)
         | Statement::AlterIndexOptions(_) => StatementDesc::new(None),
 
@@ -266,6 +269,8 @@ pub fn describe_statement(
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
+
+        Statement::Fetch(_) => bail!("FETCH must be described with a Session"),
     })
 }
 
@@ -294,7 +299,7 @@ pub fn handle_statement(
         Statement::CreateSource(stmt) => handle_create_source(scx, stmt),
         Statement::CreateTable(stmt) => handle_create_table(scx, stmt),
         Statement::CreateView(stmt) => handle_create_view(scx, stmt, params),
-        Statement::CreateMapType(stmt) => handle_create_map_type(scx, stmt),
+        Statement::CreateType(stmt) => handle_create_type(scx, stmt),
         Statement::DropDatabase(stmt) => handle_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => handle_drop_objects(scx, stmt),
         Statement::AlterObjectRename(stmt) => handle_alter_object_rename(scx, stmt),
@@ -328,6 +333,10 @@ pub fn handle_statement(
         Statement::Update(_) => bail!("UPDATE statements are not supported"),
         Statement::Delete(_) => bail!("DELETE statements are not supported"),
         Statement::SetTransaction(_) => bail!("SET TRANSACTION statements are not supported"),
+
+        Statement::Declare(_) => bail!("DECLARE statements should already be handled"),
+        Statement::Fetch(_) => bail!("FETCH statements should already be handled"),
+        Statement::Close(_) => bail!("CLOSE statements should already be handled"),
     }
 }
 
@@ -671,10 +680,11 @@ fn handle_create_sink(
     let suffix = format!(
         "{}-{}",
         scx.catalog
-            .startup_time()
+            .config()
+            .startup_time
             .duration_since(UNIX_EPOCH)?
             .as_secs(),
-        scx.catalog.nonce()
+        scx.catalog.config().nonce
     );
 
     let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
@@ -938,44 +948,40 @@ fn handle_create_view(
     })
 }
 
-fn handle_create_map_type(
+fn handle_create_type(
     scx: &StatementContext,
-    stmt: CreateMapTypeStatement,
+    stmt: CreateTypeStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let create_sql = normalize::create_statement(scx, Statement::CreateMapType(stmt.clone()))?;
-    let CreateMapTypeStatement { name, with_options } = stmt;
+    let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
+    let CreateTypeStatement {
+        name,
+        as_type,
+        with_options,
+    } = stmt;
 
     let mut with_options = normalize::option_objects(&with_options);
-    let key_name = match with_options.remove("key_type") {
-        Some(SqlOption::Value {
-            value: Value::String(val),
-            ..
-        }) => ObjectName(vec![Ident::new(val)]),
-        Some(SqlOption::ObjectName { object_name, .. }) => object_name,
-        Some(_) => bail!("key_type must be a string or identifier"),
-        None => bail!("key_type parameter required"),
-    };
-    let key = scx
-        .catalog
-        .resolve_item(&normalize::object_name(key_name)?)?;
-    if key.item.to_uppercase().as_str() != "TEXT" {
-        bail!("key_type must be text")
-    }
-    let key_id = scx.catalog.get_item(&key).id();
 
-    let value_name = match with_options.remove("value_type") {
-        Some(SqlOption::Value {
-            value: Value::String(val),
-            ..
-        }) => ObjectName(vec![Ident::new(val)]),
-        Some(SqlOption::ObjectName { object_name, .. }) => object_name,
-        Some(_) => bail!("value_type must be a string or identifier"),
-        None => bail!("value_type parameter required"),
+    let option_keys = match as_type {
+        CreateTypeAs::List => vec!["element_type"],
+        CreateTypeAs::Map => vec!["key_type", "value_type"],
     };
-    let value = scx
-        .catalog
-        .resolve_item(&normalize::object_name(value_name)?)?;
-    let value_id = scx.catalog.get_item(&value).id();
+
+    let mut ids = vec![];
+    for key in option_keys {
+        let item_name = match with_options.remove(&key.to_string()) {
+            Some(SqlOption::Value {
+                value: Value::String(val),
+                ..
+            }) => ObjectName(vec![Ident::new(val)]),
+            Some(SqlOption::ObjectName { object_name, .. }) => object_name,
+            Some(_) => bail!("{} must be a string or identifier", key),
+            None => bail!("{} parameter required", key),
+        };
+        let item_name = scx
+            .catalog
+            .resolve_item(&normalize::object_name(item_name)?)?;
+        ids.push(scx.catalog.get_item(&item_name).id());
+    }
 
     if !with_options.is_empty() {
         bail!(
@@ -989,12 +995,31 @@ fn handle_create_map_type(
         bail!("type \"{}\" already exists", name.to_string());
     }
 
+    let inner = match as_type {
+        CreateTypeAs::List => TypeInner::List {
+            element_id: ids.remove(0),
+        },
+        CreateTypeAs::Map => {
+            let key_id = ids.remove(0);
+            // TODO(sean): As part of
+            // https://github.com/MaterializeInc/materialize/issues/4953 we
+            // should be able to resolve IDs to `ScalarType`s, so this shouldn't
+            // rely on external knowledge that this OID is text's.
+            if scx.catalog.get_item_by_id(&key_id).oid() != 25 {
+                bail!("key_type must be text")
+            };
+            TypeInner::Map {
+                key_id,
+                value_id: ids.remove(0),
+            }
+        }
+    };
+
+    assert!(ids.is_empty());
+
     Ok(Plan::CreateType {
         name,
-        typ: Type {
-            create_sql,
-            inner: TypeInner::Map { key_id, value_id },
-        },
+        typ: Type { create_sql, inner },
     })
 }
 
@@ -1504,11 +1529,14 @@ fn handle_create_table(
 
     let names: Vec<_> = columns
         .iter()
-        .map(|c| Some(normalize::column_name(c.name.clone())))
+        .map(|c| normalize::column_name(c.name.clone()))
         .collect();
 
-    if names.iter().has_duplicates() {
-        bail!("cannot CREATE TABLE with duplicate column names");
+    if let Some(dup) = names.iter().duplicates().next() {
+        bail!(
+            "cannot CREATE TABLE: column \"{}\" specified more than once",
+            dup
+        );
     }
 
     // Build initial relation type that handles declared data types
@@ -1533,7 +1561,7 @@ fn handle_create_table(
     );
 
     let name = scx.allocate_name(normalize::object_name(name.clone())?);
-    let desc = RelationDesc::new(typ, names);
+    let desc = RelationDesc::new(typ, names.into_iter().map(Some));
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
     let table = Table { create_sql, desc };
@@ -1937,7 +1965,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn experimental_mode(&self) -> bool {
-        self.catalog.experimental_mode()
+        self.catalog.config().experimental_mode
     }
 
     pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {

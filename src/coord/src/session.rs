@@ -76,9 +76,15 @@ impl Session {
         self.transaction = TransactionStatus::InTransactionImplicit;
     }
 
-    /// Ends a transaction.
+    /// Ends a transaction, setting its state to Idle and destroying all portals.
+    ///
+    /// The [Postgres protocol docs](https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY) specify:
+    /// > a named portal object lasts till the end of the current transaction
+    /// and
+    /// > An unnamed portal is destroyed at the end of the transaction
     pub fn end_transaction(&mut self) {
         self.transaction = TransactionStatus::Idle;
+        self.portals.clear();
     }
 
     /// Marks the current transaction as failed.
@@ -148,7 +154,7 @@ impl Session {
                     types: params.into_iter().map(|(_d, t)| t).collect(),
                 },
                 result_formats: result_formats.into_iter().map(Into::into).collect(),
-                remaining_rows: None,
+                state: PortalState::NotStarted,
             },
         );
         Ok(())
@@ -156,9 +162,9 @@ impl Session {
 
     /// Removes the specified portal.
     ///
-    /// If there is no such portal, this method does nothing.
-    pub fn remove_portal(&mut self, portal_name: &str) {
-        let _ = self.portals.remove(portal_name);
+    /// If there is no such portal, this method does nothing. Returns whether that portal existed.
+    pub fn remove_portal(&mut self, portal_name: &str) -> bool {
+        self.portals.remove(portal_name).is_some()
     }
 
     /// Retrieves a reference to the specified portal.
@@ -231,17 +237,22 @@ pub struct Portal {
     pub parameters: Params,
     /// The desired output format for each column in the result set.
     pub result_formats: Vec<pgrepr::Format>,
-    /// The rows that have yet to be delivered to the client, if the portal is
-    /// partially executed.
+    /// The execution state of the portal.
     #[derivative(Debug = "ignore")]
-    pub remaining_rows: Option<Box<RowBatchStream>>,
+    pub state: PortalState,
 }
 
-impl Portal {
-    /// Sets the remaining rows for this portal.
-    pub fn set_remaining_rows(&mut self, rows: Box<RowBatchStream>) {
-        self.remaining_rows = Some(rows);
-    }
+/// Execution states of a portal.
+pub enum PortalState {
+    /// Portal not yet started.
+    NotStarted,
+    /// Portal is a rows-returning statement in progress with 0 or more rows
+    /// remaining.
+    InProgress(Option<Box<RowBatchStream>>),
+    /// Portal has completed and should not be re-executed. If the optional string
+    /// is present, it is returned as a CommandComplete tag, otherwise an error
+    /// is sent.
+    Completed(Option<String>),
 }
 
 /// A stream of batched rows.

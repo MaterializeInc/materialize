@@ -54,6 +54,7 @@ impl Project {
             group_key,
             aggregates,
             monotonic: _,
+            expected_group_size: _,
         } = relation
         {
             if let RelationExpr::Project {
