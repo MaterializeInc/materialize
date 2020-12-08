@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
+use std::iter;
 use std::ops::Add;
 use std::rc::Rc;
 use std::thread;
@@ -249,12 +250,10 @@ impl<'a> RandomAvroGenerator<'a> {
             let mut len = integral_dist::<usize>(json, rng.clone());
             move |v| {
                 let len = len();
-                v.reserve(len);
-                unsafe { v.set_len(len) }
                 let cd = Alphanumeric;
-                for i in 0..len {
-                    v[i] = cd.sample(&mut *rng.borrow_mut()) as u8;
-                }
+                let sample = || cd.sample(&mut *rng.borrow_mut()) as u8;
+                v.clear();
+                v.extend(iter::repeat_with(sample).take(len));
             }
         }
         fn bytes_dist(
@@ -264,12 +263,10 @@ impl<'a> RandomAvroGenerator<'a> {
             let mut len = integral_dist::<usize>(json, rng.clone());
             move |v| {
                 let len = len();
-                v.reserve(len);
-                unsafe { v.set_len(len) }
                 let bd = Uniform::new_inclusive(0, 255);
-                for i in 0..len {
-                    v[i] = bd.sample(&mut *rng.borrow_mut());
-                }
+                let sample = || bd.sample(&mut *rng.borrow_mut());
+                v.clear();
+                v.extend(iter::repeat_with(sample).take(len));
             }
         }
         let p: *const _ = &*node.inner;
@@ -415,14 +412,9 @@ impl<'a> ValueGenerator<'a> {
         match self {
             ValueGenerator::UniformBytes { len, bytes, rng } => {
                 let len = len.sample(rng);
-                out.reserve(len);
-                // safety - everything will be set by the below loop before ever being read
-                unsafe {
-                    out.set_len(len);
-                }
-                for i in 0..len {
-                    out[i] = bytes.sample(rng);
-                }
+                let sample = || bytes.sample(rng);
+                out.clear();
+                out.extend(iter::repeat_with(sample).take(len));
             }
             ValueGenerator::RandomAvro {
                 inner,
