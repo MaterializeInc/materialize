@@ -97,19 +97,26 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
         commit_hash = git.rev_parse("HEAD")
         package.create_version(version, desc="git main", vcs_tag=commit_hash)
     except bintray.VersionAlreadyExistsError:
-        # Ignore for idempotency. Bintray won't allow us to overwite an existing
-        # .deb below with a file whose checksum doesn't match, so this is safe.
+        # Ignore for idempotency.
         pass
 
-    print(f"Uploading Debian package ({humanize.naturalsize(deb_size)})...")
-    package.debian_upload(
-        version,
-        path=f"/{version}/materialized-{commit_hash}.deb",
-        data=open(deb_path, "rb"),
-        distributions=["generic"],
-        components=["main"],
-        architectures=["amd64"],
-    )
+    try:
+        print(f"Uploading Debian package ({humanize.naturalsize(deb_size)})...")
+        package.debian_upload(
+            version,
+            path=f"/{version}/materialized-{commit_hash}.deb",
+            data=open(deb_path, "rb"),
+            distributions=["generic"],
+            components=["main"],
+            architectures=["amd64"],
+        )
+    except bintray.DebAlreadyExistsError:
+        # Ideally `cargo deb` would produce identical output for identical input
+        # to give us idempotency for free, since Bintray won't produce a
+        # DebAlreadyExistsError if you upload the identical .deb file twice. But
+        # it doesn't, so instead we just assume the .deb that's already uploaded
+        # is functionally equivalent to the one we just built.
+        print("Debian package already exists; assuming it is valid and skipping upload")
 
 
 if __name__ == "__main__":

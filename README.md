@@ -1,10 +1,16 @@
 [![Build status](https://badge.buildkite.com/97d6604e015bf633d1c2a12d166bb46f3b43a927d3952c999a.svg?branch=main)](https://buildkite.com/materialize/tests)
 [![Doc reference](https://img.shields.io/badge/doc-reference-orange)](https://materialize.com/docs)
-[![Chat on Slack](https://img.shields.io/badge/chat-on%20slack-purple)](https://join.slack.com/t/materializecommunity/shared_invite/zt-igbcmoxh-5V7XXMBIeDe7PFHO6sG6Dw)
+[![Chat on Slack](https://img.shields.io/badge/chat-on%20slack-purple)](https://join.slack.com/t/materializecommunity/shared_invite/zt-jjwe1t45-klG9k7V7xibdtqA6bcFpyQ)
 
 [<img src="https://materialize.com/wp-content/uploads/2020/01/materialize_logo_primary.png" width=60%>](https://materialize.com)
 
 Materialize is a streaming database for real-time applications.
+
+## Get started
+
+Check out [our getting started guide](https://materialize.com/docs/get-started/).
+
+## About
 
 Materialize lets you ask questions of your live data, which it answers and then maintains for you as your data continue to change. The moment you need a refreshed answer, you can get it in milliseconds. Materialize is designed to help you interactively explore your streaming data, perform data warehousing analytics against live relational data, or just increase the freshness *and* reduce the load of your dashboard and monitoring tasks.
 
@@ -86,10 +92,6 @@ Stream inserts, updates, and deletes on the underlying tables (`lineitem` and `s
 **Push based**: Or configure Materialize to stream results to a Kafka topic as soon as the views change.
 
 If you want to use an ORM, [chat with us](https://github.com/MaterializeInc/materialize/issues/new/choose). They're surprisingly tricky.
-
-## Get started
-
-Check out [our getting started guide](https://materialize.com/docs/get-started/).
 
 ## Documentation
 

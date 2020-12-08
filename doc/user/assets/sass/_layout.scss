@@ -8,22 +8,40 @@ body {
 header {
   align-items: center;
   display: flex;
-  justify-content: space-between;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 20px;
-  max-width: 1100px;
+  padding: 0 20px;
+
+  #header-image {
+    flex-basis: 25%;
+    padding: 23px 0 17px;
+  }
 
   img {
-    width: 260px;
-    margin: 0 8px;
+    min-width: 141px;
+    max-width: 247px;
+    width: 100%;
+  }
+
+  #header-nav {
+    flex-basis: 75%;
+    max-width: 75%;
+    text-align: right;
+    padding-right: 4px;
   }
 
   ul {
     margin: 0 48px 0 0;
 
-    @media (max-width: 1130px) {
-      & {
-        display: none;
+    @media (max-width: 1149px) {
+      a {
+        padding: 7px;
+      }
+    }
+
+    @media (min-width: 1150px) {
+      a {
+        padding: 14px;
       }
     }
   }
@@ -32,27 +50,11 @@ header {
     display: inline-block;
 
     a {
-      color: $purple;
+      color: $off-black;
       display: block;
-      font-weight: bold;
-      line-height: 28px;
-      padding: 10px;
-
-      &.button {
-        border-radius: 2px;
-        margin-left: 10px;
-        padding: 5px 10px;
-      }
-
-      &.button-lime {
-        background-color: $lime;
-        color: $purple;
-      }
-
-      &.button-purple {
-        background-color: $purple;
-        color: white;
-      }
+      font-weight: 600;
+      font-size: 16px;
+      line-height: 19px;
     }
   }
 }

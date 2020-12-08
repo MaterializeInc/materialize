@@ -170,11 +170,7 @@ fn run() -> Result<(), anyhow::Error> {
         print!("{}", opts.usage("usage: materialized [options]"));
         return Ok(());
     } else if popts.opt_present("v") {
-        println!(
-            "materialized v{} ({})",
-            materialized::VERSION,
-            materialized::BUILD_SHA
-        );
+        println!("materialized {}", materialized::BUILD_INFO.human_version());
         if popts.opt_count("v") > 1 {
             for bi in build_info() {
                 println!("{}", bi);
@@ -398,7 +394,7 @@ cpus: {ncpus_logical} logical, {ncpus_physical} physical
 cpu0: {cpu0}
 memory: {memory_total}KB total, {memory_used}KB used
 swap: {swap_total}KB total, {swap_used}KB used",
-        mz_version = materialized::version(),
+        mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
         invocation = {
             use shell_words::quote as escape;
@@ -496,7 +492,7 @@ For more details, see https://materialize.com/docs/cli#experimental-mode
 
     println!(
         "materialized {} listening on {}...",
-        materialized::version(),
+        materialized::BUILD_INFO.human_version(),
         server.local_addr(),
     );
 

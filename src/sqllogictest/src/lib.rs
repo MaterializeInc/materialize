@@ -17,7 +17,6 @@
 //! The parser is generic, but the runner is specific to Materialize.
 
 pub mod ast;
-pub mod fuzz;
 pub mod parser;
 pub mod runner;
 pub mod util;

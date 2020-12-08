@@ -33,6 +33,14 @@ fn test_parse_date_errors() {
         "invalid input syntax for date: YEAR, MONTH, DAY are all required: \"2001\"",
     );
     run_test_parse_date_errors(
+        "2019-02-29",
+        "invalid input syntax for date: invalid or out-of-range date: \"2019-02-29\"",
+    );
+    run_test_parse_date_errors(
+        "2020-02-30",
+        "invalid input syntax for date: invalid or out-of-range date: \"2020-02-30\"",
+    );
+    run_test_parse_date_errors(
         "2001-13-01",
         "invalid input syntax for date: MONTH must be [1, 12], got 13: \"2001-13-01\"",
     );

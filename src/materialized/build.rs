@@ -7,14 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![cfg_attr(not(test), no_main)]
+use std::env;
+use std::error::Error;
 
-use libfuzzer_sys::fuzz_target;
-use tokio::runtime::Runtime;
-
-fuzz_target!(|data: &[u8]| {
-    if let Ok(string) = std::str::from_utf8(data) {
-        let mut runtime = Runtime::new().unwrap();
-        runtime.block_on(sqllogictest::fuzz::fuzz(string))
-    };
-});
+pub fn main() -> Result<(), Box<dyn Error>> {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rustc-env=TARGET_TRIPLE={}", env::var("TARGET")?);
+    Ok(())
+}

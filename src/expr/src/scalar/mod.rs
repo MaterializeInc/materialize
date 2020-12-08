@@ -193,6 +193,19 @@ impl ScalarExpr {
         });
     }
 
+    /// Rewrites column indices with their value in `permutation`.
+    ///
+    /// This method is applicable even when `permutation` is not a
+    /// strict permutation, and it only needs to have entries for
+    /// each column referenced in `self`.
+    pub fn permute_map(&mut self, permutation: &std::collections::HashMap<usize, usize>) {
+        self.visit_mut(&mut |e| {
+            if let ScalarExpr::Column(old_i) = e {
+                *old_i = permutation[old_i];
+            }
+        });
+    }
+
     pub fn support(&self) -> HashSet<usize> {
         let mut support = HashSet::new();
         self.visit(&mut |e| {
@@ -413,6 +426,10 @@ impl ScalarExpr {
                         exprs.truncate(i + 1);
                     }
 
+                    // Deduplicate arguments in cases like `coalesce(#0, #0)`.
+                    let mut prior_exprs = HashSet::new();
+                    exprs.retain(|e| prior_exprs.insert(e.clone()));
+
                     if let Some(expr) = exprs.iter_mut().find(|e| e.is_literal_err()) {
                         // One of the remaining arguments is an error, so
                         // just replace the entire coalesce with that error.
@@ -572,6 +589,7 @@ impl ScalarExpr {
 pub enum EvalError {
     DivisionByZero,
     NumericFieldOverflow,
+    FloatOutOfRange,
     IntegerOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
@@ -581,6 +599,7 @@ pub enum EvalError {
     },
     InvalidArray(InvalidArrayError),
     InvalidEncodingName(String),
+    InvalidHashAlgorithm(String),
     InvalidByteSequence {
         byte_sequence: String,
         encoding_name: String,
@@ -601,6 +620,7 @@ impl fmt::Display for EvalError {
         match self {
             EvalError::DivisionByZero => f.write_str("division by zero"),
             EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
+            EvalError::FloatOutOfRange => f.write_str("float out of range"),
             EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
@@ -611,6 +631,7 @@ impl fmt::Display for EvalError {
             ),
             EvalError::InvalidArray(e) => e.fmt(f),
             EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
+            EvalError::InvalidHashAlgorithm(alg) => write!(f, "invalid hash algorithm '{}'", alg),
             EvalError::InvalidByteSequence {
                 byte_sequence,
                 encoding_name,

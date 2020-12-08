@@ -15,6 +15,7 @@ use std::fmt;
 use std::io::Read;
 use std::{cell::RefCell, iter, rc::Rc};
 
+use anyhow::Context;
 use anyhow::{anyhow, bail};
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::format::{DelayedFormat, StrftimeItems};
@@ -36,14 +37,15 @@ use mz_avro::{
     error::{DecodeError, Error as AvroError},
     give_value,
     types::{DecimalValue, Scalar, Value},
-    AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, GeneralDeserializer,
-    StatefulAvroDecodeable, TrivialDecoder, ValueDecoder, ValueOrReader,
+    AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess, AvroRead, AvroRecordAccess,
+    GeneralDeserializer, StatefulAvroDecodeable, TrivialDecoder, ValueDecoder, ValueOrReader,
 };
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
 
 use ordered_float::OrderedFloat;
+use smallvec::alloc::collections::BTreeMap;
 use smallvec::SmallVec;
 
 lazy_static! {
@@ -798,7 +800,31 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         *self.buf = str_buf;
         Ok(())
     }
-    define_unexpected! {map}
+    #[inline]
+    fn map<A: AvroMapAccess>(self, a: &mut A) -> Result<Self::Out, AvroError> {
+        // Map (key, value) pairs need to be unique and ordered.
+        let mut map = BTreeMap::new();
+        while let Some((name, f)) = a.next_entry()? {
+            map.insert(name, f.decode_field(ValueDecoder)?);
+        }
+        self.packer
+            .push_dict_with(|packer| -> Result<(), AvroError> {
+                for (key, val) in map {
+                    packer.push(Datum::String(key.as_str()));
+                    give_value(
+                        AvroFlatDecoder {
+                            packer,
+                            buf: &mut vec![],
+                            is_top: false,
+                        },
+                        &val,
+                    )?;
+                }
+                Ok(())
+            })?;
+
+        Ok(())
+    }
 }
 
 /// Converts an Apache Avro schema into a list of column names and types.
@@ -1051,6 +1077,9 @@ fn validate_schema_2(
             }
             ret
         }
+        SchemaPiece::Map(inner) => ScalarType::Map {
+            value_type: Box::new(validate_schema_2(seen_avro_nodes, schema.step(inner))?),
+        },
 
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
     })
@@ -1929,7 +1958,10 @@ impl ConfluentAvroResolver {
         }
 
         let resolved_schema = match &mut self.writer_schemas {
-            Some(cache) => cache.get(schema_id, &self.reader_schema).await?,
+            Some(cache) => cache
+                .get(schema_id, &self.reader_schema)
+                .await
+                .with_context(|| format!("Failed to fetch schema with ID {}", schema_id))?,
             // If we haven't been asked to use a schema registry, we have no way
             // to discover the writer's schema. That's ok; we'll just use the
             // reader's schema and hope it lines up.

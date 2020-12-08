@@ -11,6 +11,7 @@ use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use enum_kinds::EnumKind;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -630,7 +631,8 @@ impl fmt::Display for Datum<'_> {
 ///
 /// There is a direct correspondence between `Datum` variants and `ScalarType`
 /// variants.
-#[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd, EnumKind)]
+#[enum_kind(ScalarBaseType, derive(Hash))]
 pub enum ScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,
@@ -770,19 +772,6 @@ impl<'a> ScalarType {
         match self {
             ScalarType::Map { value_type } => &**value_type,
             _ => panic!("ScalarType::unwrap_map_value_type called on {:?}", self),
-        }
-    }
-
-    /// Returns a copy of `Self` with any embedded fields "zeroed" out. Meant to
-    /// make comparisons easier, allowing you to mimic `std::mem::discriminant`
-    /// equality.
-    pub fn desaturate(&self) -> ScalarType {
-        match self {
-            ScalarType::Array(..) => ScalarType::Array(Box::new(ScalarType::String)),
-            ScalarType::Decimal(..) => ScalarType::Decimal(0, 0),
-            ScalarType::List(..) => ScalarType::List(Box::new(ScalarType::String)),
-            ScalarType::Record { .. } => ScalarType::Record { fields: vec![] },
-            _ => self.clone(),
         }
     }
 

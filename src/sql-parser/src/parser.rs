@@ -213,6 +213,9 @@ impl<'a> Parser<'a> {
                 Token::Keyword(ROLLBACK) => Ok(self.parse_rollback()?),
                 Token::Keyword(TAIL) => Ok(self.parse_tail()?),
                 Token::Keyword(EXPLAIN) => Ok(self.parse_explain()?),
+                Token::Keyword(DECLARE) => Ok(self.parse_declare()?),
+                Token::Keyword(FETCH) => Ok(self.parse_fetch()?),
+                Token::Keyword(CLOSE) => Ok(self.parse_close()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -288,7 +291,7 @@ impl<'a> Parser<'a> {
         // "date".
         maybe!(self.maybe_parse(|parser| {
             match parser.parse_data_type()? {
-                DataType::Interval => parser.parse_literal_interval(),
+                DataType::Other(n) if n.as_str() == "interval" => parser.parse_literal_interval(),
                 data_type => Ok(Expr::Cast {
                     expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
                     data_type,
@@ -336,29 +339,8 @@ impl<'a> Parser<'a> {
             }
             Token::Parameter(n) => Ok(Expr::Parameter(n)),
             Token::LParen => {
-                let mut expr = self.parse_parenthesized_expr()?;
+                let expr = self.parse_parenthesized_expr()?;
                 self.expect_token(&Token::RParen)?;
-                while self.consume_token(&Token::Dot) {
-                    match self.next_token() {
-                        Some(Token::Ident(id)) => {
-                            expr = Expr::FieldAccess {
-                                expr: Box::new(expr),
-                                field: Ident::new(id),
-                            };
-                        }
-                        Some(Token::Star) => {
-                            expr = Expr::WildcardAccess(Box::new(expr));
-                            break;
-                        }
-                        unexpected => {
-                            return self.expected(
-                                self.peek_prev_pos(),
-                                "an identifier or a '*' after '.'",
-                                unexpected,
-                            );
-                        }
-                    }
-                }
                 Ok(expr)
             }
             unexpected => self.expected(self.peek_prev_pos(), "an expression", Some(unexpected)),
@@ -920,6 +902,19 @@ impl<'a> Parser<'a> {
             self.parse_pg_cast(expr)
         } else if Token::LBracket == tok {
             self.parse_subscript(expr)
+        } else if Token::Dot == tok {
+            match self.next_token() {
+                Some(Token::Ident(id)) => Ok(Expr::FieldAccess {
+                    expr: Box::new(expr),
+                    field: Ident::new(id),
+                }),
+                Some(Token::Star) => Ok(Expr::WildcardAccess(Box::new(expr))),
+                unexpected => self.expected(
+                    self.peek_prev_pos(),
+                    "an identifier or a '*' after '.'",
+                    unexpected,
+                ),
+            }
         } else {
             // Can only happen if `get_next_precedence` got out of sync with this function
             panic!("No infix parser for token {:?}", tok)
@@ -1057,7 +1052,7 @@ impl<'a> Parser<'a> {
                 Token::Eq => Precedence::Cmp,
                 Token::Star => Precedence::Times,
                 Token::DoubleColon => Precedence::DoubleColon,
-                Token::LBracket => Precedence::Subscript,
+                Token::LBracket | Token::Dot => Precedence::Subscript,
                 _ => Precedence::Zero,
             }
         } else {
@@ -1668,11 +1663,17 @@ impl<'a> Parser<'a> {
     fn parse_create_type(&mut self) -> Result<Statement, ParserError> {
         let name = self.parse_object_name()?;
         self.expect_keyword(AS)?;
-        self.expect_keyword(MAP)?;
+        let as_type = match self.expect_one_of_keywords(&[LIST, MAP])? {
+            LIST => CreateTypeAs::List,
+            MAP => CreateTypeAs::Map,
+            _ => unreachable!(),
+        };
+        let with_options = self.parse_options()?;
 
-        Ok(Statement::CreateMapType(CreateMapTypeStatement {
+        Ok(Statement::CreateType(CreateTypeStatement {
             name,
-            with_options: self.parse_options()?,
+            as_type,
+            with_options,
         }))
     }
 
@@ -2194,21 +2195,10 @@ impl<'a> Parser<'a> {
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
     fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
+        let other = |n: &str| -> DataType { DataType::Other(Ident::new(n)) };
         let mut data_type = match self.next_token() {
             Some(Token::Keyword(kw)) => match kw {
-                BOOL | BOOLEAN => DataType::Boolean,
-                FLOAT | FLOAT4 => DataType::Float(self.parse_optional_precision()?),
-                REAL => DataType::Real,
-                DOUBLE => {
-                    let _ = self.parse_keyword(PRECISION);
-                    DataType::Double
-                }
-                FLOAT8 => DataType::Double,
-                SMALLINT => DataType::SmallInt,
-                INT | INTEGER | INT4 => DataType::Int,
-                INT8 | BIGINT => DataType::BigInt,
-                OID => DataType::Oid,
-                VARCHAR => DataType::Varchar(self.parse_optional_precision()?),
+                // Text-like types
                 CHAR | CHARACTER => {
                     if self.parse_keyword(VARYING) {
                         DataType::Varchar(self.parse_optional_precision()?)
@@ -2216,50 +2206,52 @@ impl<'a> Parser<'a> {
                         DataType::Char(self.parse_optional_precision()?)
                     }
                 }
-                UUID => DataType::Uuid,
-                DATE => DataType::Date,
-                TIMESTAMP => {
-                    if self.parse_keyword(WITH) {
-                        self.expect_keywords(&[TIME, ZONE])?;
-                        DataType::TimestampTz
-                    } else {
-                        if self.parse_keyword(WITHOUT) {
-                            self.expect_keywords(&[TIME, ZONE])?;
-                        }
-                        DataType::Timestamp
-                    }
-                }
-                TIMESTAMPTZ => DataType::TimestampTz,
-                TIME => {
-                    if self.parse_keyword(WITH) {
-                        self.expect_keywords(&[TIME, ZONE])?;
-                        DataType::TimeTz
-                    } else {
-                        if self.parse_keyword(WITHOUT) {
-                            self.expect_keywords(&[TIME, ZONE])?;
-                        }
-                        DataType::Time
-                    }
-                }
-                INTERVAL => DataType::Interval,
-                REGCLASS => DataType::Regclass,
-                TEXT | STRING => DataType::Text,
-                BYTEA | BYTES => DataType::Bytea,
-                NUMERIC | DECIMAL | DEC => {
+                VARCHAR => DataType::Varchar(self.parse_optional_precision()?),
+
+                // Number-like types
+                DEC | DECIMAL | NUMERIC => {
                     let (precision, scale) = self.parse_optional_precision_scale()?;
                     DataType::Decimal(precision, scale)
                 }
-                JSON | JSONB => DataType::Jsonb,
+                DOUBLE => {
+                    let _ = self.parse_keyword(PRECISION);
+                    other("float8")
+                }
+                FLOAT => DataType::Float(self.parse_optional_precision()?),
+
+                // Time-like types
+                TIME => {
+                    if self.parse_keyword(WITH) {
+                        self.expect_keywords(&[TIME, ZONE])?;
+                        other("timetz")
+                    } else {
+                        if self.parse_keyword(WITHOUT) {
+                            self.expect_keywords(&[TIME, ZONE])?;
+                        }
+                        other("time")
+                    }
+                }
+                TIMESTAMP => {
+                    if self.parse_keyword(WITH) {
+                        self.expect_keywords(&[TIME, ZONE])?;
+                        other("timestamptz")
+                    } else {
+                        if self.parse_keyword(WITHOUT) {
+                            self.expect_keywords(&[TIME, ZONE])?;
+                        }
+                        other("timestamp")
+                    }
+                }
+                TIMESTAMPTZ => other("timestamptz"),
+
+                // MZ "proprietary" types
                 MAP => DataType::Map {
                     value_type: Box::new(self.parse_map()?),
                 },
-                _ => self.expected(
-                    self.peek_prev_pos(),
-                    "a known data type",
-                    Some(Token::Keyword(kw)),
-                )?,
+
+                kw => DataType::Other(kw.into_ident()),
             },
-            Some(Token::Ident(id)) => DataType::Custom(id),
+            Some(Token::Ident(id)) => other(&id),
             other => self.expected(self.peek_prev_pos(), "a data type name", other)?,
         };
         loop {
@@ -2458,7 +2450,7 @@ impl<'a> Parser<'a> {
 
     fn parse_map(&mut self) -> Result<DataType, ParserError> {
         self.expect_token(&Token::LBracket)?;
-        if self.parse_data_type()? != DataType::Text {
+        if self.parse_data_type()? != DataType::Other(Ident::new("text")) {
             self.prev_token();
             return self.expected(self.peek_prev_pos(), "TEXT", self.peek_token());
         }
@@ -3377,6 +3369,38 @@ impl<'a> Parser<'a> {
             explainee,
             options,
         }))
+    }
+
+    /// Parse a `DECLARE` statement, assuming that the `DECLARE` token
+    /// has already been consumed.
+    fn parse_declare(&mut self) -> Result<Statement, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_keyword(CURSOR)?;
+        // WITHOUT HOLD is optional and the default behavior so we can ignore it.
+        let _ = self.parse_keywords(&[WITHOUT, HOLD]);
+        self.expect_keyword(FOR)?;
+        let stmt = self.parse_statement()?;
+        Ok(Statement::Declare(DeclareStatement {
+            name,
+            stmt: Box::new(stmt),
+        }))
+    }
+
+    /// Parse a `CLOSE` statement, assuming that the `CLOSE` token
+    /// has already been consumed.
+    fn parse_close(&mut self) -> Result<Statement, ParserError> {
+        let name = self.parse_identifier()?;
+        Ok(Statement::Close(CloseStatement { name }))
+    }
+
+    /// Parse a `FETCH` statement, assuming that the `FETCH` token
+    /// has already been consumed.
+    fn parse_fetch(&mut self) -> Result<Statement, ParserError> {
+        let _ = self.parse_keyword(FORWARD);
+        let count = self.maybe_parse(Parser::parse_literal_uint);
+        let _ = self.parse_keyword(FROM);
+        let name = self.parse_identifier()?;
+        Ok(Statement::Fetch(FetchStatement { name, count }))
     }
 
     /// Checks whether it is safe to descend another layer of nesting in the

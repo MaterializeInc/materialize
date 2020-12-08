@@ -55,7 +55,7 @@ pub use self::expr::RelationExpr;
 pub use error::PlanError;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
 pub use query::scalar_type_from_sql;
-pub use statement::{StatementContext, StatementDesc};
+pub use statement::{describe_statement, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
@@ -211,6 +211,9 @@ pub struct Type {
 
 #[derive(Clone, Debug)]
 pub enum TypeInner {
+    List {
+        element_id: GlobalId,
+    },
     Map {
         key_id: GlobalId,
         value_id: GlobalId,

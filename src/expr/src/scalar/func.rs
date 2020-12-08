@@ -17,9 +17,12 @@ use std::str;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
+use hmac::{Hmac, Mac, NewMac};
 use itertools::Itertools;
+use md5::{Digest, Md5};
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
+use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
@@ -197,6 +200,12 @@ fn cast_int64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
     Datum::String(temp_storage.push_string(buf))
 }
 
+fn cast_float32_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
+    // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
+    // i32 (https://github.com/rust-lang/rust/issues/10184).
+    Datum::from(a.unwrap_float32().round() as i32)
+}
+
 fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
@@ -242,6 +251,15 @@ fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float64().round() as i64)
+}
+
+fn cast_float64_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let f = a.unwrap_float64();
+    if f > f32::MAX as f64 || f < f32::MIN as f64 {
+        Err(EvalError::FloatOutOfRange)
+    } else {
+        Ok(Datum::from(f as f32))
+    }
 }
 
 fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1919,6 +1937,8 @@ pub enum BinaryFunc {
     ListListConcat,
     ListElementConcat,
     ElementListConcat,
+    DigestString,
+    DigestBytes,
 }
 
 impl BinaryFunc {
@@ -2045,6 +2065,8 @@ impl BinaryFunc {
             BinaryFunc::ListListConcat => Ok(eager!(list_list_concat, temp_storage)),
             BinaryFunc::ListElementConcat => Ok(eager!(list_element_concat, temp_storage)),
             BinaryFunc::ElementListConcat => Ok(eager!(element_list_concat, temp_storage)),
+            BinaryFunc::DigestString => eager!(digest_string, temp_storage),
+            BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
         }
     }
 
@@ -2200,6 +2222,7 @@ impl BinaryFunc {
             ListLengthMax { .. } | ArrayLower | ArrayUpper => ScalarType::Int64.nullable(true),
             ListListConcat | ListElementConcat => input1_type.scalar_type.nullable(true),
             ElementListConcat => input2_type.scalar_type.nullable(true),
+            DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
         }
     }
 
@@ -2364,7 +2387,9 @@ impl BinaryFunc {
             | TrimLeading
             | TrimTrailing
             | EncodedBytesCharLength
-            | ListLengthMax { .. } => false,
+            | ListLengthMax { .. }
+            | DigestString
+            | DigestBytes => false,
         }
     }
 }
@@ -2462,6 +2487,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListListConcat => f.write_str("||"),
             BinaryFunc::ListElementConcat => f.write_str("||"),
             BinaryFunc::ElementListConcat => f.write_str("||"),
+            BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
         }
     }
 }
@@ -2505,11 +2531,13 @@ pub enum UnaryFunc {
     CastInt64ToFloat32,
     CastInt64ToFloat64,
     CastInt64ToString,
+    CastFloat32ToInt32,
     CastFloat32ToInt64,
     CastFloat32ToFloat64,
     CastFloat32ToString,
     CastFloat64ToInt32,
     CastFloat64ToInt64,
+    CastFloat64ToFloat32,
     CastFloat64ToString,
     CastDecimalToInt32(u8),
     CastDecimalToInt64(u8),
@@ -2577,6 +2605,9 @@ pub enum UnaryFunc {
         return_ty: ScalarType,
         // The expression to cast List1's elements to List2's elements' type
         cast_expr: Box<ScalarExpr>,
+    },
+    CastMapToString {
+        ty: ScalarType,
     },
     CeilFloat32,
     CeilFloat64,
@@ -2655,11 +2686,13 @@ impl UnaryFunc {
             UnaryFunc::CastInt64ToFloat32 => Ok(cast_int64_to_float32(a)),
             UnaryFunc::CastInt64ToFloat64 => Ok(cast_int64_to_float64(a)),
             UnaryFunc::CastInt64ToString => Ok(cast_int64_to_string(a, temp_storage)),
+            UnaryFunc::CastFloat32ToInt32 => Ok(cast_float32_to_int32(a)),
             UnaryFunc::CastFloat32ToInt64 => Ok(cast_float32_to_int64(a)),
             UnaryFunc::CastFloat32ToFloat64 => Ok(cast_float32_to_float64(a)),
             UnaryFunc::CastFloat32ToString => Ok(cast_float32_to_string(a, temp_storage)),
             UnaryFunc::CastFloat64ToInt32 => Ok(cast_float64_to_int32(a)),
             UnaryFunc::CastFloat64ToInt64 => Ok(cast_float64_to_int64(a)),
+            UnaryFunc::CastFloat64ToFloat32 => cast_float64_to_float32(a),
             UnaryFunc::CastFloat64ToString => Ok(cast_float64_to_string(a, temp_storage)),
             UnaryFunc::CastDecimalToInt32(scale) => Ok(cast_decimal_to_int32(a, *scale)),
             UnaryFunc::CastDecimalToInt64(scale) => Ok(cast_decimal_to_int64(a, *scale)),
@@ -2711,7 +2744,8 @@ impl UnaryFunc {
             UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
             UnaryFunc::CastRecordToString { ty }
             | UnaryFunc::CastArrayToString { ty }
-            | UnaryFunc::CastListToString { ty } => {
+            | UnaryFunc::CastListToString { ty }
+            | UnaryFunc::CastMapToString { ty } => {
                 Ok(cast_collection_to_string(a, ty, temp_storage))
             }
             UnaryFunc::CastList1ToList2 { cast_expr, .. } => {
@@ -2808,13 +2842,15 @@ impl UnaryFunc {
             | CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
+            | CastMapToString { .. }
             | TrimWhitespace
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace => ScalarType::String.nullable(in_nullable),
 
-            CastInt32ToFloat32 | CastInt64ToFloat32 | CastSignificandToFloat32 => {
-                ScalarType::Float32.nullable(in_nullable)
-            }
+            CastFloat64ToFloat32
+            | CastInt32ToFloat32
+            | CastInt64ToFloat32
+            | CastSignificandToFloat32 => ScalarType::Float32.nullable(in_nullable),
 
             CastInt32ToFloat64
             | CastInt64ToFloat64
@@ -2823,7 +2859,7 @@ impl UnaryFunc {
 
             CastInt64ToInt32 | CastDecimalToInt32(_) => ScalarType::Int32.nullable(in_nullable),
 
-            CastFloat64ToInt32 => ScalarType::Int32.nullable(true),
+            CastFloat32ToInt32 | CastFloat64ToInt32 => ScalarType::Int32.nullable(true),
 
             CastInt32ToInt64 | CastDecimalToInt64(_) | CastFloat32ToInt64 | CastFloat64ToInt64 => {
                 ScalarType::Int64.nullable(in_nullable)
@@ -2977,8 +3013,10 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastFloat32ToInt64 => f.write_str("f32toi64"),
             UnaryFunc::CastFloat32ToFloat64 => f.write_str("f32tof64"),
             UnaryFunc::CastFloat32ToString => f.write_str("f32tostr"),
+            UnaryFunc::CastFloat32ToInt32 => f.write_str("f32toi32"),
             UnaryFunc::CastFloat64ToInt32 => f.write_str("f64toi32"),
             UnaryFunc::CastFloat64ToInt64 => f.write_str("f64toi64"),
+            UnaryFunc::CastFloat64ToFloat32 => f.write_str("f64tof32"),
             UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
             UnaryFunc::CastDecimalToInt32(_) => f.write_str("dectoi32"),
             UnaryFunc::CastDecimalToInt64(_) => f.write_str("dectoi64"),
@@ -3024,6 +3062,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastArrayToString { .. } => f.write_str("arraytostr"),
             UnaryFunc::CastListToString { .. } => f.write_str("listtostr"),
             UnaryFunc::CastList1ToList2 { .. } => f.write_str("list1tolist2"),
+            UnaryFunc::CastMapToString { .. } => f.write_str("maptostr"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
@@ -3282,6 +3321,64 @@ pub fn build_regex(needle: &str, flags: &str) -> Result<regex::Regex, EvalError>
         }
     }
     Ok(regex.build()?)
+}
+
+pub fn hmac_string<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let to_digest = datums[0].unwrap_str().as_bytes();
+    hmac_inner(to_digest, datums, temp_storage)
+}
+
+pub fn hmac_bytes<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let to_digest = datums[0].unwrap_bytes();
+    hmac_inner(to_digest, datums, temp_storage)
+}
+
+pub fn hmac_inner<'a>(
+    to_digest: &[u8],
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let key = datums[1].unwrap_str().as_bytes();
+    let bytes = match datums[2].unwrap_str() {
+        "md5" => {
+            type HmacMd5 = Hmac<Md5>;
+            let mut mac = HmacMd5::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
+        "sha224" => {
+            type HmacSha224 = Hmac<Sha224>;
+            let mut mac = HmacSha224::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
+        "sha256" => {
+            type HmacSha256 = Hmac<Sha256>;
+            let mut mac = HmacSha256::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
+        "sha384" => {
+            type HmacSha384 = Hmac<Sha384>;
+            let mut mac = HmacSha384::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
+        "sha512" => {
+            type HmacSha512 = Hmac<Sha512>;
+            let mut mac = HmacSha512::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
+        other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
+    };
+    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
@@ -3740,6 +3837,40 @@ fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     })
 }
 
+fn digest_string<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let to_digest = a.unwrap_str().as_bytes();
+    digest_inner(to_digest, b, temp_storage)
+}
+
+fn digest_bytes<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let to_digest = a.unwrap_bytes();
+    digest_inner(to_digest, b, temp_storage)
+}
+
+fn digest_inner<'a>(
+    bytes: &[u8],
+    digest_fn: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let bytes = match digest_fn.unwrap_str() {
+        "md5" => Md5::digest(bytes).to_vec(),
+        "sha224" => Sha224::digest(bytes).to_vec(),
+        "sha256" => Sha256::digest(bytes).to_vec(),
+        "sha384" => Sha384::digest(bytes).to_vec(),
+        "sha512" => Sha512::digest(bytes).to_vec(),
+        other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
+    };
+    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
@@ -3767,6 +3898,8 @@ pub enum VariadicFunc {
     ListSlice,
     SplitPart,
     RegexpMatch,
+    HmacString,
+    HmacBytes,
 }
 
 impl VariadicFunc {
@@ -3810,6 +3943,8 @@ impl VariadicFunc {
             VariadicFunc::ListSlice => Ok(eager!(list_slice, temp_storage)),
             VariadicFunc::SplitPart => eager!(split_part),
             VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
+            VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
+            VariadicFunc::HmacBytes => eager!(hmac_bytes, temp_storage),
         }
     }
 
@@ -3862,6 +3997,7 @@ impl VariadicFunc {
             .nullable(true),
             SplitPart => ScalarType::String.nullable(true),
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+            HmacString | HmacBytes => ScalarType::Bytes.nullable(true),
         }
     }
 
@@ -3896,6 +4032,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ListSlice => f.write_str("list_slice"),
             VariadicFunc::SplitPart => f.write_str("split_string"),
             VariadicFunc::RegexpMatch => f.write_str("regexp_match"),
+            VariadicFunc::HmacString | VariadicFunc::HmacBytes => f.write_str("hmac"),
         }
     }
 }

@@ -219,6 +219,16 @@ steps:
           config: test/lang/java/mzcompose.yml
           run: java-smoketest
 
+  - id: lang-python
+    label: ":python: tests"
+    depends_on: build
+    timeout_in_minutes: 10
+    inputs: [test/lang/python]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/lang/python/mzcompose.yml
+          run: python
+
   - id: deploy
     label: ":rocket: Deploy"
     depends_on:

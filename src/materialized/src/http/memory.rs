@@ -14,6 +14,7 @@ use futures::future;
 use hyper::{Body, Request, Response};
 
 use crate::http::{util, Server};
+use crate::BUILD_INFO;
 
 #[derive(Template)]
 #[template(path = "http/templates/memory.html")]
@@ -27,7 +28,7 @@ impl Server {
         _: Request<Body>,
     ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
         future::ok(util::template_response(MemoryTemplate {
-            version: crate::VERSION,
+            version: BUILD_INFO.version,
         }))
     }
 }

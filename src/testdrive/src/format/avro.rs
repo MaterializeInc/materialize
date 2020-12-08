@@ -17,6 +17,7 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
 
@@ -137,6 +138,24 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
                 builder.put(key, val);
             }
             Ok(builder.avro())
+        }
+        (JsonValue::Object(items), SchemaPiece::Map(m)) => {
+            let mut map = HashMap::new();
+            for (k, v) in items {
+                let (inner, name) = m.get_piece_and_name(schema.root);
+                map.insert(
+                    k.to_owned(),
+                    from_json(
+                        v,
+                        SchemaNode {
+                            root: schema.root,
+                            inner,
+                            name,
+                        },
+                    )?,
+                );
+            }
+            Ok(Value::Map(map))
         }
         (val, SchemaPiece::Union(us)) => {
             let variants = us.variants();
