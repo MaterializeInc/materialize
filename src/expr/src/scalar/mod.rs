@@ -607,12 +607,16 @@ pub enum EvalError {
     InvalidRegex(String),
     InvalidRegexFlag(char),
     InvalidParameterValue(String),
+    InvalidPgpPrivateKey,
+    InvalidPgpPublicKey,
     NegSqrt,
     UnknownUnits(String),
     UnsupportedDateTimeUnits(DateTimeUnits),
     UnterminatedLikeEscapeSequence,
     Parse(ParseError),
     Internal(String),
+    PgpDecryption(String),
+    PgpEncryption(String),
 }
 
 impl fmt::Display for EvalError {
@@ -644,6 +648,8 @@ impl fmt::Display for EvalError {
             EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
             EvalError::InvalidRegexFlag(c) => write!(f, "invalid regular expression flag: {}", c),
             EvalError::InvalidParameterValue(s) => f.write_str(s),
+            EvalError::InvalidPgpPrivateKey => f.write_str("invalid pgp private key"),
+            EvalError::InvalidPgpPublicKey => f.write_str("invalid pgp public key"),
             EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
             EvalError::UnsupportedDateTimeUnits(units) => {
                 write!(f, "unsupported timestamp units '{}'", units)
@@ -653,6 +659,8 @@ impl fmt::Display for EvalError {
             }
             EvalError::Parse(e) => e.fmt(f),
             EvalError::Internal(s) => write!(f, "internal error: {}", s),
+            EvalError::PgpDecryption(s) => write!(f, "pgp decryption error: {}", s),
+            EvalError::PgpEncryption(s) => write!(f, "pgp encryption error: {}", s),
         }
     }
 }
