@@ -1269,7 +1269,6 @@ def mzcompose_up(
     if args is None:
         args = []
     cmd = ["bin/mzcompose", "--mz-quiet", *args, "up", "-d"]
-    print("CWD:", os.getcwd())
     return spawn.runv(cmd + services, env=_merge_env(extra_env))
 
 
