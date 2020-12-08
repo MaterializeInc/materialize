@@ -33,8 +33,8 @@ use crate::render::context::Arrangement;
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 enum ReductionType {
     FusedAccumulable = 1,
-    FusedMinMax = 2,
-    Other = 3,
+    FusedHierarchical = 2,
+    Unfused = 3,
 }
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -245,7 +245,10 @@ where
                             *expected_group_size,
                         )
                         .as_collection(|key, val| {
-                            (key.clone(), (ReductionType::FusedMinMax, None, val.clone()))
+                            (
+                                key.clone(),
+                                (ReductionType::FusedHierarchical, None, val.clone()),
+                            )
                         });
                         to_collect.push(hierarchical_collection);
                     }
@@ -255,7 +258,7 @@ where
                         to_collect.push(collection.as_collection(move |key, val| {
                             (
                                 key.clone(),
-                                (ReductionType::Other, Some(index), val.clone()),
+                                (ReductionType::Unfused, Some(index), val.clone()),
                             )
                         }));
                     }
@@ -271,49 +274,41 @@ where
                                 // The inputs are triples of a reduction type, an optional index and row to decode.
                                 // The `reduce_abelian` operator guarantees that values will be placed in sorted order
                                 // by the values Ord implementation. This means that fused reductions
-                                // (ReductionType's FusedAccumulable and FusedMinMax) will be the first entries in inputs
+                                // (ReductionType's FusedAccumulable and FusedHierarchical) will be the first entries in inputs
                                 // if any such ReductionType's are present.
                                 // We need to reconstitute the final value by:
                                 // 1. Extracting out the fused aggregates
                                 // 2. For each aggregate we are computing, figure out if it is either a fused accumulable,
-                                //    fused min-max or unfused aggregate
+                                //    fused hierarchical or unfused aggregate
                                 // 3. Get the relevant value (either from the rows of fused aggregates, or from the input
                                 //    array for unfused aggregates)
                                 // 4. Stitch all the values together into one row.
 
                                 let new_row = Row::new(Vec::new());
+                                let mut accumulable = new_row.iter();
+                                let mut hierarchical = new_row.iter();
+                                let mut input_to_skip = None;
 
-                                // First, we are going to check to see if any of our inputs correspond to fused aggregates.
-                                // If so, we need to pull those out and treat them differently than unfused aggregates. The
-                                // code here assumes that fused accumulable aggregates will always be stored before fused
-                                // min-max aggregates, by virtue of the Ord implementation of ReductionType. If ReductionType
-                                // changes, this code will need to change as well.
-                                let mut accumulable = if (input[0].0).0 == ReductionType::FusedAccumulable {
-                                    // This input corresponds to our densely packed accumulable aggregates.
-                                    let iter = (input[0].0).2.iter();
-                                    // Once we've found fused accumulable aggregates, we need to be careful
-                                    // never to read from this entry in `input` again so that we don't reuse
-                                    // that row for something else.
-                                    input = &input[1..];
-                                    iter
-                                } else {
-                                    // If we don't have any fused accumulable aggregates we can use this empty
-                                    // iterator as a stand-in.
-                                    new_row.iter()
-                                };
+                                // Extract out the fused accumulable and hierarchical aggregates from our inputs if we have them. These
+                                // should all be sorted before any unfused aggregates, so that we can grab them efficiently and at the
+                                // extract the subsets of inputs that corresponds to only unfused aggregates.
+                                for i in 0..input.len() {
+                                    match (input[i].0).0 {
+                                        ReductionType::FusedAccumulable => {
+                                            accumulable = (input[i].0).2.iter();
+                                            input_to_skip = Some(i);
+                                        }
+                                        ReductionType::FusedHierarchical => {
+                                            hierarchical = (input[i].0).2.iter();
+                                            input_to_skip = Some(i);
+                                        }
+                                        ReductionType::Unfused => break,
+                                    }
+                               }
 
-                                // Do the same thing as above, but for min-maxes. Note that we are looking at the
-                                // first entry of inputs again and that's ok because if we had previously found fused
-                                // accumulable aggregates, we would have modified our input slice to skip that element.
-                                let mut hierarchical = if (input[0].0).0 == ReductionType::FusedMinMax {
-                                    // This input corresponds to our densely packed min/max aggregates.
-                                    let iter = (input[0].0).2.iter();
-                                    // Make sure we never try to read from this input again.
-                                    input = &input[1..];
-                                    iter
-                                } else {
-                                    new_row.iter()
-                                };
+                                if let Some(i) = input_to_skip {
+                                    input = &input[(i + 1)..];
+                                }
 
                                 // First, fill our output row with key information.
                                 row_packer.extend(key.iter());
@@ -423,9 +418,9 @@ where
     })
 }
 
-// Render a single reduction tree that computes a set of mins and max aggregations
-// hierarchically. Note that because we know all the aggregations are mins and maxes
-// we can also ignore the distinct bit here.
+// Render a single reduction tree that computes aggregations
+// hierarchically. If the input is monotonic, we further specialize and
+// render them as a fused series of monoids similar to the accumulable reductions.
 fn build_hierarchical<G>(
     collection: Collection<G, (Row, Row)>,
     aggrs: Vec<(usize, AggregateExpr)>,
@@ -460,6 +455,9 @@ where
     });
 
     if monotonic {
+        // We can place our rows directly into the diff field, and only keep the
+        // relevant one corresponding to evaluating our aggregate, instead of having
+        // to do a hierarchical reduction.
         use differential_dataflow::operators::consolidate::ConsolidateStream;
         use timely::dataflow::operators::Map;
 
@@ -555,7 +553,7 @@ where
     })
 }
 
-// Renders one stage of a fused reduction tree for a set of min / max aggregations.
+// Renders one stage of a fused reduction tree for a set of hierarchical aggregations.
 fn build_hierarchical_stage<G>(
     collection: Collection<G, ((Row, u64), Vec<Row>)>,
     aggrs: Vec<AggregateFunc>,
