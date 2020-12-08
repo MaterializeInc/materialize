@@ -194,14 +194,26 @@ pub struct Type {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TypeInner {
-    Base,
     Array {
+        element_id: GlobalId,
+    },
+    Base,
+    List {
         element_id: GlobalId,
     },
     Map {
         key_id: GlobalId,
         value_id: GlobalId,
     },
+}
+
+impl From<sql::plan::TypeInner> for TypeInner {
+    fn from(t: sql::plan::TypeInner) -> TypeInner {
+        match t {
+            sql::plan::TypeInner::List { element_id } => TypeInner::List { element_id },
+            sql::plan::TypeInner::Map { key_id, value_id } => TypeInner::Map { key_id, value_id },
+        }
+    }
 }
 
 impl CatalogItem {
@@ -238,8 +250,9 @@ impl CatalogItem {
             CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
             CatalogItem::Index(idx) => vec![idx.on],
             CatalogItem::Type(typ) => match &typ.inner {
-                TypeInner::Base { .. } => vec![],
                 TypeInner::Array { element_id } => vec![*element_id],
+                TypeInner::Base { .. } => vec![],
+                TypeInner::List { element_id } => vec![*element_id],
                 TypeInner::Map { key_id, value_id } => vec![*key_id, *value_id],
             },
         }
@@ -1496,11 +1509,7 @@ impl Catalog {
             Plan::CreateType { typ, .. } => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
                 plan_cx: pcx,
-                inner: match typ.inner {
-                    sql::plan::TypeInner::Map { key_id, value_id } => {
-                        TypeInner::Map { key_id, value_id }
-                    }
-                },
+                inner: typ.inner.into(),
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })
@@ -1820,6 +1829,10 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn id(&self) -> GlobalId {
         self.id()
+    }
+
+    fn oid(&self) -> u32 {
+        self.oid()
     }
 
     fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {

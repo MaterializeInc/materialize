@@ -12,7 +12,9 @@ chrono = "0.4"
 csv = "1.1"
 encoding = "0.2"
 enum-iterator = "0.6.0"
+hmac = "0.8.1"
 itertools = "0.9"
+md-5 = "0.9"
 num_enum = "0.5.1"
 ordered-float = { version = "2.0.0", features = ["serde"] }
 ore = { path = "../ore" }
@@ -22,4 +24,5 @@ regex-syntax = "0.6.18"
 repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.9.2"
 unicase = "2.6.0"

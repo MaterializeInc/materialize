@@ -41,7 +41,7 @@ by the Apache License, Version 2.0.
             <th>Plan failure</th>
             <th>Unexpected plan success</th>
             <th>Wrong number of rows affected</th>
-            <th>Inference failure</th>
+            <th>Wrong column count</th>
             <th>Wrong column names</th>
             <th>Output failure</th>
             <th>Bail</th>
@@ -73,7 +73,13 @@ by the Apache License, Version 2.0.
                         {{ r.wrong_number_of_rows_affected }}
                     {% endif %}
                 </td>
-                <td>{{ r.inference_failure }}</td>
+                <td>
+                    {% if r.wrong_column_count is none %}
+                        ?
+                    {% else %}
+                        {{ r.wrong_column_count }}
+                    {% endif %}
+                </td>
                 <td>
                     {% if r.wrong_column_names is none %}
                         ?
@@ -86,11 +92,11 @@ by the Apache License, Version 2.0.
                 <td>{{ r.success }}</td>
                 <td>
                     {{ r.unsupported +
-                       r.parse_failure +
+                       (r.parse_failure or 0) +
                        r.plan_failure +
                        (r.unexpected_plan_success or 0) +
                        (r.wrong_number_of_rows_affected or 0) +
-                       r.inference_failure +
+                       (r.wrong_column_count or 0) +
                        (r.wrong_column_names or 0) +
                        r.output_failure +
                        r.bail +
@@ -114,7 +120,7 @@ by the Apache License, Version 2.0.
                         "Unsupported",
                         "Parse failures",
                         "Plan failures",
-                        "Inference failures",
+                        "Wrong column count",
                         "Output failures",
                         "Bails",
                         "Successes",

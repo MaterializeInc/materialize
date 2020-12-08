@@ -162,7 +162,7 @@ impl<'a> Parser<'a> {
                     words
                         .next()
                         .ok_or_else(|| anyhow!("missing count of rows affected"))?
-                        .parse::<usize>()
+                        .parse::<u64>()
                         .map_err(|err| anyhow!("parsing count of rows affected: {}", err))?,
                 );
             }

@@ -28,6 +28,7 @@ use std::mem;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use itertools::Itertools;
+use ore::iter::IteratorExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
@@ -167,8 +168,6 @@ pub fn plan_insert_query(
             .map(|(idx, (name, typ))| (name, (idx, typ)))
             .collect();
 
-        let mut seen = HashSet::with_capacity(columns.len());
-
         for c in &columns {
             if let Some((idx, typ)) = column_by_name.get(c) {
                 ordering.push(*idx);
@@ -180,9 +179,9 @@ pub fn plan_insert_query(
                     table.name()
                 );
             }
-            if !seen.insert(c) {
-                bail!("column \"{}\" specified more than once", c.as_str());
-            }
+        }
+        if let Some(dup) = columns.iter().duplicates().next() {
+            bail!("column \"{}\" specified more than once", dup.as_str());
         }
     };
 

@@ -8,8 +8,11 @@ title: Demo
   style="height: 91vh; width: 100%">
 </div>
 <script>
+    const scenario = location.search.substring(1);
+    if (!scenario)
+        location.replace("./unknown-scenario");
     document
         .querySelector("#katacoda-embed")
-        .setAttribute("data-katacoda-id", "materialize/" + location.search.substring(1));
+        .setAttribute("data-katacoda-id", "materialize/" + scenario);
 </script>
 <script src="https://katacoda.com/embed.js"></script>

@@ -177,6 +177,10 @@ disabled_lints=(
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
     # Collapsing if statements can render code unreadable, and should not be mandated.
     clippy::collapsible-if
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#stable_sort_primitive
+    # Unstable sort is not strictly better than sort, notably on partially sorted inputs.
+    clippy::stable-sort-primitive
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word

@@ -13,8 +13,8 @@ use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    CreateIndexStatement, CreateMapTypeStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior,
+    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior,
     ObjectName, SqlOption, Statement, TableFactor, Value,
 };
 
@@ -257,7 +257,9 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             *if_not_exists = false;
         }
 
-        Statement::CreateMapType(CreateMapTypeStatement { name, with_options }) => {
+        Statement::CreateType(CreateTypeStatement {
+            name, with_options, ..
+        }) => {
             *name = allocate_name(name)?;
             for option in with_options {
                 match option {

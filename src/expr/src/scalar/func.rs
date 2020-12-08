@@ -17,9 +17,12 @@ use std::str;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
+use hmac::{Hmac, Mac, NewMac};
 use itertools::Itertools;
+use md5::{Digest, Md5};
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
+use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
@@ -1934,6 +1937,8 @@ pub enum BinaryFunc {
     ListListConcat,
     ListElementConcat,
     ElementListConcat,
+    DigestString,
+    DigestBytes,
 }
 
 impl BinaryFunc {
@@ -2060,6 +2065,8 @@ impl BinaryFunc {
             BinaryFunc::ListListConcat => Ok(eager!(list_list_concat, temp_storage)),
             BinaryFunc::ListElementConcat => Ok(eager!(list_element_concat, temp_storage)),
             BinaryFunc::ElementListConcat => Ok(eager!(element_list_concat, temp_storage)),
+            BinaryFunc::DigestString => eager!(digest_string, temp_storage),
+            BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
         }
     }
 
@@ -2215,6 +2222,7 @@ impl BinaryFunc {
             ListLengthMax { .. } | ArrayLower | ArrayUpper => ScalarType::Int64.nullable(true),
             ListListConcat | ListElementConcat => input1_type.scalar_type.nullable(true),
             ElementListConcat => input2_type.scalar_type.nullable(true),
+            DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
         }
     }
 
@@ -2379,7 +2387,9 @@ impl BinaryFunc {
             | TrimLeading
             | TrimTrailing
             | EncodedBytesCharLength
-            | ListLengthMax { .. } => false,
+            | ListLengthMax { .. }
+            | DigestString
+            | DigestBytes => false,
         }
     }
 }
@@ -2477,6 +2487,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListListConcat => f.write_str("||"),
             BinaryFunc::ListElementConcat => f.write_str("||"),
             BinaryFunc::ElementListConcat => f.write_str("||"),
+            BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
         }
     }
 }
@@ -3312,6 +3323,64 @@ pub fn build_regex(needle: &str, flags: &str) -> Result<regex::Regex, EvalError>
     Ok(regex.build()?)
 }
 
+pub fn hmac_string<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let to_digest = datums[0].unwrap_str().as_bytes();
+    hmac_inner(to_digest, datums, temp_storage)
+}
+
+pub fn hmac_bytes<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let to_digest = datums[0].unwrap_bytes();
+    hmac_inner(to_digest, datums, temp_storage)
+}
+
+pub fn hmac_inner<'a>(
+    to_digest: &[u8],
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let key = datums[1].unwrap_str().as_bytes();
+    let bytes = match datums[2].unwrap_str() {
+        "md5" => {
+            type HmacMd5 = Hmac<Md5>;
+            let mut mac = HmacMd5::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
+        "sha224" => {
+            type HmacSha224 = Hmac<Sha224>;
+            let mut mac = HmacSha224::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
+        "sha256" => {
+            type HmacSha256 = Hmac<Sha256>;
+            let mut mac = HmacSha256::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
+        "sha384" => {
+            type HmacSha384 = Hmac<Sha384>;
+            let mut mac = HmacSha384::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
+        "sha512" => {
+            type HmacSha512 = Hmac<Sha512>;
+            let mut mac = HmacSha512::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
+        other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
+    };
+    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+}
+
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(
         temp_storage.push_string(
@@ -3768,6 +3837,40 @@ fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     })
 }
 
+fn digest_string<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let to_digest = a.unwrap_str().as_bytes();
+    digest_inner(to_digest, b, temp_storage)
+}
+
+fn digest_bytes<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let to_digest = a.unwrap_bytes();
+    digest_inner(to_digest, b, temp_storage)
+}
+
+fn digest_inner<'a>(
+    bytes: &[u8],
+    digest_fn: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let bytes = match digest_fn.unwrap_str() {
+        "md5" => Md5::digest(bytes).to_vec(),
+        "sha224" => Sha224::digest(bytes).to_vec(),
+        "sha256" => Sha256::digest(bytes).to_vec(),
+        "sha384" => Sha384::digest(bytes).to_vec(),
+        "sha512" => Sha512::digest(bytes).to_vec(),
+        other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
+    };
+    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
@@ -3795,6 +3898,8 @@ pub enum VariadicFunc {
     ListSlice,
     SplitPart,
     RegexpMatch,
+    HmacString,
+    HmacBytes,
 }
 
 impl VariadicFunc {
@@ -3838,6 +3943,8 @@ impl VariadicFunc {
             VariadicFunc::ListSlice => Ok(eager!(list_slice, temp_storage)),
             VariadicFunc::SplitPart => eager!(split_part),
             VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
+            VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
+            VariadicFunc::HmacBytes => eager!(hmac_bytes, temp_storage),
         }
     }
 
@@ -3890,6 +3997,7 @@ impl VariadicFunc {
             .nullable(true),
             SplitPart => ScalarType::String.nullable(true),
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+            HmacString | HmacBytes => ScalarType::Bytes.nullable(true),
         }
     }
 
@@ -3924,6 +4032,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ListSlice => f.write_str("list_slice"),
             VariadicFunc::SplitPart => f.write_str("split_string"),
             VariadicFunc::RegexpMatch => f.write_str("regexp_match"),
+            VariadicFunc::HmacString | VariadicFunc::HmacBytes => f.write_str("hmac"),
         }
     }
 }

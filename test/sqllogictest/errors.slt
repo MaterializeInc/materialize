@@ -13,7 +13,7 @@
 query error VALUES expression in FROM clause must be surrounded by parentheses
 SELECT * FROM VALUES (1)
 
-query error VALUES expression in FROM clause must be surrounded by parentheses
+query error Expected identifier, found number
 SELECT * FROM VALUES (1), (2)
 
 query error function "noexist" does not exist

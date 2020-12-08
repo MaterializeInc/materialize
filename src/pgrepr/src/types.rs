@@ -13,6 +13,8 @@ use repr::ScalarType;
 /// The type of a [`Value`](crate::Value).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Type {
+    /// A variable-length multidimensional array of values.
+    Array(Box<Type>),
     /// A boolean value.
     Bool,
     /// A byte array, i.e., a variable-length binary string.
@@ -31,12 +33,17 @@ pub enum Type {
     Interval,
     /// A binary JSON blob.
     Jsonb,
-    /// A variable-length multidimensional array of values.
-    Array(Box<Type>),
     /// A sequence of homogeneous values.
     List(Box<Type>),
+    /// A map with text keys and homogeneous values.
+    Map {
+        /// Type of the homogenous values.
+        value_type: Box<Type>,
+    },
     /// An arbitrary precision number.
     Numeric,
+    /// An object identifier.
+    Oid,
     /// A sequence of heterogeneous values.
     Record(Vec<Type>),
     /// A variable-length string.
@@ -49,18 +56,12 @@ pub enum Type {
     TimestampTz,
     /// A universally unique identifier.
     Uuid,
-    /// An object identifier.
-    Oid,
-    /// A map with text keys and homogeneous values.
-    Map {
-        /// Type of the homogenous values.
-        value_type: Box<Type>,
-    },
 }
 
 lazy_static! {
+    /// An anonymous [`Type::List`].
     pub static ref LIST: postgres_types::Type = postgres_types::Type::new(
-        "LIST".to_owned(),
+        "list".to_owned(),
         // OID chosen to be the first OID not considered stable by
         // PostgreSQL. See the "OID Assignment" section of the PostgreSQL
         // documentation for details:
@@ -72,8 +73,9 @@ lazy_static! {
 }
 
 lazy_static! {
+    /// An anonymous [`Type::Map`].
     pub static ref MAP: postgres_types::Type = postgres_types::Type::new(
-        "MAP".to_owned(),
+        "map".to_owned(),
         // OID chosen to follow our "LIST" type.
         16_385,
         postgres_types::Kind::Pseudo,

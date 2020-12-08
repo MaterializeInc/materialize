@@ -1663,11 +1663,17 @@ impl<'a> Parser<'a> {
     fn parse_create_type(&mut self) -> Result<Statement, ParserError> {
         let name = self.parse_object_name()?;
         self.expect_keyword(AS)?;
-        self.expect_keyword(MAP)?;
+        let as_type = match self.expect_one_of_keywords(&[LIST, MAP])? {
+            LIST => CreateTypeAs::List,
+            MAP => CreateTypeAs::Map,
+            _ => unreachable!(),
+        };
+        let with_options = self.parse_options()?;
 
-        Ok(Statement::CreateMapType(CreateMapTypeStatement {
+        Ok(Statement::CreateType(CreateTypeStatement {
             name,
-            with_options: self.parse_options()?,
+            as_type,
+            with_options,
         }))
     }
 
