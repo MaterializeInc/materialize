@@ -22,7 +22,7 @@ use timely::dataflow::Scope;
 use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, RelationExpr};
 use ore::vec::repurpose_allocation;
-use repr::{Datum, Row, RowArena, RowPacker};
+use repr::{Datum, DatumList, Row, RowArena, RowPacker};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
@@ -284,9 +284,8 @@ where
                                 //    array for unfused aggregates)
                                 // 4. Stitch all the values together into one row.
 
-                                let new_row = Row::new(Vec::new());
-                                let mut accumulable = new_row.iter();
-                                let mut hierarchical = new_row.iter();
+                                let mut accumulable = DatumList::empty().iter();
+                                let mut hierarchical = DatumList::empty().iter();
                                 let mut input_to_skip = None;
 
                                 // Extract out the fused accumulable and hierarchical aggregates from our inputs if we have them. These
@@ -306,6 +305,8 @@ where
                                     }
                                }
 
+                                // Restrict ourselves to the suffix of inputs we have not
+                                // already extracted for accumulable or hierarchical inputs.
                                 if let Some(i) = input_to_skip {
                                     input = &input[(i + 1)..];
                                 }
@@ -421,6 +422,10 @@ where
 // Render a single reduction tree that computes aggregations
 // hierarchically. If the input is monotonic, we further specialize and
 // render them as a fused series of monoids similar to the accumulable reductions.
+// Note that we ignore the distinct bit, because currently all hierarchical
+// aggregates are min / max which efficiently suppress updates for non-distinct
+// items. If we add more hierarchical aggregates we will have to revise this
+// implementation.
 fn build_hierarchical<G>(
     collection: Collection<G, (Row, Row)>,
     aggrs: Vec<(usize, AggregateExpr)>,
@@ -505,6 +510,14 @@ where
     let mut shifts = vec![];
     let mut current = 4u64;
 
+    // We'll plan for an expected 4B records / key in the absense of hints.
+    // Note that here we will render what is essentially a 16-ary heap. At each reduce "layer",
+    // the reduce operator will take up to 16 inputs, and produce one output. We use the `expected_group_size` hint
+    // to figure out how deep we need to make this heap, but the renderer currently locks in the choice of arity.
+    // Making the heap wider (higher-arity) reduces the total number of layers we need, which shrinks the
+    // memory usage. However, that increases the worst and average case latencies to update results given new inputs.
+    // TODO(rkhaitan): move this decision making logic (choosing the overall depth and width of the reduction tree) to
+    // the optimizer.
     let limit = expected_group_size.unwrap_or(4_000_000_000);
 
     while (1 << current) < limit {
@@ -585,7 +598,9 @@ where
                     }
                     // We only want to arrange the parts of the input that are not part of the output.
                     // More specifically, we want to arrange it so that `input.concat(&output.negate())`
-                    // gives us the intended value of this aggregate function.
+                    // gives us the intended value of this aggregate function. Also we assume that regardless
+                    // of the multiplicity of the final result in the input, we only want to have one copy
+                    // in the output.
 
                     target.push((output, -1));
                     target.extend(source.iter().map(|(values, cnt)| ((*values).clone(), *cnt)));
@@ -752,8 +767,6 @@ where
                     // For most aggregations, the first aggregate is the "data" and the second is the number
                     // of non-null elements (so that we can determine if we should produce 0 or a Null).
                     // For Any and All, the two aggregates are the numbers of true and false records, resp.
-                    // let agg1 = accum.element2.element1;
-                    // let agg2 = accum.element2.element2;
                     let tot = accum[3 * index];
                     let agg1 = accum[3 * index + 1];
                     let agg2 = accum[3 * index + 2];
@@ -817,7 +830,8 @@ where
 ///
 /// At present, there is a dichotomy, but this is set up to complain if new aggregations
 /// are added that perhaps violate these requirement. For example, a "median" aggregation
-/// could be neither accumulable nor hierarchical.
+/// could be neither accumulable nor hierarchical. Note that we can't have functions that are
+/// both hierarchical and accumulable.
 ///
 /// Accumulable aggregations will be packed into differential dataflow's "difference" field,
 /// which can be accumulated in-place using the addition operation on the type. Aggregations
@@ -828,7 +842,9 @@ where
 /// Hierarchical aggregations will be subjected to repeated aggregation on initially small but
 /// increasingly large subsets of each key. This has the intended property that no invocation
 /// is on a significantly large set of values (and so, no incremental update needs to reform
-/// significant input data).
+/// significant input data). Hierarchical aggregates can be rendered more efficiently if the
+/// input stream is append-only as then we only need to retain the "currently winning" value.
+/// Every hierarchical aggregate needs to supply a corresponding ReductionMonoid implementation.
 fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
     match func {
         AggregateFunc::SumInt32
@@ -940,6 +956,8 @@ pub mod monoids {
         }
     }
 
+    /// Get the correct monoid implementation for a given aggregation function. Note that
+    // all hierarchical aggregation functions need to supply a monoid implementation.
     pub fn get_monoid(row: Row, func: &AggregateFunc) -> Option<ReductionMonoid> {
         match func {
             AggregateFunc::MaxInt32
@@ -962,7 +980,16 @@ pub mod monoids {
             | AggregateFunc::MinDate
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz => Some(ReductionMonoid::Min(row)),
-            _ => None,
+            AggregateFunc::SumInt32
+            | AggregateFunc::SumInt64
+            | AggregateFunc::SumFloat32
+            | AggregateFunc::SumFloat64
+            | AggregateFunc::SumDecimal
+            | AggregateFunc::Count
+            | AggregateFunc::Any
+            | AggregateFunc::All
+            | AggregateFunc::Dummy
+            | AggregateFunc::JsonbAgg => None,
         }
     }
 }
