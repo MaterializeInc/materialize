@@ -840,6 +840,20 @@ impl RowPacker {
         Row { data }
     }
 
+    /// Finish packing a row into a pre-existing allocation.
+    ///
+    /// This method is available in order to re-use existing row allocations,
+    /// which would otherwise be de-allocated and re-allocated is common row
+    /// processing cases.
+    ///
+    /// The current contents of `row` are erased, and replaced with the packed
+    /// contents of `self`.
+    pub fn finish_into(&mut self, row: &mut Row) {
+        row.data.clear();
+        row.data.extend(self.data.iter().cloned());
+        self.data.clear();
+    }
+
     /// Pushes a [`DatumList`] that is built from a closure.
     ///
     /// The supplied closure will be invoked once with a `RowPacker` that can
