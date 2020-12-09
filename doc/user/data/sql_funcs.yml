@@ -362,7 +362,7 @@
     - signature: 'digest(data: text, type: text) -> bytea'
       desctription: >-
         Computes a binary hash of the given text `data` using the specified `type` algorithm.
-        Supported hash algorithms are: `md5`, `sha224`, `sha256`, `sha384`, `sha512`.
+        Supported hash algorithms are: `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`.
     - signature: 'digest(data: bytea, type: text) -> bytea'
       desctription: >-
         Computes a binary hash of the given bytea `data` using the specified `type` algorithm.
@@ -370,7 +370,7 @@
     - signature: 'hmac(data: text, key: text, type: text) -> bytea'
       desctription: >-
         Computes a hashed MAC of the given text `data` using the specified `key` and
-        `type` algorithm. Supported hash algorithms are: `md5`, `sha224`, `sha256`, `sha384`, `sha512`.
+        `type` algorithm. Supported hash algorithms are: `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`.
     - signature: 'hmac(data: bytea, key: text, type: text) -> bytea'
       desctription: >-
         Computes a hashed MAC of the given bytea `data` using the specified `key` and
