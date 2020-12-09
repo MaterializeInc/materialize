@@ -131,9 +131,10 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
             buf.clear();
         }
         log::info!(
-            "produced {} records ({} bytes / record)",
+            "produced {} records ({} bytes / record) ({} remaining)",
             messages_to_send,
-            bytes_sent / messages_to_send
+            bytes_sent / messages_to_send,
+            messages_remaining,
         );
         messages_remaining -= messages_to_send;
 
