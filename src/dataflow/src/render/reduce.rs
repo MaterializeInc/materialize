@@ -19,6 +19,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
+use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, RelationExpr};
@@ -38,10 +39,11 @@ enum ReductionType {
     Unfused = 3,
 }
 
-// The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G, RelationExpr, Row, repr::Timestamp>
+impl<G, T> Context<G, RelationExpr, Row, T>
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
 {
     /// Renders a `RelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
