@@ -44,3 +44,10 @@ a max
 ---
 1 2
 2 4
+
+# Smoke test for aggregate fusion
+> SELECT a, min(b), max(b + 1)  FROM non_dbz_data group by a
+a min max
+---
+1 2 3
+2 3 5
