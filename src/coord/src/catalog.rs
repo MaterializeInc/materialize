@@ -26,7 +26,7 @@ use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::RelationDesc;
 use sql::ast::display::AstDisplay;
 use sql::catalog::CatalogError as SqlCatalogError;
-use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
+use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
@@ -93,10 +93,6 @@ pub struct ConnCatalog<'a> {
 }
 
 impl ConnCatalog<'_> {
-    fn database_spec(&self) -> DatabaseSpecifier {
-        DatabaseSpecifier::Name(self.database.clone())
-    }
-
     pub fn conn_id(&self) -> u32 {
         self.conn_id
     }
@@ -104,6 +100,7 @@ impl ConnCatalog<'_> {
 
 #[derive(Debug, Serialize)]
 pub struct Database {
+    pub name: String,
     pub id: i64,
     #[serde(skip)]
     pub oid: u32,
@@ -112,6 +109,7 @@ pub struct Database {
 
 #[derive(Debug, Serialize)]
 pub struct Schema {
+    pub name: SchemaName,
     pub id: i64,
     #[serde(skip)]
     pub oid: u32,
@@ -416,6 +414,7 @@ impl Catalog {
             catalog.by_name.insert(
                 name.clone(),
                 Database {
+                    name: name.clone(),
                     id,
                     oid,
                     schemas: BTreeMap::new(),
@@ -427,10 +426,10 @@ impl Catalog {
         let schemas = catalog.storage().load_schemas()?;
         for (id, database_name, schema_name) in schemas {
             let oid = catalog.allocate_oid()?;
-            let (database_id, schemas) = match database_name {
+            let (database_id, schemas) = match &database_name {
                 Some(database_name) => catalog
                     .by_name
-                    .get_mut(&database_name)
+                    .get_mut(database_name)
                     .map(|db| (Some(db.id), &mut db.schemas))
                     .expect("catalog out of sync"),
                 None => (None, &mut catalog.ambient_schemas),
@@ -438,6 +437,10 @@ impl Catalog {
             schemas.insert(
                 schema_name.clone(),
                 Schema {
+                    name: SchemaName {
+                        database: database_name.into(),
+                        schema: schema_name.clone(),
+                    },
                     id,
                     oid,
                     items: BTreeMap::new(),
@@ -658,33 +661,34 @@ impl Catalog {
 
     pub fn resolve_schema(
         &self,
-        current_database: &DatabaseSpecifier,
+        current_database: &str,
         database: Option<String>,
         schema_name: &str,
         conn_id: u32,
-    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), SqlCatalogError> {
-        if let Some(database) = database {
-            let database_spec = DatabaseSpecifier::Name(database);
-            self.get_schema(&database_spec, schema_name, conn_id)
-                .map(|schema| (database_spec, SchemaSpecifier::new(schema_name, schema.id)))
-        } else {
-            match self.get_schema(current_database, schema_name, conn_id) {
-                Ok(schema) => Ok((
-                    current_database.clone(),
-                    SchemaSpecifier::new(schema_name, schema.id),
-                )),
-                Err(SqlCatalogError::UnknownSchema(_))
-                | Err(SqlCatalogError::UnknownDatabase(_)) => self
-                    .get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id)
-                    .map(|schema| {
-                        (
-                            DatabaseSpecifier::Ambient,
-                            SchemaSpecifier::new(schema_name, schema.id),
-                        )
-                    }),
-                Err(e) => Err(e),
+    ) -> Result<&Schema, SqlCatalogError> {
+        let database_spec = match database {
+            // If a database is explicitly specified, validate it. Note that we
+            // intentionally do not validate `current_database` to permit
+            // querying `mz_catalog` with an invalid session database, e.g., so
+            // that you can run `SHOW DATABASES` to *find* a valid database.
+            Some(database) if !self.by_name.contains_key(&database) => {
+                return Err(SqlCatalogError::UnknownDatabase(database));
             }
+            Some(database) => DatabaseSpecifier::Name(database),
+            None => DatabaseSpecifier::Name(current_database.into()),
+        };
+
+        // First try to find the schema in the named database.
+        if let Some(schema) = self.get_schema(&database_spec, schema_name, conn_id) {
+            return Ok(schema);
         }
+
+        // Then fall back to the ambient database.
+        if let Some(schema) = self.get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id) {
+            return Ok(schema);
+        }
+
+        Err(SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
     /// Resolves [`PartialName`] into a [`FullName`].
@@ -695,11 +699,11 @@ impl Catalog {
     #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
-        current_database: DatabaseSpecifier,
+        current_database: &str,
         search_path: &[&str],
         name: &PartialName,
         conn_id: u32,
-    ) -> Result<FullName, SqlCatalogError> {
+    ) -> Result<&CatalogEntry, SqlCatalogError> {
         // If a schema name was specified, just try to find the item in that
         // schema. If no schema was specified, try to find the item in every
         // schema in the search path.
@@ -721,20 +725,14 @@ impl Catalog {
 
         for &schema_name in schemas {
             let database_name = name.database.clone();
-            let res = self.resolve_schema(&current_database, database_name, schema_name, conn_id);
-            let (database_spec, _) = match res {
-                Ok(specs) => specs,
-                Err(SqlCatalogError::UnknownSchema(_)) => continue,
-                Err(e) => return Err(e),
-            };
-            if let Ok(schema) = self.get_schema(&database_spec, schema_name, conn_id) {
-                if schema.items.contains_key(&name.item) {
-                    return Ok(FullName {
-                        database: database_spec,
-                        schema: schema_name.to_owned(),
-                        item: name.item.to_owned(),
-                    });
-                }
+            let schema =
+                match self.resolve_schema(&current_database, database_name, schema_name, conn_id) {
+                    Ok(schema) => schema,
+                    Err(SqlCatalogError::UnknownSchema(_)) => continue,
+                    Err(e) => return Err(e),
+                };
+            if let Some(id) = schema.items.get(&name.item) {
+                return Ok(&self.by_id[id]);
             }
         }
         Err(SqlCatalogError::UnknownItem(name.to_string()))
@@ -745,17 +743,8 @@ impl Catalog {
     /// See also [`Catalog::get`].
     pub fn try_get(&self, name: &FullName, conn_id: u32) -> Option<&CatalogEntry> {
         self.get_schema(&name.database, &name.schema, conn_id)
-            .ok()
             .and_then(|schema| schema.items.get(&name.item))
             .map(|id| &self.by_id[id])
-    }
-
-    /// Returns the named catalog item, or an error if it does not exist.
-    ///
-    /// See also [`Catalog::try_get`].
-    pub fn get(&self, name: &FullName, conn_id: u32) -> Result<&CatalogEntry, SqlCatalogError> {
-        self.try_get(name, conn_id)
-            .ok_or_else(|| SqlCatalogError::UnknownItem(name.to_string()))
     }
 
     pub fn try_get_by_id(&self, id: GlobalId) -> Option<&CatalogEntry> {
@@ -773,6 +762,10 @@ impl Catalog {
         self.temporary_schemas.insert(
             conn_id,
             Schema {
+                name: SchemaName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: MZ_TEMP_SCHEMA.into(),
+                },
                 id: -1,
                 oid,
                 items: BTreeMap::new(),
@@ -809,23 +802,17 @@ impl Catalog {
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
         conn_id: u32,
-    ) -> Result<&Schema, SqlCatalogError> {
+    ) -> Option<&Schema> {
         // Keep in sync with `get_schemas_mut`.
         match database_spec {
             DatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
-                Ok(&self.temporary_schemas[&conn_id])
+                self.temporary_schemas.get(&conn_id)
             }
-            DatabaseSpecifier::Ambient => match self.ambient_schemas.get(schema_name) {
-                Some(schema) => Ok(schema),
-                None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
-            },
-            DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
-                Some(db) => match db.schemas.get(schema_name) {
-                    Some(schema) => Ok(schema),
-                    None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
-                },
-                None => Err(SqlCatalogError::UnknownDatabase(name.to_owned())),
-            },
+            DatabaseSpecifier::Ambient => self.ambient_schemas.get(schema_name),
+            DatabaseSpecifier::Name(name) => self
+                .by_name
+                .get(name)
+                .and_then(|db| db.schemas.get(schema_name)),
         }
     }
 
@@ -835,23 +822,17 @@ impl Catalog {
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
         conn_id: u32,
-    ) -> Result<&mut Schema, SqlCatalogError> {
+    ) -> Option<&mut Schema> {
         // Keep in sync with `get_schemas`.
         match database_spec {
             DatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
-                Ok(self.temporary_schemas.get_mut(&conn_id).unwrap())
+                self.temporary_schemas.get_mut(&conn_id)
             }
-            DatabaseSpecifier::Ambient => match self.ambient_schemas.get_mut(schema_name) {
-                Some(schema) => Ok(schema),
-                None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
-            },
-            DatabaseSpecifier::Name(name) => match self.by_name.get_mut(name) {
-                Some(db) => match db.schemas.get_mut(schema_name) {
-                    Some(schema) => Ok(schema),
-                    None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
-                },
-                None => Err(SqlCatalogError::UnknownDatabase(name.to_owned())),
-            },
+            DatabaseSpecifier::Ambient => self.ambient_schemas.get_mut(schema_name),
+            DatabaseSpecifier::Name(name) => self
+                .by_name
+                .get_mut(name)
+                .and_then(|db| db.schemas.get_mut(schema_name)),
         }
     }
 
@@ -930,20 +911,16 @@ impl Catalog {
         ops
     }
 
-    pub fn drop_schema_ops(
-        &mut self,
-        database_spec: DatabaseSpecifier,
-        schema_name: String,
-    ) -> Vec<Op> {
+    pub fn drop_schema_ops(&mut self, name: SchemaName) -> Vec<Op> {
         let mut ops = vec![];
         let mut seen = HashSet::new();
-        if let DatabaseSpecifier::Name(database_name) = database_spec {
+        if let DatabaseSpecifier::Name(database_name) = name.database {
             if let Some(database) = self.by_name.get(&database_name) {
-                if let Some(schema) = database.schemas.get(&schema_name) {
+                if let Some(schema) = database.schemas.get(&name.schema) {
                     Self::drop_schema_items(schema, &self.by_id, &mut ops, &mut seen);
                     ops.push(Op::DropSchema {
                         database_name: DatabaseSpecifier::Name(database_name),
-                        schema_name,
+                        schema_name: name.schema,
                     })
                 }
             }
@@ -1249,6 +1226,7 @@ impl Catalog {
                     self.by_name.insert(
                         name.clone(),
                         Database {
+                            name: name.clone(),
                             id,
                             oid,
                             schemas: BTreeMap::new(),
@@ -1268,6 +1246,10 @@ impl Catalog {
                     db.schemas.insert(
                         schema_name.clone(),
                         Schema {
+                            name: SchemaName {
+                                database: DatabaseSpecifier::Name(database_name),
+                                schema: schema_name.clone(),
+                            },
                             id,
                             oid,
                             items: BTreeMap::new(),
@@ -1762,9 +1744,12 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         &self.database
     }
 
-    fn resolve_database(&self, database_name: &str) -> Result<i64, SqlCatalogError> {
+    fn resolve_database(
+        &self,
+        database_name: &str,
+    ) -> Result<&dyn sql::catalog::CatalogDatabase, SqlCatalogError> {
         match self.catalog.by_name.get(database_name) {
-            Some(database) => Ok(database.id),
+            Some(database) => Ok(database),
             None => Err(SqlCatalogError::UnknownDatabase(database_name.into())),
         }
     }
@@ -1773,29 +1758,28 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         &self,
         database: Option<String>,
         schema_name: &str,
-    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), SqlCatalogError> {
-        Ok(self.catalog.resolve_schema(
-            &self.database_spec(),
-            database,
-            schema_name,
-            self.conn_id,
-        )?)
-    }
-
-    fn resolve_item(&self, name: &PartialName) -> Result<FullName, SqlCatalogError> {
+    ) -> Result<&dyn sql::catalog::CatalogSchema, SqlCatalogError> {
         Ok(self
             .catalog
-            .resolve(self.database_spec(), self.search_path, name, self.conn_id)?)
+            .resolve_schema(&self.database, database, schema_name, self.conn_id)?)
+    }
+
+    fn resolve_item(
+        &self,
+        name: &PartialName,
+    ) -> Result<&dyn sql::catalog::CatalogItem, SqlCatalogError> {
+        Ok(self
+            .catalog
+            .resolve(&self.database, self.search_path, name, self.conn_id)?)
     }
 
     fn list_items<'a>(
         &'a self,
-        database_spec: &DatabaseSpecifier,
-        schema_name: &str,
+        schema: &SchemaName,
     ) -> Box<dyn Iterator<Item = &'a dyn sql::catalog::CatalogItem> + 'a> {
         let schema = self
             .catalog
-            .get_schema(database_spec, schema_name, self.conn_id)
+            .get_schema(&schema.database, &schema.schema, self.conn_id)
             .unwrap();
         Box::new(
             schema
@@ -1803,10 +1787,6 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
                 .values()
                 .map(move |id| self.catalog.get_by_id(id) as &dyn sql::catalog::CatalogItem),
         )
-    }
-
-    fn get_item(&self, name: &FullName) -> &dyn sql::catalog::CatalogItem {
-        self.catalog.get(name, self.conn_id).unwrap()
     }
 
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn sql::catalog::CatalogItem {
@@ -1819,6 +1799,26 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
 
     fn config(&self) -> &sql::catalog::CatalogConfig {
         &self.catalog.config
+    }
+}
+
+impl sql::catalog::CatalogDatabase for Database {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn id(&self) -> i64 {
+        self.id
+    }
+}
+
+impl sql::catalog::CatalogSchema for Schema {
+    fn name(&self) -> &SchemaName {
+        &self.name
+    }
+
+    fn id(&self) -> i64 {
+        self.id
     }
 }
 

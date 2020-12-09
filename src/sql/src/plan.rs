@@ -37,7 +37,7 @@ use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use crate::catalog::Catalog;
-use crate::names::{DatabaseSpecifier, FullName};
+use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 
 pub(crate) mod decorrelate;
 pub(crate) mod error;
@@ -111,8 +111,7 @@ pub enum Plan {
         name: String,
     },
     DropSchema {
-        database_name: DatabaseSpecifier,
-        schema_name: String,
+        name: SchemaName,
     },
     DropItems {
         items: Vec<GlobalId>,
