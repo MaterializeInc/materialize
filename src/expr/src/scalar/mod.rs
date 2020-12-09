@@ -454,17 +454,17 @@ impl ScalarExpr {
             }
             ScalarExpr::If { cond, then, els } => {
                 cond.reduce_inner(temp_storage, relation_type)?;
-                then.reduce_inner(temp_storage, relation_type)?;
-                els.reduce_inner(temp_storage, relation_type)?;
+                let then_res = then.reduce_inner(temp_storage, relation_type).and(Ok(then));
+                let els_res = els.reduce_inner(temp_storage, relation_type).and(Ok(els));
                 if let Some(literal) = cond.as_literal() {
                     match literal {
-                        Datum::True => *self = then.take(),
-                        Datum::False | Datum::Null => *self = els.take(),
+                        Datum::True => *self = then_res?.take(),
+                        Datum::False | Datum::Null => *self = els_res?.take(),
                         _ => unreachable!(),
                     }
-                } else if then == els {
-                    *self = then.take();
-                } else if then.is_literal() && els.is_literal() {
+                } else if then_res == els_res {
+                    *self = then_res?.take();
+                } else if let (Ok(then), Ok(els)) = (then_res, els_res) {
                     match (then.as_literal(), els.as_literal()) {
                         (Some(Datum::True), _) => {
                             *self = cond.take().call_binary(els.take(), BinaryFunc::Or);
