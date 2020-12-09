@@ -12,7 +12,7 @@ use crate::source::SourceOutput;
 use log::warn;
 use regex::Regex;
 use repr::{Datum, Diff, Row, Timestamp};
-use std::cmp::max;
+use std::cmp::min;
 use std::iter;
 use std::str;
 
@@ -40,7 +40,7 @@ where
                         let line = match str::from_utf8(&line) {
                             Ok(line) => line,
                             _ => {
-                                let line_len = max(line.len(), 1024);
+                                let line_len = min(line.len(), 1024);
                                 warn!(
                                     "Line {}{} from source {} cannot be decoded as utf8. Discarding line.",
                                     if line_len == line.len() { "" } else {"starting with: "},
