@@ -465,6 +465,8 @@ where
         // to do a hierarchical reduction.
         use timely::dataflow::operators::Map;
 
+        // We arrange the inputs ourself to force it into a leaner structure because we know we
+        // won't care about values.
         let partial = collection
             .consolidate()
             .inner
@@ -479,10 +481,10 @@ where
 
                 (key, time, DiffVector::new(output))
             })
-            .as_collection()
-            .arrange_by_self();
-        let arrangement =
-            partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMonotonicHierarchical", {
+            .as_collection();
+        return partial
+            .arrange_by_self()
+            .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMonotonicHierarchical", {
                 let mut row_packer = RowPacker::new();
                 move |key, input, output| {
                     let accum = &input[0].1;
@@ -500,8 +502,6 @@ where
                     output.push((row_packer.finish_and_reuse(), 1));
                 }
             });
-
-        return arrangement;
     }
 
     // Plan a fused hierarchical reduction
@@ -636,7 +636,6 @@ where
     // generally the count, and then two aggregation-specific values. The size could be
     // reduced if we want to specialize for the aggregations.
 
-    use differential_dataflow::operators::consolidate::ConsolidateStream;
     use timely::dataflow::operators::map::Map;
 
     let float_scale = f64::from(1 << 24);
@@ -713,7 +712,7 @@ where
                         }
                     }
                 }
-                Some(((key, ()), DiffVector::new(diffs)))
+                Some((key, DiffVector::new(diffs)))
             }
         });
     to_aggregate.push(easy_cases);
@@ -740,7 +739,7 @@ where
                         diffs[3 * idx] = 1i128;
                         diffs[3 * idx + 1] = agg1;
                         diffs[3 * idx + 2] = agg2;
-                        Some(((key, ()), DiffVector::new(diffs)))
+                        Some((key, DiffVector::new(diffs)))
                     }
                 });
             to_aggregate.push(collection);
@@ -750,7 +749,7 @@ where
         differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate);
 
     collection
-        .consolidate_stream()
+        .arrange_by_self()
         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
             "ReduceAccumulable", {
             let mut row_packer = RowPacker::new();
