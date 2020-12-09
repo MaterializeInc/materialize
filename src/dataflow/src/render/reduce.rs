@@ -223,10 +223,10 @@ where
                         *monotonic,
                         *expected_group_size,
                     )
-                } else if remaining.len() == 1 && accumulable.is_empty() && hierarchical.is_empty()
+                } else if !remaining.is_empty() && accumulable.is_empty() && hierarchical.is_empty()
                 {
-                    // If we have a single non-fusable aggregation, it can be arranged and returned.
-                    build_aggregate_stage(ok_input, 0, &aggregates[0], true)
+                    // If we have only have non-fusable aggregations, they can be arranged and returned.
+                    build_basic(ok_input, remaining, true, scope)
                 } else {
                     // Otherwise we need to stitch things together.
                     let mut to_collect = Vec::new();
@@ -234,10 +234,7 @@ where
                         let accumulables_collection =
                             build_accumulables(ok_input.clone(), accumulable, false).as_collection(
                                 |key, val| {
-                                    (
-                                        key.clone(),
-                                        (ReductionType::FusedAccumulable, None, val.clone()),
-                                    )
+                                    (key.clone(), (ReductionType::FusedAccumulable, val.clone()))
                                 },
                             );
                         to_collect.push(accumulables_collection);
@@ -251,22 +248,17 @@ where
                             *expected_group_size,
                         )
                         .as_collection(|key, val| {
-                            (
-                                key.clone(),
-                                (ReductionType::FusedHierarchical, None, val.clone()),
-                            )
+                            (key.clone(), (ReductionType::FusedHierarchical, val.clone()))
                         });
                         to_collect.push(hierarchical_collection);
                     }
-                    for (index, aggr) in remaining {
-                        let collection =
-                            build_aggregate_stage(ok_input.clone(), index, &aggr, false);
-                        to_collect.push(collection.as_collection(move |key, val| {
-                            (
-                                key.clone(),
-                                (ReductionType::Unfused, Some(index), val.clone()),
-                            )
-                        }));
+
+                    if !remaining.is_empty() {
+                        let remaining_collection = build_basic(ok_input, remaining, false, scope)
+                            .as_collection(|key, val| {
+                                (key.clone(), (ReductionType::Unfused, val.clone()))
+                            });
+                        to_collect.push(remaining_collection);
                     }
                     let is_accumulable_hierarchical = aggregates
                         .iter()
@@ -276,7 +268,7 @@ where
                     differential_dataflow::collection::concatenate(scope, to_collect)
                         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
                             let mut row_packer = RowPacker::new();
-                            move |key, mut input, output| {
+                            move |key, input, output| {
                                 // The inputs are triples of a reduction type, an optional index and row to decode.
                                 // The `reduce_abelian` operator guarantees that values will be placed in sorted order
                                 // by the values Ord implementation. This means that fused reductions
@@ -290,59 +282,39 @@ where
                                 //    array for unfused aggregates)
                                 // 4. Stitch all the values together into one row.
 
+                                // TODO change these to be options probably
                                 let mut accumulable = DatumList::empty().iter();
                                 let mut hierarchical = DatumList::empty().iter();
-                                let mut input_to_skip = None;
+                                let mut basic = DatumList::empty().iter();
 
                                 // Extract out the fused accumulable and hierarchical aggregates from our inputs if we have them. These
                                 // should all be sorted before any unfused aggregates, so that we can grab them efficiently and at the
                                 // extract the subsets of inputs that corresponds to only unfused aggregates.
-                                for i in 0..input.len() {
-                                    match (input[i].0).0 {
+
+                                // TODO assert that there are <= 3 items?
+                                // TODO assert that the diff is positive?
+
+                                for ((reduction_type, row), _) in input.iter() {
+                                    match reduction_type {
                                         ReductionType::FusedAccumulable => {
-                                            accumulable = (input[i].0).2.iter();
-                                            input_to_skip = Some(i);
+                                            accumulable = row.iter();
                                         }
                                         ReductionType::FusedHierarchical => {
-                                            hierarchical = (input[i].0).2.iter();
-                                            input_to_skip = Some(i);
+                                            hierarchical = row.iter();
                                         }
-                                        ReductionType::Unfused => break,
+                                        ReductionType::Unfused => {
+                                            basic = row.iter();
+                                        }
                                     }
                                }
 
-                                // Restrict ourselves to the suffix of inputs we have not
-                                // already extracted for accumulable or hierarchical inputs.
-                                if let Some(i) = input_to_skip {
-                                    input = &input[(i + 1)..];
-                                }
-
                                 // First, fill our output row with key information.
                                 row_packer.extend(key.iter());
-                                // Now, we need to reconstruct our data in the order that the aggregates were given to us.
-                                // We can think of the original list of aggregates. Then the fused accumulable aggregates
-                                // (stored in a Row), fused minmax aggregates (stored in another Row) and the unfused
-                                // aggregates (stored as individual Rows in input) each form disjoint subsequences that
-                                // partition the original sequence of aggregations. We know that each of these is a
-                                // subsequence because the fused aggregations were computed in order, and the unfused
-                                // aggregates are ordered by index (the second field in the input triple).
-                                // All of this to say, we can reconstruct our original sequence of aggregations for the
-                                // results by doing something that is very similar to a 3 way merge as long as we know
-                                // whether each aggregate was fused and accumulable, fused and minmax, or unfused.
                                 for flags in is_accumulable_hierarchical.iter() {
                                     match flags {
                                         (true, false) => row_packer.push(accumulable.next().unwrap()),
                                         (false, true) => row_packer.push(hierarchical.next().unwrap()),
-                                        (false, false) => {
-                                            // Since this is not an accumulable aggregate, we need to grab
-                                            // the next result from other reduction dataflows and put them
-                                            // in our output.
-                                            let elem = input[0].0;
-                                            let row = &elem.2;
-                                            let datum = row.unpack_first();
-                                            row_packer.push(datum);
-                                            input = &input[1..];
-                                        }
+                                        (false, false) => row_packer.push(basic.next().unwrap()),
                                         _ => log::error!("Aggregation erroneously reported as both accumulable and hierarchical in ReduceCollation"),
                                     }
                                 }
@@ -361,10 +333,51 @@ where
     }
 }
 
+fn build_basic<G>(
+    collection: Collection<G, (Row, Row)>,
+    aggrs: Vec<(usize, AggregateExpr)>,
+    prepend_key: bool,
+    scope: &mut G,
+) -> Arrangement<G, Row>
+where
+    G: Scope,
+    G: Scope<Timestamp = repr::Timestamp>,
+{
+    if aggrs.len() == 1 {
+        // If we just have a single basic aggregation we can just arrange that without doing
+        // any fusion.
+        return build_basic_aggregate(collection, aggrs[0].0, &aggrs[0].1, prepend_key);
+    }
+
+    // Otherwise we need to render each individually and stitch them together.
+    let mut to_collect = Vec::new();
+    for (index, aggr) in aggrs {
+        let result = build_basic_aggregate(collection.clone(), index, &aggr, prepend_key);
+        to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
+    }
+    differential_dataflow::collection::concatenate(scope, to_collect)
+        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceFuseBasic", {
+            let mut row_packer = RowPacker::new();
+            move |key, input, output| {
+                // First, fill our output row with key information.
+                if prepend_key {
+                    row_packer.extend(key.iter());
+                }
+
+                for ((_, row), _) in input.iter() {
+                    let datum = row.unpack_first();
+                    row_packer.push(datum);
+                }
+                output.push((row_packer.finish_and_reuse(), 1));
+            }
+        })
+}
+
 /// Reduce and arrange `input` by `group_key` and `aggr`.
 ///
+/// Computes a single, non-accumulable, non-hierarchical aggregate.
 /// This method also applies distinctness if required.
-fn build_aggregate_stage<G>(
+fn build_basic_aggregate<G>(
     ok_input: Collection<G, (Row, Row)>,
     index: usize,
     aggr: &AggregateExpr,
