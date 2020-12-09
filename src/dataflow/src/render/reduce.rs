@@ -226,7 +226,7 @@ where
                 } else if !remaining.is_empty() && accumulable.is_empty() && hierarchical.is_empty()
                 {
                     // If we have only have non-fusable aggregations, they can be arranged and returned.
-                    build_basic(ok_input, remaining, true, scope)
+                    build_basic(ok_input, remaining, true)
                 } else {
                     // Otherwise we need to stitch things together.
                     let mut to_collect = Vec::new();
@@ -254,7 +254,7 @@ where
                     }
 
                     if !remaining.is_empty() {
-                        let remaining_collection = build_basic(ok_input, remaining, false, scope)
+                        let remaining_collection = build_basic(ok_input, remaining, false)
                             .as_collection(|key, val| {
                                 (key.clone(), (ReductionType::Unfused, val.clone()))
                             });
@@ -337,11 +337,10 @@ fn build_basic<G>(
     collection: Collection<G, (Row, Row)>,
     aggrs: Vec<(usize, AggregateExpr)>,
     prepend_key: bool,
-    scope: &mut G,
 ) -> Arrangement<G, Row>
 where
     G: Scope,
-    G: Scope<Timestamp = repr::Timestamp>,
+    G::Timestamp: Lattice,
 {
     if aggrs.len() == 1 {
         // If we just have a single basic aggregation we can just arrange that without doing
@@ -355,7 +354,7 @@ where
         let result = build_basic_aggregate(collection.clone(), index, &aggr, prepend_key);
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
-    differential_dataflow::collection::concatenate(scope, to_collect)
+    differential_dataflow::collection::concatenate(&mut collection.scope(), to_collect)
         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceFuseBasic", {
             let mut row_packer = RowPacker::new();
             move |key, input, output| {
@@ -384,7 +383,8 @@ fn build_basic_aggregate<G>(
     prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope,
+    G::Timestamp: Lattice,
 {
     let AggregateExpr {
         func,
