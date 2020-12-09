@@ -66,5 +66,13 @@ query IITT
 FETCH c
 ----
 
+# Test some FETCH timeout errors. The actual timeout functionality is
+# tested elsewhere.
+statement error timeout out of range
+FETCH c WITH (TIMEOUT = '-1s')
+
+statement error timeout out of range
+FETCH c WITH (TIMEOUT = '25h')
+
 statement ok
 CLOSE c
