@@ -220,8 +220,8 @@ END $$;
                 self.client.execute(&*stmt.to_string(), &[]).await?;
                 let mut items = vec![];
                 for name in names {
-                    let name = match scx.resolve_item(name.clone()) {
-                        Ok(name) => name,
+                    match scx.resolve_item(name.clone()) {
+                        Ok(item) => items.push(item.id()),
                         Err(err) => {
                             if *if_exists {
                                 continue;
@@ -229,8 +229,7 @@ END $$;
                                 return Err(err.into());
                             }
                         }
-                    };
-                    items.push(catalog.get_item(&name).id());
+                    }
                 }
                 Plan::DropItems {
                     items,
@@ -239,14 +238,14 @@ END $$;
             }
             Statement::Delete(DeleteStatement { table_name, .. }) => {
                 let mut updates = vec![];
-                let table_name = scx.resolve_item(table_name.clone())?;
+                let table = scx.resolve_item(table_name.clone())?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
-                for row in self.run_query(&table_name, sql, 0).await? {
+                for row in self.run_query(table.name(), sql, 0).await? {
                     updates.push((row, -1));
                 }
                 let affected_rows = updates.len();
                 Plan::SendDiffs {
-                    id: catalog.get_item(&table_name).id(),
+                    id: table.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Delete,
@@ -254,18 +253,18 @@ END $$;
             }
             Statement::Insert(InsertStatement { table_name, .. }) => {
                 let mut updates = vec![];
-                let table_name = scx.resolve_item(table_name.clone())?;
+                let table = scx.resolve_item(table_name.clone())?;
                 // RETURNING cannot return zero columns, but we might be
                 // executing INSERT INTO t DEFAULT VALUES where t is a zero
                 // arity table. So use a time-honored trick of always including
                 // a junk column in RETURNING, then stripping that column out.
                 let sql = format!("{} RETURNING *, 1", stmt.to_string());
-                for row in self.run_query(&table_name, sql, 1).await? {
+                for row in self.run_query(table.name(), sql, 1).await? {
                     updates.push((row, 1));
                 }
                 let affected_rows = updates.len();
                 Plan::SendDiffs {
-                    id: catalog.get_item(&table_name).id(),
+                    id: table.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Insert,
@@ -278,21 +277,21 @@ END $$;
             }) => {
                 let mut updates = vec![];
                 let mut sql = format!("SELECT * FROM {}", table_name);
-                let table_name = scx.resolve_item(table_name.clone())?;
+                let table = scx.resolve_item(table_name.clone())?;
                 if let Some(selection) = selection {
                     sql += &format!(" WHERE {}", selection);
                 }
-                for row in self.run_query(&table_name, sql, 0).await? {
+                for row in self.run_query(table.name(), sql, 0).await? {
                     updates.push((row, -1))
                 }
                 let affected_rows = updates.len();
                 let sql = format!("{} RETURNING *", stmt.to_string());
-                for row in self.run_query(&table_name, sql, 0).await? {
+                for row in self.run_query(table.name(), sql, 0).await? {
                     updates.push((row, 1));
                 }
                 assert_eq!(affected_rows * 2, updates.len());
                 Plan::SendDiffs {
-                    id: catalog.get_item(&table_name).id(),
+                    id: table.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Update,

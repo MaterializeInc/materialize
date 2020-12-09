@@ -758,6 +758,11 @@ impl RowPacker {
         }
     }
 
+    /// Clears the row packer.
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+
     /// Push `datum` onto the end of `self`
     pub fn push(&mut self, datum: Datum) {
         push_datum(&mut self.data, datum)

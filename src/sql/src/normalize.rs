@@ -96,7 +96,8 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
     };
 
     let resolve_item = |name: &ObjectName| -> Result<_, PlanError> {
-        Ok(unresolve(scx.resolve_item(name.clone())?))
+        let item = scx.resolve_item(name.clone())?;
+        Ok(unresolve(item.name().clone()))
     };
 
     struct QueryNormalizer<'a> {
@@ -155,7 +156,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
 
         fn visit_object_name_mut(&mut self, object_name: &'ast mut ObjectName) {
             match self.scx.resolve_item(object_name.clone()) {
-                Ok(full_name) => *object_name = unresolve(full_name),
+                Ok(full_name) => *object_name = unresolve(full_name.name().clone()),
                 Err(e) => self.err = Some(e),
             };
         }
