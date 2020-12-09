@@ -22,6 +22,7 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
+use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use ore::collections::CollectionExt;
@@ -3352,6 +3353,12 @@ pub fn hmac_inner<'a>(
             mac.update(to_digest);
             mac.finalize().into_bytes().to_owned().to_vec()
         }
+        "sha1" => {
+            type HmacSha1 = Hmac<Sha1>;
+            let mut mac = HmacSha1::new_varkey(key).expect("HMAC can take key of any size");
+            mac.update(to_digest);
+            mac.finalize().into_bytes().to_owned().to_vec()
+        }
         "sha224" => {
             type HmacSha224 = Hmac<Sha224>;
             let mut mac = HmacSha224::new_varkey(key).expect("HMAC can take key of any size");
@@ -3862,6 +3869,7 @@ fn digest_inner<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let bytes = match digest_fn.unwrap_str() {
         "md5" => Md5::digest(bytes).to_vec(),
+        "sha1" => Sha1::digest(bytes).to_vec(),
         "sha224" => Sha224::digest(bytes).to_vec(),
         "sha256" => Sha256::digest(bytes).to_vec(),
         "sha384" => Sha384::digest(bytes).to_vec(),
