@@ -1717,8 +1717,8 @@ fn log_duplication_info(
     worker_idx: usize,
     is_new: bool,
     should_skip: &Option<SkipInfo>,
-    original_time: &mut i64,
-    max_seen_time: &mut i64,
+    original_time: &i64,
+    max_seen_time: &i64,
 ) {
     let file_name = file_name_repr(file);
     match (is_new, should_skip) {
@@ -1728,10 +1728,12 @@ fn log_duplication_info(
         // records will ever be sent with a position below the highest
         // position ever seen
         (true, Some(skipinfo)) => {
+            // original time is guaranteed to be the same as message time, so
+            // that label is omitted from this log message
             warn!(
                 "Created a new record behind the highest point in source={}:{} binlog_file={} \
                  new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{} \
-                 message_time={} message_first_seen={} max_seen_time={}",
+                 message_time={} max_seen_time={}",
                 debug_name,
                 worker_idx,
                 file_name,
@@ -1741,7 +1743,6 @@ fn log_duplication_info(
                 skipinfo.old_max_pos,
                 skipinfo.old_max_row,
                 fmt_timestamp(upstream_time_millis),
-                fmt_timestamp(*original_time),
                 fmt_timestamp(*max_seen_time),
             );
         }
