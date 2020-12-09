@@ -636,6 +636,42 @@ SELECT digest('12345678901234567890123456789012345678901234567890123456789012345
 ----
 \x57edf4a22be3c955ac49da2e2107b67a
 
+## digest with sha1
+query T
+SELECT digest(''::text, 'sha1'::text)::text
+----
+\xda39a3ee5e6b4b0d3255bfef95601890afd80709
+
+query T
+SELECT digest('a'::bytea, 'sha1'::text)::text
+----
+\x86f7e437faa5a7fce15d1ddcb9eaeaea377667b8
+
+query T
+SELECT digest('abc'::text, 'sha1'::text)::text
+----
+\xa9993e364706816aba3e25717850c26c9cd0d89d
+
+query T
+SELECT digest('message digest'::bytea, 'sha1'::text)::text
+----
+\xc12252ceda8be8994d5fa0290a47231c1d16aae3
+
+query T
+SELECT digest('abcdefghijklmnopqrstuvwxyz'::text, 'sha1'::text)::text
+----
+\x32d10c7b8cf96570ca04ce37f2a19d84240d3a89
+
+query T
+SELECT digest('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'::bytea, 'sha1'::text)::text
+----
+\x761c457bf73b14d27e9e9265c46f4b4dda11f940
+
+query T
+SELECT digest('12345678901234567890123456789012345678901234567890123456789012345678901234567890'::text, 'sha1'::text)::text
+----
+\x50abf5706a150990a08b2c5ea40fa0e585554732
+
 ## digest with sha224
 query T
 SELECT digest(''::text, 'sha224'::text)::text
@@ -780,6 +816,40 @@ SELECT hmac('Test Using Larger Than Block-Size Key and Larger Than Block-Size Da
             'md5'::text)::text
 ----
 \xf4d787e9ad2aef45765ef18b7f055cfd
+
+## hmac with sha1
+query T
+SELECT hmac(''::text, ''::text, 'sha1'::text)::text
+----
+\xfbdb1d1b18aa6c08324b7d64b71fb76370690e1d
+
+query T
+SELECT hmac(''::bytea, ''::text, 'sha1'::text)::text
+----
+\xfbdb1d1b18aa6c08324b7d64b71fb76370690e1d
+
+query T
+SELECT hmac(''::text, 'some key here'::text, 'sha1'::text)::text
+----
+\xd30b88796d86e6ecf2ac3ad424ba59504f6e29f6
+
+query T
+SELECT hmac('some text here'::bytea, ''::text, 'sha1'::text)::text
+----
+\xa15273bebb53bca4ef2118c8896e6b4786ea67c8
+
+query T
+SELECT hmac('some text here'::text, 'some key here'::text, 'sha1'::text)::text
+----
+\xd965ff402c6b2a676837dd523e121a2df1e1e328
+
+# sha1's block-size is 64 bytes
+query T
+SELECT hmac('Test Using Larger Than Block-Size Key and Larger Than Block-Size Data'::bytea,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::text,
+            'sha1'::text)::text
+----
+\x92aafbe48e89d4a07dcd875dad4c7db64a4c2151
 
 ## hmac with sha224
 query T
