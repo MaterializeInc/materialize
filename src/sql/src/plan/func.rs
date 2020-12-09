@@ -1400,10 +1400,9 @@ lazy_static! {
                         None => bail!("source passed to internal_read_cached_data must be literal string"),
                     };
                     let item = ecx.qcx.scx.resolve_item(ObjectName(vec![Ident::new(source.clone())]))?;
-                    let entry = ecx.catalog().get_item(&item);
-                    match entry.item_type() {
+                    match item.item_type() {
                         CatalogItemType::Source => {},
-                        _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, entry.item_type()),
+                        _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, item.item_type()),
                     }
                     let cache_directory = ecx.catalog().config().cache_directory.as_deref();
                     if cache_directory.is_none() {
@@ -1411,7 +1410,7 @@ lazy_static! {
                     }
                     Ok(TableFuncPlan {
                         func: TableFunc::ReadCachedData {
-                            source: entry.id(),
+                            source: item.id(),
                             cache_directory: cache_directory.expect("known to exist").to_path_buf(),
                         },
                         exprs: vec![],

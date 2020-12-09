@@ -103,6 +103,11 @@ where
                     move |row| {
                         let temp_storage = RowArena::new();
                         let mut results = Vec::new();
+
+                        // Ensure the packer is clear, and does not reflect
+                        // columns from prior rows that may have errored.
+                        row_packer.clear();
+
                         // First, evaluate the key selector expressions.
                         // If any error we produce their errors as output and note
                         // the fact that the key was not correctly produced.
