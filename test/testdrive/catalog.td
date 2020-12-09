@@ -49,7 +49,7 @@ name
 ----
 materialize
 
-> SELECT id, name FROM mz_catalog.mz_databases
+> SELECT id, name FROM mz_databases
 id          name
 -----------------------
 1           materialize
@@ -62,11 +62,18 @@ name
 d
 materialize
 
-> SELECT id, name FROM mz_catalog.mz_databases
+> SELECT id, name FROM mz_databases
 id          name
 -----------------------
 1           materialize
 2           d
+
+# The same catalog information should be accessible with any amount of
+# database or schema qualification.
+> SELECT count(*) FROM materialize.mz_catalog.mz_databases
+2
+> SELECT count(*) FROM d.mz_catalog.mz_databases
+2
 
 # SHOW DATABASES should filter its output according to the provided LIKE or
 # WHERE clause.
@@ -144,7 +151,7 @@ Expected end of statement, found RESTRICT
 name
 ----
 materialize
-> SELECT id, name FROM mz_catalog.mz_databases
+> SELECT id, name FROM mz_databases
 id          name
 -----------------------
 1           materialize
@@ -215,7 +222,7 @@ name
 d
 d2
 materialize
-> SELECT id, name FROM mz_catalog.mz_databases
+> SELECT id, name FROM mz_databases
 id          name
 -----------------------
 1           materialize
