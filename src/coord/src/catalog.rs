@@ -93,10 +93,6 @@ pub struct ConnCatalog<'a> {
 }
 
 impl ConnCatalog<'_> {
-    fn database_spec(&self) -> DatabaseSpecifier {
-        DatabaseSpecifier::Name(self.database.clone())
-    }
-
     pub fn conn_id(&self) -> u32 {
         self.conn_id
     }
@@ -658,7 +654,7 @@ impl Catalog {
 
     pub fn resolve_schema(
         &self,
-        current_database: &DatabaseSpecifier,
+        current_database: &str,
         database: Option<String>,
         schema_name: &str,
         conn_id: u32,
@@ -668,11 +664,9 @@ impl Catalog {
             self.get_schema(&database_spec, schema_name, conn_id)
                 .map(|schema| (database_spec, SchemaSpecifier::new(schema_name, schema.id)))
         } else {
-            match self.get_schema(current_database, schema_name, conn_id) {
-                Ok(schema) => Ok((
-                    current_database.clone(),
-                    SchemaSpecifier::new(schema_name, schema.id),
-                )),
+            let database_spec = DatabaseSpecifier::Name(current_database.into());
+            match self.get_schema(&database_spec, schema_name, conn_id) {
+                Ok(schema) => Ok((database_spec, SchemaSpecifier::new(schema_name, schema.id))),
                 Err(SqlCatalogError::UnknownSchema(_))
                 | Err(SqlCatalogError::UnknownDatabase(_)) => self
                     .get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id)
@@ -695,7 +689,7 @@ impl Catalog {
     #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
-        current_database: DatabaseSpecifier,
+        current_database: &str,
         search_path: &[&str],
         name: &PartialName,
         conn_id: u32,
@@ -1774,18 +1768,15 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         database: Option<String>,
         schema_name: &str,
     ) -> Result<(DatabaseSpecifier, SchemaSpecifier), SqlCatalogError> {
-        Ok(self.catalog.resolve_schema(
-            &self.database_spec(),
-            database,
-            schema_name,
-            self.conn_id,
-        )?)
+        Ok(self
+            .catalog
+            .resolve_schema(&self.database, database, schema_name, self.conn_id)?)
     }
 
     fn resolve_item(&self, name: &PartialName) -> Result<FullName, SqlCatalogError> {
         Ok(self
             .catalog
-            .resolve(self.database_spec(), self.search_path, name, self.conn_id)?)
+            .resolve(&self.database, self.search_path, name, self.conn_id)?)
     }
 
     fn list_items<'a>(
