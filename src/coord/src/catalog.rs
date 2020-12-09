@@ -659,26 +659,32 @@ impl Catalog {
         schema_name: &str,
         conn_id: u32,
     ) -> Result<(DatabaseSpecifier, SchemaSpecifier), SqlCatalogError> {
-        if let Some(database) = database {
-            let database_spec = DatabaseSpecifier::Name(database);
-            self.get_schema(&database_spec, schema_name, conn_id)
-                .map(|schema| (database_spec, SchemaSpecifier::new(schema_name, schema.id)))
-        } else {
-            let database_spec = DatabaseSpecifier::Name(current_database.into());
-            match self.get_schema(&database_spec, schema_name, conn_id) {
-                Ok(schema) => Ok((database_spec, SchemaSpecifier::new(schema_name, schema.id))),
-                Err(SqlCatalogError::UnknownSchema(_))
-                | Err(SqlCatalogError::UnknownDatabase(_)) => self
-                    .get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id)
-                    .map(|schema| {
-                        (
-                            DatabaseSpecifier::Ambient,
-                            SchemaSpecifier::new(schema_name, schema.id),
-                        )
-                    }),
-                Err(e) => Err(e),
+        let database_spec = match database {
+            // If a database is explicitly specified, validate it. Note that we
+            // intentionally do not validate `current_database` to permit
+            // querying `mz_catalog` with an invalid session database, e.g., so
+            // that you can run `SHOW DATABASES` to *find* a valid database.
+            Some(database) if !self.by_name.contains_key(&database) => {
+                return Err(SqlCatalogError::UnknownDatabase(database));
             }
+            Some(database) => DatabaseSpecifier::Name(database),
+            None => DatabaseSpecifier::Name(current_database.into()),
+        };
+
+        // First try to find the schema in the named database.
+        if let Some(schema) = self.get_schema(&database_spec, schema_name, conn_id) {
+            return Ok((database_spec, SchemaSpecifier::new(schema_name, schema.id)));
         }
+
+        // Then fall back to the ambient database.
+        if let Some(schema) = self.get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id) {
+            return Ok((
+                DatabaseSpecifier::Ambient,
+                SchemaSpecifier::new(schema_name, schema.id),
+            ));
+        }
+
+        Err(SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
     /// Resolves [`PartialName`] into a [`FullName`].
@@ -721,7 +727,7 @@ impl Catalog {
                 Err(SqlCatalogError::UnknownSchema(_)) => continue,
                 Err(e) => return Err(e),
             };
-            if let Ok(schema) = self.get_schema(&database_spec, schema_name, conn_id) {
+            if let Some(schema) = self.get_schema(&database_spec, schema_name, conn_id) {
                 if schema.items.contains_key(&name.item) {
                     return Ok(FullName {
                         database: database_spec,
@@ -739,7 +745,6 @@ impl Catalog {
     /// See also [`Catalog::get`].
     pub fn try_get(&self, name: &FullName, conn_id: u32) -> Option<&CatalogEntry> {
         self.get_schema(&name.database, &name.schema, conn_id)
-            .ok()
             .and_then(|schema| schema.items.get(&name.item))
             .map(|id| &self.by_id[id])
     }
@@ -803,23 +808,17 @@ impl Catalog {
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
         conn_id: u32,
-    ) -> Result<&Schema, SqlCatalogError> {
+    ) -> Option<&Schema> {
         // Keep in sync with `get_schemas_mut`.
         match database_spec {
             DatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
-                Ok(&self.temporary_schemas[&conn_id])
+                self.temporary_schemas.get(&conn_id)
             }
-            DatabaseSpecifier::Ambient => match self.ambient_schemas.get(schema_name) {
-                Some(schema) => Ok(schema),
-                None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
-            },
-            DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
-                Some(db) => match db.schemas.get(schema_name) {
-                    Some(schema) => Ok(schema),
-                    None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
-                },
-                None => Err(SqlCatalogError::UnknownDatabase(name.to_owned())),
-            },
+            DatabaseSpecifier::Ambient => self.ambient_schemas.get(schema_name),
+            DatabaseSpecifier::Name(name) => self
+                .by_name
+                .get(name)
+                .and_then(|db| db.schemas.get(schema_name)),
         }
     }
 
@@ -829,23 +828,17 @@ impl Catalog {
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
         conn_id: u32,
-    ) -> Result<&mut Schema, SqlCatalogError> {
+    ) -> Option<&mut Schema> {
         // Keep in sync with `get_schemas`.
         match database_spec {
             DatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
-                Ok(self.temporary_schemas.get_mut(&conn_id).unwrap())
+                self.temporary_schemas.get_mut(&conn_id)
             }
-            DatabaseSpecifier::Ambient => match self.ambient_schemas.get_mut(schema_name) {
-                Some(schema) => Ok(schema),
-                None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
-            },
-            DatabaseSpecifier::Name(name) => match self.by_name.get_mut(name) {
-                Some(db) => match db.schemas.get_mut(schema_name) {
-                    Some(schema) => Ok(schema),
-                    None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
-                },
-                None => Err(SqlCatalogError::UnknownDatabase(name.to_owned())),
-            },
+            DatabaseSpecifier::Ambient => self.ambient_schemas.get_mut(schema_name),
+            DatabaseSpecifier::Name(name) => self
+                .by_name
+                .get_mut(name)
+                .and_then(|db| db.schemas.get_mut(schema_name)),
         }
     }
 
