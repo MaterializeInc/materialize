@@ -9,7 +9,10 @@
 
 FROM python:3.7-slim
 
-RUN pip install kafka-python \
+RUN apt update && apt install -y librdkafka1 librdkafka-dev
+
+ENV RDKAFKA_INSTALL=system
+RUN pip install pykafka \
                 pyarrow \
                 requests
 

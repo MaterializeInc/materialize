@@ -63,18 +63,6 @@ def restore_schemas(args):
             sys.exit(1)
 
 
-def check_delivery(producer):
-    count = 0
-    while 1:
-        try:
-            _, exc = producer.get_delivery_report(block=False)
-            if exc is not None:
-                print(f'Failed to deliver message: {exc}')
-                sys.exit(1)
-            count += 1
-        except queue.Empty:
-            return count
-
 def restore_topic(args, archive):
 
     topic = os.path.splitext(archive)[0]
@@ -88,8 +76,10 @@ def restore_topic(args, archive):
         with pyarrow.RecordBatchFileReader(f) as reader:
             table = reader.read_all()
 
+    log.info(f"Loaded {table.num_rows} from snapshot file")
+
     kafka_topic = client.topics[topic]
-    with kafka_topic.get_producer(delivery_reports=True) as producer:
+    with kafka_topic.get_producer(max_retries=0, delivery_reports=True, use_rdkafka=True) as producer:
 
         total_msgs = table.num_rows
 
@@ -99,19 +89,8 @@ def restore_topic(args, archive):
             timestamp = table["timestamp"][i].value
             (sec, ms) = divmod(timestamp, 1000)
             dt = datetime.datetime.fromtimestamp(sec).replace(microsecond=ms)
+
             producer.produce(value, partition_key=key, timestamp=dt)
-
-            # Check for delivery reports
-            if i % 10 ** 6 == 0:
-                total_msgs -= check_delivery(producer)
-
-        total_msgs -= check_delivery(producer)
-        producer.stop()
-
-        while total_msgs != 0:
-            total_msgs -= check_delivery(producer)
-            print(f'Waiting on {total_msgs} messages to be delivered.... again!')
-            time.sleep(1)
 
     log.info(f"Restored {table.num_rows} rows to topic {topic}")
 
