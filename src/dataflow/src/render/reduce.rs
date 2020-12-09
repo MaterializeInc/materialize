@@ -441,7 +441,6 @@ where
     // Gather the relevant values into a vec of rows ordered by aggregation_index
     let mut packer = RowPacker::new();
     let collection = collection.map(move |(key, row)| {
-        let aggrs = aggrs.clone();
         let mut values = Vec::with_capacity(aggrs.len());
         let mut row_iter = row.iter().enumerate();
         // Go through all the elements of the row with one iterator
@@ -471,7 +470,6 @@ where
             .inner
             .map(move |((key, values), time, diff)| {
                 assert!(diff > 0);
-                let aggr_funcs = aggr_funcs.clone();
                 let mut output = Vec::new();
                 for (row, func) in values.into_iter().zip(aggr_funcs.iter()) {
                     output.push(monoids::get_monoid(row, func).expect(
