@@ -102,8 +102,6 @@ where
                     |_expr| None,
                     move |row| {
                         let temp_storage = RowArena::new();
-                        let mut results = Vec::new();
-
                         // Ensure the packer is clear, and does not reflect
                         // columns from prior rows that may have errored.
                         row_packer.clear();
@@ -117,7 +115,7 @@ where
                             match expr.eval(&datums_local, &temp_storage) {
                                 Ok(val) => row_packer.push(val),
                                 Err(e) => {
-                                    results.push(Err(e.into()));
+                                    return Some(Err(e.into()));
                                 }
                             }
                         }
@@ -126,25 +124,29 @@ where
                         // If any error occurs we produce both the error as output,
                         // but also a `Datum::Null` value to avoid causing the later
                         // "ReduceCollation" operator to panic due to absent aggregates.
-                        if results.is_empty() {
-                            let key = row_packer.finish_and_reuse();
-                            for aggr in aggregates_clone.iter() {
-                                match aggr.expr.eval(&datums_local, &temp_storage) {
-                                    Ok(val) => {
-                                        row_packer.push(val);
-                                    }
-                                    Err(e) => {
-                                        row_packer.push(Datum::Null);
-                                        results.push(Err(e.into()));
-                                    }
+                        let key = row_packer.finish_and_reuse();
+                        for aggr in aggregates_clone.iter() {
+                            match aggr.expr.eval(&datums_local, &temp_storage) {
+                                Ok(val) => {
+                                    row_packer.push(val);
+                                }
+                                Err(e) => {
+                                    return Some(Err(e.into()));
                                 }
                             }
-                            let row = row_packer.finish_and_reuse();
-                            results.push(Ok((key, row)));
                         }
                         datums = repurpose_allocation(datums_local);
-                        // Return accumulated results.
-                        results
+
+                        // Mint the final row, ideally re-using resources.
+                        use timely::communication::message::RefOrMut;
+                        let row = match row {
+                            RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
+                            RefOrMut::Mut(row) => {
+                                row_packer.finish_into(row);
+                                std::mem::replace(row, Row::new(vec![]))
+                            }
+                        };
+                        return Some(Ok((key, row)));
                     },
                 )
                 .unwrap();
