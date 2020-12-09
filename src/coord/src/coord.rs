@@ -55,7 +55,7 @@ use sql::ast::{
     FetchStatement, ObjectType, Statement,
 };
 use sql::catalog::Catalog as _;
-use sql::names::{DatabaseSpecifier, FullName};
+use sql::names::{DatabaseSpecifier, FullName, SchemaName};
 use sql::plan::StatementDesc;
 use sql::plan::{
     AlterIndexLogicalCompactionWindow, CopyFormat, LogicalCompactionWindow, MutationKind, Params,
@@ -1329,13 +1329,7 @@ where
                 tx.send(self.sequence_drop_database(name).await, session)
             }
 
-            Plan::DropSchema {
-                database_name,
-                schema_name,
-            } => tx.send(
-                self.sequence_drop_schema(database_name, schema_name).await,
-                session,
-            ),
+            Plan::DropSchema { name } => tx.send(self.sequence_drop_schema(name).await, session),
 
             Plan::DropItems { items, ty } => {
                 tx.send(self.sequence_drop_items(items, ty).await, session)
@@ -1835,10 +1829,9 @@ where
 
     async fn sequence_drop_schema(
         &mut self,
-        database_name: DatabaseSpecifier,
-        schema_name: String,
+        name: SchemaName,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        let ops = self.catalog.drop_schema_ops(database_name, schema_name);
+        let ops = self.catalog.drop_schema_ops(name);
         self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedSchema)
     }

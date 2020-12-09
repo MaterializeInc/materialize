@@ -133,8 +133,7 @@ pub fn plan_insert_query(
     source: InsertSource,
 ) -> Result<(GlobalId, RelationExpr), anyhow::Error> {
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-    let name = scx.resolve_item(table_name)?;
-    let table = scx.catalog.get_item(&name);
+    let table = scx.resolve_item(table_name)?;
     let desc = table.desc()?;
 
     // Validate the target of the insert.
@@ -2838,8 +2837,7 @@ impl<'a> QueryContext<'a> {
         }
 
         // Non-CTE table names must be retrieved from the catalog.
-        let name = self.scx.resolve_item(name)?;
-        let item = self.scx.catalog.get_item(&name);
+        let item = self.scx.resolve_item(name)?;
         let desc = item.desc()?.clone();
         let expr = RelationExpr::Get {
             id: Id::Global(item.id()),
@@ -2847,7 +2845,7 @@ impl<'a> QueryContext<'a> {
         };
 
         let scope = Scope::from_source(
-            Some(name.into()),
+            Some(item.name().clone().into()),
             desc.iter_names().map(|n| n.cloned()),
             Some(self.outer_scope.clone()),
         );
