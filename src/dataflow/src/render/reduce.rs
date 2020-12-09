@@ -12,6 +12,7 @@ use differential_dataflow::difference::DiffVector;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
+use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
@@ -462,10 +463,9 @@ where
         // We can place our rows directly into the diff field, and only keep the
         // relevant one corresponding to evaluating our aggregate, instead of having
         // to do a hierarchical reduction.
-        use differential_dataflow::operators::consolidate::ConsolidateStream;
         use timely::dataflow::operators::Map;
 
-        let collection = collection
+        let partial = collection
             .consolidate()
             .inner
             .map(move |((key, values), time, diff)| {
@@ -477,12 +477,12 @@ where
                     ));
                 }
 
-                ((key, ()), time, DiffVector::new(output))
+                (key, time, DiffVector::new(output))
             })
-            .as_collection();
-        let arrangement = collection
-            .consolidate_stream()
-            .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMonotonicHierarchical", {
+            .as_collection()
+            .arrange_by_self();
+        let arrangement =
+            partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMonotonicHierarchical", {
                 let mut row_packer = RowPacker::new();
                 move |key, input, output| {
                     let accum = &input[0].1;
