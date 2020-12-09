@@ -39,25 +39,32 @@ FETCH FORWARD 2000 FROM c
 ----
 FETCH 2000 c
 =>
-Fetch(FetchStatement { name: Ident("c"), count: Some(2000) })
+Fetch(FetchStatement { name: Ident("c"), count: Some(2000), options: [] })
 
 parse-statement
 FETCH c
 ----
 FETCH c
 =>
-Fetch(FetchStatement { name: Ident("c"), count: None })
+Fetch(FetchStatement { name: Ident("c"), count: None, options: [] })
 
 parse-statement
 FETCH FORWARD c
 ----
 FETCH c
 =>
-Fetch(FetchStatement { name: Ident("c"), count: None })
+Fetch(FetchStatement { name: Ident("c"), count: None, options: [] })
 
 parse-statement
 FETCH FROM c
 ----
 FETCH c
 =>
-Fetch(FetchStatement { name: Ident("c"), count: None })
+Fetch(FetchStatement { name: Ident("c"), count: None, options: [] })
+
+parse-statement
+FETCH FROM c WITH (TIMEOUT = '5s')
+----
+FETCH c WITH (timeout = '5s')
+=>
+Fetch(FetchStatement { name: Ident("c"), count: None, options: [WithOption { key: Ident("timeout"), value: Some(Value(String("5s"))) }] })
