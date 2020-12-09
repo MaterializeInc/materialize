@@ -752,16 +752,46 @@ where
         let (mfp, input) = MapFilterProject::extract_from_expression(relation_expr);
         match input {
             RelationExpr::Get { .. } => {
+                // TODO: determine if `mfp` is no-op to simplify implementation.
                 let mfp2 = mfp.clone();
                 self.ensure_rendered(&input, scope, worker_index);
                 let (ok_collection, mut err_collection) = self
                     .flat_map_ref(&input, move |exprs| mfp2.literal_constraints(exprs), {
                         let mut row_packer = repr::RowPacker::new();
+                        let mut datums = vec![];
                         move |row| {
-                            let temp_storage = RowArena::new();
-                            mfp.evaluate(&mut row.unpack(), &temp_storage, &mut row_packer)
-                                .map_err(|e| e.into())
-                                .transpose()
+                            let pack_result = {
+                                let temp_storage = RowArena::new();
+                                let mut datums_local = std::mem::take(&mut datums);
+                                datums_local.extend(row.iter());
+                                // Temporary assignment looks weird, but seems needed to convince
+                                // Rust that the lifetime of `evaluate_iter` does not escape.
+                                let result =
+                                    match mfp.evaluate_iter(&mut datums_local, &temp_storage) {
+                                        Ok(Some(iter)) => {
+                                            row_packer.clear();
+                                            row_packer.extend(iter);
+                                            Some(Ok(()))
+                                        }
+                                        Ok(None) => None,
+                                        Err(e) => Some(Err(e.into())),
+                                    };
+                                datums = ore::vec::repurpose_allocation(datums_local);
+                                result
+                            };
+
+                            // Re-use the input `row` if at all possible.
+                            pack_result.map(|res| {
+                                res.map(|()| match row {
+                                    timely::communication::message::RefOrMut::Ref(_) => {
+                                        row_packer.finish_and_reuse()
+                                    }
+                                    timely::communication::message::RefOrMut::Mut(r) => {
+                                        row_packer.finish_into(r);
+                                        std::mem::replace(r, Row::new(Vec::new()))
+                                    }
+                                })
+                            })
                         }
                     })
                     .unwrap();
