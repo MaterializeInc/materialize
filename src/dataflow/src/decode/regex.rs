@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp::min;
 use std::iter;
 use std::str;
 
@@ -45,17 +44,18 @@ where
                     let line = match str::from_utf8(&line) {
                         Ok(line) => line,
                         Err(_) => {
-                            let line_len = min(line.len(), 1024);
+                            let line_no = match line_no {
+                                Some(line_no) => line_no.to_string(),
+                                None => "unknown".into(),
+                            };
+                            let line_prefix = String::from_utf8_lossy(&line)
+                                .chars()
+                                .take(64)
+                                .collect::<String>();
                             warn!(
-                                "Line {}{} from source {} cannot be decoded as utf8. \
-                                Discarding line.",
-                                if line_len == line.len() {
-                                    ""
-                                } else {
-                                    "starting with: "
-                                },
-                                String::from_utf8_lossy(&line[0..line_len]),
-                                name
+                                "dropping line with invalid UTF-8 \
+                                (source: {}, line number: {}, line prefix: {:?})",
+                                name, line_no, line_prefix,
                             );
                             continue;
                         }
