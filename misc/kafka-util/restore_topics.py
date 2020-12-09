@@ -13,13 +13,16 @@
 # Writes topic contents as Arrow encoded Tables into the working directory of the script
 
 import argparse
+import datetime
 import json
 import logging
 import glob
+import queue
 import os
 import sys
+import time
 
-import kafka
+import pykafka
 import pyarrow
 import pyarrow.fs
 import requests
@@ -60,18 +63,24 @@ def restore_schemas(args):
             sys.exit(1)
 
 
+def check_delivery(producer):
+    count = 0
+    while 1:
+        try:
+            _, exc = producer.get_delivery_report(block=False)
+            if exc is not None:
+                print(f'Failed to deliver message: {exc}')
+                sys.exit(1)
+            count += 1
+        except queue.Empty:
+            return count
+
 def restore_topic(args, archive):
 
     topic = os.path.splitext(archive)[0]
     log.info(f"Restoring messages to topic {topic}")
 
-    producer = kafka.KafkaProducer(
-        bootstrap_servers=[f"{args.kafkahost}:{args.port}"], retries=3
-    )
-
-    def on_error(excp):
-        log.error(f"ERROR: Failed to send message {excp}")
-        sys.exit(1)
+    client = pykafka.KafkaClient(f"{args.kafkahost}:{args.port}", broker_version="1.0.0")
 
     local = pyarrow.fs.LocalFileSystem()
 
@@ -79,16 +88,31 @@ def restore_topic(args, archive):
         with pyarrow.RecordBatchFileReader(f) as reader:
             table = reader.read_all()
 
-    for i in range(0, table.num_rows):
-        key = table["key"][i].as_py()
-        value = table["value"][i].as_py()
-        timestamp = table["timestamp"][i].value
+    kafka_topic = client.topics[topic]
+    with kafka_topic.get_producer(delivery_reports=True) as producer:
 
-        producer.send(
-            f"{topic}", key=key, value=value, timestamp_ms=timestamp
-        ).add_errback(on_error)
+        total_msgs = table.num_rows
 
-    producer.flush()
+        for i in range(0, table.num_rows):
+            key = table["key"][i].as_py()
+            value = table["value"][i].as_py()
+            timestamp = table["timestamp"][i].value
+            (sec, ms) = divmod(timestamp, 1000)
+            dt = datetime.datetime.fromtimestamp(sec).replace(microsecond=ms)
+            producer.produce(value, partition_key=key, timestamp=dt)
+
+            # Check for delivery reports
+            if i % 10 ** 6 == 0:
+                total_msgs -= check_delivery(producer)
+
+        total_msgs -= check_delivery(producer)
+        producer.stop()
+
+        while total_msgs != 0:
+            total_msgs -= check_delivery(producer)
+            print(f'Waiting on {total_msgs} messages to be delivered.... again!')
+            time.sleep(1)
+
     log.info(f"Restored {table.num_rows} rows to topic {topic}")
 
 
