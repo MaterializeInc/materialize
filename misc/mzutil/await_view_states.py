@@ -50,7 +50,9 @@ def view_matches(cursor, view, expected, timestamp):
 
 def source_at_offset(cursor, source_name, desired_offset):
     """Return True if a SELECT from the VIEW matches the expected string."""
-    query = "SELECT timestamp FROM mz_source_info WHERE source_name = %s and offset = %s"
+    query = (
+        "SELECT timestamp FROM mz_source_info WHERE source_name = %s and offset = %s"
+    )
     try:
         cursor.execute(query, (source_name, desired_offset))
         if cursor.rowcount > 1:
@@ -84,7 +86,7 @@ def await_materialize_views(args):
     }
 
     # Create a dictionary mapping view names to source name and offset
-    with open(os.path.join(args.snapshot_dir, 'offsets.json')) as fd:
+    with open(os.path.join(args.snapshot_dir, "offsets.json")) as fd:
         source_offsets = json.load(fd)
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
@@ -113,7 +115,9 @@ def await_materialize_views(args):
                     if not timestamp:
                         continue
 
-                    print(f"Source {source_name} at offset {desired_offset}, timestamp {timestamp}")
+                    print(
+                        f"Source {source_name} at offset {desired_offset}, timestamp {timestamp}"
+                    )
                     if view_matches(cursor, view, view_snapshots[view], timestamp):
                         time_taken = time.time() - start_time
                         print(f"{time_taken:>6.1f}s: {view}")
