@@ -1229,6 +1229,7 @@ dependencies = [
  "hmac",
  "itertools",
  "md-5",
+ "nettle-sys",
  "num_enum",
  "ordered-float",
  "ore",
