@@ -67,6 +67,8 @@ parse_args() {
 
 main() {
 
+    parse_args "$@"
+
     if [[ -d "${data_dir}" ]]; then
         echo "ERROR: ${data_dir} exists -- will not overwrite"
         exit 1

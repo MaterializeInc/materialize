@@ -605,9 +605,9 @@ class PrintEnvStep(WorkflowStep):
 class Sleep(WorkflowStep):
     """Waits for the defined duration of time."""
 
-    def __init__(self, path: Path, duration: int) -> None:
+    def __init__(self, path: Path, duration: Union[int, str]) -> None:
         super().__init__(path)
-        self._duration = duration
+        self._duration = int(duration)
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
         print(f"Sleeping {self._duration} seconds")
