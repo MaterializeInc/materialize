@@ -9,7 +9,8 @@
 
 FROM python:3.9-slim
 
-RUN pip install kafka-python
+COPY requirements.txt /tmp
+RUN pip install -r /tmp/requirements.txt
 
-COPY summarize_topics.py /usr/local/bin/summarize_topics.py
-RUN chmod +x /usr/local/bin/summarize_topics.py
+# Add our executable scripts into the container
+COPY scripts /usr/local/bin
