@@ -1317,7 +1317,6 @@ def mzcompose_restart(
     if args is None:
         args = []
     cmd = ["bin/mzcompose", "--mz-quiet", *args, "restart"]
-    print("CWD:", os.getcwd())
     return spawn.runv(cmd + services, env=_merge_env(extra_env))
 
 

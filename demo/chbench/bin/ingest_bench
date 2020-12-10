@@ -8,6 +8,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+set -euo pipefail
+
+if [[ ! -f bin/mzconduct ]]; then
+    echo "This must be run from the root of the repo" >&2
+    exit 1
+fi
+
 export MZ_THREADS=24
 export NUM_WAREHOUSES=10
 export OLAP_THREADS=1

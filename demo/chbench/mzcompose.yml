@@ -369,37 +369,37 @@ mzconduct:
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
 
 
     load-test:

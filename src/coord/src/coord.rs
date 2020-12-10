@@ -777,7 +777,7 @@ where
         )?;
         let params = vec![];
         let result_formats = vec![pgrepr::Format::Text; desc.arity()];
-        session.set_portal(name, desc, Some(stmt), params, result_formats)?;
+        session.set_portal(name, desc, Some(stmt), params, result_formats);
         Ok(())
     }
 
