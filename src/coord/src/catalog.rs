@@ -382,6 +382,12 @@ impl CatalogEntry {
     }
 }
 
+lazy_static! {
+    /// Content migrations for the catalog's on-disk state.
+    static ref CATALOG_CONTENT_MIGRATIONS: Vec<Box<dyn Fn(&mut Catalog) -> Result<(), Error> + Send + Sync>> =
+        vec![];
+}
+
 impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
     ///
@@ -389,6 +395,8 @@ impl Catalog {
     /// of the catalog.
     pub fn open(config: Config) -> Result<(Catalog, Vec<Event>), Error> {
         let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
+
+        let cc = config.clone();
 
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
@@ -623,7 +631,19 @@ impl Catalog {
             events.push(catalog.insert_item(id, oid, name, item));
         }
 
-        Ok((catalog, events))
+        let catalog_content_version = catalog.storage().get_catalog_content_version()?;
+
+        if CATALOG_CONTENT_MIGRATIONS.len() > catalog_content_version {
+            CATALOG_CONTENT_MIGRATIONS[catalog_content_version](&mut catalog)?;
+            catalog
+                .storage()
+                .set_catalog_content_version(catalog_content_version + 1)?;
+            // Reopen catalog with new contents to ensure on-disk and in-memory
+            // state remain synchronized.
+            Catalog::open(cc)
+        } else {
+            Ok((catalog, events))
+        }
     }
 
     /// Opens the catalog at `path` with parameters set appropriately for debug
