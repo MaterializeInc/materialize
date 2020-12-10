@@ -375,37 +375,37 @@ mzconduct:
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
       # Run it again
       - step: restart-services
         services: [materialized]
       - step: run
         service: mzutil
-        command: await_view_states.py
+        command: wait_for_view_states.py
 
     # Run a test that populates Kafka with data from chbench for a set amount of time
     # After the first timer expires, stop chbench and wait for the data to stabilize

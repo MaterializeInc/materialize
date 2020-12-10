@@ -17,10 +17,10 @@ import argparse
 import fnmatch
 import time
 
-import kafka
+import kafka # type: ignore
 
 
-def summarize_topic(args, topic):
+def summarize_topic(args: argparse.Namespace, topic: str) -> None:
     """Read messages from a topic and print basic information about the topic."""
 
     consumer = kafka.KafkaConsumer(
@@ -31,7 +31,7 @@ def summarize_topic(args, topic):
         enable_auto_commit=True,
     )
 
-    start = time.time()
+    start = time.monotonic()
 
     num_messages = 0
     key_bytes = 0
@@ -41,11 +41,11 @@ def summarize_topic(args, topic):
         key_bytes += len(message.key) if message.key else 0
         value_bytes += len(message.value) if message.value else 0
 
-    seconds_elapsed = time.time() - start
+    seconds_elapsed = time.monotonic() - start
     print(f"{topic},{num_messages},{key_bytes},{value_bytes},{seconds_elapsed:.1f}s")
 
 
-def summarize_topics(args):
+def summarize_topics(args: argparse.Namespace) -> None:
     """Read messages from topics matching prefix and print basic information about the topic."""
 
     consumer = kafka.KafkaConsumer(bootstrap_servers=[f"{args.kafkahost}:{args.port}"])
@@ -56,7 +56,7 @@ def summarize_topics(args):
         summarize_topic(args, topic)
 
 
-def main():
+def main() -> None:
     """Parse arguments and print topic summaries."""
 
     parser = argparse.ArgumentParser()

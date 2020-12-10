@@ -9,21 +9,14 @@
 
 FROM python:3.7-slim
 
-RUN pip install kafka-python \
-                pyarrow \
-                requests
-
 # This is the directory that we expect to be mounted by Docker so that we can
 # save files across Docker runs
 RUN mkdir -p /snapshot
 
-COPY archive_topics.py /usr/local/bin/archive_topics.py
-RUN chmod +x /usr/local/bin/archive_topics.py
+COPY requirements.txt /tmp
+RUN pip install -r /tmp/requirements.txt
 
-COPY restore_topics.py /usr/local/bin/restore_topics.py
-RUN chmod +x /usr/local/bin/restore_topics.py
-
-COPY summarize_topics.py /usr/local/bin/summarize_topics.py
-RUN chmod +x /usr/local/bin/summarize_topics.py
+# Add our executable scripts into the container
+COPY scripts /usr/local/bin
 
 WORKDIR /snapshot

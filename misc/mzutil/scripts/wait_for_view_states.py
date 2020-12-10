@@ -8,7 +8,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""await_view_states
+"""wait_for_view_states
 
 Script to query all materialized views in a Materialize database and wait until each view matches
 the exact output as captured in the snapshot files.
@@ -21,13 +21,18 @@ import glob
 import io
 import os
 import sys
+import pathlib
 import time
+import typing
 
-import psycopg2
-import psycopg2.errors
+import psycopg2  # type: ignore
+import psycopg2.errors  # type: ignore
+import psycopg2.extensions  # type: ignore
 
 
-def view_names(conn):
+def view_names(
+    conn: psycopg2.extensions.connection,
+) -> typing.Generator[str, None, None]:
     """Return a generator containing all view names in Materialize."""
     with conn.cursor() as cursor:
         cursor.execute("SHOW VIEWS")
@@ -35,7 +40,7 @@ def view_names(conn):
             yield row[0]
 
 
-def view_matches(cursor, view, expected):
+def view_matches(cursor: psycopg2.extensions.cursor, view: str, expected: str) -> bool:
     """Return True if a SELECT from the VIEW matches the expected string."""
     stream = io.StringIO()
     try:
@@ -46,19 +51,14 @@ def view_matches(cursor, view, expected):
     return stream.getvalue() == expected
 
 
-def await_materialize_views(args):
+def wait_for_materialize_views(args: argparse.Namespace) -> None:
     """Record the current table status of all views installed in Materialize."""
 
     start_time = time.time()
 
-    def file_contents(fname):
-        with open(fname, "r") as fd:
-            return fd.read()
-
     # Create a dictionary mapping view names (as calculated from the filename) to expected contents
     view_snapshots = {
-        os.path.splitext(os.path.basename(fname))[0]: file_contents(fname)
-        for fname in glob.glob(os.path.join(args.snapshot_dir, "*.sql"))
+        p.stem: p.read_text() for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
     }
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
@@ -90,15 +90,15 @@ def await_materialize_views(args):
             time.sleep(0.1)
 
 
-def main():
+def main() -> None:
     """Parse arguments and snapshot materialized views."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--host", help="Materialize hostname", default="materialized", type=str
+        "--host", help="materialized hostname", default="materialized", type=str
     )
     parser.add_argument(
-        "-p", "--port", help="Materialize port number", default=6875, type=int
+        "-p", "--port", help="materialized port number", default=6875, type=int
     )
 
     parser.add_argument(
@@ -110,7 +110,7 @@ def main():
     )
 
     args = parser.parse_args()
-    await_materialize_views(args)
+    wait_for_materialize_views(args)
 
 
 if __name__ == "__main__":
