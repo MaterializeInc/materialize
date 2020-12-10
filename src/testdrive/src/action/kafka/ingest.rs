@@ -18,6 +18,7 @@ use serde::de::DeserializeOwned;
 
 use crate::action::{Action, State};
 use crate::format::avro::{self, Schema};
+use crate::format::bytes;
 use crate::format::protobuf;
 use crate::parser::BuiltinCommand;
 
@@ -63,12 +64,11 @@ impl Transcoder {
     where
         R: BufRead,
     {
-        let mut out = vec![];
         match self {
             Transcoder::Avro { schema, schema_id } => {
-                let val = Self::decode_json(row)?;
-                if let Some(val) = val {
+                if let Some(val) = Self::decode_json(row)? {
                     let val = avro::from_json(&val, schema.top_node())?;
+                    let mut out = vec![];
                     // The first byte is a magic byte (0) that indicates the Confluent
                     // serialization format version, and the next four bytes are a
                     // 32-bit schema ID.
@@ -77,8 +77,9 @@ impl Transcoder {
                     out.write_u8(0).unwrap();
                     out.write_i32::<NetworkEndian>(*schema_id).unwrap();
                     out.extend(avro::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
+                    Ok(Some(out))
                 } else {
-                    return Ok(None);
+                    Ok(None)
                 }
             }
             Transcoder::Protobuf { message } => {
@@ -100,19 +101,22 @@ impl Transcoder {
                         }
                     }
                 };
-                val.write_to_vec(&mut out).map_err(|e| e.to_string())?;
+                Ok(Some(val.write_to_bytes().map_err(|e| e.to_string())?))
             }
-            Transcoder::Bytes { terminator } => match terminator {
-                Some(t) => {
-                    row.read_until(*t, &mut out).map_err(|e| e.to_string())?;
-                    out.pop();
-                    Ok(())
+            Transcoder::Bytes { terminator } => {
+                let mut out = vec![];
+                match terminator {
+                    Some(t) => {
+                        row.read_until(*t, &mut out).map_err(|e| e.to_string())?;
+                        out.pop();
+                    }
+                    None => {
+                        row.read_to_end(&mut out).map_err(|e| e.to_string())?;
+                    }
                 }
-                None => row.read_to_end(&mut out).map(|_n| ()),
+                Ok(Some(bytes::unescape(&out)?))
             }
-            .map_err(|e| e.to_string())?,
         }
-        Ok(Some(out))
     }
 }
 

@@ -14,11 +14,12 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
 use crate::action::{Action, State};
+use crate::format::bytes;
 use crate::parser::BuiltinCommand;
 
 pub struct AppendAction {
     path: String,
-    contents: String,
+    contents: Vec<u8>,
 }
 
 fn build_path(cmd: &mut BuiltinCommand) -> Result<String, String> {
@@ -33,8 +34,12 @@ fn build_path(cmd: &mut BuiltinCommand) -> Result<String, String> {
 
 pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, String> {
     let path = build_path(&mut cmd)?;
-    let contents = cmd.input.join("\n") + "\n";
     cmd.args.done()?;
+    let mut contents = vec![];
+    for line in cmd.input {
+        contents.extend(bytes::unescape(line.as_bytes())?);
+        contents.push(b'\n');
+    }
     Ok(AppendAction { path, contents })
 }
 
@@ -55,7 +60,7 @@ impl Action for AppendAction {
             .open(&path)
             .await
             .map_err(|e| e.to_string())?;
-        file.write_all(self.contents.as_bytes())
+        file.write_all(&self.contents)
             .await
             .map_err(|e| e.to_string())?;
         Ok(())

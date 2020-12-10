@@ -562,8 +562,7 @@ where
         let stmt = stmt.sql().cloned();
         self.coord_client
             .session()
-            .set_portal(portal_name, desc, stmt, params, result_formats)
-            .unwrap();
+            .set_portal(portal_name, desc, stmt, params, result_formats);
 
         self.conn.send(BackendMessage::BindComplete).await?;
         Ok(State::Ready)
