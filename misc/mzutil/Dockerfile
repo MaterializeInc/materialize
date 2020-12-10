@@ -9,7 +9,8 @@
 
 FROM python:3.9-slim
 
-RUN pip install psycopg2-binary
+COPY requirements.txt /tmp
+RUN pip install -r /tmp/requirements.txt
 
 # This is the directory that we expect to be mounted by Docker so that we can
 # save files across Docker runs

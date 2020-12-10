@@ -22,12 +22,15 @@ import io
 import os
 import pathlib
 import time
+import typing
 
-import psycopg2
-import psycopg2.errors
+import psycopg2  # type: ignore
+import psycopg2.errors  # type: ignore
 
 
-def view_names(conn):
+def view_names(
+    conn: psycopg2.extensions.Connection,
+) -> typing.Generator[str, None, None]:
     """Return a generator containing all view names in Materialize."""
     with conn.cursor() as cursor:
         cursor.execute("SHOW VIEWS")
@@ -35,7 +38,7 @@ def view_names(conn):
             yield row[0]
 
 
-def view_matches(cursor, view, expected):
+def view_matches(cursor: psycopg2.extensions.Cursor, view: str, expected: str) -> bool:
     """Return True if a SELECT from the VIEW matches the expected string."""
     stream = io.StringIO()
     try:
@@ -46,7 +49,7 @@ def view_matches(cursor, view, expected):
     return stream.getvalue() == expected
 
 
-def wait_for_materialize_views(args):
+def wait_for_materialize_views(args: argparse.Namespace) -> None:
     """Record the current table status of all views installed in Materialize."""
 
     start_time = time.time()
@@ -82,7 +85,7 @@ def wait_for_materialize_views(args):
                 time.sleep(0.1)
 
 
-def main():
+def main() -> None:
     """Parse arguments and snapshot materialized views."""
 
     parser = argparse.ArgumentParser()
