@@ -14,6 +14,7 @@ lazy_static = "1.4"
 log = "0.4.11"
 mz-process-collector = { path = "../mz-process-collector" }
 ore = { path = "../ore" }
+parse_duration = "2.1.0"
 postgres = "0.17.5"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.4.1"
