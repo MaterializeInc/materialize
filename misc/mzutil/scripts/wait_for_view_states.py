@@ -87,7 +87,8 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
             for view in views_to_remove:
                 pending_views.remove(view)
 
-            time.sleep(0.1)
+            if pending_views:
+                time.sleep(0.1)
 
 
 def main() -> None:
