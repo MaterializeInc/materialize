@@ -29,7 +29,7 @@ pub struct Args {
     pub materialized_url: String,
     /// If true, don't run peeks, just create sources and views
     pub only_initialize: bool,
-    pub init_attempts: u16,
+    pub init_timeout: Duration,
     pub config: Config,
     pub warmup_secs: u32,
     pub run_secs: u32,
@@ -73,8 +73,8 @@ impl Args {
         );
         opts.optopt(
             "",
-            "init-attempts",
-            "How many times to try and initialize. Default: 10",
+            "init-timeout",
+            "How long to spend trying to initialize. Default: 60s",
             "ATTEMPTS",
         );
         opts.optopt(
@@ -103,12 +103,12 @@ impl Args {
                 std::process::exit(0);
             }
         };
-        let init_attempts = popts
-            .opt_str("init-attempts")
-            .map(|s| s.parse())
+        let init_timeout = popts
+            .opt_str("init-timeout")
+            .map(|d| parse_duration::parse(&d))
             .transpose()
-            .map_err(|e| format!("Error parsing --init-attempts: {}", e))?
-            .unwrap_or(10);
+            .map_err(|e| format!("Error parsing --init-timeout: {}", e))?
+            .unwrap_or_else(|| Duration::from_secs(60));
         let warmup_secs = popts
             .opt_str("warmup-seconds")
             .map(|s| s.parse())
@@ -135,7 +135,7 @@ impl Args {
                 "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
             )?,
             only_initialize: popts.opt_present("only-initialize"),
-            init_attempts,
+            init_timeout,
             config,
             warmup_secs,
             run_secs,
