@@ -15,6 +15,7 @@ enum-iterator = "0.6.0"
 hmac = "0.8.1"
 itertools = "0.9"
 md-5 = "0.9"
+nettle-sys = { version = "2.0", features = ["vendored"] }
 num_enum = "0.5.1"
 ordered-float = { version = "2.0.0", features = ["serde"] }
 ore = { path = "../ore" }
