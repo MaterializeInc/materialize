@@ -2784,15 +2784,21 @@ where
         }
         Ok(())
     }
+}
 
+// Coordinator methods related to the construction of dataflow descriptions.
+impl<C> Coordinator<C>
+where
+    C: comm::Connection,
+{
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
     fn import_into_dataflow(&self, id: &GlobalId, dataflow: &mut DataflowDesc) {
-        if dataflow.objects_to_build.iter().any(|bd| &bd.id == id)
-            || dataflow.source_imports.iter().any(|(i, _)| i == id)
-        {
+        // Avoid importing the item redundantly.
+        if dataflow.is_imported(id) {
             return;
         }
+
         // A valid index is any index on `id` that is known to the dataflow
         // layer, as indicated by its presence in `self.indexes`.
         let valid_index = self.catalog.indexes()[id]
@@ -2864,16 +2870,9 @@ where
         dataflow: &mut DataflowDesc,
     ) {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
-        view.as_ref().visit(&mut |e| {
-            if let RelationExpr::Get {
-                id: Id::Global(id),
-                typ: _,
-            } = e
-            {
-                self.import_into_dataflow(&id, dataflow);
-                dataflow.add_dependency(*view_id, *id)
-            }
-        });
+        for get_id in view.as_ref().global_uses() {
+            self.import_into_dataflow(&get_id, dataflow);
+        }
         // Collect sources, views, and indexes used.
         view.as_ref().visit(&mut |e| {
             if let RelationExpr::ArrangeBy { input, keys } = e {
@@ -2933,7 +2932,12 @@ where
         dataflow.add_sink_export(id, from, from_type, connector);
         dataflow
     }
+}
 
+impl<C> Coordinator<C>
+where
+    C: comm::Connection,
+{
     /// Finalizes a dataflow and then broadcasts it to all workers.
     ///
     /// Finalization includes optimization, but also validation of various
