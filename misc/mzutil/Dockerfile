@@ -15,8 +15,5 @@ RUN pip install psycopg2-binary
 # save files across Docker runs
 RUN mkdir -p /snapshot
 
-COPY await_view_states.py /usr/local/bin/await_view_states.py
-RUN chmod +x /usr/local/bin/await_view_states.py
-
-COPY snapshot_view_states.py /usr/local/bin/snapshot_view_states.py
-RUN chmod +x /usr/local/bin/snapshot_view_states.py
+# Add our executable scripts into the container
+COPY scripts /usr/local/bin

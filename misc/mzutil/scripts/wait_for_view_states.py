@@ -8,7 +8,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""await_view_states
+"""wait_for_view_states
 
 Script to query all materialized views in a Materialize database and wait until each view matches
 the exact output as captured in the snapshot files.
@@ -20,6 +20,7 @@ import argparse
 import glob
 import io
 import os
+import pathlib
 import time
 
 import psycopg2
@@ -45,20 +46,13 @@ def view_matches(cursor, view, expected):
     return stream.getvalue() == expected
 
 
-def await_materialize_views(args):
+def wait_for_materialize_views(args):
     """Record the current table status of all views installed in Materialize."""
 
     start_time = time.time()
 
-    def file_contents(fname):
-        with open(fname, "r") as fd:
-            return fd.read()
-
     # Create a dictionary mapping view names (as calculated from the filename) to expected contents
-    view_snapshots = {
-        os.path.splitext(os.path.basename(fname))[0]: file_contents(fname)
-        for fname in glob.glob(os.path.join(args.snapshot_dir, "*.sql"))
-    }
+    view_snapshots = {p.stem: p.read_text() for p in pathlib.Path(args.snapshot_dir).glob("*.sql")}
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
         installed_views = list(view_names(conn))
@@ -69,7 +63,7 @@ def await_materialize_views(args):
     print("Recording time required until each view matches its snapshot")
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
-        while 1:
+        while view_snapshots:
             views_to_remove = []
             for (view, contents) in view_snapshots.items():
                 with conn.cursor() as cursor:
@@ -84,8 +78,6 @@ def await_materialize_views(args):
             if view_snapshots:
                 # Our queries should be very fast, use a fast timer
                 time.sleep(0.1)
-            else:
-                break
 
 
 def main():
@@ -93,10 +85,10 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--host", help="Materialize hostname", default="materialized", type=str
+        "--host", help="materialized hostname", default="materialized", type=str
     )
     parser.add_argument(
-        "-p", "--port", help="Materialize port number", default=6875, type=int
+        "-p", "--port", help="materialized port number", default=6875, type=int
     )
 
     parser.add_argument(
@@ -108,7 +100,7 @@ def main():
     )
 
     args = parser.parse_args()
-    await_materialize_views(args)
+    wait_for_materialize_views(args)
 
 
 if __name__ == "__main__":
