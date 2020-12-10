@@ -389,6 +389,8 @@ version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd574044e0e73feb49cdf47728cb4f5299a32eb4743766cc3fb2e202525bfac5"
 dependencies = [
+ "bzip2",
+ "flate2",
  "libc",
 ]
 
@@ -425,6 +427,27 @@ name = "bytes"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e4cec68f03f32e44924783795810fa50a7035d8c8ebe78580ad7e6c703fba38"
+
+[[package]]
+name = "bzip2"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "275d84fe348b838dc49477d39770682839b3e73e21a3eadc07b12924f1a9fcbe"
+dependencies = [
+ "bzip2-sys",
+ "libc",
+]
+
+[[package]]
+name = "bzip2-sys"
+version = "0.1.9+1.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad3b39a260062fca31f7b0b12f207e8f2590a67d32ec7d59c20484b07ea7285e"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+]
 
 [[package]]
 name = "cast"
@@ -2423,12 +2446,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nettle-src"
+version = "3.5.1-2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fad3c0d4be23880e92170c10f009f1d4b0dd842a523dd8b35c89738fd3b640c8"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "nettle-sys"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8629333ff5f3b74d251dae253e383cda9242410fac4244a4fe855469be101fb"
 dependencies = [
  "bindgen",
+ "nettle-src",
  "pkg-config",
 ]
 
@@ -3835,7 +3868,9 @@ dependencies = [
  "backtrace",
  "base64 0.13.0",
  "buffered-reader",
+ "bzip2",
  "dyn-clone",
+ "flate2",
  "idna",
  "lalrpop",
  "lalrpop-util",
