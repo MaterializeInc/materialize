@@ -8,9 +8,77 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-export MZ_THREADS=24
-export MZ_TOPIC_SNAPSHOTS=/home/chris/snapshots2
-export KAFKA_TOPIC_FILTER=debezium.tpcch.orderline
-export PEEKER_QUERIES=count_orderline
+set -euo pipefail
 
-./bin/mzconduct run chbench -w kafka-replay-benchmark
+data_dir="${HOME}/chbench_snapshot"
+peeker_queries="count-sources"
+topic_filter="debezium.tpcch.*"
+workers=24
+
+usage() {
+    echo -n "usage: $0 [-d DATA_DIRECTORY] [-q QUERIES] [-t TOPIC_FILTER] [-w WORKERS]
+
+Start a benchmark that measures Materialize performance when ingesting VIEWS configured by
+Peeker (using the QUERIES variable). This benchmark works by starting a Kafka cluster and
+populating topics using the snapshot information (and TOPIC_FILTER) contained with the data
+directory. The benchmark then starts Materialized a set number of times, measuring how long it
+takes for Materialized to acheive the desired final view state.
+
+Help:
+
+    -h|--help      Print this help message and exit
+
+Options:
+
+    -d|--data-directory     Directory that contains the chbench state snapshot
+    -q|--queries            Peeker queries to configure (individual query or group name)
+    -t|--topic-filter       Only restore topics that match the supplied filter (GLOB syntax)
+    -w|--workers            Read the token from your Yubikey instead of asking for a one-time token
+"
+    exit "$1"
+}
+
+parse_args() {
+    local arg
+    while [[ $# -gt 0 ]]; do
+        arg="$1" && shift
+        case "$arg" in
+            -d|--data-directory)
+                data_dir="${1:?--data-directory requires an argument}" && shift
+                ;;
+            -h|--help) usage 0;;
+            -q|--queries)
+                peeker_queries="${1:?--queries requires an argument}" && shift
+                ;;
+            -t|--topic-filter)
+                topic_filter="${1:?--topic-filter requires an argument}" && shift
+                ;;
+            -w|--workers)
+                workers="${1:?--workers requires an argument}" && shift
+                ;;
+            *)
+                echo "ERROR: unknown argument: '$arg'"
+                usage 1
+                ;;
+        esac
+    done
+}
+
+main() {
+
+    parse_args "$@"
+
+    if [[ ! -d "${data_dir}" ]]; then
+        echo "ERROR: ${data_dir} is not a directory or does not exist"
+        exit 1
+    fi
+
+    export KAFKA_TOPIC_FILTER="${topic_filter}"
+    export MZ_THREADS="${workers}"
+    export MZ_TOPIC_SNAPSHOTS="${data_dir}"
+    export PEEKER_QUERIES="${peeker_queries}"
+
+    ./bin/mzconduct run chbench -w chbench-replay-benchmark
+}
+
+main "$@"

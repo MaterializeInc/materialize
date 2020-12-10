@@ -411,7 +411,7 @@ mzconduct:
     # After the first timer expires, stop chbench and wait for the data to stabilize
     # Record offsets ingested by Materialize and the answers to our count(*) views
     # Take a snapshot of topic schemas and contents
-    create-topic-snapshots:
+    create-chbench-snapshot:
       steps:
       - step: workflow
         workflow: bring-up-source-data-postgres
@@ -432,8 +432,9 @@ mzconduct:
         seconds: 1
       # Populate Kafka topics with sufficient data that Materialize will take a decent amount of
       # time to catch up
+      # TODO: Configure chbench with this paramter and wait on its exit
       - step: sleep
-        duration: 43200
+        duration: ${RUN_SECONDS:-43200}
       - step: stop-services
         services: [chbench, postgres]
       # Give Materialize a few seconds to catch up with topics / drain before snapshotting views
@@ -448,7 +449,7 @@ mzconduct:
 
     # Run a test that populates Kafka with data from topic snapshots
     # Then run Materialize and measure time until it catches up to snapshotted view state
-    kafka-replay-benchmark:
+    chbench-replay-benchmark:
       steps:
       # start the dashboard before the load data get started so that we have data from
       # the beginning of time
