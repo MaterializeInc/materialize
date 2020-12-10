@@ -33,6 +33,11 @@ main    | [Linux] / [macOS]
 The tarballs for other commits on main can be constructed by replacing
 `latest` in the links above with the full 40-character commit hash.
 
+Unstable Docker images are also available. The most recent published unstable build is published
+as `materialize/materialized:unstable`. Docker images for other commits on main are published with
+an unstable tag that is suffixed by the 40-character commit hash:
+`materialize/materialized:unstable-COMMIT_HASH`
+
 ## Support
 
 We offer support for the two most recent versions of Materialize. The
