@@ -17,10 +17,11 @@ import json
 import logging
 import os
 import sys
+import typing
 
-import kafka
-import pyarrow
-import pyarrow.fs
+import kafka  # type: ignore
+import pyarrow  # type: ignore
+import pyarrow.fs  # type: ignore
 import requests
 
 # Setup basic formatting for logging output
@@ -38,32 +39,34 @@ SCHEMA = pyarrow.schema(
 )
 
 
-def query_subjects(args):
+def query_subjects(args: argparse.Namespace) -> typing.Generator[str, None, None]:
     """Return all subjects stored in the schema registry."""
     response = requests.get(f"http://{args.schemahost}:8081/subjects")
     response.raise_for_status()
-    return response.json()
+    yield from response.json()
 
 
-def fetch_schema(args, subject):
+def fetch_schema(args: argparse.Namespace, subject: str) -> requests.Response:
     """Get the latest schema definition for a subject."""
     response = requests.get(
         f"http://{args.schemahost}:8081/subjects/{subject}/versions/latest"
     )
     response.raise_for_status()
-    return response.json()
+    return response
 
 
-def archive_schemas(args):
+def archive_schemas(args: argparse.Namespace) -> None:
     """Record the raw value of the key/value schema fields for the named topic."""
 
     # Create a json file that maps subject name to schema definition, including ID
-    schemas = {subject: fetch_schema(args, subject) for subject in query_subjects(args)}
+    schemas = {
+        subject: fetch_schema(args, subject).json() for subject in query_subjects(args)
+    }
     with open("schemas.json", "w") as fd:
         json.dump(schemas, fd)
 
 
-def archive_topic(args, topic):
+def archive_topic(args: argparse.Namespace, topic: str) -> None:
 
     consumer = kafka.KafkaConsumer(
         topic,
@@ -113,7 +116,7 @@ def archive_topic(args, topic):
     log.info(f"Topic {topic} archived to local file ({len(keys)} messages)")
 
 
-def archive_topics(args):
+def archive_topics(args: argparse.Namespace) -> None:
 
     consumer = kafka.KafkaConsumer(
         bootstrap_servers=[f"{args.kafkahost}:{args.port}"], group_id="archive.topics"
@@ -133,7 +136,7 @@ def archive_topics(args):
         archive_topic(args, topic)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
 
     parser.add_argument(

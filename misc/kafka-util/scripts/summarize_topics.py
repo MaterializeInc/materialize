@@ -17,7 +17,7 @@ import argparse
 import fnmatch
 import time
 
-import kafka # type: ignore
+import kafka  # type: ignore
 
 
 def summarize_topic(args: argparse.Namespace, topic: str) -> None:
