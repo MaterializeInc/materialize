@@ -52,7 +52,9 @@ def wait_for_materialize_views(args):
     start_time = time.time()
 
     # Create a dictionary mapping view names (as calculated from the filename) to expected contents
-    view_snapshots = {p.stem: p.read_text() for p in pathlib.Path(args.snapshot_dir).glob("*.sql")}
+    view_snapshots = {
+        p.stem: p.read_text() for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
+    }
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
         installed_views = list(view_names(conn))
