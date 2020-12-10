@@ -3016,7 +3016,7 @@ where
         };
 
         let path = data_directory.join("catalog");
-        let (catalog, initial_catalog_events) = Catalog::open(catalog::Config {
+        let (catalog, initial_catalog_events) = Catalog::open(&catalog::Config {
             path: &path,
             experimental_mode: Some(experimental_mode),
             enable_logging: logging.is_some(),

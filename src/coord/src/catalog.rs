@@ -382,12 +382,14 @@ impl CatalogEntry {
     }
 }
 
+const CATALOG_CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), Error>] = &[];
+
 impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
     ///
     /// Returns the catalog and a list of events that describe the initial state
     /// of the catalog.
-    pub fn open(config: Config) -> Result<(Catalog, Vec<Event>), Error> {
+    pub fn open(config: &Config) -> Result<(Catalog, Vec<Event>), Error> {
         let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
 
         let mut catalog = Catalog {
@@ -403,7 +405,7 @@ impl Catalog {
                 nonce: rand::random(),
                 experimental_mode,
                 cluster_id,
-                cache_directory: config.cache_directory,
+                cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
             },
         };
@@ -623,7 +625,19 @@ impl Catalog {
             events.push(catalog.insert_item(id, oid, name, item));
         }
 
-        Ok((catalog, events))
+        let catalog_content_version = catalog.storage().get_catalog_content_version()?;
+
+        if CATALOG_CONTENT_MIGRATIONS.len() > catalog_content_version {
+            CATALOG_CONTENT_MIGRATIONS[catalog_content_version](&mut catalog)?;
+            catalog
+                .storage()
+                .set_catalog_content_version(catalog_content_version + 1)?;
+            // Reopen catalog with new contents to ensure on-disk and in-memory
+            // state remain synchronized.
+            Catalog::open(config)
+        } else {
+            Ok((catalog, events))
+        }
     }
 
     /// Opens the catalog at `path` with parameters set appropriately for debug
@@ -633,7 +647,7 @@ impl Catalog {
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
     pub fn open_debug(path: &Path) -> Result<Catalog, anyhow::Error> {
-        let (catalog, _) = Self::open(Config {
+        let (catalog, _) = Self::open(&Config {
             path,
             enable_logging: true,
             experimental_mode: None,
