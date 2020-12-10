@@ -62,7 +62,8 @@ impl Args {
         opts.optopt(
             "",
             "materialized-url",
-            "url of the materialized instance to collect metrics from",
+            "url of the materialized instance to collect metrics from. \
+             Default: postgres://ignoreuser@materialized:6875/materialize",
             "URL",
         );
         opts.optflag(
