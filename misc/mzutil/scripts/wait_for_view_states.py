@@ -26,10 +26,11 @@ import typing
 
 import psycopg2  # type: ignore
 import psycopg2.errors  # type: ignore
+import psycopg2.extensions  # type: ignore
 
 
 def view_names(
-    conn: psycopg2.extensions.Connection,
+    conn: psycopg2.extensions.connection,
 ) -> typing.Generator[str, None, None]:
     """Return a generator containing all view names in Materialize."""
     with conn.cursor() as cursor:
@@ -38,7 +39,7 @@ def view_names(
             yield row[0]
 
 
-def view_matches(cursor: psycopg2.extensions.Cursor, view: str, expected: str) -> bool:
+def view_matches(cursor: psycopg2.extensions.cursor, view: str, expected: str) -> bool:
     """Return True if a SELECT from the VIEW matches the expected string."""
     stream = io.StringIO()
     try:
