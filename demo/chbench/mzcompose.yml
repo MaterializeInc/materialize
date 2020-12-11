@@ -408,7 +408,6 @@ mzconduct:
       - step: wait-for-tcp
         host: kafka
         port: 9092
-      # Kafka connect / debezium takes forever to initialize (well, 5 minutes or so)
       - step: run
         service: kafka-util
         command: restore_topics.py --topic-filter ${KAFKA_TOPIC_FILTER:-debezium.tpcch.*}
