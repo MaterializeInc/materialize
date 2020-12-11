@@ -18,11 +18,15 @@ Best used when no data is running through the system.
 
 import argparse
 import os
+import typing
 
-import psycopg2
+import psycopg2  # type: ignore
+import psycopg2.extensions  # type: ignore
 
 
-def view_names(conn):
+def view_names(
+    conn: psycopg2.extensions.connection,
+) -> typing.Generator[str, None, None]:
     """Return a generator containing all view names in Materialize."""
     with conn.cursor() as cursor:
         cursor.execute("SHOW VIEWS")
@@ -30,7 +34,7 @@ def view_names(conn):
             yield row[0]
 
 
-def snapshot_materialize_views(args):
+def snapshot_materialize_views(args: argparse.Namespace) -> None:
     """Record the current table status of all views installed in Materialize."""
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
@@ -42,15 +46,15 @@ def snapshot_materialize_views(args):
                     cursor.copy_expert(query, outfile)
 
 
-def main():
+def main() -> None:
     """Parse arguments and snapshot materialized views."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--host", help="Materialize hostname", default="materialized", type=str
+        "--host", help="materialized hostname", default="materialized", type=str
     )
     parser.add_argument(
-        "-p", "--port", help="Materialize port number", default=6875, type=int
+        "-p", "--port", help="materialized port number", default=6875, type=int
     )
 
     parser.add_argument(

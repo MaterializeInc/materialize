@@ -18,10 +18,11 @@ import logging
 import glob
 import os
 import sys
+import typing
 
-import kafka
-import pyarrow
-import pyarrow.fs
+import kafka  # type: ignore
+import pyarrow  # type: ignore
+import pyarrow.fs  # type: ignore
 import requests
 
 # Setup basic formatting for logging output
@@ -30,7 +31,7 @@ log = logging.getLogger("restore.topics")
 log.setLevel(logging.INFO)
 
 
-def load_sorted_schemas():
+def load_sorted_schemas() -> typing.Generator[typing.Tuple[int, str, str], None, None]:
     """Load the list of schemas, sorted by schema registry's internal ID."""
 
     with open("schemas.json") as fd:
@@ -42,7 +43,7 @@ def load_sorted_schemas():
     )
 
 
-def restore_schemas(args):
+def restore_schemas(args: argparse.Namespace) -> None:
     """Create key and value schemas for this topic."""
 
     for subject_id, subject, schema in load_sorted_schemas():
@@ -60,7 +61,7 @@ def restore_schemas(args):
             sys.exit(1)
 
 
-def restore_topic(args, archive):
+def restore_topic(args: argparse.Namespace, archive: str) -> None:
 
     topic = os.path.splitext(archive)[0]
     log.info(f"Restoring messages to topic {topic}")
@@ -69,7 +70,7 @@ def restore_topic(args, archive):
         bootstrap_servers=[f"{args.kafkahost}:{args.port}"], retries=3
     )
 
-    def on_error(excp):
+    def on_error(excp: Exception) -> None:
         log.error(f"ERROR: Failed to send message {excp}")
         sys.exit(1)
 
@@ -92,7 +93,7 @@ def restore_topic(args, archive):
     log.info(f"Restored {table.num_rows} rows to topic {topic}")
 
 
-def restore_topics(args):
+def restore_topics(args: argparse.Namespace) -> None:
 
     topic_archives = glob.glob(f"{args.topic_filter}.arrow")
     if not topic_archives:
@@ -107,7 +108,7 @@ def restore_topics(args):
         restore_topic(args, archive)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
 
     parser.add_argument(

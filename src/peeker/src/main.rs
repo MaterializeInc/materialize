@@ -195,14 +195,16 @@ fn create_postgres_client(mz_url: &str) -> Client {
 }
 
 fn initialize(config: &Args) -> Result<()> {
-    let mut counter = 6;
+    let start = std::time::Instant::now();
     let mut init_result = init_inner(&config);
     while let Err(e) = init_result {
-        counter -= 1;
-        if counter <= 0 {
+        if start.elapsed() > config.init_timeout {
             return Err(format!("unable to initialize: {}", e).into());
         }
-        warn!("init error, retry in 10 seconds ({} remaining)", counter);
+        warn!(
+            "init error, retry in 10 seconds ({:?} remaining)",
+            config.init_timeout - start.elapsed()
+        );
         thread::sleep(Duration::from_secs(10));
         init_result = init_inner(&config);
     }
@@ -211,12 +213,8 @@ fn initialize(config: &Args) -> Result<()> {
 
 fn init_inner(config: &Args) -> Result<()> {
     let mut postgres_client = create_postgres_client(&config.materialized_url);
-    initialize_sources(
-        &mut postgres_client,
-        &config.config.sources,
-        config.init_attempts,
-    )
-    .map_err(|e| format!("need to have sources for anything else to work: {}", e))?;
+    initialize_sources(&mut postgres_client, &config.config.sources)
+        .map_err(|e| format!("need to have sources for anything else to work: {}", e))?;
     let mut errors = 0;
     for group in config.config.queries_in_declaration_order() {
         if !try_initialize(&mut postgres_client, group) {
@@ -230,7 +228,7 @@ fn init_inner(config: &Args) -> Result<()> {
     }
 }
 
-fn initialize_sources(client: &mut Client, sources: &[Source], attempts: u16) -> Result<()> {
+fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
     let mut failed = false;
     for source in sources {
         let mut still_to_try = source.names.clone();
@@ -240,48 +238,46 @@ fn initialize_sources(client: &mut Client, sources: &[Source], attempts: u16) ->
         } else {
             ""
         };
-        for _ in 0..attempts {
-            let this_time = still_to_try.clone();
-            still_to_try.clear();
-            for name in this_time {
-                let delete_source = format!(r#" DROP SOURCE {name} CASCADE"#, name = name);
-                match client.batch_execute(&delete_source) {
-                    Ok(_) => info!("Deleted source in preparation for creation {}", name),
-                    Err(err) => {
-                        debug!("error trying to delete source {}: {}", name, err);
-                    }
+        let this_time = still_to_try.clone();
+        still_to_try.clear();
+        for name in this_time {
+            let delete_source = format!(r#" DROP SOURCE {name} CASCADE"#, name = name);
+            match client.batch_execute(&delete_source) {
+                Ok(_) => info!("Deleted source in preparation for creation {}", name),
+                Err(err) => {
+                    debug!("error trying to delete source {}: {}", name, err);
                 }
-                let create_source = format!(
-                    r#"CREATE {materialized} SOURCE IF NOT EXISTS "{name}"
+            }
+            let create_source = format!(
+                r#"CREATE {materialized} SOURCE IF NOT EXISTS "{name}"
                      FROM KAFKA BROKER '{broker}' TOPIC '{prefix}{name}'
                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{registry}'
                      ENVELOPE DEBEZIUM"#,
-                    name = name,
-                    broker = source.kafka_broker,
-                    prefix = source.topic_namespace,
-                    registry = source.schema_registry,
-                    materialized = materialized,
-                );
-                match client.batch_execute(&create_source) {
-                    Ok(_) => {
-                        info!(
-                            "installed source {} for topic {}{}",
-                            name, source.topic_namespace, name
-                        );
-                        succeeded.push(name)
-                    }
-                    Err(err) => {
-                        warn!("error trying to create source {}: {}", name, err);
-                        debug!("For query:\n                     {}", create_source);
-                        still_to_try.push(name)
-                    }
+                name = name,
+                broker = source.kafka_broker,
+                prefix = source.topic_namespace,
+                registry = source.schema_registry,
+                materialized = materialized,
+            );
+            match client.batch_execute(&create_source) {
+                Ok(_) => {
+                    info!(
+                        "installed source {} for topic {}{}",
+                        name, source.topic_namespace, name
+                    );
+                    succeeded.push(name)
+                }
+                Err(err) => {
+                    warn!("error trying to create source {}: {}", name, err);
+                    debug!("For query:\n                     {}", create_source);
+                    still_to_try.push(name)
                 }
             }
-            if still_to_try.is_empty() {
-                return Ok(());
-            } else {
-                thread::sleep(Duration::from_secs(3));
-            }
+        }
+        if still_to_try.is_empty() {
+            return Ok(());
+        } else {
+            thread::sleep(Duration::from_secs(3));
         }
         if !still_to_try.is_empty() {
             warn!(
