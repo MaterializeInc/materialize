@@ -20,7 +20,7 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::str;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
@@ -283,6 +283,67 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
 
     assert!(tail_reader.next().is_none());
     drop(tail_reader);
+
+    Ok(())
+}
+
+#[test]
+fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().threads(2);
+    let (_server, mut client) = util::start_server(config)?;
+
+    client.batch_execute(
+        "BEGIN;
+         CREATE TABLE t (i INT8);
+         INSERT INTO t VALUES (1), (2), (3);
+         DECLARE c CURSOR FOR TAIL t;",
+    )?;
+
+    let expected: Vec<i64> = vec![1, 2, 3];
+    let mut expected_iter = expected.iter();
+    let mut next = expected_iter.next();
+
+    // Test 0s timeouts.
+    while let Some(expect) = next {
+        let rows = client.query("FETCH c WITH (TIMEOUT = '0s')", &[])?;
+        // It is fine for there to be no rows ready yet. Immediately try again because
+        // they should be ready soon.
+        if rows.len() != 1 {
+            continue;
+        }
+        assert_eq!(rows[0].get::<_, i64>(2), *expect);
+
+        next = expected_iter.next();
+    }
+
+    // Test a 1s timeout and make sure we waited for atleast that long.
+    let before = Instant::now();
+    let rows = client.query("FETCH c WITH (TIMEOUT = '1s')", &[])?;
+    let duration = before.elapsed();
+    assert_eq!(rows.len(), 0);
+    // Make sure we waited at least 1s but also not too long.
+    assert!(duration >= Duration::from_secs(1));
+    assert!(duration < Duration::from_secs(10));
+
+    // Make a new cursor. Try to fetch more rows from it than exist. Verify that
+    // we got all the rows we expect and also waited for at least the timeout
+    // duration.
+    client.batch_execute("DECLARE c CURSOR FOR TAIL t")?;
+    let before = Instant::now();
+    let rows = client.query("FETCH 4 c WITH (TIMEOUT = '1s')", &[])?;
+    let duration = before.elapsed();
+    assert_eq!(rows.len(), expected.len());
+    assert!(duration >= Duration::from_secs(1));
+    assert!(duration < Duration::from_secs(10));
+    for i in 0..expected.len() {
+        assert_eq!(rows[i].get::<_, i64>(2), expected[i])
+    }
+
+    // Test that an unspecified timeout defaults to 0s.
+    let rows = client.query("FETCH c", &[])?;
+    assert_eq!(rows.len(), 0);
 
     Ok(())
 }

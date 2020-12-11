@@ -114,11 +114,12 @@ impl DataflowDesc {
         self.add_dependency(requesting_view, id);
     }
 
-    pub fn add_dependency(&mut self, view_id: GlobalId, dependent_id: GlobalId) {
+    /// Records a dependency of `view_id` on `depended_upon`.
+    fn add_dependency(&mut self, view_id: GlobalId, depended_upon: GlobalId) {
         self.dependent_objects
             .entry(view_id)
             .or_insert_with(Vec::new)
-            .push(dependent_id);
+            .push(depended_upon);
     }
 
     pub fn add_source_import(
@@ -141,6 +142,9 @@ impl DataflowDesc {
         expr: OptimizedRelationExpr,
         typ: RelationType,
     ) {
+        for get_id in expr.as_ref().global_uses() {
+            self.add_dependency(id, get_id);
+        }
         self.objects_to_build.push(BuildDesc {
             id,
             relation_expr: expr,
@@ -190,6 +194,12 @@ impl DataflowDesc {
                 connector,
             },
         ));
+    }
+
+    /// Returns true iff the id is already imported.
+    pub fn is_imported(&self, id: &GlobalId) -> bool {
+        self.objects_to_build.iter().any(|bd| &bd.id == id)
+            || self.source_imports.iter().any(|(i, _)| i == id)
     }
 
     /// Assigns the `as_of` frontier to the supplied argument.
