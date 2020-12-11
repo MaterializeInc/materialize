@@ -40,7 +40,7 @@ use repr::adt::decimal::Significand;
 use repr::{Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::ast::{
     ColumnOption, CreateTableStatement, DataType, DeleteStatement, DropObjectsStatement,
-    InsertStatement, ObjectType, Statement, TableConstraint, UpdateStatement,
+    Expr, InsertStatement, ObjectType, Statement, TableConstraint, UpdateStatement,
 };
 use sql::catalog::Catalog;
 use sql::names::FullName;
@@ -143,31 +143,34 @@ END $$;
                     .collect();
 
                 // Build initial relation type that handles declared data types
-                // and NOT NULL constraints.
-                let mut typ = RelationType::new(
-                    columns
-                        .iter()
-                        .map(|c| {
-                            let ty = scalar_type_from_sql(&c.data_type)?;
-                            let nullable =
-                                !c.options.iter().any(|o| o.option == ColumnOption::NotNull);
-                            Ok(ty.nullable(nullable))
-                        })
-                        .collect::<Result<Vec<_>, anyhow::Error>>()?,
-                );
+                // and NOT NULL, UNIQUE, and PRIMARY KEY constraints.
+                let mut column_types = Vec::with_capacity(columns.len());
+                let mut defaults = Vec::with_capacity(columns.len());
+                let mut keys = vec![];
 
-                // Handle column-level UNIQUE and PRIMARY KEY constraints.
-                // PRIMARY KEY implies UNIQUE and NOT NULL.
                 for (index, column) in columns.iter().enumerate() {
-                    for option in column.options.iter() {
-                        if let ColumnOption::Unique { is_primary } = option.option {
-                            typ = typ.with_key(vec![index]);
-                            if is_primary {
-                                typ.column_types[index].nullable = false;
+                    let ty = scalar_type_from_sql(&column.data_type)?;
+                    let mut nullable = true;
+                    let mut default = Expr::null();
+
+                    for option in &column.options {
+                        match &option.option {
+                            ColumnOption::NotNull => nullable = false,
+                            ColumnOption::Default(expr) => default = expr.clone(),
+                            // PRIMARY KEY implies UNIQUE and NOT NULL.
+                            ColumnOption::Unique { is_primary } => {
+                                keys.push(vec![index]);
+                                if *is_primary {
+                                    nullable = false;
+                                }
                             }
+                            other => bail!("unsupported column constraint: {}", other),
                         }
                     }
+                    column_types.push(ty.nullable(nullable));
+                    defaults.push(default);
                 }
+                let mut typ = RelationType { column_types, keys };
 
                 // Handle table-level UNIQUE and PRIMARY KEY constraints.
                 // PRIMARY KEY implies UNIQUE and NOT NULL.
@@ -204,6 +207,7 @@ END $$;
                 let table = Table {
                     create_sql: stmt.to_string(),
                     desc,
+                    defaults,
                 };
                 Plan::CreateTable {
                     name,

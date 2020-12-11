@@ -1542,30 +1542,37 @@ fn handle_create_table(
 
     // Build initial relation type that handles declared data types
     // and NOT NULL constraints.
-    let typ = RelationType::new(
-        columns
-            .iter()
-            .map(|c| {
-                let ty = scalar_type_from_sql(&c.data_type)?;
-                let mut nullable = true;
-                for option in c.options.iter() {
-                    match &option.option {
-                        ColumnOption::NotNull => nullable = false,
-                        other => {
-                            unsupported!(format!("CREATE TABLE with column constraint: {}", other))
-                        }
-                    }
+    let mut column_types = Vec::with_capacity(columns.len());
+    let mut defaults = Vec::with_capacity(columns.len());
+
+    for c in columns {
+        let ty = scalar_type_from_sql(&c.data_type)?;
+        let mut nullable = true;
+        let mut default = Expr::null();
+        for option in &c.options {
+            match &option.option {
+                ColumnOption::NotNull => nullable = false,
+                ColumnOption::Default(expr) => default = expr.clone(),
+                other => {
+                    unsupported!(format!("CREATE TABLE with column constraint: {}", other))
                 }
-                Ok(ty.nullable(nullable))
-            })
-            .collect::<Result<Vec<_>, anyhow::Error>>()?,
-    );
+            }
+        }
+        column_types.push(ty.nullable(nullable));
+        defaults.push(default);
+    }
+
+    let typ = RelationType::new(column_types);
 
     let name = scx.allocate_name(normalize::object_name(name.clone())?);
     let desc = RelationDesc::new(typ, names.into_iter().map(Some));
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
-    let table = Table { create_sql, desc };
+    let table = Table {
+        create_sql,
+        desc,
+        defaults,
+    };
     Ok(Plan::CreateTable {
         name,
         table,
