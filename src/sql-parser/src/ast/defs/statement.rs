@@ -1405,6 +1405,7 @@ impl_display!(CloseStatement);
 pub struct FetchStatement {
     pub name: Ident,
     pub count: Option<u64>,
+    pub options: Vec<WithOption>,
 }
 
 impl AstDisplay for FetchStatement {
@@ -1414,6 +1415,11 @@ impl AstDisplay for FetchStatement {
             f.write_str(format!("{} ", count));
         }
         f.write_node(&self.name);
+        if !self.options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
+        }
     }
 }
 impl_display!(FetchStatement);

@@ -33,6 +33,7 @@ use expr::{GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
+use repr::adt::interval::Interval;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
@@ -1999,6 +2000,15 @@ macro_rules! with_option_type {
             bail!("expected bool");
         }
     };
+    ($name:ident, Interval) => {
+        if let Some(WithOptionValue::Value(Value::String(value))) = $name {
+            strconv::parse_interval(&value)?
+        } else if let Some(WithOptionValue::Value(Value::Interval(interval))) = $name {
+            strconv::parse_interval(&interval.value)?
+        } else {
+            bail!("expected Interval");
+        }
+    };
 }
 
 /// This macro accepts a struct definition and will generate it and a `try_from`
@@ -2010,12 +2020,15 @@ macro_rules! with_option_type {
 ///   (`WITH (name = text)`).
 /// - `bool`: expects either a SQL bool (`WITH (name = true)`) or a valueless
 ///   option which will be interpreted as true: (`WITH (name)`.
+/// - `Interval`: expects either a SQL interval or string that can be parsed as
+///   an interval.
 macro_rules! with_options {
   (struct $name:ident {
         $($field_name:ident: $field_type:ident,)*
     }) => {
-        struct $name {
-            $($field_name: Option<$field_type>,)*
+        #[derive(Debug)]
+        pub struct $name {
+            pub $($field_name: Option<$field_type>,)*
         }
 
         impl TryFrom<Vec<WithOption>> for $name {
@@ -2051,4 +2064,8 @@ with_options! { struct CopyOptions {
 with_options! { struct TailOptions {
     snapshot: bool,
     progress: bool,
+} }
+
+with_options! { struct FetchOptions {
+    timeout: Interval,
 } }

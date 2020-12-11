@@ -3400,7 +3400,12 @@ impl<'a> Parser<'a> {
         let count = self.maybe_parse(Parser::parse_literal_uint);
         let _ = self.parse_keyword(FROM);
         let name = self.parse_identifier()?;
-        Ok(Statement::Fetch(FetchStatement { name, count }))
+        let options = self.parse_opt_with_options()?;
+        Ok(Statement::Fetch(FetchStatement {
+            name,
+            count,
+            options,
+        }))
     }
 
     /// Checks whether it is safe to descend another layer of nesting in the
