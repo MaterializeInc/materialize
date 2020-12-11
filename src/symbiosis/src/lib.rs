@@ -39,8 +39,8 @@ use pgrepr::Jsonb;
 use repr::adt::decimal::Significand;
 use repr::{Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::ast::{
-    ColumnOption, CreateTableStatement, DataType, DeleteStatement, DropObjectsStatement,
-    Expr, InsertStatement, ObjectType, Statement, TableConstraint, UpdateStatement,
+    ColumnOption, CreateTableStatement, DataType, DeleteStatement, DropObjectsStatement, Expr,
+    InsertStatement, ObjectType, Statement, TableConstraint, UpdateStatement,
 };
 use sql::catalog::Catalog;
 use sql::names::FullName;
