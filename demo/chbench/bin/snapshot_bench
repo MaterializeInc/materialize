@@ -30,7 +30,7 @@ Start a benchmark that measures Materialize performance when ingesting VIEWS con
 Peeker (using the QUERIES variable). This benchmark works by starting a Kafka cluster and
 populating topics using the snapshot information (and TOPIC_FILTER) contained with the data
 directory. The benchmark then starts Materialized a set number of times, measuring how long it
-takes for Materialized to acheive the desired final view state.
+takes for Materialized to achieve the desired final view state.
 
 Help:
 
