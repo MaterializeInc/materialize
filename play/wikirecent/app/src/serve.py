@@ -99,11 +99,11 @@ class Application(tornado.web.Application):
         super().__init__(*args, **kwargs)
         self.dsn = dsn
 
-        configured_views = ['counter', 'top_users', 'top_servers', 'top_pages']
+        configured_views = ['counter', 'top_users']
         self.views = {view: View() for view in configured_views}
 
         for view in configured_views:
-            ioloop.spawn_callback(self.tail_view, view)
+            ioloop.add_callback(self.tail_view, view)
 
     def mzql_connection(self):
         """Return a psycopg3.AsyncConnection object to our Materialize database."""
