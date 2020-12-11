@@ -28,6 +28,7 @@ use std::mem;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use itertools::Itertools;
+use ore::iter::IteratorExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
@@ -132,8 +133,7 @@ pub fn plan_insert_query(
     source: InsertSource,
 ) -> Result<(GlobalId, RelationExpr), anyhow::Error> {
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-    let name = scx.resolve_item(table_name)?;
-    let table = scx.catalog.get_item(&name);
+    let table = scx.resolve_item(table_name)?;
     let desc = table.desc()?;
 
     // Validate the target of the insert.
@@ -167,8 +167,6 @@ pub fn plan_insert_query(
             .map(|(idx, (name, typ))| (name, (idx, typ)))
             .collect();
 
-        let mut seen = HashSet::with_capacity(columns.len());
-
         for c in &columns {
             if let Some((idx, typ)) = column_by_name.get(c) {
                 ordering.push(*idx);
@@ -180,9 +178,9 @@ pub fn plan_insert_query(
                     table.name()
                 );
             }
-            if !seen.insert(c) {
-                bail!("column \"{}\" specified more than once", c.as_str());
-            }
+        }
+        if let Some(dup) = columns.iter().duplicates().next() {
+            bail!("column \"{}\" specified more than once", dup.as_str());
         }
     };
 
@@ -2568,23 +2566,14 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
 }
 
 pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::Error> {
-    // NOTE this needs to stay in sync with symbiosis::push_column
+    // `DataType`s that get translated into the same `ScalarType` have different
+    // functionality within symbiosis. Because of the relationship with
+    // symbiosis, this function should stay in sync with
+    // symbiosis::push_column.catalog.
     Ok(match data_type {
-        DataType::Boolean => ScalarType::Bool,
-        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
-        DataType::SmallInt | DataType::Int => ScalarType::Int32,
-        DataType::BigInt => ScalarType::Int64,
-        DataType::Float(Some(p)) if *p < 25 => ScalarType::Float32,
-        DataType::Float(p) => {
-            if let Some(p) = p {
-                if *p > 53 {
-                    bail!("precision for type float must be less than 54 bits")
-                }
-            }
-            ScalarType::Float64
-        }
-        DataType::Real => ScalarType::Float32,
-        DataType::Double => ScalarType::Float64,
+        DataType::Array(elem_type) => ScalarType::Array(Box::new(scalar_type_from_sql(elem_type)?)),
+        // Differentiated from `DataType::Other("text")` by impact within symbiosis.
+        DataType::Char(_) | DataType::Varchar(_) => ScalarType::String,
         DataType::Decimal(precision, scale) => {
             let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
             let scale = scale.unwrap_or(0);
@@ -2600,27 +2589,42 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::
             }
             ScalarType::Decimal(precision as u8, scale as u8)
         }
-        DataType::Date => ScalarType::Date,
-        DataType::Time => ScalarType::Time,
-        DataType::Timestamp => ScalarType::Timestamp,
-        DataType::TimestampTz => ScalarType::TimestampTz,
-        DataType::Interval => ScalarType::Interval,
-        DataType::Bytea => ScalarType::Bytes,
-        DataType::Jsonb => ScalarType::Jsonb,
-        DataType::Uuid => ScalarType::Uuid,
-        DataType::Array(elem_type) => ScalarType::Array(Box::new(scalar_type_from_sql(elem_type)?)),
+        DataType::Float(Some(p)) if *p < 25 => ScalarType::Float32,
+        DataType::Float(p) => {
+            if let Some(p) = p {
+                if *p > 53 {
+                    bail!("precision for type float must be less than 54 bits")
+                }
+            }
+            ScalarType::Float64
+        }
         DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
-        DataType::Oid => ScalarType::Oid,
         DataType::Map { value_type } => ScalarType::Map {
             value_type: Box::new(scalar_type_from_sql(value_type)?),
         },
-        DataType::Binary(..)
-        | DataType::Blob(_)
-        | DataType::Clob(_)
-        | DataType::Regclass
-        | DataType::TimeTz
-        | DataType::Varbinary(_)
-        | DataType::Custom(_) => bail!("Unexpected SQL type: {:?}", data_type),
+        DataType::Other(n) => match n.as_str() {
+            "bool" | "boolean" => ScalarType::Bool,
+            "bytea" | "bytes" => ScalarType::Bytes,
+            "date" => ScalarType::Date,
+            "float4" | "real" => ScalarType::Float32,
+            "float8" => ScalarType::Float64,
+            "interval" => ScalarType::Interval,
+            // Differentiated from one another by impact within symbiosis.
+            "int" | "integer" | "int4" | "smallint" => ScalarType::Int32,
+            "bigint" | "int8" => ScalarType::Int64,
+            "json" | "jsonb" => ScalarType::Jsonb,
+            "oid" => ScalarType::Oid,
+            "uuid" => ScalarType::Uuid,
+            "string" | "text" => ScalarType::String,
+            "time" => ScalarType::Time,
+            "timestamp" => ScalarType::Timestamp,
+            "timestamptz" => ScalarType::TimestampTz,
+            "timetz" => bail!(
+                "TIMETZ is not supported \
+            https://wiki.postgresql.org/wiki/Don%27t_Do_This#Don.27t_use_timetz"
+            ),
+            _ => bail!("type \"{}\" does not exist", n),
+        },
     })
 }
 
@@ -2833,8 +2837,7 @@ impl<'a> QueryContext<'a> {
         }
 
         // Non-CTE table names must be retrieved from the catalog.
-        let name = self.scx.resolve_item(name)?;
-        let item = self.scx.catalog.get_item(&name);
+        let item = self.scx.resolve_item(name)?;
         let desc = item.desc()?.clone();
         let expr = RelationExpr::Get {
             id: Id::Global(item.id()),
@@ -2842,7 +2845,7 @@ impl<'a> QueryContext<'a> {
         };
 
         let scope = Scope::from_source(
-            Some(name.into()),
+            Some(item.name().clone().into()),
             desc.iter_names().map(|n| n.cloned()),
             Some(self.outer_scope.clone()),
         );

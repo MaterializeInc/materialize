@@ -133,9 +133,6 @@ impl Session {
     ///
     // The `results_formats` parameter sets the desired format of the results,
     /// and is stored on the portal.
-    ///
-    /// Returns an error if `statement_name` does not specify a valid
-    /// prepared statement.
     pub fn set_portal(
         &mut self,
         portal_name: String,
@@ -143,7 +140,7 @@ impl Session {
         stmt: Option<Statement>,
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<pgrepr::Format>,
-    ) -> Result<(), anyhow::Error> {
+    ) {
         self.portals.insert(
             portal_name,
             Portal {
@@ -157,7 +154,6 @@ impl Session {
                 state: PortalState::NotStarted,
             },
         );
-        Ok(())
     }
 
     /// Removes the specified portal.

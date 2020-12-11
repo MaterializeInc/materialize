@@ -9,13 +9,15 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use sql_parser::ast::{Ident, ObjectName};
 
 /// The fully-qualified name of an item in the catalog.
 ///
 /// Catalog names compare case sensitively. Normalization is the responsibility
 /// of the consumer (e.g., the SQL layer).
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct FullName {
     pub database: DatabaseSpecifier,
     pub schema: String,
@@ -31,7 +33,7 @@ impl fmt::Display for FullName {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum DatabaseSpecifier {
     Ambient,
     Name(String),
@@ -55,17 +57,17 @@ impl From<Option<String>> for DatabaseSpecifier {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct SchemaSpecifier {
-    pub name: String,
-    pub id: i64,
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct SchemaName {
+    pub database: DatabaseSpecifier,
+    pub schema: String,
 }
 
-impl SchemaSpecifier {
-    pub fn new(name: &str, id: i64) -> SchemaSpecifier {
-        SchemaSpecifier {
-            name: name.to_owned(),
-            id,
+impl fmt::Display for SchemaName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.database {
+            DatabaseSpecifier::Ambient => f.write_str(&self.schema),
+            DatabaseSpecifier::Name(name) => write!(f, "{}.{}", name, self.schema),
         }
     }
 }
@@ -83,7 +85,7 @@ impl From<FullName> for ObjectName {
 }
 
 /// A partial name of an item in the catalog.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PartialName {
     pub database: Option<String>,
     pub schema: Option<String>,

@@ -33,22 +33,24 @@ use expr::{GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
+use repr::adt::interval::Interval;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
     ColumnOption, Connector, CopyDirection, CopyRelation, CopyStatement, CopyTarget,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMapTypeStatement, CreateSchemaStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement,
-    DiscardStatement, DiscardTarget, DropDatabaseStatement, DropObjectsStatement, ExplainStage,
-    ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior, InsertStatement,
-    ObjectName, ObjectType, Query, SelectStatement, SetVariableStatement, SetVariableValue,
-    ShowVariableStatement, SqlOption, Statement, TailStatement, Value, WithOption, WithOptionValue,
+    CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
+    CreateViewStatement, DiscardStatement, DiscardTarget, DropDatabaseStatement,
+    DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
+    IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query, SelectStatement,
+    SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption, Statement,
+    TailStatement, Value, WithOption, WithOptionValue,
 };
 
-use crate::catalog::{Catalog, CatalogItemType};
+use crate::catalog::{Catalog, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema};
 use crate::kafka_util;
-use crate::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
+use crate::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
@@ -131,7 +133,7 @@ pub fn describe_statement(
         | Statement::CreateTable(_)
         | Statement::CreateSink(_)
         | Statement::CreateView(_)
-        | Statement::CreateMapType(_)
+        | Statement::CreateType(_)
         | Statement::DropDatabase(_)
         | Statement::DropObjects(_)
         | Statement::SetVariable(_)
@@ -217,8 +219,7 @@ pub fn describe_statement(
         }
 
         Statement::Tail(TailStatement { name, options, .. }) => {
-            let name = scx.resolve_item(name)?;
-            let sql_object = scx.catalog.get_item(&name);
+            let sql_object = scx.resolve_item(name)?;
             let options = TailOptions::try_from(options)?;
             const MAX_U64_DIGITS: u8 = 20;
             let mut desc = RelationDesc::empty().with_column(
@@ -298,7 +299,7 @@ pub fn handle_statement(
         Statement::CreateSource(stmt) => handle_create_source(scx, stmt),
         Statement::CreateTable(stmt) => handle_create_table(scx, stmt),
         Statement::CreateView(stmt) => handle_create_view(scx, stmt, params),
-        Statement::CreateMapType(stmt) => handle_create_map_type(scx, stmt),
+        Statement::CreateType(stmt) => handle_create_type(scx, stmt),
         Statement::DropDatabase(stmt) => handle_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => handle_drop_objects(scx, stmt),
         Statement::AlterObjectRename(stmt) => handle_alter_object_rename(scx, stmt),
@@ -392,8 +393,7 @@ fn handle_tail(
     }: TailStatement,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
-    let from = scx.resolve_item(name)?;
-    let entry = scx.catalog.get_item(&from);
+    let entry = scx.resolve_item(name)?;
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let options = TailOptions::try_from(options)?;
 
@@ -410,7 +410,7 @@ fn handle_tail(
         }
         CatalogItemType::Index | CatalogItemType::Sink | CatalogItemType::Type => bail!(
             "'{}' cannot be tailed because it is a {}",
-            from,
+            entry.name(),
             entry.item_type(),
         ),
     }
@@ -458,8 +458,7 @@ fn handle_alter_object_rename(
     }: AlterObjectRenameStatement,
 ) -> Result<Plan, anyhow::Error> {
     let id = match scx.resolve_item(name.clone()) {
-        Ok(from_name) => {
-            let entry = scx.catalog.get_item(&from_name);
+        Ok(entry) => {
             if entry.item_type() != object_type {
                 bail!("{} is a {} not a {}", name, entry.item_type(), object_type)
             }
@@ -495,10 +494,9 @@ fn handle_alter_index_options(
     }: AlterIndexOptionsStatement,
 ) -> Result<Plan, anyhow::Error> {
     let alter_index = match scx.resolve_item(index_name) {
-        Ok(name) => {
-            let entry = scx.catalog.get_item(&name);
+        Ok(entry) => {
             if entry.item_type() != CatalogItemType::Index {
-                bail!("{} is a {} not a index", name, entry.item_type())
+                bail!("{} is a {} not a index", entry.name(), entry.item_type())
             }
 
             let logical_compaction_window = match options {
@@ -675,7 +673,7 @@ fn handle_create_sink(
         if_not_exists,
     } = stmt;
     let name = scx.allocate_name(normalize::object_name(name)?);
-    let from = scx.catalog.get_item(&scx.resolve_item(from)?);
+    let from = scx.resolve_item(from)?;
     let suffix = format!(
         "{}-{}",
         scx.catalog
@@ -756,21 +754,20 @@ fn handle_create_index(
         key_parts,
         if_not_exists,
     } = &mut stmt;
-    let on_name = scx.resolve_item(on_name.clone())?;
-    let catalog_entry = scx.catalog.get_item(&on_name);
+    let on = scx.resolve_item(on_name.clone())?;
 
-    if CatalogItemType::View != catalog_entry.item_type()
-        && CatalogItemType::Source != catalog_entry.item_type()
-        && CatalogItemType::Table != catalog_entry.item_type()
+    if CatalogItemType::View != on.item_type()
+        && CatalogItemType::Source != on.item_type()
+        && CatalogItemType::Table != on.item_type()
     {
         bail!(
             "index cannot be created on {} because it is a {}",
-            on_name,
-            catalog_entry.item_type()
+            on.name(),
+            on.item_type()
         )
     }
 
-    let on_desc = catalog_entry.desc()?;
+    let on_desc = on.desc()?;
 
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
@@ -778,8 +775,7 @@ fn handle_create_index(
             // `key_parts` is None if we're creating a "default" index, i.e.
             // creating the index as if the index had been created alongside the
             // view source, e.g. `CREATE MATERIALIZED...`
-            catalog_entry
-                .desc()?
+            on.desc()?
                 .typ()
                 .default_key()
                 .iter()
@@ -794,12 +790,12 @@ fn handle_create_index(
 
     let index_name = if let Some(name) = name {
         FullName {
-            database: on_name.database.clone(),
-            schema: on_name.schema.clone(),
+            database: on.name().database.clone(),
+            schema: on.name().schema.clone(),
             item: normalize::ident(name.clone()),
         }
     } else {
-        let mut idx_name_base = on_name.clone();
+        let mut idx_name_base = on.name().clone();
         if key_parts.is_none() {
             // We're trying to create the "default" index.
             idx_name_base.item += "_primary_idx";
@@ -823,14 +819,18 @@ fn handle_create_index(
         let mut index_name = idx_name_base.clone();
         let mut i = 0;
 
-        let mut cat_schema_iter = scx.catalog.list_items(&on_name.database, &on_name.schema);
+        let schema = SchemaName {
+            database: on.name().database.clone(),
+            schema: on.name().schema.clone(),
+        };
+        let mut cat_schema_iter = scx.catalog.list_items(&schema);
 
         // Search for an unused version of the name unless `if_not_exists`.
         while cat_schema_iter.any(|i| *i.name() == index_name) && !*if_not_exists {
             i += 1;
             index_name = idx_name_base.clone();
             index_name.item += &i.to_string();
-            cat_schema_iter = scx.catalog.list_items(&on_name.database, &on_name.schema);
+            cat_schema_iter = scx.catalog.list_items(&schema);
         }
 
         index_name
@@ -846,7 +846,7 @@ fn handle_create_index(
         name: index_name,
         index: Index {
             create_sql,
-            on: catalog_entry.id(),
+            on: on.id(),
             keys,
         },
         if_not_exists,
@@ -915,11 +915,13 @@ fn handle_create_view(
     } else {
         scx.allocate_name(normalize::object_name(name.to_owned())?)
     };
-    let replace = if *if_exists == IfExistsBehavior::Replace
-        && scx.catalog.resolve_item(&name.clone().into()).is_ok()
-    {
-        let cascade = false;
-        handle_drop_item(scx, ObjectType::View, &name, cascade)?
+    let replace = if *if_exists == IfExistsBehavior::Replace {
+        if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
+            let cascade = false;
+            handle_drop_item(scx, ObjectType::View, item, cascade)?
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -947,44 +949,40 @@ fn handle_create_view(
     })
 }
 
-fn handle_create_map_type(
+fn handle_create_type(
     scx: &StatementContext,
-    stmt: CreateMapTypeStatement,
+    stmt: CreateTypeStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let create_sql = normalize::create_statement(scx, Statement::CreateMapType(stmt.clone()))?;
-    let CreateMapTypeStatement { name, with_options } = stmt;
+    let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
+    let CreateTypeStatement {
+        name,
+        as_type,
+        with_options,
+    } = stmt;
 
     let mut with_options = normalize::option_objects(&with_options);
-    let key_name = match with_options.remove("key_type") {
-        Some(SqlOption::Value {
-            value: Value::String(val),
-            ..
-        }) => ObjectName(vec![Ident::new(val)]),
-        Some(SqlOption::ObjectName { object_name, .. }) => object_name,
-        Some(_) => bail!("key_type must be a string or identifier"),
-        None => bail!("key_type parameter required"),
-    };
-    let key = scx
-        .catalog
-        .resolve_item(&normalize::object_name(key_name)?)?;
-    if key.item.to_uppercase().as_str() != "TEXT" {
-        bail!("key_type must be text")
-    }
-    let key_id = scx.catalog.get_item(&key).id();
 
-    let value_name = match with_options.remove("value_type") {
-        Some(SqlOption::Value {
-            value: Value::String(val),
-            ..
-        }) => ObjectName(vec![Ident::new(val)]),
-        Some(SqlOption::ObjectName { object_name, .. }) => object_name,
-        Some(_) => bail!("value_type must be a string or identifier"),
-        None => bail!("value_type parameter required"),
+    let option_keys = match as_type {
+        CreateTypeAs::List => vec!["element_type"],
+        CreateTypeAs::Map => vec!["key_type", "value_type"],
     };
-    let value = scx
-        .catalog
-        .resolve_item(&normalize::object_name(value_name)?)?;
-    let value_id = scx.catalog.get_item(&value).id();
+
+    let mut ids = vec![];
+    for key in option_keys {
+        let item_name = match with_options.remove(&key.to_string()) {
+            Some(SqlOption::Value {
+                value: Value::String(val),
+                ..
+            }) => ObjectName(vec![Ident::new(val)]),
+            Some(SqlOption::ObjectName { object_name, .. }) => object_name,
+            Some(_) => bail!("{} must be a string or identifier", key),
+            None => bail!("{} parameter required", key),
+        };
+        let item = scx
+            .catalog
+            .resolve_item(&normalize::object_name(item_name)?)?;
+        ids.push(item.id());
+    }
 
     if !with_options.is_empty() {
         bail!(
@@ -998,12 +996,31 @@ fn handle_create_map_type(
         bail!("type \"{}\" already exists", name.to_string());
     }
 
+    let inner = match as_type {
+        CreateTypeAs::List => TypeInner::List {
+            element_id: ids.remove(0),
+        },
+        CreateTypeAs::Map => {
+            let key_id = ids.remove(0);
+            // TODO(sean): As part of
+            // https://github.com/MaterializeInc/materialize/issues/4953 we
+            // should be able to resolve IDs to `ScalarType`s, so this shouldn't
+            // rely on external knowledge that this OID is text's.
+            if scx.catalog.get_item_by_id(&key_id).oid() != 25 {
+                bail!("key_type must be text")
+            };
+            TypeInner::Map {
+                key_id,
+                value_id: ids.remove(0),
+            }
+        }
+    };
+
+    assert!(ids.is_empty());
+
     Ok(Plan::CreateType {
         name,
-        typ: Type {
-            create_sql,
-            inner: TypeInner::Map { key_id, value_id },
-        },
+        typ: Type { create_sql, inner },
     })
 }
 
@@ -1513,11 +1530,14 @@ fn handle_create_table(
 
     let names: Vec<_> = columns
         .iter()
-        .map(|c| Some(normalize::column_name(c.name.clone())))
+        .map(|c| normalize::column_name(c.name.clone()))
         .collect();
 
-    if names.iter().has_duplicates() {
-        bail!("cannot CREATE TABLE with duplicate column names");
+    if let Some(dup) = names.iter().duplicates().next() {
+        bail!(
+            "cannot CREATE TABLE: column \"{}\" specified more than once",
+            dup
+        );
     }
 
     // Build initial relation type that handles declared data types
@@ -1542,7 +1562,7 @@ fn handle_create_table(
     );
 
     let name = scx.allocate_name(normalize::object_name(name.clone())?);
-    let desc = RelationDesc::new(typ, names);
+    let desc = RelationDesc::new(typ, names.into_iter().map(Some));
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
     let table = Table { create_sql, desc };
@@ -1594,7 +1614,7 @@ fn handle_drop_database(
     DropDatabaseStatement { name, if_exists }: DropDatabaseStatement,
 ) -> Result<Plan, anyhow::Error> {
     let name = match scx.resolve_database_ident(name) {
-        Ok((name, _id)) => name,
+        Ok(database) => database.name().into(),
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the database
             // does not exist.
@@ -1638,24 +1658,22 @@ fn handle_drop_schema(
         unsupported!("DROP SCHEMA with multiple schemas");
     }
     match scx.resolve_schema(names.into_element()) {
-        Ok((database_spec, schema_spec)) => {
-            if let DatabaseSpecifier::Ambient = database_spec {
+        Ok(schema) => {
+            if let DatabaseSpecifier::Ambient = schema.name().database {
                 bail!(
                     "cannot drop schema {} because it is required by the database system",
-                    schema_spec.name
+                    schema.name()
                 );
             }
-            let mut items = scx.catalog.list_items(&database_spec, &schema_spec.name);
+            let mut items = scx.catalog.list_items(schema.name());
             if !cascade && items.next().is_some() {
                 bail!(
-                    "schema '{}.{}' cannot be dropped without CASCADE while it contains objects",
-                    database_spec,
-                    schema_spec.name
+                    "schema '{}' cannot be dropped without CASCADE while it contains objects",
+                    schema.name(),
                 );
             }
             Ok(Plan::DropSchema {
-                database_name: database_spec,
-                schema_name: schema_spec.name,
+                name: schema.name().clone(),
             })
         }
         Err(_) if if_exists => {
@@ -1664,8 +1682,10 @@ fn handle_drop_schema(
             // TODO(benesch): adjust the types here properly, rather than making
             // up a nonexistent database.
             Ok(Plan::DropSchema {
-                database_name: DatabaseSpecifier::Ambient,
-                schema_name: "noexist".into(),
+                name: SchemaName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: "noexist".into(),
+                },
             })
         }
         Err(e) => Err(e.into()),
@@ -1679,14 +1699,14 @@ fn handle_drop_items(
     names: Vec<ObjectName>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
-    let names = names
+    let items = names
         .into_iter()
         .map(|n| scx.resolve_item(n))
         .collect::<Vec<_>>();
     let mut ids = vec![];
-    for name in names {
-        match name {
-            Ok(name) => ids.extend(handle_drop_item(scx, object_type, &name, cascade)?),
+    for item in items {
+        match item {
+            Ok(item) => ids.extend(handle_drop_item(scx, object_type, item, cascade)?),
             Err(_) if if_exists => {
                 // TODO(benesch): generate a notice indicating this
                 // item does not exist.
@@ -1703,18 +1723,17 @@ fn handle_drop_items(
 fn handle_drop_item(
     scx: &StatementContext,
     object_type: ObjectType,
-    name: &FullName,
+    catalog_entry: &dyn CatalogItem,
     cascade: bool,
 ) -> Result<Option<GlobalId>, anyhow::Error> {
-    let catalog_entry = scx.catalog.get_item(name);
     if catalog_entry.id().is_system() {
         bail!(
             "cannot drop item {} because it is required by the database system",
-            name
+            catalog_entry.name(),
         );
     }
     if object_type != catalog_entry.item_type() {
-        bail!("{} is not of type {}", name, object_type);
+        bail!("{} is not of type {}", catalog_entry.name(), object_type);
     }
     if !cascade {
         for id in catalog_entry.used_by() {
@@ -1786,23 +1805,18 @@ fn handle_explain(
     let is_view = matches!(explainee, Explainee::View(_));
     let (scx, query) = match explainee {
         Explainee::View(name) => {
-            let full_name = scx.resolve_item(name.clone())?;
-            let entry = scx.catalog.get_item(&full_name);
-            if entry.item_type() != CatalogItemType::View {
-                bail!(
-                    "Expected {} to be a view, not a {}",
-                    name,
-                    entry.item_type(),
-                );
+            let view = scx.resolve_item(name.clone())?;
+            if view.item_type() != CatalogItemType::View {
+                bail!("Expected {} to be a view, not a {}", name, view.item_type(),);
             }
-            let parsed = crate::parse::parse(entry.create_sql())
+            let parsed = crate::parse::parse(view.create_sql())
                 .expect("Sql for existing view should be valid sql");
             let query = match parsed.into_last() {
                 Statement::CreateView(CreateViewStatement { query, .. }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
             let scx = StatementContext {
-                pcx: entry.plan_cx(),
+                pcx: view.plan_cx(),
                 catalog: scx.catalog,
                 param_types: scx.param_types.clone(),
             };
@@ -1903,35 +1917,28 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn resolve_default_database(&self) -> Result<(String, i64), PlanError> {
+    pub fn resolve_default_database(&self) -> Result<&dyn CatalogDatabase, PlanError> {
         let name = self.catalog.default_database();
-        let id = self.catalog.resolve_database(name)?;
-        Ok((name.into(), id))
+        Ok(self.catalog.resolve_database(name)?)
     }
 
-    pub fn resolve_default_schema(&self) -> Result<SchemaSpecifier, PlanError> {
-        Ok(self
-            .resolve_schema(ObjectName(vec![Ident::new("public")]))?
-            .1)
+    pub fn resolve_default_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
+        self.resolve_schema(ObjectName(vec![Ident::new("public")]))
     }
 
-    pub fn resolve_database(&self, name: ObjectName) -> Result<(String, i64), PlanError> {
+    pub fn resolve_database(&self, name: ObjectName) -> Result<&dyn CatalogDatabase, PlanError> {
         if name.0.len() != 1 {
             return Err(PlanError::OverqualifiedDatabaseName(name.to_string()));
         }
         self.resolve_database_ident(name.0.into_element())
     }
 
-    pub fn resolve_database_ident(&self, name: Ident) -> Result<(String, i64), PlanError> {
+    pub fn resolve_database_ident(&self, name: Ident) -> Result<&dyn CatalogDatabase, PlanError> {
         let name = normalize::ident(name);
-        let id = self.catalog.resolve_database(&name)?;
-        Ok((name, id))
+        Ok(self.catalog.resolve_database(&name)?)
     }
 
-    pub fn resolve_schema(
-        &self,
-        mut name: ObjectName,
-    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), PlanError> {
+    pub fn resolve_schema(&self, mut name: ObjectName) -> Result<&dyn CatalogSchema, PlanError> {
         if name.0.len() > 2 {
             return Err(PlanError::OverqualifiedSchemaName(name.to_string()));
         }
@@ -1940,7 +1947,7 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_schema(database_spec, &schema_name)?)
     }
 
-    pub fn resolve_item(&self, name: ObjectName) -> Result<FullName, PlanError> {
+    pub fn resolve_item(&self, name: ObjectName) -> Result<&dyn CatalogItem, PlanError> {
         let name = normalize::object_name(name)?;
         Ok(self.catalog.resolve_item(&name)?)
     }
@@ -1993,6 +2000,15 @@ macro_rules! with_option_type {
             bail!("expected bool");
         }
     };
+    ($name:ident, Interval) => {
+        if let Some(WithOptionValue::Value(Value::String(value))) = $name {
+            strconv::parse_interval(&value)?
+        } else if let Some(WithOptionValue::Value(Value::Interval(interval))) = $name {
+            strconv::parse_interval(&interval.value)?
+        } else {
+            bail!("expected Interval");
+        }
+    };
 }
 
 /// This macro accepts a struct definition and will generate it and a `try_from`
@@ -2004,12 +2020,15 @@ macro_rules! with_option_type {
 ///   (`WITH (name = text)`).
 /// - `bool`: expects either a SQL bool (`WITH (name = true)`) or a valueless
 ///   option which will be interpreted as true: (`WITH (name)`.
+/// - `Interval`: expects either a SQL interval or string that can be parsed as
+///   an interval.
 macro_rules! with_options {
   (struct $name:ident {
         $($field_name:ident: $field_type:ident,)*
     }) => {
-        struct $name {
-            $($field_name: Option<$field_type>,)*
+        #[derive(Debug)]
+        pub struct $name {
+            pub $($field_name: Option<$field_type>,)*
         }
 
         impl TryFrom<Vec<WithOption>> for $name {
@@ -2045,4 +2064,8 @@ with_options! { struct CopyOptions {
 with_options! { struct TailOptions {
     snapshot: bool,
     progress: bool,
+} }
+
+with_options! { struct FetchOptions {
+    timeout: Interval,
 } }

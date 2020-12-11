@@ -6,8 +6,8 @@ publish = false
 
 [dependencies]
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-libc = "0.2.79"
+libc = "0.2.81"
 lazy_static = "1.4.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procfs = "0.9.0"
+procfs = "0.9.1"

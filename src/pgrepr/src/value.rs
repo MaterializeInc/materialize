@@ -10,7 +10,6 @@
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::error::Error;
-use std::fmt;
 use std::io;
 use std::str;
 
@@ -36,6 +35,13 @@ pub mod record;
 /// A PostgreSQL datum.
 #[derive(Debug)]
 pub enum Value {
+    /// A variable-length, multi-dimensional array of values.
+    Array {
+        /// The dimensions of the array.
+        dims: Vec<ArrayDimension>,
+        /// The elements of the array.
+        elements: Vec<Option<Value>>,
+    },
     /// A boolean value.
     Bool(bool),
     /// A byte array, i.e., a variable-length binary string.
@@ -50,17 +56,14 @@ pub enum Value {
     Int4(i32),
     /// An 8-byte signed integer.
     Int8(i64),
+    /// A time interval.
+    Interval(Interval),
     /// A binary JSON blob.
     Jsonb(Jsonb),
-    /// A variable-length, multi-dimensional array of values.
-    Array {
-        /// The dimensions of the array.
-        dims: Vec<ArrayDimension>,
-        /// The elements of the array.
-        elements: Vec<Option<Value>>,
-    },
     /// A sequence of homogeneous values.
     List(Vec<Option<Value>>),
+    /// A map of string keys and homogeneous values.
+    Map(BTreeMap<String, Option<Value>>),
     /// An arbitrary precision number.
     Numeric(Numeric),
     /// A sequence of heterogeneous values.
@@ -71,14 +74,10 @@ pub enum Value {
     Timestamp(NaiveDateTime),
     /// A date and time, with a timezone.
     TimestampTz(DateTime<Utc>),
-    /// A time interval.
-    Interval(Interval),
     /// A variable-length string.
     Text(String),
     /// A universally unique identifier.
     Uuid(Uuid),
-    /// A map of string keys and homogeneous values.
-    Map(BTreeMap<String, Option<Value>>),
 }
 
 impl Value {
@@ -96,45 +95,51 @@ impl Value {
             (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
+            (Datum::Decimal(d), ScalarType::Decimal(_, scale)) => {
+                Some(Value::Numeric(Numeric(d.with_scale(*scale))))
+            }
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
             (Datum::TimestampTz(ts), ScalarType::TimestampTz) => Some(Value::TimestampTz(ts)),
             (Datum::Interval(iv), ScalarType::Interval) => Some(Value::Interval(Interval(iv))),
-            (Datum::Decimal(d), ScalarType::Decimal(_, scale)) => {
-                Some(Value::Numeric(Numeric(d.with_scale(*scale))))
-            }
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (_, ScalarType::Jsonb) => {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
             }
             (Datum::Uuid(u), ScalarType::Uuid) => Some(Value::Uuid(u)),
-            (Datum::Array(array), ScalarType::Array(elem_type)) => Some(Value::Array {
-                dims: array.dims().into_iter().collect(),
-                elements: array
+            (Datum::Array(array), ScalarType::Array(elem_type)) => {
+                let dims = array.dims().into_iter().collect();
+                let elements = array
                     .elements()
                     .iter()
                     .map(|elem| Value::from_datum(elem, elem_type))
-                    .collect(),
-            }),
-            (Datum::List(list), ScalarType::List(elem_type)) => Some(Value::List(
-                list.iter()
+                    .collect();
+                Some(Value::Array { dims, elements })
+            }
+            (Datum::List(list), ScalarType::List(elem_type)) => {
+                let elements = list
+                    .iter()
                     .map(|elem| Value::from_datum(elem, elem_type))
-                    .collect(),
-            )),
-            (Datum::List(record), ScalarType::Record { fields, .. }) => Some(Value::Record(
-                record
+                    .collect();
+                Some(Value::List(elements))
+            }
+            (Datum::List(record), ScalarType::Record { fields, .. }) => {
+                let fields = record
                     .iter()
                     .zip(fields)
                     .map(|(e, (_name, ty))| Value::from_datum(e, ty))
-                    .collect(),
-            )),
-            (Datum::Map(dict), ScalarType::Map { value_type }) => Some(Value::Map(
-                dict.iter()
+                    .collect();
+                Some(Value::Record(fields))
+            }
+            (Datum::Map(dict), ScalarType::Map { value_type }) => {
+                let entries = dict
+                    .iter()
                     .map(|(k, v)| (k.to_owned(), Value::from_datum(v, value_type)))
-                    .collect(),
-            )),
+                    .collect();
+                Some(Value::Map(entries))
+            }
             _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
@@ -148,34 +153,24 @@ impl Value {
     /// To construct a null datum, see the [`null_datum`] function.
     pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> (Datum<'a>, ScalarType) {
         match self {
+            Value::Array { .. } => {
+                // This situation is handled gracefully by Value::decode; if we
+                // wind up here it's a programming error.
+                unreachable!("into_datum cannot be called on Value::Array");
+            }
             Value::Bool(true) => (Datum::True, ScalarType::Bool),
             Value::Bool(false) => (Datum::False, ScalarType::Bool),
+            Value::Bytea(b) => (Datum::Bytes(buf.push_bytes(b)), ScalarType::Bytes),
+            Value::Date(d) => (Datum::Date(d), ScalarType::Date),
+            Value::Float4(f) => (Datum::Float32(f.into()), ScalarType::Float32),
+            Value::Float8(f) => (Datum::Float64(f.into()), ScalarType::Float64),
             Value::Int4(i) => match typ {
                 Type::Oid => (Datum::Int32(i), ScalarType::Int32),
                 Type::Int4 => (Datum::Int32(i), ScalarType::Int32),
                 _ => unreachable!(),
             },
             Value::Int8(i) => (Datum::Int64(i), ScalarType::Int64),
-            Value::Float4(f) => (Datum::Float32(f.into()), ScalarType::Float32),
-            Value::Float8(f) => (Datum::Float64(f.into()), ScalarType::Float64),
-            Value::Date(d) => (Datum::Date(d), ScalarType::Date),
-            Value::Time(t) => (Datum::Time(t), ScalarType::Time),
-            Value::Timestamp(ts) => (Datum::Timestamp(ts), ScalarType::Timestamp),
-            Value::TimestampTz(ts) => (Datum::TimestampTz(ts), ScalarType::TimestampTz),
-            Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
-            Value::Numeric(d) => (
-                Datum::from(d.0.significand()),
-                ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.0.scale()),
-            ),
-            Value::Bytea(b) => (Datum::Bytes(buf.push_bytes(b)), ScalarType::Bytes),
-            Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
             Value::Jsonb(js) => (buf.push_unary_row(js.0.into_row()), ScalarType::Jsonb),
-            Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
-            Value::Array { .. } => {
-                // This situation is handled gracefully by Value::decode; if we
-                // wind up here it's a programming error.
-                unreachable!("into_datum cannot be called on Value::Array");
-            }
             Value::List(elems) => {
                 let elem_pg_type = match typ {
                     Type::List(t) => &*t,
@@ -191,11 +186,6 @@ impl Value {
                     buf.push_unary_row(packer.finish()),
                     ScalarType::List(Box::new(elem_type)),
                 )
-            }
-            Value::Record(_) => {
-                // This situation is handled gracefully by Value::decode; if we
-                // wind up here it's a programming error.
-                unreachable!("into_datum cannot be called on Value::Record");
             }
             Value::Map(map) => {
                 let elem_pg_type = match typ {
@@ -220,6 +210,21 @@ impl Value {
                     },
                 )
             }
+            Value::Numeric(d) => (
+                Datum::from(d.0.significand()),
+                ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.0.scale()),
+            ),
+            Value::Record(_) => {
+                // This situation is handled gracefully by Value::decode; if we
+                // wind up here it's a programming error.
+                unreachable!("into_datum cannot be called on Value::Record");
+            }
+            Value::Time(t) => (Datum::Time(t), ScalarType::Time),
+            Value::Timestamp(ts) => (Datum::Timestamp(ts), ScalarType::Timestamp),
+            Value::TimestampTz(ts) => (Datum::TimestampTz(ts), ScalarType::TimestampTz),
+            Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
+            Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
+            Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
         }
     }
 
@@ -241,25 +246,39 @@ impl Value {
         F: FormatBuffer,
     {
         match self {
+            Value::Array { dims, elements } => {
+                strconv::format_array(buf, dims, elements, |buf, elem| match elem {
+                    None => buf.write_null(),
+                    Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+                })
+            }
             Value::Bool(b) => strconv::format_bool(buf, *b),
             Value::Bytea(b) => strconv::format_bytes(buf, b),
             Value::Date(d) => strconv::format_date(buf, *d),
+            Value::Int4(i) => strconv::format_int32(buf, *i),
+            Value::Int8(i) => strconv::format_int64(buf, *i),
+            Value::Interval(iv) => strconv::format_interval(buf, iv.0),
+            Value::Float4(f) => strconv::format_float32(buf, *f),
+            Value::Float8(f) => strconv::format_float64(buf, *f),
+            Value::Jsonb(js) => strconv::format_jsonb(buf, js.0.as_ref()),
+            Value::List(elems) => strconv::format_list(buf, elems, |buf, elem| match elem {
+                None => buf.write_null(),
+                Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+            }),
+            Value::Map(elems) => strconv::format_map(buf, elems, |buf, value| match value {
+                None => buf.write_null(),
+                Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+            }),
+            Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
+            Value::Record(elems) => strconv::format_record(buf, elems, |buf, elem| match elem {
+                None => buf.write_null(),
+                Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+            }),
+            Value::Text(s) => strconv::format_string(buf, s),
             Value::Time(t) => strconv::format_time(buf, *t),
             Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
-            Value::Interval(iv) => strconv::format_interval(buf, iv.0),
-            Value::Int4(i) => strconv::format_int32(buf, *i),
-            Value::Int8(i) => strconv::format_int64(buf, *i),
-            Value::Float4(f) => strconv::format_float32(buf, *f),
-            Value::Float8(f) => strconv::format_float64(buf, *f),
-            Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
-            Value::Text(s) => strconv::format_string(buf, s),
-            Value::Jsonb(js) => strconv::format_jsonb(buf, js.0.as_ref()),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
-            Value::Array { dims, elements } => encode_array(buf, dims, elements),
-            Value::List(elems) => encode_list(buf, elems),
-            Value::Record(elems) => encode_record(buf, elems),
-            Value::Map(map) => encode_map(buf, map),
         }
     }
 
@@ -267,21 +286,6 @@ impl Value {
     /// format](Format::Binary).
     pub fn encode_binary(&self, ty: &Type, buf: &mut BytesMut) -> Result<(), io::Error> {
         let is_null = match self {
-            Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
-            Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
-            Value::Date(d) => d.to_sql(&PgType::DATE, buf),
-            Value::Time(t) => t.to_sql(&PgType::TIME, buf),
-            Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
-            Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
-            Value::Interval(iv) => iv.to_sql(&PgType::INTERVAL, buf),
-            Value::Int4(i) => i.to_sql(&PgType::INT4, buf),
-            Value::Int8(i) => i.to_sql(&PgType::INT8, buf),
-            Value::Float4(f) => f.to_sql(&PgType::FLOAT4, buf),
-            Value::Float8(f) => f.to_sql(&PgType::FLOAT8, buf),
-            Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
-            Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
-            Value::Jsonb(js) => js.to_sql(&PgType::JSONB, buf),
-            Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
             Value::Array { dims, elements } => {
                 let ndims = pg_len("number of array dimensions", dims.len())?;
                 let has_null = elements.iter().any(|e| e.is_none());
@@ -301,11 +305,26 @@ impl Value {
                 }
                 Ok(postgres_types::IsNull::No)
             }
+            Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
+            Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
+            Value::Date(d) => d.to_sql(&PgType::DATE, buf),
+            Value::Float4(f) => f.to_sql(&PgType::FLOAT4, buf),
+            Value::Float8(f) => f.to_sql(&PgType::FLOAT8, buf),
+            Value::Int4(i) => i.to_sql(&PgType::INT4, buf),
+            Value::Int8(i) => i.to_sql(&PgType::INT8, buf),
+            Value::Interval(iv) => iv.to_sql(&PgType::INTERVAL, buf),
+            Value::Jsonb(js) => js.to_sql(&PgType::JSONB, buf),
             Value::List(_) => {
                 // for now just use text encoding
                 self.encode_text(buf);
                 Ok(postgres_types::IsNull::No)
             }
+            Value::Map(_) => {
+                // for now just use text encoding
+                self.encode_text(buf);
+                Ok(postgres_types::IsNull::No)
+            }
+            Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
             Value::Record(fields) => {
                 let nfields = pg_len("record field length", fields.len())?;
                 buf.put_i32(nfields);
@@ -319,11 +338,11 @@ impl Value {
                 }
                 Ok(postgres_types::IsNull::No)
             }
-            Value::Map(_) => {
-                // for now just use text encoding
-                self.encode_text(buf);
-                Ok(postgres_types::IsNull::No)
-            }
+            Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
+            Value::Time(t) => t.to_sql(&PgType::TIME, buf),
+            Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
+            Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
+            Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -350,33 +369,36 @@ impl Value {
     pub fn decode_text(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
         let raw = str::from_utf8(raw)?;
         Ok(match ty {
+            Type::Array(_) => return Err("input of array types is not implemented".into()),
             Type::Bool => Value::Bool(strconv::parse_bool(raw)?),
             Type::Bytea => Value::Bytea(strconv::parse_bytes(raw)?),
-            Type::Int4 | Type::Oid => Value::Int4(strconv::parse_int32(raw)?),
-            Type::Int8 => Value::Int8(strconv::parse_int64(raw)?),
+            Type::Date => Value::Date(strconv::parse_date(raw)?),
             Type::Float4 => Value::Float4(strconv::parse_float32(raw)?),
             Type::Float8 => Value::Float8(strconv::parse_float64(raw)?),
-            Type::Date => Value::Date(strconv::parse_date(raw)?),
+            Type::Int4 | Type::Oid => Value::Int4(strconv::parse_int32(raw)?),
+            Type::Int8 => Value::Int8(strconv::parse_int64(raw)?),
+            Type::Interval => Value::Interval(Interval(strconv::parse_interval(raw)?)),
+            Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
+            Type::List(elem_type) => Value::List(strconv::parse_list(
+                raw,
+                matches!(**elem_type, Type::List(..)),
+                || None,
+                |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
+            )?),
+            Type::Map { value_type } => Value::Map(strconv::parse_map(
+                raw,
+                matches!(**value_type, Type::Map { .. }),
+                |elem_text| Value::decode_text(value_type, elem_text.as_bytes()).map(Some),
+            )?),
+            Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
+            Type::Record(_) => {
+                return Err("input of anonymous composite types is not implemented".into())
+            }
+            Type::Text => Value::Text(raw.to_owned()),
             Type::Time => Value::Time(strconv::parse_time(raw)?),
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
-            Type::Interval => Value::Interval(Interval(strconv::parse_interval(raw)?)),
-            Type::Text => Value::Text(raw.to_owned()),
-            Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
-            Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
             Type::Uuid => Value::Uuid(Uuid::parse_str(raw)?),
-            Type::Array(_) => {
-                return Err(Box::new(DecodeError::new(
-                    "input of array types is not implemented",
-                )))
-            }
-            Type::List(elem_type) => Value::List(decode_list(&elem_type, raw)?),
-            Type::Record(_) => {
-                return Err(Box::new(DecodeError::new(
-                    "input of anonymous composite types is not implemented",
-                )))
-            }
-            Type::Map { value_type } => Value::Map(decode_map(&value_type, raw)?),
         })
     }
 
@@ -384,6 +406,7 @@ impl Value {
     /// format](Format::Binary).
     pub fn decode_binary(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
         match ty {
+            Type::Array(_) => Err("input of array types is not implemented".into()),
             Type::Bool => bool::from_sql(ty.inner(), raw).map(Value::Bool),
             Type::Bytea => Vec::<u8>::from_sql(ty.inner(), raw).map(Value::Bytea),
             Type::Date => chrono::NaiveDate::from_sql(ty.inner(), raw).map(Value::Date),
@@ -393,111 +416,17 @@ impl Value {
             Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
             Type::Interval => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
+            Type::List(_) => Value::decode_text(ty, raw), // just using the text encoding for now
+            Type::Map { .. } => Value::decode_text(ty, raw), // just using the text encoding for now
             Type::Numeric => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
+            Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
-            Type::Array(_) => Err(Box::new(DecodeError::new(
-                "input of array types is not implemented",
-            ))),
-            Type::List(_) => {
-                // just using the text encoding for now
-                Value::decode_text(ty, raw)
-            }
-            Type::Record(_) => Err(Box::new(DecodeError::new(
-                "input of anonymous composite types is not implemented",
-            ))),
-            Type::Map { .. } => {
-                // just using the text encoding for now
-                Value::decode_text(ty, raw)
-            }
         }
     }
-}
-
-#[derive(Debug)]
-struct DecodeError(String);
-
-impl DecodeError {
-    fn new<S>(message: S) -> DecodeError
-    where
-        S: Into<String>,
-    {
-        DecodeError(message.into())
-    }
-}
-
-impl fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl Error for DecodeError {}
-
-fn encode_array<F>(buf: &mut F, dims: &[ArrayDimension], elems: &[Option<Value>]) -> Nestable
-where
-    F: FormatBuffer,
-{
-    strconv::format_array(buf, dims, elems, |buf, elem| match elem {
-        None => buf.write_null(),
-        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
-    })
-}
-
-fn encode_list<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
-where
-    F: FormatBuffer,
-{
-    strconv::format_list(buf, elems, |buf, elem| match elem {
-        None => buf.write_null(),
-        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
-    })
-}
-
-fn decode_list(
-    elem_type: &Type,
-    raw: &str,
-) -> Result<Vec<Option<Value>>, Box<dyn Error + Sync + Send>> {
-    Ok(strconv::parse_list(
-        raw,
-        matches!(elem_type, Type::List(..)),
-        || None,
-        |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
-    )?)
-}
-
-fn encode_map<F>(buf: &mut F, elems: &BTreeMap<String, Option<Value>>) -> Nestable
-where
-    F: FormatBuffer,
-{
-    strconv::format_map(buf, elems, |buf, value| match value {
-        None => buf.write_null(),
-        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
-    })
-}
-
-fn decode_map(
-    val_type: &Type,
-    raw: &str,
-) -> Result<BTreeMap<String, Option<Value>>, Box<dyn Error + Sync + Send>> {
-    Ok(strconv::parse_map(
-        raw,
-        matches!(val_type, Type::Map { .. }),
-        |elem_text| Value::decode_text(val_type, elem_text.as_bytes()).map(Some),
-    )?)
-}
-
-fn encode_record<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
-where
-    F: FormatBuffer,
-{
-    strconv::format_record(buf, elems, |buf, elem| match elem {
-        None => buf.write_null(),
-        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
-    })
 }
 
 fn encode_element(buf: &mut BytesMut, elem: Option<&Value>, ty: &Type) -> Result<(), io::Error> {
@@ -526,6 +455,10 @@ fn pg_len(what: &str, len: usize) -> Result<i32, io::Error> {
 /// Constructs a null datum of the specified type.
 pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
     let ty = match ty {
+        Type::Array(t) => {
+            let (_, elem_type) = null_datum(t);
+            ScalarType::Array(Box::new(elem_type))
+        }
         Type::Bool => ScalarType::Bool,
         Type::Bytea => ScalarType::Bytes,
         Type::Date => ScalarType::Date,
@@ -535,6 +468,10 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
         Type::Int8 => ScalarType::Int64,
         Type::Interval => ScalarType::Interval,
         Type::Jsonb => ScalarType::Jsonb,
+        Type::List(t) => {
+            let (_, elem_type) = null_datum(t);
+            ScalarType::List(Box::new(elem_type))
+        }
         Type::Numeric => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
         Type::Oid => ScalarType::Oid,
         Type::Text => ScalarType::String,
@@ -542,24 +479,17 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,
         Type::Uuid => ScalarType::Uuid,
-        Type::Array(t) => {
-            let (_, elem_type) = null_datum(t);
-            ScalarType::Array(Box::new(elem_type))
-        }
-        Type::List(t) => {
-            let (_, elem_type) = null_datum(t);
-            ScalarType::List(Box::new(elem_type))
-        }
-        Type::Record(fields) => ScalarType::Record {
-            fields: fields
+        Type::Record(fields) => {
+            let fields = fields
                 .iter()
                 .enumerate()
                 .map(|(i, ty)| {
                     let name = ColumnName::from(format!("f{}", i + 1));
                     (name, null_datum(ty).1)
                 })
-                .collect(),
-        },
+                .collect();
+            ScalarType::Record { fields }
+        }
         Type::Map { value_type } => {
             let (_, value_type) = null_datum(value_type);
             ScalarType::Map {

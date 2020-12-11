@@ -306,6 +306,12 @@ lazy_static! {
                 }))
             }),
 
+            // MAP
+            (Map, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
+                let ty = from_type.clone();
+                Some(|e: ScalarExpr| e.call_unary(CastMapToString { ty }))
+            }),
+
             // JSONB
             (Jsonb, Bool) => Explicit: CastJsonbToBool,
             (Jsonb, Int32) => Explicit: CastTemplate::new(from_jsonb_f64_cast),

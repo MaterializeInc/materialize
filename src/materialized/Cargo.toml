@@ -62,7 +62,7 @@ tracing-subscriber = "0.2.7"
 url = "2"
 
 [dev-dependencies]
-assert_cmd = "1.0.1"
+assert_cmd = "1.0.2"
 chrono = "0.4"
 datadriven = "0.4"
 fallible-iterator = "0.2.0"

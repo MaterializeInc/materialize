@@ -1391,7 +1391,7 @@ FROM (
 GROUP BY e.company_id
 ORDER BY e.company_id;
 
-query error Unexpected SQL type
+query error type "b" does not exist
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
   SELECT employee::BYTEA, company_id
@@ -1411,7 +1411,7 @@ FROM (
 GROUP BY e.company_id
 ORDER BY e.company_id;
 
-query error Unexpected SQL type
+query error type "b" does not exist
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
   SELECT employee::BYTEA, company_id

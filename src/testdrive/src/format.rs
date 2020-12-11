@@ -8,4 +8,5 @@
 // by the Apache License, Version 2.0.
 
 pub mod avro;
+pub mod bytes;
 pub mod protobuf;

@@ -46,6 +46,8 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.5.4 %}}
+
 {{% version-header v0.5.3 %}}
 
 - Fix a regression in the SQL parser, introduced in v0.5.2, in which nested
@@ -420,7 +422,7 @@ Wrap your release notes at the 80 character mark.
 
 - Allow dropping databases with cross-schema dependencies {{% gh 3558 %}}.
 
-- Avoid crashing if [`date_trunc('week', ...)`](/sql/functions/#time-func) is
+- Avoid crashing if [`date_trunc('week', ...)`](/sql/functions/#date-and-time-func) is
   called on a date that is in the first week of a month {{% gh 3651 %}}.
 
 - Ensure the built-in `mz_avro_ocf_sinks`, `mz_catalog_names`, and

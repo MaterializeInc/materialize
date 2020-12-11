@@ -1036,6 +1036,9 @@ lazy_static! {
             "convert_from" => Scalar {
                 params!(Bytes, String) => BinaryFunc::ConvertFrom
             },
+            "current_schema" => Scalar {
+                params!() => sql_op!("current_schemas(false)[1]")
+            },
             "current_schemas" => Scalar {
                 params!(Bool) => Operation::unary(|ecx, e| {
                     let with_sys = ScalarExpr::literal_1d_array(
@@ -1063,6 +1066,10 @@ lazy_static! {
                 params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp,
                 params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz
             },
+            "digest" => Scalar {
+                params!(String, String) => BinaryFunc::DigestString,
+                params!(Bytes, String) => BinaryFunc::DigestBytes
+            },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32,
                 params!(Float64) => UnaryFunc::FloorFloat64,
@@ -1070,6 +1077,10 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
                 })
+            },
+            "hmac" => Scalar {
+                params!(String, String, String) => VariadicFunc::HmacString,
+                params!(Bytes, String, String) => VariadicFunc::HmacBytes
             },
             "jsonb_array_length" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
@@ -1389,10 +1400,9 @@ lazy_static! {
                         None => bail!("source passed to internal_read_cached_data must be literal string"),
                     };
                     let item = ecx.qcx.scx.resolve_item(ObjectName(vec![Ident::new(source.clone())]))?;
-                    let entry = ecx.catalog().get_item(&item);
-                    match entry.item_type() {
+                    match item.item_type() {
                         CatalogItemType::Source => {},
-                        _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, entry.item_type()),
+                        _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, item.item_type()),
                     }
                     let cache_directory = ecx.catalog().config().cache_directory.as_deref();
                     if cache_directory.is_none() {
@@ -1400,7 +1410,7 @@ lazy_static! {
                     }
                     Ok(TableFuncPlan {
                         func: TableFunc::ReadCachedData {
-                            source: entry.id(),
+                            source: item.id(),
                             cache_directory: cache_directory.expect("known to exist").to_path_buf(),
                         },
                         exprs: vec![],
