@@ -13,6 +13,7 @@ itertools = "0.9"
 phf = { version = "0.8", features = ["unicase"] }
 ore = { path = "../ore" }
 repr = { path = "../repr" }
+serde = { version = "1.0", features = ["derive"] }
 unicase = "2.4"
 stacker = "0.1.12"
 

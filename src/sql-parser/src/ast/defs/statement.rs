@@ -18,6 +18,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     ColumnDef, Connector, Envelope, Expr, Format, Ident, ObjectName, Query, TableConstraint, Value,
@@ -25,7 +27,7 @@ use crate::ast::{
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Statement {
     Select(SelectStatement),
     Insert(InsertStatement),
@@ -114,7 +116,7 @@ impl AstDisplay for Statement {
 impl_display!(Statement);
 
 /// `SELECT`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SelectStatement {
     pub query: Query,
     pub as_of: Option<Expr>,
@@ -132,7 +134,7 @@ impl AstDisplay for SelectStatement {
 impl_display!(SelectStatement);
 
 /// `INSERT`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InsertStatement {
     /// TABLE
     pub table_name: ObjectName,
@@ -157,7 +159,7 @@ impl AstDisplay for InsertStatement {
 }
 impl_display!(InsertStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CopyRelation {
     Table {
         name: ObjectName,
@@ -167,7 +169,7 @@ pub enum CopyRelation {
     Tail(TailStatement),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CopyDirection {
     To,
     From,
@@ -183,7 +185,7 @@ impl AstDisplay for CopyDirection {
 }
 impl_display!(CopyDirection);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CopyTarget {
     Stdin,
     Stdout,
@@ -200,7 +202,7 @@ impl AstDisplay for CopyTarget {
 impl_display!(CopyTarget);
 
 /// `COPY`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CopyStatement {
     /// RELATION
     pub relation: CopyRelation,
@@ -249,7 +251,7 @@ impl AstDisplay for CopyStatement {
 impl_display!(CopyStatement);
 
 /// `UPDATE`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UpdateStatement {
     /// TABLE
     pub table_name: ObjectName,
@@ -276,7 +278,7 @@ impl AstDisplay for UpdateStatement {
 impl_display!(UpdateStatement);
 
 /// `DELETE`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DeleteStatement {
     /// `FROM`
     pub table_name: ObjectName,
@@ -297,7 +299,7 @@ impl AstDisplay for DeleteStatement {
 impl_display!(DeleteStatement);
 
 /// `CREATE DATABASE`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CreateDatabaseStatement {
     pub name: Ident,
     pub if_not_exists: bool,
@@ -315,7 +317,7 @@ impl AstDisplay for CreateDatabaseStatement {
 impl_display!(CreateDatabaseStatement);
 
 /// `CREATE SCHEMA`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CreateSchemaStatement {
     pub name: ObjectName,
     pub if_not_exists: bool,
@@ -333,7 +335,7 @@ impl AstDisplay for CreateSchemaStatement {
 impl_display!(CreateSchemaStatement);
 
 /// `CREATE SOURCE`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CreateSourceStatement {
     pub name: ObjectName,
     pub col_names: Vec<Ident>,
@@ -382,7 +384,7 @@ impl AstDisplay for CreateSourceStatement {
 impl_display!(CreateSourceStatement);
 
 /// `CREATE SINK`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CreateSinkStatement {
     pub name: ObjectName,
     pub from: ObjectName,
@@ -429,7 +431,7 @@ impl AstDisplay for CreateSinkStatement {
 impl_display!(CreateSinkStatement);
 
 /// `CREATE VIEW`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CreateViewStatement {
     /// View name
     pub name: ObjectName,
@@ -482,7 +484,7 @@ impl AstDisplay for CreateViewStatement {
 impl_display!(CreateViewStatement);
 
 /// `CREATE TABLE`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CreateTableStatement {
     /// Table name
     pub name: ObjectName,
@@ -518,7 +520,7 @@ impl AstDisplay for CreateTableStatement {
 impl_display!(CreateTableStatement);
 
 /// `CREATE INDEX`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CreateIndexStatement {
     /// Optional index name.
     pub name: Option<Ident>,
@@ -556,7 +558,7 @@ impl AstDisplay for CreateIndexStatement {
 impl_display!(CreateIndexStatement);
 
 /// `CREATE TYPE ..`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CreateTypeStatement {
     /// Name of the created type.
     pub name: ObjectName,
@@ -583,7 +585,7 @@ impl AstDisplay for CreateTypeStatement {
 impl_display!(CreateTypeStatement);
 
 /// `CREATE TYPE .. AS <TYPE>`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CreateTypeAs {
     List,
     Map,
@@ -600,7 +602,7 @@ impl AstDisplay for CreateTypeAs {
 impl_display!(CreateTypeAs);
 
 /// `ALTER <OBJECT> ... RENAME TO`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AlterObjectRenameStatement {
     pub object_type: ObjectType,
     pub if_exists: bool,
@@ -623,14 +625,14 @@ impl AstDisplay for AlterObjectRenameStatement {
 }
 impl_display!(AlterObjectRenameStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AlterIndexOptionsList {
     Set(Vec<SqlOption>),
     Reset(Vec<Ident>),
 }
 
 /// `ALTER INDEX ... {RESET, SET}`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AlterIndexOptionsStatement {
     pub index_name: ObjectName,
     pub if_exists: bool,
@@ -663,7 +665,7 @@ impl AstDisplay for AlterIndexOptionsStatement {
 
 impl_display!(AlterIndexOptionsStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DiscardStatement {
     pub target: DiscardTarget,
 }
@@ -676,7 +678,7 @@ impl AstDisplay for DiscardStatement {
 }
 impl_display!(DiscardStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DiscardTarget {
     Plans,
     Sequences,
@@ -696,7 +698,7 @@ impl AstDisplay for DiscardTarget {
 }
 impl_display!(DiscardTarget);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DropDatabaseStatement {
     pub name: Ident,
     pub if_exists: bool,
@@ -714,7 +716,7 @@ impl AstDisplay for DropDatabaseStatement {
 impl_display!(DropDatabaseStatement);
 
 /// `DROP`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DropObjectsStatement {
     /// The type of the object to drop: TABLE, VIEW, etc.
     pub object_type: ObjectType,
@@ -748,7 +750,7 @@ impl_display!(DropObjectsStatement);
 /// Note: this is not a standard SQL statement, but it is supported by at
 /// least MySQL and PostgreSQL. Not all MySQL-specific syntatic forms are
 /// supported yet.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SetVariableStatement {
     pub local: bool,
     pub variable: Ident,
@@ -769,7 +771,7 @@ impl AstDisplay for SetVariableStatement {
 impl_display!(SetVariableStatement);
 
 /// `SHOW <variable>`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShowVariableStatement {
     pub variable: Ident,
 }
@@ -783,7 +785,7 @@ impl AstDisplay for ShowVariableStatement {
 impl_display!(ShowVariableStatement);
 
 /// `SHOW DATABASES`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShowDatabasesStatement {
     pub filter: Option<ShowStatementFilter>,
 }
@@ -807,7 +809,7 @@ impl_display!(ShowDatabasesStatement);
 /// SHOW VIEWS;
 /// SHOW SINKS;
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShowObjectsStatement {
     pub object_type: ObjectType,
     pub from: Option<ObjectName>,
@@ -852,7 +854,7 @@ impl AstDisplay for ShowObjectsStatement {
 impl_display!(ShowObjectsStatement);
 
 /// `SHOW INDEX|INDEXES|KEYS`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShowIndexesStatement {
     pub table_name: ObjectName,
     pub extended: bool,
@@ -878,7 +880,7 @@ impl_display!(ShowIndexesStatement);
 /// `SHOW COLUMNS`
 ///
 /// Note: this is a MySQL-specific statement.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShowColumnsStatement {
     pub extended: bool,
     pub full: bool,
@@ -906,7 +908,7 @@ impl AstDisplay for ShowColumnsStatement {
 impl_display!(ShowColumnsStatement);
 
 /// `SHOW CREATE VIEW <view>`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShowCreateViewStatement {
     pub view_name: ObjectName,
 }
@@ -920,7 +922,7 @@ impl AstDisplay for ShowCreateViewStatement {
 impl_display!(ShowCreateViewStatement);
 
 /// `SHOW CREATE SOURCE <source>`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShowCreateSourceStatement {
     pub source_name: ObjectName,
 }
@@ -934,7 +936,7 @@ impl AstDisplay for ShowCreateSourceStatement {
 impl_display!(ShowCreateSourceStatement);
 
 /// `SHOW CREATE TABLE <table>`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShowCreateTableStatement {
     pub table_name: ObjectName,
 }
@@ -948,7 +950,7 @@ impl AstDisplay for ShowCreateTableStatement {
 impl_display!(ShowCreateTableStatement);
 
 /// `SHOW CREATE SINK <sink>`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShowCreateSinkStatement {
     pub sink_name: ObjectName,
 }
@@ -962,7 +964,7 @@ impl AstDisplay for ShowCreateSinkStatement {
 impl_display!(ShowCreateSinkStatement);
 
 /// `SHOW CREATE INDEX <index>`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShowCreateIndexStatement {
     pub index_name: ObjectName,
 }
@@ -976,7 +978,7 @@ impl AstDisplay for ShowCreateIndexStatement {
 impl_display!(ShowCreateIndexStatement);
 
 /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StartTransactionStatement {
     pub modes: Vec<TransactionMode>,
 }
@@ -993,7 +995,7 @@ impl AstDisplay for StartTransactionStatement {
 impl_display!(StartTransactionStatement);
 
 /// `SET TRANSACTION ...`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SetTransactionStatement {
     pub modes: Vec<TransactionMode>,
 }
@@ -1010,7 +1012,7 @@ impl AstDisplay for SetTransactionStatement {
 impl_display!(SetTransactionStatement);
 
 /// `COMMIT [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CommitStatement {
     pub chain: bool,
 }
@@ -1026,7 +1028,7 @@ impl AstDisplay for CommitStatement {
 impl_display!(CommitStatement);
 
 /// `ROLLBACK [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RollbackStatement {
     pub chain: bool,
 }
@@ -1042,7 +1044,7 @@ impl AstDisplay for RollbackStatement {
 impl_display!(RollbackStatement);
 
 /// `TAIL`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TailStatement {
     pub name: ObjectName,
     pub options: Vec<WithOption>,
@@ -1067,7 +1069,7 @@ impl AstDisplay for TailStatement {
 impl_display!(TailStatement);
 
 /// `EXPLAIN ...`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ExplainStatement {
     pub stage: ExplainStage,
     pub explainee: Explainee,
@@ -1087,7 +1089,7 @@ impl AstDisplay for ExplainStatement {
 }
 impl_display!(ExplainStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InsertSource {
     Query(Query),
     DefaultValues,
@@ -1103,7 +1105,7 @@ impl AstDisplay for InsertSource {
 }
 impl_display!(InsertSource);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, Serialize, Deserialize)]
 pub enum ObjectType {
     Schema,
     Table,
@@ -1129,7 +1131,7 @@ impl AstDisplay for ObjectType {
 }
 impl_display!(ObjectType);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShowStatementFilter {
     Like(String),
     Where(Expr),
@@ -1153,7 +1155,7 @@ impl AstDisplay for ShowStatementFilter {
 }
 impl_display!(ShowStatementFilter);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SqlOption {
     Value {
         name: Ident,
@@ -1192,7 +1194,7 @@ impl AstDisplay for SqlOption {
 }
 impl_display!(SqlOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WithOption {
     pub key: Ident,
     pub value: Option<WithOptionValue>,
@@ -1209,7 +1211,7 @@ impl AstDisplay for WithOption {
 }
 impl_display!(WithOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WithOptionValue {
     Value(Value),
     ObjectName(ObjectName),
@@ -1225,7 +1227,7 @@ impl AstDisplay for WithOptionValue {
 }
 impl_display!(WithOptionValue);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransactionMode {
     AccessMode(TransactionAccessMode),
     IsolationLevel(TransactionIsolationLevel),
@@ -1245,7 +1247,7 @@ impl AstDisplay for TransactionMode {
 }
 impl_display!(TransactionMode);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransactionAccessMode {
     ReadOnly,
     ReadWrite,
@@ -1262,7 +1264,7 @@ impl AstDisplay for TransactionAccessMode {
 }
 impl_display!(TransactionAccessMode);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransactionIsolationLevel {
     ReadUncommitted,
     ReadCommitted,
@@ -1283,7 +1285,7 @@ impl AstDisplay for TransactionIsolationLevel {
 }
 impl_display!(TransactionIsolationLevel);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SetVariableValue {
     Ident(Ident),
     Literal(Value),
@@ -1301,7 +1303,7 @@ impl AstDisplay for SetVariableValue {
 impl_display!(SetVariableValue);
 
 /// SQL assignment `foo = expr` as used in SQLUpdate
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Assignment {
     pub id: Ident,
     pub value: Expr,
@@ -1317,7 +1319,7 @@ impl AstDisplay for Assignment {
 impl_display!(Assignment);
 
 /// Specifies what [Statement::Explain] is actually explaining
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ExplainStage {
     /// The sql::RelationExpr after parsing
     RawPlan,
@@ -1338,13 +1340,13 @@ impl AstDisplay for ExplainStage {
 }
 impl_display!(ExplainStage);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Explainee {
     View(ObjectName),
     Query(Query),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ExplainOptions {
     pub typed: bool,
 }
@@ -1362,7 +1364,7 @@ impl AstDisplay for Explainee {
 }
 impl_display!(Explainee);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IfExistsBehavior {
     Error,
     Skip,
@@ -1370,7 +1372,7 @@ pub enum IfExistsBehavior {
 }
 
 /// `DECLARE ...`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DeclareStatement {
     pub name: Ident,
     pub stmt: Box<Statement>,
@@ -1387,7 +1389,7 @@ impl AstDisplay for DeclareStatement {
 impl_display!(DeclareStatement);
 
 /// `CLOSE ...`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CloseStatement {
     pub name: Ident,
 }
@@ -1401,7 +1403,7 @@ impl AstDisplay for CloseStatement {
 impl_display!(CloseStatement);
 
 /// `FETCH ...`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FetchStatement {
     pub name: Ident,
     pub count: Option<u64>,

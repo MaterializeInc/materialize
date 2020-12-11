@@ -20,6 +20,8 @@
 
 use std::mem;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{DataType, Ident, ObjectName, OrderByExpr, Query, Value};
 
@@ -28,7 +30,7 @@ use crate::ast::{DataType, Ident, ObjectName, OrderByExpr, Query, Value};
 /// The parser does not distinguish between expressions of different types
 /// (e.g. boolean vs string), so the caller must handle expressions of
 /// inappropriate type, like `WHERE 1` or `SELECT 1=1`, as necessary.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Expr {
     /// Identifier e.g. table name or column name
     Identifier(Vec<Ident>),
@@ -503,7 +505,7 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SubscriptPosition {
     pub start: Option<Expr>,
     pub end: Option<Expr>,
@@ -523,7 +525,7 @@ impl AstDisplay for SubscriptPosition {
 impl_display!(SubscriptPosition);
 
 /// A window specification (i.e. `OVER (PARTITION BY .. ORDER BY .. etc.)`)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WindowSpec {
     pub partition_by: Vec<Expr>,
     pub order_by: Vec<OrderByExpr>,
@@ -568,7 +570,7 @@ impl_display!(WindowSpec);
 ///
 /// Note: The parser does not validate the specified bounds; the caller should
 /// reject invalid bounds like `ROWS UNBOUNDED FOLLOWING` before execution.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WindowFrame {
     pub units: WindowFrameUnits,
     pub start_bound: WindowFrameBound,
@@ -579,7 +581,7 @@ pub struct WindowFrame {
     // TBD: EXCLUDE
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WindowFrameUnits {
     Rows,
     Range,
@@ -598,7 +600,7 @@ impl AstDisplay for WindowFrameUnits {
 impl_display!(WindowFrameUnits);
 
 /// Specifies [WindowFrame]'s `start_bound` and `end_bound`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WindowFrameBound {
     /// `CURRENT ROW`
     CurrentRow,
@@ -628,7 +630,7 @@ impl AstDisplay for WindowFrameBound {
 impl_display!(WindowFrameBound);
 
 /// A function call
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Function {
     pub name: ObjectName,
     pub args: FunctionArgs,
@@ -663,7 +665,7 @@ impl AstDisplay for Function {
 impl_display!(Function);
 
 /// Arguments for a function call.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FunctionArgs {
     /// The special star argument, as in `count(*)`.
     Star,

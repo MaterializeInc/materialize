@@ -111,7 +111,7 @@ impl FromStr for DateTimeUnits {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DateTimeField {
     Year,
     Month,

@@ -23,10 +23,12 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{DataType, Expr, Ident, ObjectName, SqlOption};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Schema {
     File(PathBuf),
     Inline(String),
@@ -52,7 +54,7 @@ impl AstDisplay for Schema {
 }
 impl_display!(Schema);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AvroSchema {
     CsrUrl {
         url: String,
@@ -89,7 +91,7 @@ impl AstDisplay for AvroSchema {
 }
 impl_display!(AvroSchema);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CsrSeed {
     pub key_schema: Option<String>,
     pub value_schema: String,
@@ -110,7 +112,7 @@ impl AstDisplay for CsrSeed {
 }
 impl_display!(CsrSeed);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Format {
     Bytes,
     Avro(AvroSchema),
@@ -128,7 +130,7 @@ pub enum Format {
     Text,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Envelope {
     None,
     Debezium,
@@ -214,7 +216,7 @@ impl AstDisplay for Format {
 }
 impl_display!(Format);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Connector {
     File {
         path: String,
@@ -271,7 +273,7 @@ impl_display!(Connector);
 
 /// A table-level constraint, specified in a `CREATE TABLE` or an
 /// `ALTER TABLE ADD <constraint>` statement.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TableConstraint {
     /// `[ CONSTRAINT <name> ] { PRIMARY KEY | UNIQUE } (<columns>)`
     Unique {
@@ -340,7 +342,7 @@ impl AstDisplay for TableConstraint {
 impl_display!(TableConstraint);
 
 /// SQL column definition
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ColumnDef {
     pub name: Ident,
     pub data_type: DataType,
@@ -377,7 +379,7 @@ impl_display!(ColumnDef);
 /// For maximum flexibility, we don't distinguish between constraint and
 /// non-constraint options, lumping them all together under the umbrella of
 /// "column options," and we allow any column option to be named.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ColumnOptionDef {
     pub name: Option<Ident>,
     pub option: ColumnOption,
@@ -393,7 +395,7 @@ impl_display!(ColumnOptionDef);
 
 /// `ColumnOption`s are modifiers that follow a column definition in a `CREATE
 /// TABLE` statement.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ColumnOption {
     /// `NULL`
     Null,

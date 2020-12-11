@@ -20,6 +20,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use repr::adt::datetime::DateTimeField;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
@@ -37,7 +39,7 @@ impl fmt::Display for ValueError {
 }
 
 /// Primitive SQL values.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Value {
     /// Numeric value.
     Number(String),
@@ -131,7 +133,7 @@ impl_display!(Value);
 
 /// An intermediate value for Intervals, which tracks all data from
 /// the user, as well as the computed ParsedDateTime.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct IntervalValue {
     /// The raw `[value]` that was present in `INTERVAL '[value]'`
     pub value: String,
@@ -175,7 +177,7 @@ mod test {
 }
 
 /// SQL data types
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DataType {
     /// Array
     Array(Box<DataType>),

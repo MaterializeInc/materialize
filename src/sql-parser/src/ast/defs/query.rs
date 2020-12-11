@@ -20,12 +20,14 @@
 
 use std::mem;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{Expr, FunctionArgs, Ident, ObjectName, SqlOption};
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Query {
     /// WITH (common table expressions, or CTEs)
     pub ctes: Vec<Cte>,
@@ -105,7 +107,7 @@ impl Query {
 
 /// A node in a tree, representing a "query body" expression, roughly:
 /// `SELECT ... [ {UNION|EXCEPT|INTERSECT} SELECT ...]`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SetExpr {
     /// Restricted SELECT .. FROM .. HAVING (no ORDER BY or set operations)
     Select(Box<Select>),
@@ -153,7 +155,7 @@ impl AstDisplay for SetExpr {
 }
 impl_display!(SetExpr);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SetOperator {
     Union,
     Except,
@@ -174,7 +176,7 @@ impl_display!(SetOperator);
 /// A restricted variant of `SELECT` (without CTEs/`ORDER BY`), which may
 /// appear either as the only body item of an `SQLQuery`, or as an operand
 /// to a set operation like `UNION`.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Select {
     pub distinct: Option<Distinct>,
     /// projection expressions
@@ -244,7 +246,7 @@ impl Select {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Distinct {
     EntireRow,
     On(Vec<Expr>),
@@ -268,7 +270,7 @@ impl AstDisplay for Distinct {
 /// The names in the column list before `AS`, when specified, replace the names
 /// of the columns returned by the query. The parser does not validate that the
 /// number of columns in the query matches the number of columns in the query.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Cte {
     pub alias: TableAlias,
     pub query: Query,
@@ -285,7 +287,7 @@ impl AstDisplay for Cte {
 impl_display!(Cte);
 
 /// One item of the comma-separated list following `SELECT`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SelectItem {
     /// An expression, optionally followed by `[ AS ] alias`.
     Expr { expr: Expr, alias: Option<Ident> },
@@ -309,7 +311,7 @@ impl AstDisplay for SelectItem {
 }
 impl_display!(SelectItem);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TableWithJoins {
     pub relation: TableFactor,
     pub joins: Vec<Join>,
@@ -339,7 +341,7 @@ impl TableWithJoins {
 }
 
 /// A table name or a parenthesized subquery with an optional alias
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TableFactor {
     Table {
         name: ObjectName,
@@ -415,7 +417,7 @@ impl AstDisplay for TableFactor {
 }
 impl_display!(TableFactor);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TableAlias {
     pub name: Ident,
     pub columns: Vec<Ident>,
@@ -439,7 +441,7 @@ impl AstDisplay for TableAlias {
 }
 impl_display!(TableAlias);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Join {
     pub relation: TableFactor,
     pub join_operator: JoinOperator,
@@ -511,7 +513,7 @@ impl AstDisplay for Join {
 }
 impl_display!(Join);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JoinOperator {
     Inner(JoinConstraint),
     LeftOuter(JoinConstraint),
@@ -520,7 +522,7 @@ pub enum JoinOperator {
     CrossJoin,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JoinConstraint {
     On(Expr),
     Using(Vec<Ident>),
@@ -528,7 +530,7 @@ pub enum JoinConstraint {
 }
 
 /// SQL ORDER BY expression
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OrderByExpr {
     pub expr: Expr,
     pub asc: Option<bool>,
@@ -546,13 +548,13 @@ impl AstDisplay for OrderByExpr {
 }
 impl_display!(OrderByExpr);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Limit {
     pub with_ties: bool,
     pub quantity: Expr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Values(pub Vec<Vec<Expr>>);
 
 impl AstDisplay for Values {

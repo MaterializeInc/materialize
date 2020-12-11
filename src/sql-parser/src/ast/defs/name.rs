@@ -18,11 +18,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::keywords::Keyword;
 
 /// An identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Ident(String);
 
 impl Ident {
@@ -91,7 +93,7 @@ impl AstDisplay for Ident {
 impl_display!(Ident);
 
 /// A name of a table, view, custom type, etc., possibly multi-part, i.e. db.schema.obj
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ObjectName(pub Vec<Ident>);
 
 impl AstDisplay for ObjectName {
