@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
 
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
 import collections
 import logging
 import os
@@ -12,11 +21,10 @@ import tornado.platform.asyncio
 import tornado.web
 import tornado.websocket
 
-log = logging.getLogger('wikipedia_live.main')
+log = logging.getLogger("wikipedia_live.main")
 
 
 class View:
-
     def __init__(self):
         self.current_rows = []
         self.current_timestamp = []
@@ -25,9 +33,13 @@ class View:
     def add_listener(self, conn):
         """Insert this connection into the list that will be notified on new messages."""
         # Write the latest view state to catch this listener up to the current state of the world
-        conn.write_message({'deleted': [],
-                            'inserted': self.current_rows,
-                            'timestamp': self.current_timestamp})
+        conn.write_message(
+            {
+                "deleted": [],
+                "inserted": self.current_rows,
+                "timestamp": self.current_timestamp,
+            }
+        )
         self.listeners.add(conn)
 
     def broadcast(self, payload):
@@ -62,29 +74,25 @@ class View:
 
         # If we have listeners configured, broadcast this diff
         if self.listeners:
-            payload = {'deleted': deleted,
-                       'inserted': inserted,
-                       'timestamp': timestamp}
+            payload = {"deleted": deleted, "inserted": inserted, "timestamp": timestamp}
 
             self.broadcast(payload)
 
 
 class IndexHandler(tornado.web.RequestHandler):
-
     async def get(self):
         async with await self.application.mzql_connection() as conn:
             async with await conn.cursor() as cursor:
-                query = 'SELECT * FROM counter'
+                query = "SELECT * FROM counter"
                 async with await cursor.execute(query) as counts:
                     assert counts.rowcount == 1
                     row = await counts.fetchone()
                     edit_count = row[0]
 
-        self.render('index.html', edit_count=edit_count)
+        self.render("index.html", edit_count=edit_count)
 
 
 class StreamHandler(tornado.websocket.WebSocketHandler):
-
     def open(self, view):
         self.view = view
         self.application.views[view].add_listener(self)
@@ -94,12 +102,11 @@ class StreamHandler(tornado.websocket.WebSocketHandler):
 
 
 class Application(tornado.web.Application):
-
     def __init__(self, *args, dsn, ioloop, **kwargs):
         super().__init__(*args, **kwargs)
         self.dsn = dsn
 
-        configured_views = ['counter', 'top_users']
+        configured_views = ["counter", "top_users"]
         self.views = {view: View() for view in configured_views}
 
         for view in configured_views:
@@ -114,55 +121,64 @@ class Application(tornado.web.Application):
         log.info('Spawning coroutine to TAIL VIEW "%s"', view_name)
         async with await self.mzql_connection() as conn:
             async with await conn.cursor() as cursor:
-                query = f'COPY (TAIL {view_name} WITH (PROGRESS)) TO STDOUT'
+                query = f"COPY (TAIL {view_name} WITH (PROGRESS)) TO STDOUT"
                 async with cursor.copy(query) as tail:
                     inserted = []
                     deleted = []
                     async for row in tail:
-                        row = row.decode('utf-8')
-                        (timestamp, progressed, diff, *columns) = row.strip().split("\t")
+                        row = row.decode("utf-8")
+                        (timestamp, progressed, diff, *columns) = row.strip().split(
+                            "\t"
+                        )
 
-                        if progressed == 't':
-                            assert diff == '\\N'
+                        if progressed == "t":
+                            assert diff == "\\N"
                             self.views[view_name].update(deleted, inserted, timestamp)
                             inserted = []
                             deleted = []
-                        elif diff == '-1':
+                        elif diff == "-1":
                             deleted.append(columns)
-                        elif diff == '1':
+                        elif diff == "1":
                             inserted.append(columns)
                         else:
-                            log.error('Failed to correctly decode row %s', row.strip())
+                            log.error("Failed to correctly decode row %s", row.strip())
+
 
 def configure_logging():
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO,
-                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+        stream=sys.stdout,
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
 
 def run():
     configure_logging()
 
     handlers = [
-        tornado.web.url(r'/', IndexHandler, name='index'),
-        tornado.web.url(r'/api/v1/stream/(.*)', StreamHandler, name='api/stream'),
+        tornado.web.url(r"/", IndexHandler, name="index"),
+        tornado.web.url(r"/api/v1/stream/(.*)", StreamHandler, name="api/stream"),
     ]
 
     base_dir = os.path.dirname(__file__)
-    static_path = os.path.join(base_dir, 'static')
-    template_path = os.path.join(base_dir, 'templates')
+    static_path = os.path.join(base_dir, "static")
+    template_path = os.path.join(base_dir, "templates")
 
     ioloop = tornado.ioloop.IOLoop.current()
-    app = Application(handlers,
-                      static_path=static_path,
-                      template_path=template_path,
-                      ioloop=ioloop,
-                      debug=True,
-                      dsn='postgresql://materialized:6875/materialize')
+    app = Application(
+        handlers,
+        static_path=static_path,
+        template_path=template_path,
+        ioloop=ioloop,
+        debug=True,
+        dsn="postgresql://materialized:6875/materialize",
+    )
 
     port = 8875
-    log.info('Port %d ready to rumble!', port)
+    log.info("Port %d ready to rumble!", port)
     app.listen(port)
     ioloop.start()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     run()

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Use slim once we can pip-install
+# TODO: Use slim once we can pip-install
 FROM python:3.9
 
 # Install the Pure Python version of psycopg3 from source
