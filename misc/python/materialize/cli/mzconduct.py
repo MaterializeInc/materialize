@@ -254,10 +254,6 @@ class Composition:
             raise UnknownItem("workflow", workflow, self._workflows.names())
         workflow_.run(self, None)
 
-    def wait(self, service: str, expected_return_code: int) -> None:
-        """wait for the specified service exit and assert that the return code is expected"""
-        mzcompose_wait(self._mzcompose_file, service, expected_return_code)
-
     def web(self, service: str) -> None:
         """Best effort attempt to open the service in a web browser"""
         ports = self.find_host_ports(service)
