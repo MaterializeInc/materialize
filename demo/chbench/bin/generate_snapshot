@@ -59,7 +59,7 @@ parse_args() {
                 oltp_threads="${1:?--oltp-threads requires an argument}" && shift
                 ;;
             -s|--run-seconds)
-                run_seconds="${1:?--run-seconds requires an argument}" && shift
+                chbench_seconds="${1:?--run-seconds requires an argument}" && shift
                 ;;
             --warehouses)
                 warehouses="${1:?--warehouses requires an argument}" && shift
