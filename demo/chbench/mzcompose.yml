@@ -345,14 +345,13 @@ mzconduct:
       - step: ensure-stays-up
         container: dashboard
         seconds: 1
-      # Populate Kafka topics with sufficient data that Materialize will take a decent amount of
-      # time to catch up
-      # TODO: wait on exit of chbench container
-      - step: sleep
-        duration: ${CHBENCH_RUN_SECONDS:-864000}
+      - step: wait
+        service: chbench
+        expected_return_code: 0
       - step: stop-services
-        services: [chbench, postgres]
+        services: [postgres]
       # Give Materialize a few seconds to catch up with topics / drain
+      # TODO: Remove this sleep by adding an `wait_for_topic_queisce` step
       - step: sleep
         duration: 15
       - step: run

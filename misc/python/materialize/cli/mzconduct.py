@@ -254,6 +254,10 @@ class Composition:
             raise UnknownItem("workflow", workflow, self._workflows.names())
         workflow_.run(self, None)
 
+    def wait(self, service: str, expected_return_code: int) -> None:
+        """wait for the specified service exit and assert that the return code is expected"""
+        mzcompose_wait(self._mzcompose_file, service, expected_return_code)
+
     def web(self, service: str) -> None:
         """Best effort attempt to open the service in a web browser"""
         ports = self.find_host_ports(service)
@@ -1295,6 +1299,19 @@ class DownStep(WorkflowStep):
         mzcompose_down(self._path, self._destroy_volumes)
 
 
+@Steps.register("wait")
+class WaitStep(WorkflowStep):
+    def __init__(self, path: Path, *, service: str, expected_return_code: int) -> None:
+        super().__init__(path)
+        """Wait for the container with name service to exit"""
+        self._expected_return_code = expected_return_code
+        self._service = service
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        say("Wait for the specified service to exit")
+        mzcompose_wait(self._path, self._service, self._expected_return_code)
+
+
 # Generic commands
 
 
@@ -1356,6 +1373,35 @@ def mzcompose_down(
     if destroy_volumes:
         cmd.append("--volumes")
     return spawn.runv(cmd)
+
+
+def mzcompose_wait(
+    mzcompose_file: Path, service: str, expected_return_code: int
+) -> None:
+    ps_cmd = ["bin/mzcompose", "--mz-quiet", "-f", str(mzcompose_file), "ps", "-q", service]
+    ps_proc = spawn.runv(ps_cmd, capture_output=True)
+    container_ids = [c for c in ps_proc.stdout.decode("utf-8").strip().split("\n")]
+    if len(container_ids) > 1:
+        raise Failed(
+            f"Expected to get a single container for {service}; got: {container_ids}"
+        )
+    elif not container_ids:
+        raise Failed(f"No containers returned for service {service}")
+
+    container_id = container_ids[0]
+    wait_cmd = ["docker", "wait", container_id]
+    wait_proc = spawn.runv(wait_cmd, capture_output=True)
+    return_codes = [int(c) for c in wait_proc.stdout.decode("utf-8").strip().split("\n")]
+    if len(return_codes) != 1:
+        raise Failed(
+            f"Expected single exit code for {container_id}; got: {return_codes}"
+        )
+
+    return_code = return_codes[0]
+    if return_code != expected_return_code:
+        raise Failed(
+            f"Expected exit code {expected_return_code} for {container_id}; got: {return_code}"
+        )
 
 
 # Helpers
