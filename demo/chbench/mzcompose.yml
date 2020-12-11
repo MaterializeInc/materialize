@@ -384,45 +384,17 @@ mzconduct:
     # After the first timer expires, stop chbench and wait for the data to stabilize
     # Record offsets ingested by Materialize and the answers to our count(*) views
     # Take a snapshot of topic schemas and contents
-    create-chbench-snapshot:
+    generate-snapshot:
       steps:
       - step: workflow
-        workflow: bring-up-source-data-postgres
-      # start the dashboard before the load data get started so that we have data from
-      # the beginning of time
-      - step: start-services
-        services: [dashboard]
-      - step: workflow
-        workflow: heavy-load-postgres
-      # Kafka connect / debezium takes forever to initialize (well, 5 minutes or so)
-      - step: sleep
-        duration: 300
-      - step: run
-        service: peeker
-        command: --only-initialize --queries ${PEEKER_QUERIES:-count-sources}
-      - step: ensure-stays-up
-        container: dashboard
-        seconds: 1
-      # Populate Kafka topics with sufficient data that Materialize will take a decent amount of
-      # time to catch up
-      # TODO: Configure chbench with this paramter and wait on its exit
-      - step: sleep
-        duration: ${RUN_SECONDS:-43200}
-      - step: stop-services
-        services: [chbench, postgres]
-      # Give Materialize a few seconds to catch up with topics / drain before snapshotting views
-      - step: sleep
-        duration: 30
-      - step: run
-        service: mzutil
-        command: snapshot_view_states.py
+        workflow: setup-ingest-benchmark
       - step: run
         service: kafka-util
         command: archive_topics.py
 
     # Run a test that populates Kafka with data from topic snapshots
     # Then run Materialize and measure time until it catches up to snapshotted view state
-    chbench-replay-benchmark:
+    setup-replay-benchmark:
       steps:
       # start the dashboard before the load data get started so that we have data from
       # the beginning of time
@@ -448,40 +420,6 @@ mzconduct:
       - step: ensure-stays-up
         container: dashboard
         seconds: 1
-      - step: run
-        service: mzutil
-        command: await_view_states.py
-      # Repeat measurements 5 times
-      # Run it again
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: await_view_states.py
-      # Run it again
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: await_view_states.py
-      # Run it again
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: await_view_states.py
-      # Run it again
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: await_view_states.py
-      # Run it again
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: await_view_states.py
 
     load-test:
       steps:

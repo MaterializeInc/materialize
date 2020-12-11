@@ -10,8 +10,16 @@
 
 set -euo pipefail
 
+MTRLZ_GIT_ROOT="${MTRLZ_GIT_ROOT:-$(git rev-parse --show-toplevel)}"
+if [[ "${PWD}" != "${MTRLZ_GIT_ROOT}" ]]; then
+    cd "${MTRLZ_GIT_ROOT}"
+fi
+
+cleanup="no"
 data_dir="${HOME}/chbench_snapshot"
+num_measurements=6
 peeker_queries="count-sources"
+setup="no"
 topic_filter="debezium.tpcch.*"
 workers=24
 
@@ -30,8 +38,10 @@ Help:
 
 Options:
 
+    -c|--cleanup            Shutdown services and remove volumes at the end of the test
     -d|--data-directory     Directory that contains the chbench state snapshot
     -q|--queries            Peeker queries to configure (individual query or group name)
+    -s|--setup              Intialize the Kafka cluster with data from topic snapshots
     -t|--topic-filter       Only restore topics that match the supplied filter (GLOB syntax)
     -w|--workers            Read the token from your Yubikey instead of asking for a one-time token
 "
@@ -43,12 +53,21 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         arg="$1" && shift
         case "$arg" in
+            -c|--cleanup)
+                cleanup="yes"
+                ;;
             -d|--data-directory)
                 data_dir="${1:?--data-directory requires an argument}" && shift
                 ;;
             -h|--help) usage 0;;
+            -n|--num-measurements)
+                num_measurements="${1:?--num-measurements requires an argument}" && shift
+                ;;
             -q|--queries)
                 peeker_queries="${1:?--queries requires an argument}" && shift
+                ;;
+            -s|--setup)
+                setup="yes"
                 ;;
             -t|--topic-filter)
                 topic_filter="${1:?--topic-filter requires an argument}" && shift
@@ -78,7 +97,18 @@ main() {
     export MZ_TOPIC_SNAPSHOTS="${data_dir}"
     export PEEKER_QUERIES="${peeker_queries}"
 
-    ./bin/mzconduct run chbench -w chbench-replay-benchmark
+    if [[ "${setup}" = "yes" ]]; then
+        ./bin/mzconduct run chbench -w setup-replay-benchmark
+    fi
+
+    for i in $(seq 1 "${num_measurements}"); do
+        echo "Conducting measurement ${i} of ${num_measurements}"
+        ./bin/mzconduct run chbench -w measure-ingest-performance
+    done
+
+    if [[ "${cleanup}" = "yes" ]]; then
+        ./bin/mzconduct down chbench
+    fi
 }
 
 main "$@"
