@@ -156,7 +156,7 @@ def run():
                       template_path=template_path,
                       ioloop=ioloop,
                       debug=True,
-                      dsn='postgresql://localhost:6875/materialize')
+                      dsn='postgresql://materialized:6875/materialize')
 
     port = 8875
     log.info('Port %d ready to rumble!', port)

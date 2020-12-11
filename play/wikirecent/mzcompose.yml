@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 x-port-mappings:
-  - &webapp ${APP_PORT:-8875:8875}
+  - &app ${APP_PORT:-8875:8875}
   - &materialized ${MZ_PORT:-6875:6875}
 
 version: '3.7'
@@ -18,18 +18,23 @@ services:
     ports:
       - *materialized
     init: true
-  wikirecent-app:
+  app:
     mzbuild: wikirecent-app
+    ports:
+      - *app
 
 mzconduct:
   workflows:
     start-demo:
       steps:
       - step: start-services
-        services: [materialized, wikirecent-app]
+        services: [materialized]
       - step: wait-for-tcp
         host: materialized
         port: ${MZ_PORT:-6875}
+      # TODO: Run step to create VIEWS / etc
+      - step: start-services
+        services: [app]
       - step: wait-for-tcp
-        host: materialized
+        host: app
         port: ${APP_PORT:-8875}
