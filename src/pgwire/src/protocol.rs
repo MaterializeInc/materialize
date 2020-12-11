@@ -12,7 +12,6 @@ use std::convert::TryFrom;
 use std::future::Future;
 use std::iter;
 use std::mem;
-use std::time::Instant;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{BoxFuture, FutureExt};
@@ -23,7 +22,7 @@ use log::debug;
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::time::{self, Duration};
+use tokio::time::{self, Duration, Instant};
 
 use coord::session::{Portal, PortalState, RowBatchStream, TransactionStatus};
 use coord::{ExecuteResponse, StartupMessage};
@@ -32,6 +31,7 @@ use ore::cast::CastFrom;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Ident, Statement};
+use sql::plan::FetchOptions;
 use sql::plan::{CopyFormat, StatementDesc};
 
 use crate::codec::FramedConn;
@@ -154,7 +154,7 @@ where
                     Ok(0) | Err(_) => ExecuteCount::All, // If `max_rows < 0`, no limit.
                     Ok(n) => ExecuteCount::Count(n),
                 };
-                self.execute(portal_name, max_rows, portal_exec_message, None)
+                self.execute(portal_name, max_rows, portal_exec_message, None, None)
                     .await?
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
@@ -313,6 +313,7 @@ where
                             ExecuteCount::All,
                             portal_exec_message,
                             None,
+                            None,
                         )
                         .await
                     }
@@ -356,9 +357,51 @@ where
             Some(Statement::Fetch(stmt)) => {
                 let name = stmt.name.clone();
                 let count = stmt.count;
+                let options = match FetchOptions::try_from(stmt.options.clone()) {
+                    Ok(options) => options,
+                    Err(e) => {
+                        return Some(
+                            self.error(ErrorResponse::error(
+                                SqlState::INVALID_PARAMETER_VALUE,
+                                format!("{}", e),
+                            ))
+                            .await,
+                        )
+                    }
+                };
+                let timeout_secs = match options.timeout {
+                    Some(timeout) => {
+                        // Limit FETCH timeouts to 1 day. If users have a legitimate need it can be
+                        // bumped. If we do bump it, ensure that the new upper limit is within the
+                        // bounds of a tokio time future, otherwise it'll panic.
+                        const SECS_PER_DAY: f64 = 60f64 * 60f64 * 24f64;
+                        let timeout_secs = timeout.as_seconds();
+                        if !timeout_secs.is_finite()
+                            || timeout_secs < 0f64
+                            || timeout_secs > SECS_PER_DAY
+                        {
+                            return Some(
+                                self.error(ErrorResponse::error(
+                                    SqlState::INVALID_PARAMETER_VALUE,
+                                    format!("timeout out of range: {:#}", timeout),
+                                ))
+                                .await,
+                            );
+                        }
+                        Some(timeout_secs)
+                    }
+                    // FETCH defaults to 0 timeout.
+                    None => Some(0f64),
+                };
                 Some(
-                    self.fetch(name, count, max_rows, Some(portal_name.to_string()))
-                        .await,
+                    self.fetch(
+                        name,
+                        count,
+                        max_rows,
+                        Some(portal_name.to_string()),
+                        timeout_secs,
+                    )
+                    .await,
                 )
             }
             Some(Statement::Close(stmt)) => {
@@ -574,6 +617,7 @@ where
         max_rows: ExecuteCount,
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
+        timeout_secs: Option<f64>,
     ) -> BoxFuture<'_, Result<State, comm::Error>> {
         async move {
             // Check if the portal has been started and can be continued.
@@ -608,6 +652,7 @@ where
                                 max_rows,
                                 get_response,
                                 fetch_portal_name,
+                                timeout_secs,
                             )
                             .await
                         }
@@ -629,6 +674,7 @@ where
                         max_rows,
                         get_response,
                         fetch_portal_name,
+                        timeout_secs,
                     )
                     .await
                 }
@@ -725,6 +771,7 @@ where
         count: Option<u64>,
         max_rows: ExecuteCount,
         fetch_portal_name: Option<String>,
+        timeout_secs: Option<f64>,
     ) -> Result<State, comm::Error> {
         // Unlike Execute, no count specified in FETCH returns 1 row, and 0 means 0
         // instead of All.
@@ -755,6 +802,7 @@ where
             ExecuteCount::Count(count),
             fetch_message,
             fetch_portal_name,
+            timeout_secs,
         )
         .await
     }
@@ -808,6 +856,7 @@ where
         self.flush().await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn send_execute_response(
         &mut self,
         response: ExecuteResponse,
@@ -816,6 +865,7 @@ where
         max_rows: ExecuteCount,
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
+        timeout_secs: Option<f64>,
     ) -> Result<State, comm::Error> {
         macro_rules! command_complete {
             ($($arg:tt)*) => {{
@@ -911,6 +961,7 @@ where
                             max_rows,
                             get_response,
                             fetch_portal_name,
+                            timeout_secs,
                         )
                         .await
                     }
@@ -961,6 +1012,7 @@ where
                     max_rows,
                     get_response,
                     fetch_portal_name,
+                    timeout_secs,
                 )
                 .await
             }
@@ -1003,6 +1055,7 @@ where
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn send_rows(
         &mut self,
         row_desc: RelationDesc,
@@ -1011,6 +1064,7 @@ where
         max_rows: ExecuteCount,
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
+        timeout_secs: Option<f64>,
     ) -> Result<State, comm::Error> {
         let session = self.coord_client.session();
 
@@ -1031,7 +1085,23 @@ where
             .get_portal_mut(&portal_name)
             .expect("valid portal name for send rows");
 
-        let mut batch = rows.try_next().await?;
+        let deadline = timeout_secs.map(|t| Instant::now() + Duration::from_secs_f64(t));
+        // fetch_batch is a helper function that fetches the next row batch and
+        // implements timeout deadlines if they were requested.
+        async fn fetch_batch(
+            deadline: Option<Instant>,
+            rows: &mut RowBatchStream,
+        ) -> Result<Option<Vec<Row>>, comm::Error> {
+            match deadline {
+                None => rows.try_next().await,
+                Some(deadline) => match time::timeout_at(deadline, rows.try_next()).await {
+                    Ok(batch) => batch,
+                    Err(_elapsed) => Ok(None),
+                },
+            }
+        };
+
+        let mut batch: Option<Vec<Row>> = fetch_batch(deadline, &mut rows).await?;
         if let Some([row, ..]) = batch.as_deref() {
             let datums = row.unpack();
             let col_types = &row_desc.typ().column_types;
@@ -1098,7 +1168,7 @@ where
                 break;
             }
             self.conn.flush().await?;
-            batch = rows.try_next().await?;
+            batch = fetch_batch(deadline, &mut rows).await?;
         }
 
         ROWS_RETURNED.inc_by(u64::cast_from(total_sent_rows));

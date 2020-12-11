@@ -47,24 +47,32 @@ statement ok
 DECLARE c CURSOR FOR TAIL v
 
 query IITT
-FETCH c
+FETCH c WITH (TIMEOUT = '10s')
 ----
 0  1  a  b
 
 query IITT
-FETCH 2 c
+FETCH 2 c WITH (TIMEOUT = '10s')
 ----
 0  1  c  d
 0  1  e  f
 
 query IITT
-FETCH 2 c
+FETCH 2 c WITH (TIMEOUT = '1')
 ----
 0  1  g  h
 
 query IITT
-FETCH c
+FETCH c WITH (TIMEOUT = '1')
 ----
+
+# Test some FETCH timeout errors. The actual timeout functionality is
+# tested elsewhere.
+statement error timeout out of range
+FETCH c WITH (TIMEOUT = '-1s')
+
+statement error timeout out of range
+FETCH c WITH (TIMEOUT = '25h')
 
 statement ok
 CLOSE c
