@@ -57,8 +57,8 @@ def view_matches(
 
 def source_at_offset(
     cursor: psycopg2.extensions.cursor, source_name: str, desired_offset: int
-):
-    """Return True if a SELECT from the VIEW matches the expected string."""
+) -> typing.Union[None, int]:
+    """Return the mz timestamp from a source if it has reached the desired offset."""
     query = (
         "SELECT timestamp FROM mz_source_info WHERE source_name = %s and offset = %s"
     )
@@ -72,11 +72,10 @@ def source_at_offset(
         if not cursor.rowcount:
             return None
 
-        return cursor.fetchone()[0]
+        return int(cursor.fetchone()[0])
     except psycopg2.errors.InternalError_:
         # The view is not yet ready to be queried
         return False
-    return stream.getvalue() == expected
 
 
 def wait_for_materialize_views(args: argparse.Namespace) -> None:
