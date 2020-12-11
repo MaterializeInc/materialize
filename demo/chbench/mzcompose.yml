@@ -325,7 +325,7 @@ mzconduct:
 
     # Run a test that populates Kafka with data from chbench for a set amount of time
     # Once chbench exits, record offsets ingested by Materialize and view states
-    # Restart Materialized and measure time until it catches up to previous views
+    # Leaves the cluster running
     setup-ingest-benchmark:
       steps:
       - step: workflow
