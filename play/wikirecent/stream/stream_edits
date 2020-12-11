@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+
+url="https://stream.wikimedia.org/v2/stream/recentchange"
+echo "Streaming recent changes from Wikipedia using URL ${url}"
+
+while true; do
+  curl -s --max-time 9999999 -N "${url}" >> /tmp/wikidata/recentchanges
+done
