@@ -1374,7 +1374,15 @@ def mzcompose_down(
 def mzcompose_wait(
     mzcompose_file: Path, service: str, expected_return_code: int
 ) -> None:
-    ps_cmd = ["bin/mzcompose", "--mz-quiet", "-f", str(mzcompose_file), "ps", "-q", service]
+    ps_cmd = [
+        "bin/mzcompose",
+        "--mz-quiet",
+        "-f",
+        str(mzcompose_file),
+        "ps",
+        "-q",
+        service,
+    ]
     ps_proc = spawn.runv(ps_cmd, capture_output=True)
     container_ids = [c for c in ps_proc.stdout.decode("utf-8").strip().split("\n")]
     if len(container_ids) > 1:
@@ -1387,7 +1395,9 @@ def mzcompose_wait(
     container_id = container_ids[0]
     wait_cmd = ["docker", "wait", container_id]
     wait_proc = spawn.runv(wait_cmd, capture_output=True)
-    return_codes = [int(c) for c in wait_proc.stdout.decode("utf-8").strip().split("\n")]
+    return_codes = [
+        int(c) for c in wait_proc.stdout.decode("utf-8").strip().split("\n")
+    ]
     if len(return_codes) != 1:
         raise Failed(
             f"Expected single exit code for {container_id}; got: {return_codes}"
