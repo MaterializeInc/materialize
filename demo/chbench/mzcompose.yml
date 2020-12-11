@@ -282,7 +282,7 @@ mzconduct:
           --dsn=mysql --gen-dir=/var/lib/mysql-files
           --analytic-threads=0
           --transactional-threads=1
-          --run-seconds=500
+          --run-seconds=${CHBENCH_RUN_SECONDS:-500}
           -l /dev/stdout
           --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
           --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
@@ -326,10 +326,9 @@ mzconduct:
           -q loadtest
 
     # Run a test that populates Kafka with data from chbench for a set amount of time
-    # After the first timer expires, stop chbench
-    # Record offsets ingested by Materialize and the answers to our count(*) views
-    # Restart Materialized and measure time until it catches up to previous views
-    ingest-performance-benchmark:
+    # Once chbench exits, record offsets ingested by Materialize and view states
+    # Leaves the cluster running
+    setup-ingest-benchmark:
       steps:
       - step: workflow
         workflow: bring-up-source-data-postgres
@@ -339,22 +338,22 @@ mzconduct:
         services: [dashboard]
       - step: workflow
         workflow: heavy-load-postgres
-      # Kafka connect / debezium takes forever to initialize (well, 5 minutes or so)
-      - step: sleep
-        duration: 300
       - step: run
         service: peeker
-        command: --only-initialize --queries ${PEEKER_QUERIES:-count-sources}
+        command: >-
+          --only-initialize
+          --init-timeout ${PEEKER_TIMEOUT:-10m}
+          --queries ${PEEKER_QUERIES:-count-sources}
       - step: ensure-stays-up
         container: dashboard
         seconds: 1
-      # Populate Kafka topics with sufficient data that Materialize will take a decent amount of
-      # time to catch up
-      - step: sleep
-        duration: 64800
+      - step: wait
+        service: chbench
+        expected_return_code: 0
       - step: stop-services
-        services: [chbench, postgres]
-      # Give Materialize a few seconds to catch up with topics / drain before snapshotting views
+        services: [postgres]
+      # Give Materialize a few seconds to catch up with topics / drain
+      # TODO: Remove this sleep by adding an `wait_for_topic_queisce` step
       - step: sleep
         duration: 15
       - step: run
@@ -364,43 +363,16 @@ mzconduct:
       - step: run
         service: kafka-util
         command: summarize_topics.py
-      # Restart Materialize and see how quickly it catches up
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: wait_for_view_states.py
-      # Run it again
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: wait_for_view_states.py
-      # Run it again
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: wait_for_view_states.py
-      # Run it again
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: wait_for_view_states.py
-      # Run it again
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: wait_for_view_states.py
-      # Run it again
-      - step: restart-services
-        services: [materialized]
-      - step: run
-        service: mzutil
-        command: wait_for_view_states.py
 
+    # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
+    # already called setup-ingest-benchmark and the cluster is still running
+    measure-ingest-performance:
+      steps:
+      - step: restart-services
+        services: [materialized]
+      - step: run
+        service: mzutil
+        command: wait_for_view_states.py
 
     load-test:
       steps:
@@ -567,7 +539,7 @@ mzconduct:
           --analytic-threads=0
           --transactional-threads=${OLTP_THREADS:-1}
           --warmup-seconds=300
-          --run-seconds=1200
+          --run-seconds=${CHBENCH_RUN_SECONDS:-1200}
           -l /dev/stdout
           --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
           --mz-url=postgresql://${MZ_HOST:-materialized}:6875/materialize?sslmode=disable
@@ -688,7 +660,7 @@ mzconduct:
          --dsn=mysql --gen-dir=/var/lib/mysql-files
          --analytic-threads=0
          --transactional-threads=${OLTP_THREADS:-1}
-         --run-seconds=864000
+         --run-seconds=${CHBENCH_RUN_SECONDS:-864000}
          -l /var/log/chbench.log
          --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
          --mz-url=postgresql://${MZ_HOST:-materialized}:6875/materialize?sslmode=disable
@@ -703,7 +675,7 @@ mzconduct:
          --dsn=postgres --gen-dir=/var/lib/postgres-files
          --analytic-threads=0
          --transactional-threads=${OLTP_THREADS:-1}
-         --run-seconds=864000
+         --run-seconds=${CHBENCH_RUN_SECONDS:-864000}
          -l /var/log/chbench.log
          --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
