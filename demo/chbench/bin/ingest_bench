@@ -10,9 +10,9 @@
 
 set -euo pipefail
 
-if [[ ! -f bin/mzconduct ]]; then
-    echo "This must be run from the root of the repo" >&2
-    exit 1
+MTRLZ_GIT_ROOT="${MTRLZ_GIT_ROOT:-$(git rev-parse --show-toplevel)}"
+if [[ "${PWD}" != "${MTRLZ_GIT_ROOT}" ]]; then
+    cd "${MTRLZ_GIT_ROOT}"
 fi
 
 chbench_seconds=43200
