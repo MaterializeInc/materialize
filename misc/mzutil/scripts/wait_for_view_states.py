@@ -41,7 +41,9 @@ def view_names(
             yield row[0]
 
 
-def view_matches(cursor: psycopg2.extensions.cursor, view: str, expected: str, timestamp: int) -> bool:
+def view_matches(
+    cursor: psycopg2.extensions.cursor, view: str, expected: str, timestamp: int
+) -> bool:
     """Return True if a SELECT from the VIEW matches the expected string."""
     stream = io.StringIO()
     query = f"COPY (SELECT * FROM {view} WHERE mz_logical_timestamp() > {timestamp}) TO STDOUT"
@@ -53,7 +55,9 @@ def view_matches(cursor: psycopg2.extensions.cursor, view: str, expected: str, t
     return stream.getvalue() == expected
 
 
-def source_at_offset(cursor: psycopg2.extensions.cursor, source_name: str, desired_offset: int):
+def source_at_offset(
+    cursor: psycopg2.extensions.cursor, source_name: str, desired_offset: int
+):
     """Return True if a SELECT from the VIEW matches the expected string."""
     query = (
         "SELECT timestamp FROM mz_source_info WHERE source_name = %s and offset = %s"
