@@ -28,6 +28,7 @@ use sql::ast::display::AstDisplay;
 use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
+use sql_parser::ast::Expr;
 use transform::Optimizer;
 
 use crate::catalog::builtin::{
@@ -140,6 +141,7 @@ pub struct Table {
     pub create_sql: String,
     pub plan_cx: PlanContext,
     pub desc: RelationDesc,
+    pub defaults: Vec<Expr>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -523,6 +525,7 @@ impl Catalog {
                             create_sql: "TODO".to_string(),
                             plan_cx: PlanContext::default(),
                             desc: table.desc.clone(),
+                            defaults: table.defaults.clone(),
                         }),
                     ));
                     let oid = catalog.allocate_oid()?;
@@ -1450,6 +1453,7 @@ impl Catalog {
                 create_sql: table.create_sql,
                 plan_cx: pcx,
                 desc: table.desc,
+                defaults: table.defaults,
             }),
             Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
@@ -1875,6 +1879,14 @@ impl sql::catalog::CatalogItem for CatalogEntry {
     fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)> {
         if let CatalogItem::Index(Index { keys, on, .. }) = self.item() {
             Some((keys, *on))
+        } else {
+            None
+        }
+    }
+
+    fn table_details(&self) -> Option<&[Expr]> {
+        if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
+            Some(defaults)
         } else {
             None
         }

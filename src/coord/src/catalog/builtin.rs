@@ -30,6 +30,7 @@ use postgres_types::{Kind, Type};
 use dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
 use expr::GlobalId;
 use repr::{RelationDesc, ScalarType};
+use sql_parser::ast::Expr;
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -83,6 +84,7 @@ pub struct BuiltinTable {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
+    pub defaults: Vec<Expr>,
     pub id: GlobalId,
     pub index_id: GlobalId,
 }
@@ -254,195 +256,321 @@ pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
 };
 
 lazy_static! {
-    pub static ref MZ_VIEW_KEYS: BuiltinTable = BuiltinTable {
-        name: "mz_view_keys",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_VIEW_KEYS: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("global_id", ScalarType::String.nullable(false))
             .with_column("column", ScalarType::Int64.nullable(false))
-            .with_column("key_group", ScalarType::Int64.nullable(false)),
-        id: GlobalId::System(2001),
-        index_id: GlobalId::System(2002),
+            .with_column("key_group", ScalarType::Int64.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_view_keys",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2001),
+            index_id: GlobalId::System(2002),
+        }
     };
-    pub static ref MZ_VIEW_FOREIGN_KEYS: BuiltinTable = BuiltinTable {
-        name: "mz_view_foreign_keys",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_VIEW_FOREIGN_KEYS: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("child_id", ScalarType::String.nullable(false))
             .with_column("child_column", ScalarType::Int64.nullable(false))
             .with_column("parent_id", ScalarType::String.nullable(false))
             .with_column("parent_column", ScalarType::Int64.nullable(false))
             .with_column("key_group", ScalarType::Int64.nullable(false))
-            .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
-        id: GlobalId::System(2003),
-        index_id: GlobalId::System(2004),
+            .with_key(vec![0, 1, 4]); // TODO: explain why this is a key.
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_view_foreign_keys",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2003),
+            index_id: GlobalId::System(2004),
+        }
     };
-    pub static ref MZ_KAFKA_SINKS: BuiltinTable = BuiltinTable {
-        name: "mz_kafka_sinks",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_KAFKA_SINKS: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("sink_id", ScalarType::String.nullable(false))
             .with_column("topic", ScalarType::String.nullable(false))
-            .with_key(vec![0]),
-        id: GlobalId::System(2005),
-        index_id: GlobalId::System(2006),
+            .with_key(vec![0]);
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_kafka_sinks",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2005),
+            index_id: GlobalId::System(2006),
+        }
     };
-    pub static ref MZ_AVRO_OCF_SINKS: BuiltinTable = BuiltinTable {
-        name: "mz_avro_ocf_sinks",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_AVRO_OCF_SINKS: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("sink_id", ScalarType::String.nullable(false))
             .with_column("path", ScalarType::Bytes.nullable(false))
-            .with_key(vec![0]),
-        id: GlobalId::System(2007),
-        index_id: GlobalId::System(2008),
+            .with_key(vec![0]);
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_avro_ocf_sinks",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2007),
+            index_id: GlobalId::System(2008),
+        }
     };
-    pub static ref MZ_DATABASES: BuiltinTable = BuiltinTable {
-        name: "mz_databases",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_DATABASES: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2009),
-        index_id: GlobalId::System(2010),
+            .with_column("name", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_databases",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2009),
+            index_id: GlobalId::System(2010),
+        }
     };
-    pub static ref MZ_SCHEMAS: BuiltinTable = BuiltinTable {
-        name: "mz_schemas",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_SCHEMAS: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("database_id", ScalarType::Int64.nullable(true))
-            .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2011),
-        index_id: GlobalId::System(2012),
+            .with_column("name", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_schemas",
+            desc,
+            defaults,
+            schema: MZ_CATALOG_SCHEMA,
+            id: GlobalId::System(2011),
+            index_id: GlobalId::System(2012),
+        }
     };
-    pub static ref MZ_COLUMNS: BuiltinTable = BuiltinTable {
-        name: "mz_columns",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_COLUMNS: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("position", ScalarType::Int64.nullable(false))
             .with_column("nullable", ScalarType::Bool.nullable(false))
-            .with_column("type", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2013),
-        index_id: GlobalId::System(2014),
+            .with_column("type", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_columns",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2013),
+            index_id: GlobalId::System(2014),
+        }
     };
-    pub static ref MZ_INDEXES: BuiltinTable = BuiltinTable {
-        name: "mz_indexes",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_INDEXES: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("on_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2015),
-        index_id: GlobalId::System(2016),
+            .with_column("on_id", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_indexes",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2015),
+            index_id: GlobalId::System(2016),
+        }
     };
-    pub static ref MZ_INDEX_COLUMNS: BuiltinTable = BuiltinTable {
-        name: "mz_index_columns",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_INDEX_COLUMNS: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("index_id", ScalarType::String.nullable(false))
             .with_column("index_position", ScalarType::Int64.nullable(false))
             .with_column("on_position", ScalarType::Int64.nullable(true))
             .with_column("on_expression", ScalarType::String.nullable(true))
-            .with_column("nullable", ScalarType::Bool.nullable(false)),
-        id: GlobalId::System(2017),
-        index_id: GlobalId::System(2018),
+            .with_column("nullable", ScalarType::Bool.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_index_columns",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2017),
+            index_id: GlobalId::System(2018),
+        }
     };
-    pub static ref MZ_TABLES: BuiltinTable = BuiltinTable {
-        name: "mz_tables",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_TABLES: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2019),
-        index_id: GlobalId::System(2020),
+            .with_column("name", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_tables",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2019),
+            index_id: GlobalId::System(2020),
+        }
     };
-    pub static ref MZ_SOURCES: BuiltinTable = BuiltinTable {
-        name: "mz_sources",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_SOURCES: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2021),
-        index_id: GlobalId::System(2022),
+            .with_column("name", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_sources",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2021),
+            index_id: GlobalId::System(2022),
+        }
     };
-    pub static ref MZ_SINKS: BuiltinTable = BuiltinTable {
-        name: "mz_sinks",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_SINKS: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2023),
-        index_id: GlobalId::System(2024),
+            .with_column("name", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_sinks",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2023),
+            index_id: GlobalId::System(2024),
+        }
     };
-    pub static ref MZ_VIEWS: BuiltinTable = BuiltinTable {
-        name: "mz_views",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_VIEWS: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2025),
-        index_id: GlobalId::System(2026),
+            .with_column("name", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_views",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2025),
+            index_id: GlobalId::System(2026),
+        }
     };
-    pub static ref MZ_TYPES: BuiltinTable = BuiltinTable {
-        name: "mz_types",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_TYPES: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2027),
-        index_id: GlobalId::System(2028),
+            .with_column("name", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_types",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2027),
+            index_id: GlobalId::System(2028),
+        }
     };
-    pub static ref MZ_ARRAY_TYPES: BuiltinTable = BuiltinTable {
-        name: "mz_array_types",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_ARRAY_TYPES: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false))
-            .with_column("element_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2029),
-        index_id: GlobalId::System(2030),
+            .with_column("element_id", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_array_types",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2029),
+            index_id: GlobalId::System(2030),
+        }
     };
-    pub static ref MZ_BASE_TYPES: BuiltinTable = BuiltinTable {
-        name: "mz_base_types",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
-            .with_column("type_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2031),
-        index_id: GlobalId::System(2032),
+    pub static ref MZ_BASE_TYPES: BuiltinTable = {
+        let desc = RelationDesc::empty()
+            .with_column("type_id", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_base_types",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2031),
+            index_id: GlobalId::System(2032),
+        }
     };
-    pub static ref MZ_LIST_TYPES: BuiltinTable = BuiltinTable {
-        name: "mz_list_types",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_LIST_TYPES: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false))
-            .with_column("element_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2033),
-        index_id: GlobalId::System(2034),
+            .with_column("element_id", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_list_types",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2033),
+            index_id: GlobalId::System(2034),
+        }
     };
-    pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
-        name: "mz_map_types",
-        schema: MZ_CATALOG_SCHEMA,
-        desc: RelationDesc::empty()
+    pub static ref MZ_MAP_TYPES: BuiltinTable = {
+        let desc = RelationDesc::empty()
             .with_column("type_id", ScalarType::String.nullable(false))
             .with_column("key_id", ScalarType::String.nullable(false))
-            .with_column("value_id", ScalarType::String.nullable(false)),
-        id: GlobalId::System(2035),
-        index_id: GlobalId::System(2036),
+            .with_column("value_id", ScalarType::String.nullable(false));
+
+        let defaults = vec![Expr::null(); desc.arity()];
+
+        BuiltinTable {
+            name: "mz_map_types",
+            schema: MZ_CATALOG_SCHEMA,
+            desc,
+            defaults,
+            id: GlobalId::System(2035),
+            index_id: GlobalId::System(2036),
+        }
     };
 }
 
