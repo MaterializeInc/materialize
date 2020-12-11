@@ -13,6 +13,12 @@ x-port-mappings:
 
 version: '3.7'
 services:
+  app:
+    mzbuild: wikirecent-app
+    ports:
+      - *app
+  create-views:
+    mzbuild: wikirecent-create-views
   materialized:
     mzbuild: materialized
     ports:
@@ -29,10 +35,6 @@ services:
       - type: volume
         source: wikidata
         target: /tmp/wikidata
-  app:
-    mzbuild: wikirecent-app
-    ports:
-      - *app
 
 volumes:
   wikidata:
@@ -46,7 +48,8 @@ mzconduct:
       - step: wait-for-tcp
         host: materialized
         port: ${MZ_PORT:-6875}
-      # TODO: Run step to create VIEWS / etc
+      - step: run
+        service: create-views
       - step: start-services
         services: [app]
       - step: wait-for-tcp

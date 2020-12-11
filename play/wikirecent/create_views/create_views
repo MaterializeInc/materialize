@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+psql -h materialized -p 6875 -f /data/views.sql materialize
