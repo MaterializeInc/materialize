@@ -20,4 +20,4 @@ if ! port=$(./bin/mzconduct list-port wikirecent app); then
     exit 1
 fi
 
-./play/wikirecent/extras/async_stream_top10.py -p "${port}" top10
+./play/wikirecent/extras/async_stream.py -p "${port}" top10

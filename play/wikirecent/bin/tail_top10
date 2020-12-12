@@ -20,4 +20,4 @@ if ! port=$(./bin/mzconduct list-port wikirecent materialized); then
     exit 1
 fi
 
-./play/wikirecent/extras/async_tail_top10.py -p "${port}" top10
+./play/wikirecent/extras/async_tail.py -p "${port}" top10

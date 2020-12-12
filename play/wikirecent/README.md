@@ -25,8 +25,7 @@ script:
 
     ./play/wikirecent/bin/up
 
-To view the web app, run the `open-web` helper script (this step is required to expose the web
-app's HTTP port):
+To view the web app, run the `open-web` helper script:
 
     ./play/wikirecent/bin/open-web
 
@@ -42,7 +41,7 @@ configured to repeatedly query or poll other applications. Instead, each applica
 subscribing to updates from their dependencies. Updates are minimal in size and are expressed
 soley as transformations from previous state. This has two major benefits:
 
-- Real-time push nofications. Applications are notified as soon as data changes and are not
+- Real-time push notifications. Applications are notified as soon as data changes and are not
   required to repeatedly poll for the same information over and over again.
 
 - Economy of resources required. Each result set only contains information about datum that have
@@ -50,15 +49,15 @@ soley as transformations from previous state. This has two major benefits:
 
 ### Services and Service Dependency
 
-There are 4 major components that should be discussed when talking about this stack:
+There are 4 major components that comprise this stack:
 
 - `stream`: A service to curl [Wikimedia's Recent Change Stream][] and write append the
   results to a file called `recentchanges`.
 - `materialized`: An instance of `materialized` configured to `TAIL` the `recentchanges` file and
   maintain the `counter`, `useredits` and `top10` `MATERIALIZED VIEWS`.
 - `app`: A Python web server, written as an asynchronous application using [tornado-web][] and
-  [psycopg3][], to `TAIL` the `counter` and `top10` views and present the updates to these views
-  over websockets.
+  [psycopg3][], to `TAIL` the `counter` and `top10` views and present updates to these views over
+  websockets.
 - The user's web browser. The webpage rendered by `app` includes Javascript code that opens two
   websockets to `app`. Each message, pushed by `app`, contains an update that is then rendered by
   the user's web browser.
@@ -69,11 +68,12 @@ There are 4 major components that should be discussed when talking about this st
 
 Thus, the flow of data looks like this:
 
-    Wikimedia --push-> stream --append-> recentchanges --tail-> materialized --update-> app --update-> browser
+    Wikimedia --> stream --> recentchanges --> materialized --> app --> browser
 
-Contrast this with a "typical web app" backed by a SQL database:
+Contrast this with a "typical web app" backed by a SQL database, where each application is making
+repeated requests to upstream systems:
 
-    Wikimedia <-poll-- stream --update-> database <-query-- app <-poll-- browser
+    Wikimedia <-- stream --> database <-- app <-- browser
 
 ## Extras
 
@@ -95,6 +95,8 @@ can see the same data being pushed to the Python server by running:
 The output from this script corresponds to the row-oriented results returned by materialized to
 the web server. The implementation of this script in
 [extras/async_tail_top10.py](./extras/async_tail.py).
+
+[psycopg3 install instructions]: https://www.psycopg.org/psycopg3/docs/install.html
 
 ### TODO: Streaming top10 from the Python Web Server to your console
 
