@@ -146,6 +146,19 @@ def help_workflows(composition: str) -> None:
     for workflow in comp.workflows():
         print(f"    {workflow.name}")
 
+@cli.command()
+@click.argument("composition")
+@click.argument("service")
+def list_port(composition: str, service: str) -> None:
+    """
+    List the main port exposed for a service
+
+    This parses the output of `mzconduct ps` and prints the open host ports. Assumes that the
+    service only opens a single port.
+    """
+    comp = Composition.find(composition)
+    comp.list_port(service)
+
 
 @cli.command()
 @click.argument("composition")
@@ -253,6 +266,16 @@ class Composition:
         except KeyError:
             raise UnknownItem("workflow", workflow, self._workflows.names())
         workflow_.run(self, None)
+
+    def list_port(self, service: str) -> None:
+        """Print the port opened by the service to stdout"""
+        ports = self.find_host_ports(service)
+        if len(ports) == 1:
+            print(ports[0])
+        elif not ports:
+            raise MzRuntimeError(f"No running services matched {service}")
+        else:
+            raise MzRuntimeError(f"Too many ports matched {service}, found: {ports}")
 
     def web(self, service: str) -> None:
         """Best effort attempt to open the service in a web browser"""

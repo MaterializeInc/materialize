@@ -14,7 +14,9 @@ configured with three `MATERIALIZED VIEWS` that update as new edits are appended
 
 The Python web application then serves a basic page that renders both the current value for
 `counter` and a visualization of the `top10` table. These counts and visualization are updated
-as the underlying `MATERIALIZED VIEWS` are updated.
+as the underlying `MATERIALIZED VIEWS` are updated, using the [TAIL][] command.
+
+[TAIL]: https://materialize.com/docs/sql/tail/
 
 ## Running it Yourself
 
@@ -72,3 +74,27 @@ Thus, the flow of data looks like this:
 Contrast this with a "typical web app" backed by a SQL database:
 
     Wikimedia <-poll-- stream --update-> database <-query-- app <-poll-- browser
+
+## Extras
+
+### Streaming top10 from Materialize to your console
+
+If you have [psycopg3][] installed on your local system ([psycopg3 install instructions][]), you
+can see the same data being pushed to the Python server by running:
+
+    ./play/wikirecent/bin/tail_top10
+
+The output from this script corresponds to the row-oriented results returned by materialized to
+the web server. The implementation of this script in
+[extras/async_tail_top10.py](./extras/async_tail.py).
+
+### TODO: Streaming top10 from the Python Web Server to your console
+
+If you have the [websockets][] module installed on your local system, you can stream the same set
+of updates directly from the web server:
+
+    ./play/wikirecent/bin/stream_top10
+
+The output from this script corresponds to the batch oriented, JSON results returned by the web
+server to the Javascript client. The implementation of this script in
+[extras/async_tail_top10.py](./extras/async_stream.py).
