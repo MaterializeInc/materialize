@@ -15,7 +15,7 @@ considered a living document. It is our collective responsibility to ensure that
 relevant and up to date. Please open an issue if anything is confusing, doesn't work as expected
 or is no longer necessary.
 
-[MaterializeInc/Infra]: https://github.com/MaterializeInc/materialize
+[MaterializeInc/materialize]: https://github.com/MaterializeInc/materialize
 
 !!! tip "Edit Directly on GitHub!"
 

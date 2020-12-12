@@ -1,6 +1,6 @@
 copyright: 'Copyright &copy; 2020 Materialize'
 
-dev_addr: '0.0.0.0:8000'
+dev_addr: '0.0.0.0:8765'
 
 docs_dir: 'handbook'
 
@@ -16,7 +16,8 @@ markdown_extensions:
 nav:
     - Home:
         - index.md
-        - about.md
+    - Guides:
+        - guides/building.md
 
 plugins:
     - search

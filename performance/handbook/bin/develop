@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -euo pipefail
+
+export MTRLZ_GIT_ROOT="${MTRLZ_GIT_ROOT:-$(git rev-parse --show-toplevel)}"
+if [[ "${PWD}" != "${MTRLZ_GIT_ROOT}" ]]; then
+    cd "${MTRLZ_GIT_ROOT}"
+fi
+
+sigint_handler()
+{
+    # Stop the composition and remove associated volumes
+    echo "Shutting down!"
+    ./bin/mzconduct down perf-handbook -v
+    trap - INT
+}
+
+trap 'sigint_handler' INT
+./bin/mzconduct up perf-handbook -w develop
+./bin/mzconduct web perf-handbook handbook-develop
+
+# Keep the script running, waiting on CTRL-C from the user
+echo "Developer server started! Type CTRL-C to shutdown"
+read -r -d '' _ </dev/tty
