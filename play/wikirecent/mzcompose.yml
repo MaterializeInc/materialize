@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 x-port-mappings:
-  - &app ${APP_PORT:-8875:8875}
-  - &materialized ${MZ_PORT:-6875:6875}
+  - &app ${APP_PORT:-8875}
+  - &materialized ${MZ_PORT:-6875}
 
 version: '3.7'
 services:
@@ -41,7 +41,7 @@ volumes:
 
 mzconduct:
   workflows:
-    start-demo:
+    demo:
       steps:
       - step: start-services
         services: [materialized, stream]
