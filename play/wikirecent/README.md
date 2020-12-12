@@ -106,3 +106,5 @@ of updates directly from the web server:
 The output from this script corresponds to the batch oriented, JSON results returned by the web
 server to the Javascript client. The implementation of this script in
 [extras/async_tail_top10.py](./extras/async_stream.py).
+
+[websockets]: https://websockets.readthedocs.io/en/stable/intro.html
