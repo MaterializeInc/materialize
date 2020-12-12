@@ -7,6 +7,8 @@ to preview your changes as you make them. It works by watching the markdown sour
 rebuilding the HTML files when they change and then sending an reload event to your browser so
 that you can view them.
 
+[MkDocs]: https://www.mkdocs.org/
+
 To start a preview server locally, in develop mode, run the following command:
 
     $(git rev-parse --show-toplevel)/performance/handbook/bin/develop
