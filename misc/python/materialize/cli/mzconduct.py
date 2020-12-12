@@ -146,6 +146,7 @@ def help_workflows(composition: str) -> None:
     for workflow in comp.workflows():
         print(f"    {workflow.name}")
 
+
 @cli.command()
 @click.argument("composition")
 @click.argument("service")

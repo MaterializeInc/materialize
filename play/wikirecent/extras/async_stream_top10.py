@@ -18,6 +18,7 @@ import asyncio
 
 import websockets
 
+
 async def stream_view(args):
     """Continuously print batches to a Materialize View, as presented by the web server."""
     uri = f"ws://{args.host}:{args.port}/api/v1/stream/{args.view}"
@@ -25,6 +26,7 @@ async def stream_view(args):
         while 1:
             batch = await websocket.recv()
             print(batch)
+
 
 def main():
     """Parse arguments and run tail query."""
