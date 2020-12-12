@@ -77,6 +77,14 @@ Contrast this with a "typical web app" backed by a SQL database:
 
 ## Extras
 
+### Open a psql client to Materialize
+
+The Materialize database is not exposed on a well-numbered port and instead docker-compose chooses
+a random high-numbered port. To open a Postgres REPL, connected to the Materialized instance
+running as part of this demo, run:
+
+    ./play/wikirecent/bin/open-psql
+
 ### Streaming top10 from Materialize to your console
 
 If you have [psycopg3][] installed on your local system ([psycopg3 install instructions][]), you
