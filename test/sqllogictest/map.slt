@@ -43,7 +43,7 @@ SELECT ('{  c  =>3, a=>     2, a => 1 }'::map[text=>int])::text
 ----
 {a=>1,c=>3}
 
-query error Expected TEXT, found INT
+query error map key type must be text, got i32
 SELECT '{1=>true}'::map[int=>bool]
 
 query T
@@ -120,7 +120,7 @@ SELECT ('{hello=>{world=>nested}}'::map[text=>map[text=>text]])::text
 ----
 {hello=>{world=>nested}}
 
-query error expected TEXT, found INT
+query error map key type must be text, got i32
 SELECT '{hello=>{1=>false}}'::map[text=>map[int=>bool]]
 
 query T
