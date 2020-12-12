@@ -188,7 +188,10 @@ pub enum DataType {
     /// List
     List(Box<DataType>),
     /// Map
-    Map { value_type: Box<DataType> },
+    Map {
+        key_type: Box<DataType>,
+        value_type: Box<DataType>,
+    },
     /// Types whose names don't accept parameters, e.g. INT
     Other(Ident),
     /// Variable-length character type e.g. VARCHAR(10)
@@ -219,8 +222,13 @@ impl AstDisplay for DataType {
                 f.write_node(&ty);
                 f.write_str(" list");
             }
-            DataType::Map { value_type } => {
-                f.write_str("map(text=>");
+            DataType::Map {
+                key_type,
+                value_type,
+            } => {
+                f.write_str("map(");
+                f.write_node(&key_type);
+                f.write_str("=>");
                 f.write_node(&value_type);
                 f.write_str(")");
             }
