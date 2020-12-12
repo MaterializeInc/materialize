@@ -94,7 +94,7 @@ can see the same data being pushed to the Python server by running:
 
 The output from this script corresponds to the row-oriented results returned by materialized to
 the web server. The implementation of this script in
-[extras/async_tail_top10.py](./extras/async_tail.py).
+[extras/async_tail.py](./extras/async_tail.py).
 
 [psycopg3 install instructions]: https://www.psycopg.org/psycopg3/docs/install.html
 
@@ -107,6 +107,6 @@ of updates directly from the web server:
 
 The output from this script corresponds to the batch oriented, JSON results returned by the web
 server to the Javascript client. The implementation of this script in
-[extras/async_tail_top10.py](./extras/async_stream.py).
+[extras/async_stream.py](./extras/async_stream.py).
 
 [websockets]: https://websockets.readthedocs.io/en/stable/intro.html
