@@ -8,9 +8,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""async_tail
+"""async_stream
 
-Module showing an example for how to asynchronously TAIL a Materialized view.
+Module showing an example for how to asynchronously stream a VIEW using websockets from the local
+Python web server.
 """
 
 import argparse
