@@ -1,3 +1,5 @@
+# For reference purposes only -- copied from Infra handbook
+
 FROM python:3.8-slim
 
 build:
