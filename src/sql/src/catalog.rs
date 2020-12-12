@@ -21,7 +21,7 @@ use expr::{GlobalId, ScalarExpr};
 use repr::RelationDesc;
 use uuid::Uuid;
 
-use crate::names::{DatabaseSpecifier, FullName, PartialName, SchemaSpecifier};
+use crate::names::{FullName, PartialName, SchemaName};
 use crate::plan::PlanContext;
 
 /// A catalog keeps track of SQL objects available to the planner.
@@ -59,54 +59,42 @@ pub trait Catalog: fmt::Debug {
     ///
     /// If `database_name` exists in the catalog, it returns the ID of the
     /// resolved database; otherwise it returns an error.
-    ///
-    /// This function is named as such for symmetry with [`resolve_schema`] and
-    /// [`resolve_item`], but there is no such thing as a "partial" database
-    /// name. All database names are full names. This function amounts to an
-    /// existence check for the named database.
-    fn resolve_database(&self, database_name: &str) -> Result<i64, CatalogError>;
+    fn resolve_database(&self, database_name: &str) -> Result<&dyn CatalogDatabase, CatalogError>;
 
     /// Resolves a partially-specified schema name.
     ///
     /// If `database_name` is provided, it searches the named database for a
     /// schema named `schema_name`. If `database_name` is not provided, it
-    /// searches the default database instead. It returns an error if the
-    /// database does not exist, or if the database exists but the schema does
-    /// not.
+    /// searches the default database instead. It returns the ID of the schema
+    /// if found; otherwise it returns an error if the database does not exist,
+    /// or if the database exists but the schema does not.
     fn resolve_schema(
         &self,
         database_name: Option<String>,
         schema_name: &str,
-    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), CatalogError>;
+    ) -> Result<&dyn CatalogSchema, CatalogError>;
 
     /// Resolves a partially-specified item name.
     ///
     /// If the partial name has a database component, it searches only the
-    /// specified database is searched; otherwise, it searches the default
-    /// database. If the partial name has a schema component, it searches only
-    /// the specified schema; otherwise, it searches a default set of schemas
-    /// within the selected database. It returns an error if none of the
-    /// searched schemas contain an item whose name matches the item component
-    /// of the partial name.
+    /// specified database; otherwise, it searches the default database. If the
+    /// partial name has a schema component, it searches only the specified
+    /// schema; otherwise, it searches a default set of schemas within the
+    /// selected database. It returns an error if none of the searched schemas
+    /// contain an item whose name matches the item component of the partial
+    /// name.
     ///
     /// Note that it is not an error if the named item appears in more than one
     /// of the search schemas. The catalog implementation must choose one.
-    fn resolve_item(&self, item_name: &PartialName) -> Result<FullName, CatalogError>;
+    fn resolve_item(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
 
     /// Lists the items in the specified schema in the specified database.
     ///
-    /// Panics if `database_spec` and `schema_name` do not specify a valid
-    /// schema.
+    /// Panics if `schema_name` does not specify a valid schema.
     fn list_items<'a>(
         &'a self,
-        database_spec: &DatabaseSpecifier,
-        schema_name: &str,
+        schema: &SchemaName,
     ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a>;
-
-    /// Gets an item by its fully-specified name.
-    ///
-    /// Panics if `name` does not specify a valid item.
-    fn get_item(&self, name: &FullName) -> &dyn CatalogItem;
 
     /// Gets an item by its ID.
     ///
@@ -144,6 +132,24 @@ pub struct CatalogConfig {
     pub build_info: &'static BuildInfo,
 }
 
+/// A database in a [`Catalog`].
+pub trait CatalogDatabase {
+    /// Returns a fully-specified name of the database.
+    fn name(&self) -> &str;
+
+    /// Returns a stable ID for the database.
+    fn id(&self) -> i64;
+}
+
+/// A database in a [`Catalog`].
+pub trait CatalogSchema {
+    /// Returns a fully-specified name of the schema.
+    fn name(&self) -> &SchemaName;
+
+    /// Returns a stable ID for the schema.
+    fn id(&self) -> i64;
+}
+
 /// An item in a [`Catalog`].
 ///
 /// Note that "item" has a very specific meaning in the context of a SQL
@@ -155,7 +161,7 @@ pub trait CatalogItem {
     /// Returns a stable ID for the catalog item.
     fn id(&self) -> GlobalId;
 
-    /// Returns the CatalogItem's OID.
+    /// Returns the catalog item's OID.
     fn oid(&self) -> u32;
 
     /// Returns a description of the result set produced by the catalog item.
@@ -285,7 +291,7 @@ impl Catalog for DummyCatalog {
         "dummy"
     }
 
-    fn resolve_database(&self, _: &str) -> Result<i64, CatalogError> {
+    fn resolve_database(&self, _: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
         unimplemented!();
     }
 
@@ -293,23 +299,18 @@ impl Catalog for DummyCatalog {
         &self,
         _: Option<String>,
         _: &str,
-    ) -> Result<(DatabaseSpecifier, SchemaSpecifier), CatalogError> {
+    ) -> Result<&dyn CatalogSchema, CatalogError> {
         unimplemented!();
     }
 
-    fn resolve_item(&self, _: &PartialName) -> Result<FullName, CatalogError> {
+    fn resolve_item(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
         unimplemented!();
     }
 
     fn list_items<'a>(
         &'a self,
-        _: &DatabaseSpecifier,
-        _: &str,
+        _: &SchemaName,
     ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a> {
-        unimplemented!();
-    }
-
-    fn get_item(&self, _: &FullName) -> &dyn CatalogItem {
         unimplemented!();
     }
 

@@ -46,6 +46,8 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.5.4 %}}
+
 {{% version-header v0.5.3 %}}
 
 - Fix a regression in the SQL parser, introduced in v0.5.2, in which nested

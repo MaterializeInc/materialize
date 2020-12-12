@@ -37,7 +37,7 @@ pub enum Type {
     List(Box<Type>),
     /// A map with text keys and homogeneous values.
     Map {
-        /// Type of the homogenous values.
+        /// The type of the values in the map.
         value_type: Box<Type>,
     },
     /// An arbitrary precision number.
@@ -70,9 +70,7 @@ lazy_static! {
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );
-}
 
-lazy_static! {
     /// An anonymous [`Type::Map`].
     pub static ref MAP: postgres_types::Type = postgres_types::Type::new(
         "map".to_owned(),
@@ -109,22 +107,8 @@ impl Type {
 
     pub(crate) fn inner(&self) -> &'static postgres_types::Type {
         match self {
-            Type::Bool => &postgres_types::Type::BOOL,
-            Type::Bytea => &postgres_types::Type::BYTEA,
-            Type::Date => &postgres_types::Type::DATE,
-            Type::Float4 => &postgres_types::Type::FLOAT4,
-            Type::Float8 => &postgres_types::Type::FLOAT8,
-            Type::Int4 => &postgres_types::Type::INT4,
-            Type::Int8 => &postgres_types::Type::INT8,
-            Type::Interval => &postgres_types::Type::INTERVAL,
-            Type::Jsonb => &postgres_types::Type::JSONB,
-            Type::Numeric => &postgres_types::Type::NUMERIC,
-            Type::Text => &postgres_types::Type::TEXT,
-            Type::Time => &postgres_types::Type::TIME,
-            Type::Timestamp => &postgres_types::Type::TIMESTAMP,
-            Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
-            Type::Uuid => &postgres_types::Type::UUID,
             Type::Array(t) => match &**t {
+                Type::Array(_) => unreachable!(),
                 Type::Bool => &postgres_types::Type::BOOL_ARRAY,
                 Type::Bytea => &postgres_types::Type::BYTEA_ARRAY,
                 Type::Date => &postgres_types::Type::DATE_ARRAY,
@@ -134,21 +118,36 @@ impl Type {
                 Type::Int8 => &postgres_types::Type::INT8_ARRAY,
                 Type::Interval => &postgres_types::Type::INTERVAL_ARRAY,
                 Type::Jsonb => &postgres_types::Type::JSONB_ARRAY,
+                Type::List(_) => unreachable!(),
+                Type::Map { .. } => unreachable!(),
                 Type::Numeric => &postgres_types::Type::NUMERIC_ARRAY,
+                Type::Oid => &postgres_types::Type::OID_ARRAY,
+                Type::Record(_) => &postgres_types::Type::RECORD_ARRAY,
                 Type::Text => &postgres_types::Type::TEXT_ARRAY,
                 Type::Time => &postgres_types::Type::TIME_ARRAY,
                 Type::Timestamp => &postgres_types::Type::TIMESTAMP_ARRAY,
                 Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
                 Type::Uuid => &postgres_types::Type::UUID_ARRAY,
-                Type::List(_) | Type::Array(_) => unreachable!(),
-                Type::Record(_) => &postgres_types::Type::RECORD_ARRAY,
-                Type::Oid => &postgres_types::Type::OID_ARRAY,
-                Type::Map { .. } => unreachable!(),
             },
+            Type::Bool => &postgres_types::Type::BOOL,
+            Type::Bytea => &postgres_types::Type::BYTEA,
+            Type::Date => &postgres_types::Type::DATE,
+            Type::Float4 => &postgres_types::Type::FLOAT4,
+            Type::Float8 => &postgres_types::Type::FLOAT8,
+            Type::Int4 => &postgres_types::Type::INT4,
+            Type::Int8 => &postgres_types::Type::INT8,
+            Type::Interval => &postgres_types::Type::INTERVAL,
+            Type::Jsonb => &postgres_types::Type::JSONB,
             Type::List(_) => &LIST,
-            Type::Record(_) => &postgres_types::Type::RECORD,
-            Type::Oid => &postgres_types::Type::OID,
             Type::Map { .. } => &MAP,
+            Type::Numeric => &postgres_types::Type::NUMERIC,
+            Type::Oid => &postgres_types::Type::OID,
+            Type::Record(_) => &postgres_types::Type::RECORD,
+            Type::Text => &postgres_types::Type::TEXT,
+            Type::Time => &postgres_types::Type::TIME,
+            Type::Timestamp => &postgres_types::Type::TIMESTAMP,
+            Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
+            Type::Uuid => &postgres_types::Type::UUID,
         }
     }
 
@@ -168,6 +167,7 @@ impl Type {
     /// type, or -1 if the type has a variable-length representation.
     pub fn typlen(&self) -> i16 {
         match self {
+            Type::Array(_) => -1,
             Type::Bool => 1,
             Type::Bytea => -1,
             Type::Date => 4,
@@ -177,17 +177,16 @@ impl Type {
             Type::Int8 => 8,
             Type::Interval => 16,
             Type::Jsonb => -1,
+            Type::List(_) => -1,
+            Type::Map { .. } => -1,
             Type::Numeric => -1,
+            Type::Oid => 4,
+            Type::Record(_) => -1,
             Type::Text => -1,
             Type::Time => 4,
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
             Type::Uuid => 16,
-            Type::Array(_) => -1,
-            Type::List(_) => -1,
-            Type::Record(_) => -1,
-            Type::Oid => 4,
-            Type::Map { .. } => -1,
         }
     }
 }
@@ -195,30 +194,30 @@ impl Type {
 impl From<&ScalarType> for Type {
     fn from(typ: &ScalarType) -> Type {
         match typ {
+            ScalarType::Array(t) => Type::Array(Box::new(From::from(&**t))),
             ScalarType::Bool => Type::Bool,
+            ScalarType::Bytes => Type::Bytea,
+            ScalarType::Date => Type::Date,
+            ScalarType::Decimal(_, _) => Type::Numeric,
+            ScalarType::Float64 => Type::Float8,
+            ScalarType::Float32 => Type::Float4,
             ScalarType::Int32 => Type::Int4,
             ScalarType::Int64 => Type::Int8,
-            ScalarType::Float32 => Type::Float4,
-            ScalarType::Float64 => Type::Float8,
-            ScalarType::Decimal(_, _) => Type::Numeric,
-            ScalarType::Date => Type::Date,
-            ScalarType::Time => Type::Time,
-            ScalarType::Timestamp => Type::Timestamp,
-            ScalarType::TimestampTz => Type::TimestampTz,
             ScalarType::Interval => Type::Interval,
-            ScalarType::Bytes => Type::Bytea,
-            ScalarType::String => Type::Text,
             ScalarType::Jsonb => Type::Jsonb,
-            ScalarType::Uuid => Type::Uuid,
-            ScalarType::Array(t) => Type::Array(Box::new(From::from(&**t))),
             ScalarType::List(t) => Type::List(Box::new(From::from(&**t))),
-            ScalarType::Record { fields } => {
-                Type::Record(fields.iter().map(|(_name, ty)| Type::from(ty)).collect())
-            }
-            ScalarType::Oid => Type::Oid,
             ScalarType::Map { value_type } => Type::Map {
                 value_type: Box::new(From::from(&**value_type)),
             },
+            ScalarType::Oid => Type::Oid,
+            ScalarType::Record { fields } => {
+                Type::Record(fields.iter().map(|(_name, ty)| Type::from(ty)).collect())
+            }
+            ScalarType::String => Type::Text,
+            ScalarType::Time => Type::Time,
+            ScalarType::Timestamp => Type::Timestamp,
+            ScalarType::TimestampTz => Type::TimestampTz,
+            ScalarType::Uuid => Type::Uuid,
         }
     }
 }

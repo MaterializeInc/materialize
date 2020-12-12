@@ -29,15 +29,14 @@ pub fn handle_show_create_view(
     scx: &StatementContext,
     ShowCreateViewStatement { view_name }: ShowCreateViewStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let name = scx.resolve_item(view_name)?;
-    let entry = scx.catalog.get_item(&name);
-    if let CatalogItemType::View = entry.item_type() {
+    let view = scx.resolve_item(view_name)?;
+    if let CatalogItemType::View = view.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
-            Datum::String(&name.to_string()),
-            Datum::String(entry.create_sql()),
+            Datum::String(&view.name().to_string()),
+            Datum::String(view.create_sql()),
         ])]))
     } else {
-        bail!("{} is not a view", name);
+        bail!("{} is not a view", view.name());
     }
 }
 
@@ -45,15 +44,14 @@ pub fn handle_show_create_table(
     scx: &StatementContext,
     ShowCreateTableStatement { table_name }: ShowCreateTableStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let name = scx.resolve_item(table_name)?;
-    let entry = scx.catalog.get_item(&name);
-    if let CatalogItemType::Table = entry.item_type() {
+    let table = scx.resolve_item(table_name)?;
+    if let CatalogItemType::Table = table.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
-            Datum::String(&name.to_string()),
-            Datum::String(entry.create_sql()),
+            Datum::String(&table.name().to_string()),
+            Datum::String(table.create_sql()),
         ])]))
     } else {
-        bail!("{} is not a table", name);
+        bail!("{} is not a table", table.name());
     }
 }
 
@@ -61,15 +59,14 @@ pub fn handle_show_create_source(
     scx: &StatementContext,
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let name = scx.resolve_item(source_name)?;
-    let entry = scx.catalog.get_item(&name);
-    if let CatalogItemType::Source = entry.item_type() {
+    let source = scx.resolve_item(source_name)?;
+    if let CatalogItemType::Source = source.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
-            Datum::String(&name.to_string()),
-            Datum::String(entry.create_sql()),
+            Datum::String(&source.name().to_string()),
+            Datum::String(source.create_sql()),
         ])]))
     } else {
-        bail!("{} is not a source", name);
+        bail!("{} is not a source", source.name());
     }
 }
 
@@ -77,15 +74,14 @@ pub fn handle_show_create_sink(
     scx: &StatementContext,
     ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let name = scx.resolve_item(sink_name)?;
-    let entry = scx.catalog.get_item(&name);
-    if let CatalogItemType::Sink = entry.item_type() {
+    let sink = scx.resolve_item(sink_name)?;
+    if let CatalogItemType::Sink = sink.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
-            Datum::String(&name.to_string()),
-            Datum::String(entry.create_sql()),
+            Datum::String(&sink.name().to_string()),
+            Datum::String(sink.create_sql()),
         ])]))
     } else {
-        bail!("'{}' is not a sink", name);
+        bail!("'{}' is not a sink", sink.name());
     }
 }
 
@@ -93,15 +89,14 @@ pub fn handle_show_create_index(
     scx: &StatementContext,
     ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement,
 ) -> Result<Plan, anyhow::Error> {
-    let name = scx.resolve_item(index_name)?;
-    let entry = scx.catalog.get_item(&name);
-    if let CatalogItemType::Index = entry.item_type() {
+    let index = scx.resolve_item(index_name)?;
+    if let CatalogItemType::Index = index.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
-            Datum::String(&name.to_string()),
-            Datum::String(entry.create_sql()),
+            Datum::String(&index.name().to_string()),
+            Datum::String(index.create_sql()),
         ])]))
     } else {
-        bail!("'{}' is not an index", name);
+        bail!("'{}' is not an index", index.name());
     }
 }
 
@@ -142,7 +137,7 @@ fn show_schemas<'a>(
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let (_database_name, database_id) = if let Some(from) = from {
+    let database = if let Some(from) = from {
         scx.resolve_database(from)?
     } else {
         scx.resolve_default_database()?
@@ -150,28 +145,28 @@ fn show_schemas<'a>(
     let query = if !full & !extended {
         format!(
             "SELECT name FROM mz_catalog.mz_schemas WHERE database_id = {}",
-            database_id,
+            database.id(),
         )
     } else if full & !extended {
         format!(
             "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
             FROM mz_catalog.mz_schemas
             WHERE database_id = {}",
-            database_id,
+            database.id(),
         )
     } else if !full & extended {
         format!(
             "SELECT name
             FROM mz_catalog.mz_schemas
             WHERE database_id = {} OR database_id IS NULL",
-            database_id,
+            database.id(),
         )
     } else {
         format!(
             "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
             FROM mz_catalog.mz_schemas
             WHERE database_id = {} OR database_id IS NULL",
-            database_id,
+            database.id(),
         )
     };
     Ok(ShowSelect::new(scx, query, filter))
@@ -188,8 +183,8 @@ fn show_tables<'a>(
         unsupported!("SHOW EXTENDED TABLES");
     }
 
-    let schema_spec = if let Some(from) = from {
-        scx.resolve_schema(from)?.1
+    let schema = if let Some(from) = from {
+        scx.resolve_schema(from)?
     } else {
         scx.resolve_default_schema()?
     };
@@ -199,12 +194,12 @@ fn show_tables<'a>(
             "SELECT name, mz_internal.mz_classify_object_id(id) AS type
             FROM mz_catalog.mz_tables
             WHERE schema_id = {}",
-            schema_spec.id,
+            schema.id(),
         )
     } else {
         format!(
             "SELECT name FROM mz_catalog.mz_tables WHERE schema_id = {}",
-            schema_spec.id
+            schema.id(),
         )
     };
     Ok(ShowSelect::new(scx, query, filter))
@@ -217,8 +212,8 @@ fn show_sources<'a>(
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema_spec = if let Some(from) = from {
-        scx.resolve_schema(from)?.1
+    let schema = if let Some(from) = from {
+        scx.resolve_schema(from)?
     } else {
         scx.resolve_default_schema()?
     };
@@ -226,7 +221,7 @@ fn show_sources<'a>(
     let query = if !full & !materialized {
         format!(
             "SELECT name FROM mz_catalog.mz_sources WHERE schema_id = {}",
-            schema_spec.id,
+            schema.id(),
         )
     } else if full & !materialized {
         format!(
@@ -236,21 +231,21 @@ fn show_sources<'a>(
                 mz_internal.mz_is_materialized(id) AS materialized
             FROM mz_catalog.mz_sources
             WHERE schema_id = {}",
-            schema_spec.id,
+            schema.id(),
         )
     } else if !full & materialized {
         format!(
             "SELECT name
             FROM mz_catalog.mz_sources
             WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema_spec.id,
+            schema.id(),
         )
     } else {
         format!(
             "SELECT name, mz_internal.mz_classify_object_id(id) AS type
             FROM mz_catalog.mz_sources
             WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema_spec.id,
+            schema.id(),
         )
     };
     Ok(ShowSelect::new(scx, query, filter))
@@ -263,8 +258,8 @@ fn show_views<'a>(
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema_spec = if let Some(from) = from {
-        scx.resolve_schema(from)?.1
+    let schema = if let Some(from) = from {
+        scx.resolve_schema(from)?
     } else {
         scx.resolve_default_schema()?
     };
@@ -272,7 +267,7 @@ fn show_views<'a>(
     let query = if !full & !materialized {
         format!(
             "SELECT name FROM mz_catalog.mz_views WHERE schema_id = {}",
-            schema_spec.id,
+            schema.id(),
         )
     } else if full & !materialized {
         format!(
@@ -282,21 +277,21 @@ fn show_views<'a>(
                 mz_internal.mz_is_materialized(id) AS materialized
              FROM mz_catalog.mz_views
              WHERE schema_id = {}",
-            schema_spec.id,
+            schema.id(),
         )
     } else if !full & materialized {
         format!(
             "SELECT name
              FROM mz_catalog.mz_views
              WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema_spec.id,
+            schema.id(),
         )
     } else {
         format!(
             "SELECT name, mz_internal.mz_classify_object_id(id) AS type
              FROM mz_catalog.mz_views
              WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema_spec.id,
+            schema.id(),
         )
     };
     Ok(ShowSelect::new(scx, query, filter))
@@ -308,8 +303,8 @@ fn show_sinks<'a>(
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema_spec = if let Some(from) = from {
-        scx.resolve_schema(from)?.1
+    let schema = if let Some(from) = from {
+        scx.resolve_schema(from)?
     } else {
         scx.resolve_default_schema()?
     };
@@ -319,12 +314,12 @@ fn show_sinks<'a>(
             "SELECT name, mz_internal.mz_classify_object_id(id) AS type
             FROM mz_catalog.mz_sinks
             WHERE schema_id = {}",
-            schema_spec.id,
+            schema.id(),
         )
     } else {
         format!(
             "SELECT name FROM mz_catalog.mz_sinks WHERE schema_id = {}",
-            schema_spec.id,
+            schema.id(),
         )
     };
     Ok(ShowSelect::new(scx, query, filter))
@@ -337,8 +332,8 @@ fn show_types<'a>(
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    let schema_spec = if let Some(from) = from {
-        scx.resolve_schema(from)?.1
+    let schema = if let Some(from) = from {
+        scx.resolve_schema(from)?
     } else {
         scx.resolve_default_schema()?
     };
@@ -348,7 +343,7 @@ fn show_types<'a>(
         FROM mz_catalog.mz_types t
         JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
         WHERE t.schema_id = {}",
-        schema_spec.id,
+        schema.id(),
     );
     if extended {
         query += " OR s.database_id IS NULL";
@@ -371,16 +366,15 @@ pub fn show_indexes<'a>(
     if extended {
         unsupported!("SHOW EXTENDED INDEXES")
     }
-    let from_name = scx.resolve_item(table_name)?;
-    let from_entry = scx.catalog.get_item(&from_name);
-    if from_entry.item_type() != CatalogItemType::View
-        && from_entry.item_type() != CatalogItemType::Source
-        && from_entry.item_type() != CatalogItemType::Table
+    let from = scx.resolve_item(table_name)?;
+    if from.item_type() != CatalogItemType::View
+        && from.item_type() != CatalogItemType::Source
+        && from.item_type() != CatalogItemType::Table
     {
         bail!(
             "cannot show indexes on {} because it is a {}",
-            from_name,
-            from_entry.item_type(),
+            from.name(),
+            from.item_type(),
         );
     }
 
@@ -400,7 +394,7 @@ pub fn show_indexes<'a>(
                 ON idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         WHERE
             objs.id = '{}'",
-        from_entry.id(),
+        from.id(),
     );
     Ok(ShowSelect::new(scx, query, filter))
 }
@@ -421,8 +415,7 @@ pub fn show_columns<'a>(
         unsupported!("SHOW FULL COLUMNS");
     }
 
-    let name = scx.resolve_item(table_name)?;
-    let entry = scx.catalog.get_item(&name);
+    let entry = scx.resolve_item(table_name)?;
 
     let query = format!(
         "SELECT
