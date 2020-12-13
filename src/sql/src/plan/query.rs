@@ -213,7 +213,7 @@ pub fn plan_insert_query(
                 }
             }
         }
-        InsertSource::DefaultValues => unsupported!("INSERT ... DEFAULT VALUES"),
+        InsertSource::DefaultValues => RelationExpr::constant(vec![vec![]], RelationType::empty()),
     };
 
     let typ = qcx.relation_type(&expr);
