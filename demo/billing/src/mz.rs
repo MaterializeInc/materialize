@@ -195,7 +195,7 @@ fn billing_agg_view(unit: &str) -> String {
     format!("CREATE MATERIALIZED VIEW billing_agg_by_{unit} AS
 SELECT date_trunc('{unit}', interval_start::timestamp) AS {unit}, client_id, meter, cpu_num, memory_gb, disk_gb, sum(value)
 FROM billing_records
-GROUP BY {unit}, client_id, meter, cpu_num, memory_gb, disk_gb",
+GROUP BY \"{unit}\", client_id, meter, cpu_num, memory_gb, disk_gb",
 unit = unit)
 }
 
@@ -268,7 +268,7 @@ WHERE
     "CREATE MATERIALIZED VIEW billing_top_5_months_per_client AS
 SELECT
     client_id,
-    month,
+    \"month\",
     execution_time_ms,
     monthly_bill,
     cpu_num,
@@ -276,7 +276,7 @@ SELECT
 FROM
     (SELECT DISTINCT client_id FROM billing_monthly_statement) grp,
     LATERAL
-        (SELECT month, execution_time_ms, monthly_bill, cpu_num, memory_gb
+        (SELECT \"month\", execution_time_ms, monthly_bill, cpu_num, memory_gb
             FROM
                 billing_monthly_statement
             WHERE client_id = grp.client_id
