@@ -1552,7 +1552,12 @@ fn handle_create_table(
         for option in &c.options {
             match &option.option {
                 ColumnOption::NotNull => nullable = false,
-                ColumnOption::Default(expr) => default = expr.clone(),
+                ColumnOption::Default(expr) => {
+                    // Ensure expression can be planned and yields the correct
+                    // type.
+                    query::plan_default_expr(scx, expr, &ty)?;
+                    default = expr.clone();
+                }
                 other => {
                     unsupported!(format!("CREATE TABLE with column constraint: {}", other))
                 }
