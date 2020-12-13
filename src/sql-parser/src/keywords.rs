@@ -96,7 +96,12 @@ impl Keyword {
     /// Ensures that `SELECT <column_name> <column_alias>` can be parsed
     /// unambiguously.
     pub fn is_reserved_in_column_alias(self) -> bool {
-        matches!(self, FROM) || self.is_reserved_in_alias()
+        matches!(
+            self,
+            FROM |
+            // These timelike keywords conflict with interval timeframe suffixes
+            YEAR | MONTH | DAY | HOUR | MINUTE | SECOND
+        ) || self.is_reserved_in_alias()
     }
 
     /// Reports whether this keyword requires quoting when used as an identifier
