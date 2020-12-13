@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::RelationDesc;
+use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::Expr;
 use sql::catalog::CatalogError as SqlCatalogError;
@@ -1804,8 +1804,14 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn type_exists(&self, name: &FullName) -> bool {
+    fn item_exists(&self, name: &FullName) -> bool {
         self.catalog.try_get(name, self.conn_id).is_some()
+    }
+
+    fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType> {
+        let entry = self.catalog.get_by_id(id);
+        let t = pgrepr::Type::from_oid(entry.oid())?;
+        Some(t.to_scalar_type_lossy())
     }
 
     fn config(&self) -> &sql::catalog::CatalogConfig {

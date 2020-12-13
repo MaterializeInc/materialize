@@ -990,8 +990,8 @@ fn handle_create_type(
     }
 
     let name = scx.allocate_name(normalize::object_name(name)?);
-    if scx.catalog.type_exists(&name) {
-        bail!("type \"{}\" already exists", name.to_string());
+    if scx.catalog.item_exists(&name) {
+        bail!("catalog item \"{}\" already exists", name.to_string());
     }
 
     let inner = match as_type {
@@ -1544,7 +1544,7 @@ fn handle_create_table(
     let mut defaults = Vec::with_capacity(columns.len());
 
     for c in columns {
-        let ty = scalar_type_from_sql(&c.data_type)?;
+        let ty = scalar_type_from_sql(scx, &c.data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
         for option in &c.options {

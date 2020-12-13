@@ -18,7 +18,7 @@ unknown catalog item 't'
 > SHOW CREATE TABLE t;
 Table   "Create Table"
 ------------------------
-materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" int, \"b\" text NOT NULL)"
+materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\" NOT NULL)"
 
 > CREATE TABLE s (a int DEFAULT 1)
 > DROP TABLE s;

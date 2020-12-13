@@ -1,0 +1,472 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# 🔬 Type resolution (non-array)
+
+# 🔬🔬 bool
+
+query T
+SELECT 'true'::bool
+----
+true
+
+query T
+SELECT 'true'::pg_catalog.bool
+----
+true
+
+# 🔬🔬🔬 bool alias
+
+query T
+SELECT 'true'::boolean
+----
+true
+
+query T
+SELECT pg_typeof('true'::boolean)
+----
+bool
+
+query error type "pg_catalog.boolean" does not exist
+SELECT 'true'::pg_catalog.boolean
+
+# 🔬🔬 bytea
+
+query T
+SELECT 'a'::bytea
+----
+a
+
+query T
+SELECT 'a'::pg_catalog.bytea
+----
+a
+
+# 🔬🔬🔬 bytea alias
+
+query T
+SELECT 'a'::bytes
+----
+a
+
+query error type "pg_catalog.bytes" does not exist
+SELECT ''::pg_catalog.bytes
+
+# 🔬🔬 date
+
+query T
+SELECT '2007-02-01'::date
+----
+2007-02-01
+
+query T
+SELECT '2007-02-01'::pg_catalog.date
+----
+2007-02-01
+
+# 🔬🔬 float4
+
+query T
+SELECT '1.2'::float4
+----
+1.200
+
+query T
+SELECT '1.2'::pg_catalog.float4
+----
+1.200
+
+# 🔬🔬🔬 float4 aliases
+
+query T
+SELECT '1.2'::float(1)
+----
+1.200
+
+query error type "pg_catalog.float" does not exist
+SELECT '1.2'::pg_catalog.float(1)
+
+query T
+SELECT pg_typeof('1.2'::float(1))
+----
+float4
+
+query T
+SELECT '1.2'::real
+----
+1.200
+
+query error type "pg_catalog.real" does not exist
+SELECT '1.2'::pg_catalog.real
+
+query T
+SELECT pg_typeof('1.2'::real)
+----
+float4
+
+# 🔬🔬 float8
+
+query T
+SELECT '1.2'::float8
+----
+1.200
+
+query T
+SELECT '1.2'::pg_catalog.float8
+----
+1.200
+
+# 🔬🔬🔬 float8 aliases
+
+query T
+SELECT '1.2'::float(53)
+----
+1.200
+
+query error type "pg_catalog.float" does not exist
+SELECT '1.2'::pg_catalog.float(53)
+
+query T
+SELECT pg_typeof('1.2'::float(53))
+----
+float8
+
+query T
+SELECT '1.2'::double
+----
+1.200
+
+query error type "pg_catalog.double" does not exist
+SELECT '1.2'::pg_catalog.double
+
+query T
+SELECT pg_typeof('1.2'::double)
+----
+float8
+
+# 🔬🔬 int4
+
+query T
+SELECT '1'::int4
+----
+1
+
+query T
+SELECT '1'::pg_catalog.int4
+----
+1
+
+# 🔬🔬🔬 int4 aliases
+
+query T
+SELECT '1'::int
+----
+1
+
+query error type "pg_catalog.int" does not exist
+SELECT '1'::pg_catalog.int
+
+query T
+SELECT pg_typeof('1'::int)
+----
+int4
+
+
+query T
+SELECT '1'::integer
+----
+1
+
+query error type "pg_catalog.integer" does not exist
+SELECT '1'::pg_catalog.integer
+
+query T
+SELECT pg_typeof('1'::integer)
+----
+int4
+
+
+query T
+SELECT '1'::smallint
+----
+1
+
+query error type "pg_catalog.smallint" does not exist
+SELECT '1'::pg_catalog.smallint
+
+query T
+SELECT pg_typeof('1'::smallint)
+----
+int4
+
+# 🔬🔬 int8
+
+query T
+SELECT '1'::int8
+----
+1
+
+query T
+SELECT '1'::pg_catalog.int8
+----
+1
+
+# 🔬🔬🔬 int8 aliases
+
+query T
+SELECT '1'::bigint
+----
+1
+
+query error type "pg_catalog.bigint" does not exist
+SELECT '1'::pg_catalog.bigint
+
+query T
+SELECT pg_typeof('1'::bigint)
+----
+int8
+
+# 🔬🔬 interval
+
+query T
+SELECT '1-2 3 4:5:6.7'::interval
+----
+1 year 2 months 3 days 04:05:06.7
+
+query T
+SELECT '1-2 3 4:5:6.7'::pg_catalog.interval
+----
+1 year 2 months 3 days 04:05:06.7
+
+# 🔬🔬🔬 interval prefix
+
+query T
+SELECT interval '1-2 3 4:5:6.7'
+----
+1 year 2 months 3 days 04:05:06.7
+
+query T
+SELECT pg_catalog.interval '1-2 3 4:5:6.7'
+----
+1 year 2 months 3 days 04:05:06.7
+
+# Special interval literal syntax doesn't apply to qualified interval
+query error Expected end of statement, found DAY
+SELECT pg_catalog.interval '1-2 3 4:5:6.7' DAY
+
+# 🔬🔬 jsonb
+
+query T
+SELECT '{"1":2,"3":4}'::jsonb
+----
+{"1":2.0,"3":4.0}
+
+query T
+SELECT '{"1":2,"3":4}'::pg_catalog.jsonb
+----
+{"1":2.0,"3":4.0}
+
+# 🔬🔬🔬 jsonb aliases
+
+query T
+SELECT '{"1":2,"3":4}'::json
+----
+{"1":2.0,"3":4.0}
+
+query error type "pg_catalog.json" does not exist
+SELECT '{"1":2,"3":4}'::pg_catalog.json
+
+# 🔬🔬 numeric
+
+query T
+SELECT '1'::numeric(38,0)
+----
+1
+
+query T
+SELECT '1'::pg_catalog.numeric(38,0)
+----
+1
+
+# 🔬🔬🔬 numeric aliases –– note that decimal alises all resolve to numeric when
+# qualified, unlike all other aliases
+
+query T
+SELECT '1'::decimal(38,0)
+----
+1
+
+query error type "pg_catalog.decimal" does not exist
+SELECT '1'::pg_catalog.decimal(38,0)
+----
+1
+
+query T
+SELECT '1'::dec(38,0)
+----
+1
+
+query error type "pg_catalog.dec" does not exist
+SELECT '1'::pg_catalog.dec(38,0)
+
+# 🔬🔬 oid
+
+query T
+SELECT '1'::oid
+----
+1
+
+query T
+SELECT '1'::pg_catalog.oid
+----
+1
+
+# 🔬🔬🔬 oid alias
+
+query T
+SELECT '1'::regclass
+----
+1
+
+query error type "pg_catalog.regclass" does not exist
+SELECT '1'::pg_catalog.regclass
+
+# 🔬🔬 record
+
+query T
+SELECT ROW(1, 2) AS record;
+----
+(1,2)
+
+query error type "pg_catalog.record" does not exist
+SELECT ROW(1, 2) AS pg_catalog.record;
+
+# 🔬🔬 text
+
+query T
+SELECT 'dog'::text
+----
+dog
+
+query T
+SELECT 'dog'::pg_catalog.text
+----
+dog
+
+# 🔬🔬🔬 text aliases
+
+query T
+SELECT 'dog'::char(10)
+----
+dog
+
+query error type "pg_catalog.char" does not exist
+SELECT '1'::pg_catalog.char(10)
+
+query T
+SELECT 'dog'::varchar(10)
+----
+dog
+
+query error type "pg_catalog.varchar" does not exist
+SELECT 'dog'::pg_catalog.varchar(10)
+
+# 🔬🔬 time
+
+query T
+SELECT '01:23:45'::time
+----
+01:23:45
+
+query T
+SELECT '01:23:45'::pg_catalog.time
+----
+01:23:45
+
+# 🔬🔬 timestamp
+
+query T
+SELECT '2007-02-01 15:04:05'::timestamp
+----
+2007-02-01 15:04:05
+
+query T
+SELECT '2007-02-01 15:04:05'::pg_catalog.timestamp
+----
+2007-02-01 15:04:05
+
+# 🔬🔬 timestamptz
+
+query T
+SELECT '2007-02-01 15:04:05'::timestamptz
+----
+2007-02-01 15:04:05+00
+
+query T
+SELECT '2007-02-01 15:04:05'::pg_catalog.timestamptz
+----
+2007-02-01 15:04:05+00
+
+# 🔬🔬 uuid
+
+query T
+SELECT '63616665-6630-3064-6465-616462656568'::uuid
+----
+63616665-6630-3064-6465-616462656568
+
+query T
+SELECT '63616665-6630-3064-6465-616462656568'::pg_catalog.uuid
+----
+63616665-6630-3064-6465-616462656568
+
+# 🔬 Type resolution of list element
+
+query T
+SELECT '{true}'::bool list::text
+----
+{t}
+
+query T
+SELECT '{true}'::pg_catalog.bool list::text
+----
+{t}
+
+# 🔬 float resolves to proper types
+
+query T
+SELECT pg_typeof(1::float)
+----
+float8
+
+query T
+SELECT pg_typeof(1::float(1))
+----
+float4
+
+query T
+SELECT pg_typeof(1::float(53))
+----
+float8
+
+query T
+SELECT pg_typeof(1::float(53))
+----
+float8
+
+# 🔬 misc. resolution tests
+
+# pg_catalog and materialize.pg_catalog resolution are equivalent
+query T
+SELECT '1'::materialize.pg_catalog.int4
+----
+1
+
+# tables are not types yet
+query error type "pg_catalog.pg_enum" does not exist
+SELECT '1'::pg_catalog.pg_enum
