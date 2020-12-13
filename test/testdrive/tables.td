@@ -271,16 +271,16 @@ cannot insert into system table 'mz_catalog.mz_kafka_sinks'
 
 # Test INSERT with default values
 > DROP TABLE IF EXISTS t;
-> CREATE TABLE t (a int, b int DEFAULT 6 * 7)
-> INSERT INTO t (a) VALUES (1);
+> CREATE TABLE t (a int DEFAULT 4, b int DEFAULT 6 * 7)
 
-! INSERT INTO t DEFAULT VALUES;
-INSERT ... DEFAULT VALUES not yet supported
+> INSERT INTO t (a) VALUES (1);
+> INSERT INTO t DEFAULT VALUES;
 
 > SELECT * FROM t;
 a  b
 ------
 1  42
+4  42
 
 # Test INSERT with column specifiers
 > DROP TABLE IF EXISTS t;
