@@ -55,6 +55,19 @@ Wrap your release notes at the 80 character mark.
 
   **Backwards-incompatible change.**
 
+- Consider the following keywords to be fully reserved: `WITH`, `SELECT`,
+  `WHERE`, `GROUP`, `HAVING`, `ORDER`, `LIMIT`, `OFFSET`, `FETCH`, `OPTION`,
+  `UNION`, `EXCEPT`, `INTERSECT`. Previously only the `FROM` keyword was
+  considered fully reserved.
+
+  These keywords can no longer be used as bare identifiers anywhere in a SQL
+  statement, except following an `AS` keyword in a table or column alias. They
+  can continue to be used as identifiers if escaped. See the
+  [Keyword collision](/sql/identifiers#keyword-collision) documentation for
+  details.
+
+  **Backwards-incompatible change.**
+
 {{% version-header v0.5.4 %}}
 
 - Add the [`version`](/sql/functions#postgresql-compatibility-func) and

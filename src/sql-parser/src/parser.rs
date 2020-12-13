@@ -320,7 +320,7 @@ impl<'a> Parser<'a> {
             }),
             Token::Keyword(ROW) => self.parse_row_expr(),
             Token::Keyword(TRIM) => self.parse_trim_expr(),
-            Token::Keyword(kw) if kw.is_reserved_in_expr() => {
+            Token::Keyword(kw) if kw.is_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
                     "expected expression, but found reserved keyword".into(),
@@ -2724,7 +2724,7 @@ impl<'a> Parser<'a> {
         let projection = match self.peek_token() {
             // An empty target list is permissible to match PostgreSQL, which
             // permits these for symmetry with zero column tables.
-            Some(Token::Keyword(kw)) if kw.is_reserved_in_column_alias() => vec![],
+            Some(Token::Keyword(kw)) if kw.is_reserved() => vec![],
             Some(Token::Semicolon) | None => vec![],
             _ => self.parse_comma_separated(Parser::parse_select_item)?,
         };
