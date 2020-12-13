@@ -56,6 +56,8 @@ pub use self::expr::RelationExpr;
 pub use error::PlanError;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
 pub use query::scalar_type_from_sql;
+// This is used by symbiosis to validate CREATE TABLE statements.
+pub use query::plan_default_expr;
 pub use statement::{describe_statement, FetchOptions, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.

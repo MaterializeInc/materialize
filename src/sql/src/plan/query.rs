@@ -256,7 +256,7 @@ pub fn plan_insert_query(
     // Maps from table column index to position in the source query
     let col_to_source: HashMap<_, _> = ordering.iter().enumerate().map(|(a, b)| (b, a)).collect();
 
-    let column_details = desc.iter().zip_eq(defaults.into_iter()).enumerate();
+    let column_details = desc.iter().zip_eq(defaults.iter()).enumerate();
     for (col_idx, ((name, col_typ), default)) in column_details {
         let name = name.expect("cannot possibly insert into anonymous column");
 
@@ -269,7 +269,7 @@ pub fn plan_insert_query(
                     name.as_str()
                 );
             }
-            let default_expr = plan_default_expr(scx, default)?;
+            let default_expr = plan_default_expr(scx, default, &col_typ.scalar_type)?;
             project_key.push(typ.arity() + map_exprs.len());
             map_exprs.push(default_expr);
         }
@@ -381,6 +381,7 @@ pub fn eval_as_of<'a>(
 pub fn plan_default_expr(
     scx: &StatementContext,
     expr: &Expr,
+    target_ty: &ScalarType,
 ) -> Result<ScalarExpr, anyhow::Error> {
     let qcx = &QueryContext::root(scx, QueryLifetime::OneShot);
     let ecx = &ExprContext {
@@ -392,7 +393,7 @@ pub fn plan_default_expr(
         allow_subqueries: false,
     };
 
-    plan_expr(ecx, expr)?.type_as_any(ecx)
+    plan_expr(ecx, expr)?.cast_to(ecx.name, ecx, CastContext::Assignment, target_ty)
 }
 
 pub fn plan_index_exprs<'a>(

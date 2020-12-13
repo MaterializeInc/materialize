@@ -45,7 +45,10 @@ use sql::ast::{
 use sql::catalog::Catalog;
 use sql::names::FullName;
 use sql::normalize;
-use sql::plan::{scalar_type_from_sql, MutationKind, Plan, PlanContext, StatementContext, Table};
+use sql::plan::{
+    plan_default_expr, scalar_type_from_sql, MutationKind, Plan, PlanContext, StatementContext,
+    Table,
+};
 use sql_parser::ast::Expr;
 
 pub struct Postgres {
@@ -157,7 +160,11 @@ END $$;
                     for option in &column.options {
                         match &option.option {
                             ColumnOption::NotNull => nullable = false,
-                            ColumnOption::Default(expr) => default = expr.clone(),
+                            ColumnOption::Default(expr) => {
+                                // Ensure expression can be planned and yields the correct type
+                                plan_default_expr(&scx, expr, &ty)?;
+                                default = expr.clone();
+                            }
                             // PRIMARY KEY implies UNIQUE and NOT NULL.
                             ColumnOption::Unique { is_primary } => {
                                 keys.push(vec![index]);
