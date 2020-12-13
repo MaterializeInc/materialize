@@ -257,11 +257,11 @@ pub fn plan_insert_query(
     let col_to_source: HashMap<_, _> = ordering.iter().enumerate().map(|(a, b)| (b, a)).collect();
 
     let column_details = desc.iter_types().zip_eq(defaults).enumerate();
-    for (col_idx, (_col_typ, default)) in column_details {
+    for (col_idx, (col_typ, default)) in column_details {
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let default_expr = plan_default_expr(scx, default)?;
+            let default_expr = plan_default_expr(scx, default, &col_typ.scalar_type)?;
             project_key.push(typ.arity() + map_exprs.len());
             map_exprs.push(default_expr);
         }
@@ -370,7 +370,11 @@ pub fn eval_as_of<'a>(
     })
 }
 
-pub fn plan_default_expr(scx: &StatementContext, expr: &Expr) -> Result<ScalarExpr, anyhow::Error> {
+pub fn plan_default_expr(
+    scx: &StatementContext,
+    expr: &Expr,
+    target_ty: &ScalarType,
+) -> Result<ScalarExpr, anyhow::Error> {
     let qcx = &QueryContext::root(scx, QueryLifetime::OneShot);
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -380,7 +384,7 @@ pub fn plan_default_expr(scx: &StatementContext, expr: &Expr) -> Result<ScalarEx
         allow_aggregates: false,
         allow_subqueries: false,
     };
-    plan_expr(ecx, expr)?.type_as_any(ecx)
+    plan_expr(ecx, expr)?.cast_to(ecx.name, ecx, CastContext::Assignment, target_ty)
 }
 
 pub fn plan_index_exprs<'a>(
