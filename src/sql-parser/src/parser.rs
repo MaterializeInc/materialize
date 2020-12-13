@@ -290,12 +290,14 @@ impl<'a> Parser<'a> {
         // in fact is a valid expression that should parse as the column name
         // "date".
         maybe!(self.maybe_parse(|parser| {
-            match parser.parse_data_type()? {
-                DataType::Other(n) if n.as_str() == "interval" => parser.parse_literal_interval(),
-                data_type => Ok(Expr::Cast {
+            let data_type = parser.parse_data_type()?;
+            if data_type.to_string().as_str() == "interval" {
+                parser.parse_literal_interval()
+            } else {
+                Ok(Expr::Cast {
                     expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
                     data_type,
-                }),
+                })
             }
         }));
 
@@ -2199,29 +2201,59 @@ impl<'a> Parser<'a> {
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
     fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
-        let other = |n: &str| -> DataType { DataType::Other(Ident::new(n)) };
+        let other = |name: &str| DataType::Other {
+            name: ObjectName(vec![Ident::new(name)]),
+            typ_mod: vec![],
+        };
+
         let mut data_type = match self.next_token() {
             Some(Token::Keyword(kw)) => match kw {
                 // Text-like types
                 CHAR | CHARACTER => {
-                    if self.parse_keyword(VARYING) {
-                        DataType::Varchar(self.parse_optional_precision()?)
+                    let name = if self.parse_keyword(VARYING) {
+                        "varchar"
                     } else {
-                        DataType::Char(self.parse_optional_precision()?)
+                        "char"
+                    };
+                    DataType::Other {
+                        name: ObjectName(vec![Ident::new(name)]),
+                        typ_mod: match self.parse_optional_precision()? {
+                            Some(u) => vec![u],
+                            None => vec![],
+                        },
                     }
                 }
-                VARCHAR => DataType::Varchar(self.parse_optional_precision()?),
+                VARCHAR => DataType::Other {
+                    name: ObjectName(vec![Ident::new("varchar")]),
+                    typ_mod: match self.parse_optional_precision()? {
+                        Some(u) => vec![u],
+                        None => vec![],
+                    },
+                },
+                STRING => other("text"),
 
                 // Number-like types
-                DEC | DECIMAL | NUMERIC => {
-                    let (precision, scale) = self.parse_optional_precision_scale()?;
-                    DataType::Decimal(precision, scale)
-                }
+                BIGINT => other("int8"),
+                DEC | DECIMAL => DataType::Other {
+                    name: ObjectName(vec![Ident::new("numeric")]),
+                    typ_mod: self.parse_typ_mod()?,
+                },
                 DOUBLE => {
                     let _ = self.parse_keyword(PRECISION);
                     other("float8")
                 }
-                FLOAT => DataType::Float(self.parse_optional_precision()?),
+                FLOAT => match self.parse_optional_precision()?.unwrap_or(53) {
+                    v if v == 0 || v > 53 => {
+                        return Err(self.error(
+                            self.peek_prev_pos(),
+                            "precision for type float must be within ([1-53])".into(),
+                        ))
+                    }
+                    v if v < 25 => other("float4"),
+                    _ => other("float8"),
+                },
+                INT | INTEGER => other("int4"),
+                REAL => other("float4"),
 
                 // Time-like types
                 TIME => {
@@ -2246,16 +2278,35 @@ impl<'a> Parser<'a> {
                         other("timestamp")
                     }
                 }
-                TIMESTAMPTZ => other("timestamptz"),
 
                 // MZ "proprietary" types
-                MAP => return self.parse_map(),
+                MAP => {
+                    return self.parse_map();
+                }
 
-                kw => DataType::Other(kw.into_ident()),
+                // Misc.
+                BOOLEAN => other("bool"),
+                BYTES => other("bytea"),
+                REGCLASS => other("oid"),
+
+                _ => {
+                    self.prev_token();
+                    DataType::Other {
+                        name: self.parse_object_name()?,
+                        typ_mod: self.parse_typ_mod()?,
+                    }
+                }
             },
-            Some(Token::Ident(id)) => other(&id),
+            Some(Token::Ident(_)) => {
+                self.prev_token();
+                DataType::Other {
+                    name: self.parse_object_name()?,
+                    typ_mod: self.parse_typ_mod()?,
+                }
+            }
             other => self.expected(self.peek_prev_pos(), "a data type name", other)?,
         };
+
         loop {
             match self.peek_token() {
                 Some(Token::Keyword(LIST)) => {
@@ -2276,6 +2327,16 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(data_type)
+    }
+
+    fn parse_typ_mod(&mut self) -> Result<Vec<u64>, ParserError> {
+        if self.consume_token(&Token::LParen) {
+            let typ_mod = self.parse_comma_separated(Parser::parse_literal_uint)?;
+            self.expect_token(&Token::RParen)?;
+            Ok(typ_mod)
+        } else {
+            Ok(vec![])
+        }
     }
 
     /// Parse `AS identifier` (or simply `identifier` if it's not a reserved keyword)
@@ -2430,23 +2491,6 @@ impl<'a> Parser<'a> {
             Ok(Some(n))
         } else {
             Ok(None)
-        }
-    }
-
-    fn parse_optional_precision_scale(
-        &mut self,
-    ) -> Result<(Option<u64>, Option<u64>), ParserError> {
-        if self.consume_token(&Token::LParen) {
-            let n = self.parse_literal_uint()?;
-            let scale = if self.consume_token(&Token::Comma) {
-                Some(self.parse_literal_uint()?)
-            } else {
-                None
-            };
-            self.expect_token(&Token::RParen)?;
-            Ok((Some(n), scale))
-        } else {
-            Ok((None, None))
         }
     }
 

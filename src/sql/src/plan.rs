@@ -56,7 +56,7 @@ pub use self::expr::RelationExpr;
 pub use error::PlanError;
 pub use explain::Explanation;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
-pub use query::scalar_type_from_sql;
+pub use query::{scalar_type_from_sql, unwrap_numeric_typ_mod};
 pub use statement::{describe_statement, FetchOptions, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
