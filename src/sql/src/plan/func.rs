@@ -1080,7 +1080,7 @@ lazy_static! {
             },
             "hmac" => Scalar {
                 params!(String, String, String) => VariadicFunc::HmacString,
-                params!(Bytes, String, String) => VariadicFunc::HmacBytes
+                params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes
             },
             "jsonb_array_length" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::cmp::max;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -1338,6 +1339,7 @@ struct DebeziumDeduplicationState {
     full: Option<TrackFull>,
     /// Whether we have printed a warning due to seeing unknown source coordinates
     warned_on_unknown: bool,
+    messages_processed: u64,
 }
 
 /// If we need to deal with debezium possibly going back after it hasn't seen things.
@@ -1355,6 +1357,9 @@ struct TrackFull {
     /// Optimization to avoid re-allocating the row packer over and over when extracting the key..
     key_buf: RowPacker,
     range: Option<TrackRange>,
+    started_padding: bool,
+    /// Whether we have started full deduplication mode
+    started: bool,
 }
 
 /// When to start and end full-range tracking
@@ -1409,6 +1414,8 @@ impl TrackFull {
             key_indices,
             key_buf: Default::default(),
             range: None,
+            started_padding: false,
+            started: false,
         }
     }
 
@@ -1451,6 +1458,7 @@ impl DebeziumDeduplicationState {
             binlog_offsets: Default::default(),
             full,
             warned_on_unknown: false,
+            messages_processed: 0,
         }
     }
 
@@ -1487,6 +1495,7 @@ impl DebeziumDeduplicationState {
                 return true;
             }
         };
+        self.messages_processed += 1;
 
         // If in the initial snapshot, binlog (pos, row) is meaningless for detecting
         // duplicates, since it is always the same.
@@ -1529,7 +1538,10 @@ impl DebeziumDeduplicationState {
                 key_indices,
                 key_buf,
                 range,
+                started_padding,
+                started,
             }) => {
+                *max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
                 if is_snapshot {
                     let key_indices = match key_indices.as_ref() {
                         None => {
@@ -1580,22 +1592,67 @@ impl DebeziumDeduplicationState {
                         true
                     }
                 } else {
-                    *max_seen_time = max(upstream_time_millis.unwrap_or(0), *max_seen_time);
                     if let Some(seen_offsets) = seen_offsets.get_mut(file) {
                         // first check if we are in a special case of range-bounded track full
                         if let Some(range) = range {
                             if let Some(upstream_time_millis) = upstream_time_millis {
                                 if upstream_time_millis < range.pad_start {
+                                    if *started_padding {
+                                        warn!("went back to before padding start, after entering padding\
+                                               source={}:{} message_time={} messages_processed={}",
+                                              debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
+                                              self.messages_processed);
+                                    }
+                                    if *started {
+                                        warn!("went back to before padding start, after entering full dedupe\
+                                               source={}:{} message_time={} messages_processed={}",
+                                              debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
+                                              self.messages_processed);
+                                    }
+                                    *started_padding = false;
+                                    *started = false;
                                     return should_skip.is_none();
                                 }
                                 if upstream_time_millis < range.start {
-                                    seen_offsets.insert((pos, row), upstream_time_millis);
+                                    // in the padding time range
+                                    *started_padding = true;
+                                    if *started {
+                                        warn!("went back to before padding start, after entering full dedupe\
+                                               source={}:{} message_time={} messages_processed={}",
+                                              debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
+                                              self.messages_processed);
+                                    }
+                                    *started = false;
+
+                                    seen_offsets
+                                        .entry((pos, row))
+                                        .or_insert_with(|| upstream_time_millis);
                                     return should_skip.is_none();
+                                }
+                                if upstream_time_millis <= range.end && !*started {
+                                    *started = true;
+                                    info!(
+                                        "starting full deduplication source={}:{} buffer_size={} \
+                                         messages_processed={} message_time={}",
+                                        debug_name,
+                                        worker_idx,
+                                        seen_offsets.len(),
+                                        self.messages_processed,
+                                        fmt_timestamp(upstream_time_millis)
+                                    );
                                 }
                                 if upstream_time_millis > range.end {
                                     // don't abort early, but we will clean up after this validation
                                     delete_full = true;
                                 }
+                            } else {
+                                warn!(
+                                    "message has no creation time file_position={}:{}:{}",
+                                    file_name_repr(file),
+                                    pos,
+                                    row,
+                                );
+                                seen_offsets.insert((pos, row), 0);
                             }
                         }
 
@@ -1660,17 +1717,10 @@ fn log_duplication_info(
     worker_idx: usize,
     is_new: bool,
     should_skip: &Option<SkipInfo>,
-    original_time: &mut i64,
-    max_seen_time: &mut i64,
+    original_time: &i64,
+    max_seen_time: &i64,
 ) {
-    let file_name_holder;
-    let file_name = match std::str::from_utf8(file) {
-        Ok(s) => s,
-        Err(_) => {
-            file_name_holder = hex::encode(file);
-            &file_name_holder
-        }
-    };
+    let file_name = file_name_repr(file);
     match (is_new, should_skip) {
         // new item that correctly is past the highest item we've ever seen
         (true, None) => {}
@@ -1678,10 +1728,12 @@ fn log_duplication_info(
         // records will ever be sent with a position below the highest
         // position ever seen
         (true, Some(skipinfo)) => {
+            // original time is guaranteed to be the same as message time, so
+            // that label is omitted from this log message
             warn!(
                 "Created a new record behind the highest point in source={}:{} binlog_file={} \
                  new_record_position={}:{} new_record_kafka_offset={} old_max_position={}:{} \
-                 message_time={} message_first_seen={} max_seen_time={}",
+                 message_time={} max_seen_time={}",
                 debug_name,
                 worker_idx,
                 file_name,
@@ -1691,7 +1743,6 @@ fn log_duplication_info(
                 skipinfo.old_max_pos,
                 skipinfo.old_max_row,
                 fmt_timestamp(upstream_time_millis),
-                fmt_timestamp(*original_time),
                 fmt_timestamp(*max_seen_time),
             );
         }
@@ -1731,6 +1782,17 @@ fn log_duplication_info(
                 fmt_timestamp(*max_seen_time),
             );
         }
+    }
+}
+
+/// Try to deocde a file name, otherwise use its hex-encoded repr
+///
+/// We map the top portion of MSSQL LSNs to the file-name part of other
+/// system's LSNs.
+fn file_name_repr<'a>(file: &'a [u8]) -> Cow<'a, str> {
+    match std::str::from_utf8(file) {
+        Ok(s) => Cow::from(s),
+        Err(_) => Cow::from(hex::encode(file)),
     }
 }
 

@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SourceConnector};
 use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
+use sql_parser::ast::Expr;
 
 use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use crate::catalog::Catalog;
@@ -171,6 +172,7 @@ pub enum Plan {
 pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
+    pub defaults: Vec<Expr>,
 }
 
 #[derive(Clone, Debug)]

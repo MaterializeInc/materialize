@@ -3329,7 +3329,9 @@ pub fn hmac_string<'a>(
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     let to_digest = datums[0].unwrap_str().as_bytes();
-    hmac_inner(to_digest, datums, temp_storage)
+    let key = datums[1].unwrap_str().as_bytes();
+    let typ = datums[2].unwrap_str();
+    hmac_inner(to_digest, key, typ, temp_storage)
 }
 
 pub fn hmac_bytes<'a>(
@@ -3337,51 +3339,47 @@ pub fn hmac_bytes<'a>(
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     let to_digest = datums[0].unwrap_bytes();
-    hmac_inner(to_digest, datums, temp_storage)
+    let key = datums[1].unwrap_bytes();
+    let typ = datums[2].unwrap_str();
+    hmac_inner(to_digest, key, typ, temp_storage)
 }
 
 pub fn hmac_inner<'a>(
     to_digest: &[u8],
-    datums: &[Datum<'a>],
+    key: &[u8],
+    typ: &str,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let key = datums[1].unwrap_str().as_bytes();
-    let bytes = match datums[2].unwrap_str() {
+    let bytes = match typ {
         "md5" => {
-            type HmacMd5 = Hmac<Md5>;
-            let mut mac = HmacMd5::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Md5>::new_varkey(key).expect("HMAC can take key of any size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_owned().to_vec()
+            mac.finalize().into_bytes().to_vec()
         }
         "sha1" => {
-            type HmacSha1 = Hmac<Sha1>;
-            let mut mac = HmacSha1::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Sha1>::new_varkey(key).expect("HMAC can take key of any size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_owned().to_vec()
+            mac.finalize().into_bytes().to_vec()
         }
         "sha224" => {
-            type HmacSha224 = Hmac<Sha224>;
-            let mut mac = HmacSha224::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Sha224>::new_varkey(key).expect("HMAC can take key of any size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_owned().to_vec()
+            mac.finalize().into_bytes().to_vec()
         }
         "sha256" => {
-            type HmacSha256 = Hmac<Sha256>;
-            let mut mac = HmacSha256::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Sha256>::new_varkey(key).expect("HMAC can take key of any size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_owned().to_vec()
+            mac.finalize().into_bytes().to_vec()
         }
         "sha384" => {
-            type HmacSha384 = Hmac<Sha384>;
-            let mut mac = HmacSha384::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Sha384>::new_varkey(key).expect("HMAC can take key of any size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_owned().to_vec()
+            mac.finalize().into_bytes().to_vec()
         }
         "sha512" => {
-            type HmacSha512 = Hmac<Sha512>;
-            let mut mac = HmacSha512::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Sha512>::new_varkey(key).expect("HMAC can take key of any size");
             mac.update(to_digest);
-            mac.finalize().into_bytes().to_owned().to_vec()
+            mac.finalize().into_bytes().to_vec()
         }
         other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
     };
