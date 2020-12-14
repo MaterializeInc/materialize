@@ -42,6 +42,22 @@ services:
       # 1000 was chosen by fair dice roll
       - DIFFERENTIAL_EAGER_MERGE=1000
       - DEFAULT_PROGRESS_MODE=${DEFAULT_PROGRESS_MODE}
+  materialized-release:
+    image: materialize/materialized:${MATERIALIZED_RELEASE_TAG:-v0.5.3}
+    ports:
+     - *materialized
+    init: true
+    command: -w ${MZ_THREADS:-1}
+    environment:
+      # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
+      - MZ_LOG=pgwire=debug,info
+      # We want this to eventually count up to the size of the largest batch in an
+      # arrangement. This number represents a tradeoff between proactive merging (which
+      # takes time) and low latency.
+      #
+      # 1000 was chosen by fair dice roll
+      - DIFFERENTIAL_EAGER_MERGE=1000
+      - DEFAULT_PROGRESS_MODE=${DEFAULT_PROGRESS_MODE}
   mysql:
     image: debezium/example-mysql:1.2
     ports:
@@ -380,6 +396,34 @@ mzconduct:
         service: mzutil
         command: wait_for_view_states.py
 
+    # Switch to using a released version of Materialize instead of the one build from this tree
+    switch-to-release-materialized:
+      steps:
+      - step: stop-services
+        services: [materialized]
+      - step: start-services
+        services: [materialized-release]
+      - step: run
+        service: peeker
+        command: >-
+          --materialized-url postgres://ignoreuser@materialized-release:6875/materialize
+          --only-initialize
+          --queries ${PEEKER_QUERIES:-count-sources}
+      - step: run
+        service: mzutil
+        command: wait_for_view_states.py --host materialized-release
+
+    # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
+    # already called setup-ingest-benchmark and the cluster is still running. Used a released
+    # Materialize image instead of the image built from the current checkout
+    measure-ingest-performance-release:
+      steps:
+      - step: restart-services
+        services: [materialized-release]
+      - step: run
+        service: mzutil
+        command: wait_for_view_states.py --host materialized-release
+
     # Run a test that populates Kafka with data from chbench for a set amount of time
     # After the first timer expires, stop chbench and wait for the data to stabilize
     # Record offsets ingested by Materialize and the answers to our count(*) views
@@ -416,6 +460,37 @@ mzconduct:
       - step: run
         service: peeker
         command: --only-initialize --queries ${PEEKER_QUERIES:-count-sources}
+      - step: ensure-stays-up
+        container: dashboard
+        seconds: 1
+
+    # Run a test that populates Kafka with data from topic snapshots
+    # Then run Materialize and measure time until it catches up to snapshotted view state
+    setup-replay-benchmark-release:
+      steps:
+      # start the dashboard before the load data get started so that we have data from
+      # the beginning of time
+      - step: start-services
+        services: [dashboard]
+      - step: start-services
+        services: [kafka, schema-registry]
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
+      - step: wait-for-tcp
+        host: kafka
+        port: 9092
+      - step: run
+        service: kafka-util
+        command: restore_topics.py --topic-filter ${KAFKA_TOPIC_FILTER:-debezium.tpcch.*}
+      - step: start-services
+        services: [materialized-release]
+      - step: run
+        service: peeker
+        command: >-
+          --materialized-url postgres://ignoreuser@materialized-release:6875/materialize
+          --only-initialize
+          --queries ${PEEKER_QUERIES:-count-sources}
       - step: ensure-stays-up
         container: dashboard
         seconds: 1
