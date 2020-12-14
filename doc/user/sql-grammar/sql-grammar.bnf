@@ -6,6 +6,8 @@ alter_index ::=
 avro_schema_spec ::=
   'CONFLUENT SCHEMA REGISTRY' url |
   'SCHEMA' ('FILE' schema_file_path | inline_schema)
+close ::=
+  'CLOSE' cursor_name
 connector_spec ::=
   'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
   'KAFKA BROKER' host 'TOPIC' topic?
@@ -134,6 +136,8 @@ create_view ::=
 create_table ::=
   'CREATE' 'TABLE' table_name
   ('(' (col_name col_type ('NOT NULL')?) ( ( ',' col_name col_type ('NOT NULL')?) )* ')')?
+declare ::=
+  'DECLARE' cursor_name 'CURSOR' ('WITHOUT' 'HOLD')? 'FOR' query
 insert ::=
   'INSERT' 'INTO' table_name 'VALUES'
   ( ('(' (col_value) ( ( ',' col_value ) )* ')') ( ( ',' ('(' (col_value) ( ( ',' col_value ) )* ')') )* ) )
@@ -160,6 +164,9 @@ explain ::=
     select_stmt |
     'VIEW' view_name
   )
+fetch ::=
+  'FETCH' 'FORWARD'? count? 'FROM'? cursor_name
+  ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
 format_spec_avro_kafka ::=
     ('AVRO' 'USING' (
         'CONFLUENT SCHEMA REGISTRY' url ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
