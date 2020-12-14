@@ -22,7 +22,7 @@ Type | Aliases | Use | Size (bytes) | Syntax
 [`integer`](integer) | `int4`, `int` | Signed integer | 4 | `123`
 [`interval`](interval) | | Duration of time | 32 | `INTERVAL '1-2 3 4:5:6.7'`
 [`jsonb`](jsonb) | `json` | JSON | Variable | `'{"1":2,"3":4}'::jsonb`
-[`map`](map) | `map` | Map with [`text`](text) keys and a uniform value type | Variable | `'{a: 1, b: 2}'::map[text=>int]`
+[`map`](map) | | Map with [`text`](text) keys and a uniform value type | Variable | `'{a: 1, b: 2}'::map[text=>int]`
 [`list`](list) | | Multidimensional list | Variable | `LIST[[1,2],[3]]`
 [`record`](record) | | Tuple with arbitrary contents | Variable | `ROW($expr, ...)`
 [`oid`](oid) | | PostgreSQL object identifier | 4 | `123`
