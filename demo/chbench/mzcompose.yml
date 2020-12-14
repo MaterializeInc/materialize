@@ -173,6 +173,10 @@ services:
     command: "true"
     volumes:
       - chbench-gen:/gen
+  mzutil:
+    mzbuild: mzutil
+    volumes:
+      - view-snapshots:/snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -252,6 +256,7 @@ volumes:
   chbench-gen:
   grafana:
   prometheus:
+  view-snapshots:
 
 mzconduct:
   name: chbench
@@ -275,7 +280,7 @@ mzconduct:
           --dsn=mysql --gen-dir=/var/lib/mysql-files
           --analytic-threads=0
           --transactional-threads=1
-          --run-seconds=500
+          --run-seconds=${CHBENCH_RUN_SECONDS:-500}
           -l /dev/stdout
           --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
           --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
@@ -317,6 +322,52 @@ mzconduct:
           --only-initialize
           -c /etc/peeker/materialized-sources.toml
           -q loadtest
+
+    # Run a test that populates Kafka with data from chbench for a set amount of time
+    # Once chbench exits, record offsets ingested by Materialize and view states
+    # Leaves the cluster running
+    setup-ingest-benchmark:
+      steps:
+      - step: workflow
+        workflow: bring-up-source-data-postgres
+      # start the dashboard before the load data get started so that we have data from
+      # the beginning of time
+      - step: start-services
+        services: [dashboard]
+      - step: workflow
+        workflow: heavy-load-postgres
+      - step: run
+        service: peeker
+        command: >-
+          --only-initialize
+          --init-timeout ${PEEKER_TIMEOUT:-10m}
+          --queries ${PEEKER_QUERIES:-count-sources}
+      - step: ensure-stays-up
+        container: dashboard
+        seconds: 1
+      - step: wait
+        service: chbench
+        expected_return_code: 0
+      - step: stop-services
+        services: [postgres]
+      # Give Materialize a few seconds to catch up with topics / drain
+      # TODO: Remove this sleep by adding an `wait_for_topic_queisce` step
+      - step: sleep
+        duration: 15
+      - step: run
+        service: mzutil
+        command: snapshot_view_states.py
+
+    # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
+    # already called setup-ingest-benchmark and the cluster is still running
+    measure-ingest-performance:
+      steps:
+      - step: restart-services
+        services: [materialized]
+      - step: run
+        service: mzutil
+        command: wait_for_view_states.py
+
 
     load-test:
       steps:
@@ -483,7 +534,7 @@ mzconduct:
           --analytic-threads=0
           --transactional-threads=${OLTP_THREADS:-1}
           --warmup-seconds=300
-          --run-seconds=1200
+          --run-seconds=${CHBENCH_RUN_SECONDS:-1200}
           -l /dev/stdout
           --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
           --mz-url=postgresql://${MZ_HOST:-materialized}:6875/materialize?sslmode=disable
@@ -604,7 +655,7 @@ mzconduct:
          --dsn=mysql --gen-dir=/var/lib/mysql-files
          --analytic-threads=0
          --transactional-threads=${OLTP_THREADS:-1}
-         --run-seconds=864000
+         --run-seconds=${CHBENCH_RUN_SECONDS:-864000}
          -l /var/log/chbench.log
          --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
          --mz-url=postgresql://${MZ_HOST:-materialized}:6875/materialize?sslmode=disable
@@ -619,7 +670,7 @@ mzconduct:
          --dsn=postgres --gen-dir=/var/lib/postgres-files
          --analytic-threads=0
          --transactional-threads=${OLTP_THREADS:-1}
-         --run-seconds=864000
+         --run-seconds=${CHBENCH_RUN_SECONDS:-864000}
          -l /var/log/chbench.log
          --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
