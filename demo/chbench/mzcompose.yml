@@ -177,6 +177,8 @@ services:
     mzbuild: mzutil
     volumes:
       - view-snapshots:/snapshot
+  kafka-util:
+    mzbuild: kafka-util
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -357,6 +359,10 @@ mzconduct:
       - step: run
         service: mzutil
         command: snapshot_view_states.py
+      # Output summary information about the topics
+      - step: run
+        service: kafka-util
+        command: summarize_topics.py
 
     # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
     # already called setup-ingest-benchmark and the cluster is still running
@@ -367,7 +373,6 @@ mzconduct:
       - step: run
         service: mzutil
         command: wait_for_view_states.py
-
 
     load-test:
       steps:
