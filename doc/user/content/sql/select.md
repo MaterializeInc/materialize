@@ -90,6 +90,13 @@ and re-order results of materialized sources or materialized views.
 
 ### Querying sources and views
 
+{{< warning >}}
+You can <code>SELECT</code> from non-materialized views only if they are
+transitively materialized. For more information, see [`CREATE VIEW`: Querying
+non-materialized
+views](https://materialize.com/docs/sql/create-view/#querying-non-materialized-views).
+{{< /warning >}}
+
 Performing a `SELECT` query that does not directly read out of a materialization
 requires Materialize to evaluate your query. Materialize will construct a
 temporary dataflow to materialize your query, and remove the dataflow as soon as
