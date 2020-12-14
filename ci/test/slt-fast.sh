@@ -159,6 +159,7 @@ tests=(
     test/sqllogictest/postgres/join-lateral.slt
     test/sqllogictest/postgres/regex.slt
     test/sqllogictest/postgres/subselect.slt
+    test/sqllogictest/postgres/pgcrypto/*.slt
 )
 
 if [[ "${BUILDKITE-}" ]]; then

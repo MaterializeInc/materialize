@@ -33,6 +33,7 @@ sqllogictest \
     -v --json-summary-file=target/slt-summary.json --no-fail "$@" \
     test/sqllogictest/cockroach/*.slt \
     test/sqllogictest/postgres/*.slt \
+    test/sqllogictest/postgres/pgcrypto/*.slt \
     | tee target/slt.log
 
 sqllogictest \

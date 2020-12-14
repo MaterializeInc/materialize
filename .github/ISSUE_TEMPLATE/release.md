@@ -132,12 +132,10 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
     have remained at 0ms or similar for the entirety of the run.
 
-- [ ] Let the chaos tests run for 24 hours, with the following success criteria:
-
-  - [ ] Each chaos test's `chaos_run` container should complete with a `0` exit code. To
-    check this, SSH into each EC2 instance running a chaos test and run `docker ps -a`.
-    You can ssh in using our [teleport cluster][], all chaos tests have a `purpose=chaos`
-    label.
+- [ ] Let the chaos test run for 24 hours. The test's `chaos_run` container should complete
+    with a `0` exit code. To check this, SSH into the EC2 instance running the chaos test and
+    run `docker ps -a`. You can ssh in using our [teleport cluster][], the chaos test has a
+    `purpose=chaos` label.
 
 - [ ] Remove all load test machines, documented on [the same page][load-instr].
 

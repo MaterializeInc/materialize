@@ -357,25 +357,24 @@
       Null elements are omitted unless `ifnull` is non-null, in which case
       null elements are replaced with the value of `ifnull`.
 
-- type: Cryptographic
+- type: Cryptography
   functions:
     - signature: 'digest(data: text, type: text) -> bytea'
-      desctription: >-
+      description: >-
         Computes a binary hash of the given text `data` using the specified `type` algorithm.
-        Supported hash algorithms are: `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`.
+        Supported hash algorithms are: `md5`, `sha1`, `sha224`, `sha256`, `sha384`, and `sha512`.
     - signature: 'digest(data: bytea, type: text) -> bytea'
-      desctription: >-
+      description: >-
         Computes a binary hash of the given bytea `data` using the specified `type` algorithm.
         The supported hash algorithms are the same as for the text variant of this function.
     - signature: 'hmac(data: text, key: text, type: text) -> bytea'
-      desctription: >-
+      description: >-
         Computes a hashed MAC of the given text `data` using the specified `key` and
-        `type` algorithm. Supported hash algorithms are: `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`.
-    - signature: 'hmac(data: bytea, key: text, type: text) -> bytea'
-      desctription: >-
+        `type` algorithm. Supported hash algorithms are the same as for `digest`.
+    - signature: 'hmac(data: bytea, key: bytea, type: text) -> bytea'
+      description: >-
         Computes a hashed MAC of the given bytea `data` using the specified `key` and
-        `type` algorithm. The supported hash algorithms are the same as for the text
-        variant of this function.
+        `type` algorithm. The supported hash algorithms are the same as for `digest`.
 
 - type: System information
   description: Functions that return information about the system

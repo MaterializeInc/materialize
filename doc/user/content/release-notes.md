@@ -53,6 +53,9 @@ Wrap your release notes at the 80 character mark.
   PostgreSQL-specific and Materialize-specific version information,
   respectively.
 
+- Add the [`hmac` and `digest` cryptography functions](/sql/functions#cryptography-func).
+  These functions are based on the [`pgcrypto`] PostgreSQL extension.
+
 {{% version-header v0.5.3 %}}
 
 - Add support for SQL cursors via the new [`DECLARE`](/sql/declare),
@@ -786,6 +789,7 @@ Wrap your release notes at the 80 character mark.
 [`double precision`]: /sql/types/float
 [`interval`]: /sql/types/interval
 [`float4`]: /sql/types/float
+[`pgcrypto`]: https://www.postgresql.org/docs/current/pgcrypto.html
 [`real`]: /sql/types/real
 [`SHOW CREATE SOURCE`]: /sql/show-create-source
 [`SHOW CREATE VIEW`]: /sql/show-create-view
