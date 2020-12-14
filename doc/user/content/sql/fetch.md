@@ -6,6 +6,8 @@ menu:
     parent: "sql"
 ---
 
+{{< version-added v0.5.3 >}}
+
 `FETCH` retrieves rows from a query using a cursor previously opened with [`DECLARE`](/sql/declare).
 
 ## Syntax
@@ -21,4 +23,4 @@ Supported `WITH` option values:
 
 Option name | Value type | Default | Describes
 ------------|------------|---------|----------
-`TIMEOUT`   | `interval` | `0s`    | When fetching from a [`TAIL`](/sql/tail) cursor, complete if there are no more rows ready after this timeout. The default `0s` will cause `FETCH` to only return rows that have already been produced since the previous `FETCH`.
+`timeout`   | `interval` | `0s`    | When fetching from a [`TAIL`](/sql/tail) cursor, complete if there are no more rows ready after this timeout. The default `0s` will cause `FETCH` to only return rows that have already been produced since the previous `FETCH`. {{< version-added v0.5.4 >}}

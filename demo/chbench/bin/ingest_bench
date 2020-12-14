@@ -41,7 +41,7 @@ Options:
     -n|--num-measurements   How many time to measure performance (default ${num_measurements})
     -s|--chbench-seconds    How many seconds to run chbench (default ${chbench_seconds})
     --warehouses            Number of chbench warehouses to configure
-    -w|--workers            Read the token from your Yubikey instead of asking for a one-time token
+    -w|--workers            Number of Materialize worker threads to configure
 "
     exit "$1"
 }

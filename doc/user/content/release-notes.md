@@ -56,12 +56,20 @@ Wrap your release notes at the 80 character mark.
 - Add the [`hmac` and `digest` cryptography functions](/sql/functions#cryptography-func).
   These functions are based on the [`pgcrypto`] PostgreSQL extension.
 
+- Add a `timeout` option to [`FETCH`](/sql/fetch/).
+
+- Fix a bug when requesting binary-formatted values with
+  [`FETCH`](/sql/fetch/) {{% gh 4976 %}}.
+
 {{% version-header v0.5.3 %}}
 
 - Add support for SQL cursors via the new [`DECLARE`](/sql/declare),
   [`FETCH`](/sql/fetch), and [`CLOSE`](/sql/close) statements. Cursors
   facilitate fetching partial results from a query and are therefore
   particularly useful in conjuction with [`TAIL`](/sql/tail#tailing-with-fetch).
+
+  **Known issue.** Requesting binary-formatted values with [`FETCH`] does not
+  work correctly. This bug will be fixed in the next release.
 
 - Support [common-table expressions (CTEs)](/sql/select#common-table-expressions-ctes)
   in `SELECT` statements.
