@@ -1,0 +1,251 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Most tests of pgcrypto were imported directly from PostgreSQL's test suite
+# and live in test/sqllogictest/postgres/pgcrypto. The tests in this file fill
+# in the gaps in pgcrypto's upstream testing.
+
+query error invalid hash algorithm 'nonsense'
+SELECT digest('hi', 'nonsense')
+
+# HMAC SHA-224.
+
+query T
+SELECT hmac('Hi There', '\x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b'::bytea, 'sha224')::text
+----
+\x4e841ce7a4ae83fbcf71e3cd64bfbf277f73a14680aae8c518ac7861
+
+query T
+SELECT hmac('Jefe', 'what do ya want for nothing?', 'sha224')::text
+----
+\x7693b9d6f5c91989e5e71084e54932ef65cb3efdf99ecfb6efc3930f
+
+query T
+SELECT hmac(
+  '\xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'::bytea,
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha224'
+)::text
+----
+\xcbff7c2716bbaa7c77bed4f491d3e8456cb6c574e92f672b291acf5b
+
+query T
+SELECT hmac(
+  '\xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd'::bytea,
+  '\x0102030405060708090a0b0c0d0e0f10111213141516171819',
+  'sha224'
+)::text
+----
+\x6c11506874013cac6a2abc1bb382627cec6a90d86efc012de7afec5a
+
+query T
+SELECT hmac(
+  'Test With Truncation',
+  '\x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c'::bytea,
+  'sha224'
+)::text
+----
+\xd812c97a5e1412f2eb08dc4d95548117780f2930fa4e0e553d985c68
+
+# SHA-224's block size is 64 bytes.
+
+query T
+SELECT hmac(
+  'Test Using Larger Than Block-Size Key - Hash Key First',
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha224'
+)::text
+----
+\x9ed2eebc0ed23576efc815e9b5bc0d9257e36d13e4dd5d5f0c809b38
+
+query T
+SELECT hmac(
+  'Test Using Larger Than Block-Size Key and Larger Than One Block-Size Data',
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha224'
+)::text
+----
+\x7358939e58683a448ac5065196d33191a1c1d33d4b8b0304dc60f5e0
+
+# HMAC SHA-256.
+
+query T
+SELECT hmac('Hi There', '\x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b'::bytea, 'sha256')::text
+----
+\x492ce020fe2534a5789dc3848806c78f4f6711397f08e7e7a12ca5a4483c8aa6
+
+query T
+SELECT hmac('Jefe', 'what do ya want for nothing?', 'sha256')::text
+----
+\x32dc8d946def0419c52253481d2c9340a54273346c4dd2e4047184d676b0e11d
+
+query T
+SELECT hmac(
+  '\xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'::bytea,
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha256'
+)::text
+----
+\x7dda3cc169743a6484649f94f0eda0f9f2ff496a9733fb796ed5adb40a44c3c1
+
+query T
+SELECT hmac(
+  '\xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd'::bytea,
+  '\x0102030405060708090a0b0c0d0e0f10111213141516171819',
+  'sha256'
+)::text
+----
+\x82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b
+
+query T
+SELECT hmac(
+  'Test With Truncation',
+  '\x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c'::bytea,
+  'sha256'
+)::text
+----
+\x2282475faa2def6936685d9c06566f2d782307ace7a27ada2037e6285efcb008
+
+# SHA-256's block size is 64 bytes.
+
+query T
+SELECT hmac(
+  'Test Using Larger Than Block-Size Key - Hash Key First',
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha256'
+)::text
+----
+\x6953025ed96f0c09f80a96f78e6538dbe2e7b820e3dd970e7ddd39091b32352f
+
+query T
+SELECT hmac(
+  'Test Using Larger Than Block-Size Key and Larger Than One Block-Size Data',
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha256'
+)::text
+----
+\x6355ac22e890d0a3c8481a5ca4825bc884d3e7a1ff98a2fc2ac7d8e064c3b2e6
+
+# HMAC SHA-384.
+
+query T
+SELECT hmac('Hi There', '\x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b'::bytea, 'sha384')::text
+----
+\x7afaa633e20d379b02395915fbc385ff8dc27dcd3885e1068ab942eeab52ec1f20ad382a92370d8b2e0ac8b83c4d53bf
+
+query T
+SELECT hmac('Jefe', 'what do ya want for nothing?', 'sha384')::text
+----
+\x7c04cd35f5030447ac6cc54355f8a1686613a95e5cda2810417cf1faececbae236bb01edf84634d6b88cea884b0ff4b9
+
+query T
+SELECT hmac(
+  '\xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'::bytea,
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha384'
+)::text
+----
+\x1383e82e28286b91f4cc7afbd13d5b5c6f887c05e7c4542484043a37a5fe45802a9470fb663bd7b6570fe2f503fc92f5
+
+query T
+SELECT hmac(
+  '\xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd'::bytea,
+  '\x0102030405060708090a0b0c0d0e0f10111213141516171819',
+  'sha384'
+)::text
+----
+\x3e8a69b7783c25851933ab6290af6ca77a9981480850009cc5577c6e1f573b4e6801dd23c4a7d679ccf8a386c674cffb
+
+query T
+SELECT hmac(
+  'Test With Truncation',
+  '\x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c'::bytea,
+  'sha384'
+)::text
+----
+\x10e0150a42d0ae6f9d3f55da7a8261c383b024c8d81b40e95d120acfd53fb018af5e77846ad99451059f0579cb9a718b
+
+# SHA-384's block size is 128 bytes.
+
+query T
+SELECT hmac(
+  'Test Using Larger Than Block-Size Key - Hash Key First',
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha384'
+)::text
+----
+\x69d2e2f55de9f09878f04d23d8670d49cb734825cdb9cd9e72e446171a43540b90e17cf086e6fa3a599382a286c61340
+
+query T
+SELECT hmac(
+  'Test Using Larger Than Block-Size Key and Larger Than One Block-Size Data aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha384'
+)::text
+----
+\xd8e72323e1f95625bc5f477a15d7a8940491dd800651943ed1335234ce95a36631e336dbec33070cd323efdf4105963c
+
+# HMAC SHA-512.
+
+query T
+SELECT hmac('Hi There', '\x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b'::bytea, 'sha512')::text
+----
+\x7641c48a3b4aa8f887c07b3e83f96affb89c978fed8c96fcbbf4ad596eebfe496f9f16da6cd080ba393c6f365ad72b50d15c71bfb1d6b81f66a911786c6ce932
+
+query T
+SELECT hmac('Jefe', 'what do ya want for nothing?', 'sha512')::text
+----
+\x082a081f4ab99190f18d6e73c5d498bf0aea67277728e6b35e6935b0619951158ff30e77c40006c79322b0a4d3d9a4cffc1b1ee59934f70d4a26bcfd5cfdb114
+
+query T
+SELECT hmac(
+  '\xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'::bytea,
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha512'
+)::text
+----
+\xad9b5c7de72693737cd5e9d9f41170d18841fec1201c1c1b02e05cae116718009f771cad9946ddbf7e3cde3e818d9ae85d91b2badae94172d096a44a79c91e86
+
+query T
+SELECT hmac(
+  '\xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd'::bytea,
+  '\x0102030405060708090a0b0c0d0e0f10111213141516171819',
+  'sha512'
+)::text
+----
+\xb0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3dba91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd
+
+query T
+SELECT hmac(
+  'Test With Truncation',
+  '\x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c'::bytea,
+  'sha512'
+)::text
+----
+\xda2c03a1f8d34ce536b246c9dc47281d7052d3f82a7b4f6dfe9ee9f5accdae02dd72f9b89324f25f9b8276a2e3d31c0a87b8b6c1dcefd7602cc881a7d120e3fd
+
+# SHA-384's block size is 128 bytes.
+
+query T
+SELECT hmac(
+  'Test Using Larger Than Block-Size Key - Hash Key First',
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha512'
+)::text
+----
+\x132c9ebc32531071f6c4d9e8842291e9403e5940f813170a3ba3a0dd6c055c8b8ca587b24c56c47f3c1f2fb8ee8f9fbc8d92deed0f83426be3e8a2e9056778b3
+
+query T
+SELECT hmac(
+  'Test Using Larger Than Block-Size Key and Larger Than One Block-Size Data aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  '\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea,
+  'sha512'
+)::text
+----
+\x9b24b47d35943d924975b0ccdf5274370744c878104e055fa99ad12199646a57f3e757f8d1caa1a6d2c59dc72c6be74f614dd94be28b493fda966c3f28aebb21

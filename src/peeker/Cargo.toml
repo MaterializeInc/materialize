@@ -18,6 +18,6 @@ parse_duration = "2.1.0"
 postgres = "0.17.5"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.4.1"
-serde = { version = "1.0.117", features = ["derive"] }
+serde = { version = "1.0.118", features = ["derive"] }
 tokio = { version = "0.2.22", features = ["rt-threaded"] }
 toml = "0.5.7"
