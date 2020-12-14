@@ -202,6 +202,94 @@ timestamp `4` implies that there are no more updates for either timestamp
 
 ## Example
 
+`TAIL` produces rows similar to a `SELECT` statement, except that `TAIL` may never complete.
+Many drivers buffer all results until a query is complete, and so will never return.
+Below are the recommended ways to work around this.
+
+### Tailing with FETCH
+
+The recommended way to use `COPY TO` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
+This allows users to limit the number of rows and the time window of their requests. First, declare a `TAIL` cursor:
+
+```
+DECLARE c CURSOR FOR TAIL t;
+````
+
+Now use [`FETCH`](/sql/fetch) in a loop to retrieve some number of rows within a time window:
+
+```
+FETCH 100 c WITH (TIMEOUT = '1s');
+```
+
+That will retrieve up to the next 100 rows that are ready in at most `1s`.
+The timeout is only used when there are not any rows ready and a wait must occur.
+If `TIMEOUT` is not specified it defaults to `0s` which means it will only return rows that are immediately available and will never wait for more to come before completing.
+
+#### FETCH with python and psycopg2
+
+```python
+#!/usr/bin/env python3
+
+import psycopg2
+import sys
+
+dsn = "postgresql://localhost:6875/materialize?sslmode=disable"
+conn = psycopg2.connect(dsn)
+
+with conn.cursor() as cur:
+    cur.execute("DECLARE c CURSOR FOR TAIL v")
+    while True:
+        cur.execute("FETCH 100 c WITH (TIMEOUT = '1s')")
+        for row in cur:
+            print(row)
+    cur.execute("CLOSE c")
+```
+
+### Tailing with COPY
+[`COPY TO`](/sql/copy-to) is supported by many drivers and does not buffer.
+However most drivers do not provide methods to parse the data coming from the `COPY`, in which case you'll have to do your own parsing.
+The Postgres docs describe the [`COPY` text format](https://www.postgresql.org/docs/current/sql-copy.html#id-1.9.3.55.9.2), which is tab-separated lines with escapes and a definition for `NULL`.
+
+#### COPY TO with C# and Npgsql
+
+Npgsql [supports](https://www.npgsql.org/doc/copy.html#binary-copy) parsing the `BINARY` format of `COPY TO`:
+
+```
+// The TAIL won't ever end, so use reader.Cancel() to cancel the request.
+using (var reader = Conn.BeginBinaryExport("COPY (TAIL t) TO STDOUT (FORMAT BINARY)"))
+{
+    reader.StartRow();
+    Console.WriteLine(reader.Read<decimal>()); // timestamp column
+    Console.WriteLine(reader.Read<long>()); // diff column
+    Console.WriteLine(reader.Read<int>()); // first column of `t`
+
+    // ...
+}
+```
+
+#### COPY TO with python and psycopg2
+
+```python
+#!/usr/bin/env python3
+
+import sys
+import psycopg2
+
+def main():
+
+    dsn = 'postgresql://localhost:6875/materialize?sslmode=disable'
+    conn = psycopg2.connect(dsn)
+
+    with conn.cursor() as cursor:
+        cursor.copy_expert("COPY (TAIL some_materialized_view) TO STDOUT", sys.stdout)
+
+if __name__ == '__main__':
+    main()
+```
+
+This will then stream the same output we saw above to `stdout`, though you could
+obviously do whatever you like with the output from this point.
+
 ### Tailing via the `psql` command-line client
 
 In this example, we'll assume `some_materialized_view` has one `text` column.
@@ -248,36 +336,6 @@ COPY (TAIL some_materialized_view WITH (PROGRESS)) TO STDOUT
 1580000000007 f  1 will_update_new
 1580000000009 t \N \N
 ````
-
-### Tailing through a driver
-
-`TAIL` produces rows similar to a `SELECT` statement, except that `TAIL` may never complete.
-Many drivers buffer all results until a query is complete, and so will never return.
-Instead, use [`COPY TO`](/sql/copy-to) which is unbuffered by drivers and so is suitable for streaming.
-As long as your driver lets you send your own `COPY` statement to the running Materialize node, you can `TAIL` updates from Materialize anywhere you'd like.
-
-```python
-#!/usr/bin/env python3
-
-import sys
-import psycopg2
-
-def main():
-
-    dsn = 'postgresql://localhost:6875/materialize?sslmode=disable'
-    conn = psycopg2.connect(dsn)
-
-    with conn.cursor() as cursor:
-        cursor.copy_expert("COPY (TAIL some_materialized_view) TO STDOUT", sys.stdout)
-
-if __name__ == '__main__':
-    main()
-```
-
-This will then stream the same output we saw above to `stdout`, though you could
-obviously do whatever you like with the output from this point.
-
-If your driver does support unbuffered result streaming, then there is no need to use `COPY TO`.
 
 [`bigint`]: /sql/types/bigint
 [`numeric`]: /sql/types/numeric
