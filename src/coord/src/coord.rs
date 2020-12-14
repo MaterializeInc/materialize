@@ -1528,6 +1528,7 @@ where
             create_sql: table.create_sql,
             plan_cx: pcx,
             desc: table.desc,
+            defaults: table.defaults,
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
