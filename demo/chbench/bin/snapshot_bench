@@ -43,7 +43,7 @@ Options:
     -q|--queries            Peeker queries to configure (individual query or group name)
     -s|--setup              Intialize the Kafka cluster with data from topic snapshots
     -t|--topic-filter       Only restore topics that match the supplied filter (GLOB syntax)
-    -w|--workers            Read the token from your Yubikey instead of asking for a one-time token
+    -w|--workers            Number of Materialize worker threads to configure
 "
     exit "$1"
 }
