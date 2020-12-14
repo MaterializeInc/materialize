@@ -24,7 +24,7 @@ postgres = "0.17"
 postgres-types = "0.1.1"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.4.1"
-serde = { version = "1.0.117", features = ["derive"] }
+serde = { version = "1.0.118", features = ["derive"] }
 tokio = { version = "0.2.22", features = ["rt-threaded"] }
 tokio-postgres = "0.5.5"
 toml = "0.5.7"

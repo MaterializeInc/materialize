@@ -134,7 +134,6 @@ pub fn plan_insert_query(
 ) -> Result<(GlobalId, RelationExpr), anyhow::Error> {
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let table = scx.resolve_item(table_name)?;
-    let desc = table.desc()?;
 
     // Validate the target of the insert.
     if table.item_type() != CatalogItemType::Table {
@@ -144,6 +143,11 @@ pub fn plan_insert_query(
             table.name()
         );
     }
+    let desc = table.desc()?;
+    let defaults = table
+        .table_details()
+        .expect("attempted to insert into non-table");
+
     if table.id().is_system() {
         bail!("cannot insert into system table '{}'", table.name());
     }
@@ -209,7 +213,7 @@ pub fn plan_insert_query(
                 }
             }
         }
-        InsertSource::DefaultValues => unsupported!("INSERT ... DEFAULT VALUES"),
+        InsertSource::DefaultValues => RelationExpr::constant(vec![vec![]], RelationType::empty()),
     };
 
     let typ = qcx.relation_type(&expr);
@@ -247,24 +251,19 @@ pub fn plan_insert_query(
 
     // Fill in any omitted columns and rearrange into correct order
     let mut map_exprs = vec![];
-    let mut project_key = vec![];
+    let mut project_key = Vec::with_capacity(desc.arity());
 
     // Maps from table column index to position in the source query
     let col_to_source: HashMap<_, _> = ordering.iter().enumerate().map(|(a, b)| (b, a)).collect();
 
-    for (col_idx, (name, col_typ)) in desc.iter().enumerate() {
-        let name = name.expect("cannot possibly insert into anonymous column");
-
+    let column_details = desc.iter_types().zip_eq(defaults).enumerate();
+    for (col_idx, (col_typ, default)) in column_details {
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
-        } else if col_typ.nullable {
-            project_key.push(typ.arity() + map_exprs.len());
-            map_exprs.push(ScalarExpr::literal_null(col_typ.scalar_type.clone()));
         } else {
-            bail!(
-                "null value in column \"{}\" violates not-null constraint",
-                name.as_str()
-            )
+            let default_expr = plan_default_expr(scx, default, &col_typ.scalar_type)?;
+            project_key.push(typ.arity() + map_exprs.len());
+            map_exprs.push(default_expr);
         }
     }
 
@@ -369,6 +368,23 @@ pub fn eval_as_of<'a>(
         ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
         _ => bail!("can't use {} as a timestamp for AS OF", ex.typ(desc.typ())),
     })
+}
+
+pub fn plan_default_expr(
+    scx: &StatementContext,
+    expr: &Expr,
+    target_ty: &ScalarType,
+) -> Result<ScalarExpr, anyhow::Error> {
+    let qcx = &QueryContext::root(scx, QueryLifetime::OneShot);
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "DEFAULT expression",
+        scope: &Scope::empty(None),
+        relation_type: &RelationType::empty(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+    };
+    plan_expr(ecx, expr)?.cast_to(ecx.name, ecx, CastContext::Assignment, target_ty)
 }
 
 pub fn plan_index_exprs<'a>(
