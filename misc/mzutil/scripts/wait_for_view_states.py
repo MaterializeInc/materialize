@@ -75,7 +75,7 @@ def source_at_offset(
         return int(cursor.fetchone()[0])
     except psycopg2.errors.InternalError_:
         # The view is not yet ready to be queried
-        return False
+        return None
 
 
 def wait_for_materialize_views(args: argparse.Namespace) -> None:
