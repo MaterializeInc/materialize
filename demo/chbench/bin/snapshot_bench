@@ -14,6 +14,7 @@ project=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 cleanup="no"
 data_dir="${HOME}/chbench_snapshot"
+image=""
 num_measurements=6
 peeker_queries="count-sources"
 setup="no"
@@ -37,6 +38,7 @@ Options:
 
     -c|--cleanup            Shutdown services and remove volumes at the end of the test
     -d|--data-directory     Directory that contains the chbench state snapshot
+    -i|--image-tag          Use specified materialize docker image instead of version build from checkout
     -q|--queries            Peeker queries to configure (individual query or group name)
     -s|--setup              Intialize the Kafka cluster with data from topic snapshots
     -t|--topic-filter       Only restore topics that match the supplied filter (GLOB syntax)
@@ -57,6 +59,9 @@ parse_args() {
                 data_dir="${1:?--data-directory requires an argument}" && shift
                 ;;
             -h|--help) usage 0;;
+            -i|--image-tag)
+                image="${1:?--image-tag requires an argument}" && shift
+                ;;
             -n|--num-measurements)
                 num_measurements="${1:?--num-measurements requires an argument}" && shift
                 ;;
@@ -98,9 +103,20 @@ main() {
         "$project"/mzcompose run setup-replay-benchmark
     fi
 
+    if [[ -n "${image}" ]]; then
+        export MATERIALIZE_RELEASE_TAG="${image}"
+        "$project"/mzcompose run setup-release-materialized
+    else
+        "$project"/mzcompose run setup-materialized
+    fi
+
     for i in $(seq 1 "${num_measurements}"); do
         echo "Conducting measurement ${i} of ${num_measurements}"
-        "$project"/mzcompose run measure-ingest-performance
+        if [[ -n "${image}" ]]; then
+            "$project"/mzcompose run measure-ingest-performance-release
+        else
+            "$project"/mzcompose run measure-ingest-performance
+        fi
     done
 
     if [[ "${cleanup}" = "yes" ]]; then
