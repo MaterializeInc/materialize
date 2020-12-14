@@ -40,7 +40,7 @@ rusoto_kinesis = "0.45.0"
 rusoto_sts = "0.45.0"
 serde = "1.0.117"
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
-serde_json = "1.0.59"
+serde_json = "1.0.60"
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.1"
 termcolor = "1.1.0"
