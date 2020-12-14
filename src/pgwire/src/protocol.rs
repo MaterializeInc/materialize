@@ -1251,30 +1251,19 @@ where
                     }
                 }
                 Err(time::Elapsed { .. }) => {
-                    // It's been a while since we've had any data to send, and
-                    // the client may have disconnected. Send a data message
-                    // with zero bytes of data, which will error if the client
-                    // has, in fact, disconnected. Otherwise we might block
-                    // forever waiting for rows, leaking memory and a socket.
+                    // It's been a while since we've had any data to send, and the client may have
+                    // disconnected. Send a notice, which will error if the client has, in fact,
+                    // disconnected. Otherwise we might block forever waiting for rows, leaking
+                    // memory and a socket.
                     //
-                    // Writing these empty data packets is rather distasteful,
-                    // but no better solution for detecting a half-closed socket
-                    // presents itself. Tokio/Mio don't provide a cross-platform
-                    // means of receiving socket closed notifications, and it's
-                    // not clear how to plumb such notifications through a
-                    // `Codec` and a `Framed`, anyway.
-                    //
-                    // If someone does wind up investigating a better solution,
-                    // on Linux, the underlying epoll system call supports the
-                    // desired notifications via POLLRDHUP [0].
-                    //
-                    // [0]: https://lkml.org/lkml/2003/7/12/116
-
-                    // TODO(mjibson): Sending an empty CopyData message is not consistent with the
-                    // spec which says CopyData messages are "always one per row". We can perhaps
-                    // use an empty NoticeResponse here instead, which is documented as being a
-                    // thing that can happen during this mode.
-                    self.conn.send(BackendMessage::CopyData(vec![])).await?;
+                    // TODO: When we are on tokio 0.3, use
+                    // https://github.com/tokio-rs/tokio/issues/2228 to detect this.
+                    self.conn
+                        .send(BackendMessage::ErrorResponse(ErrorResponse::notice(
+                            SqlState::NO_DATA,
+                            "TAIL waiting for more data",
+                        )))
+                        .await?;
                 }
             }
             self.conn.flush().await?;

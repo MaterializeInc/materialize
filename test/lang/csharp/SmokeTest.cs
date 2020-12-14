@@ -9,6 +9,7 @@
 
 using Npgsql;
 using NUnit.Framework;
+using System.Threading;
 
 namespace csharp
 {
@@ -51,6 +52,11 @@ namespace csharp
             Assert.AreEqual(1, reader.Read<long>()); // diff column
             Assert.AreEqual(1, reader.Read<int>()); // a column
             Assert.AreEqual("a", reader.Read<string>()); // b column
+
+            // Wait 2s so that the 1s NoticeResponse "test that the connection is still
+            // alive" check triggers. This verifies Npgsql can successfully ignore the
+            // NoticeResponse.
+            Thread.Sleep(2000);
 
             // Insert another row from another connection to simulate an update
             // arriving.

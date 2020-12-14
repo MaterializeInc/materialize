@@ -61,6 +61,9 @@ Wrap your release notes at the 80 character mark.
 - Fix a bug when requesting binary-formatted values with
   [`FETCH`](/sql/fetch/) {{% gh 4976 %}}.
 
+- Fix a bug when using COPY with TAIL that could cause some drivers to
+  fail if the TAIL was idle for at least 1 second {{% gh 4976 %}}.
+
 {{% version-header v0.5.3 %}}
 
 - Add support for SQL cursors via the new [`DECLARE`](/sql/declare),
