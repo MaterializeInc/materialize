@@ -9,9 +9,9 @@ menu:
 `DECLARE` creates a cursor, which can be used with
 [`FETCH`](/sql/fetch), to retrieve a limited number of rows at a time
 from a larger query. Large queries or queries that don't ever complete
-([`TAIL`](/sql/tail)) can be difficult to use by many Postgres drivers
+([`TAIL`](/sql/tail)) can be difficult to use with many PostgreSQL drivers
 that wait until all rows are returned before returning control to an
-application. Using `DECLARE` and [`FETCH`](/sql/fetch) allows users to
+application. Using `DECLARE` and [`FETCH`](/sql/fetch) allows you to
 fetch only some of the rows at a time.
 
 ## Syntax

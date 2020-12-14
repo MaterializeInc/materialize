@@ -200,32 +200,32 @@ in non-decreasing order. The receipt of the explicit progress message at
 timestamp `4` implies that there are no more updates for either timestamp
 `2` or `3`—but that there may be more data arriving at timestamp `4`.
 
-## Example
+## Examples
 
 `TAIL` produces rows similar to a `SELECT` statement, except that `TAIL` may never complete.
 Many drivers buffer all results until a query is complete, and so will never return.
 Below are the recommended ways to work around this.
 
-### Tailing with FETCH
+### Tailing with `FETCH`
 
-The recommended way to use `COPY TO` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
-This allows users to limit the number of rows and the time window of their requests. First, declare a `TAIL` cursor:
+The recommended way to use `TAIL` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
+This allows you to limit the number of rows and the time window of your requests. First, declare a `TAIL` cursor:
 
-```
+```sql
 DECLARE c CURSOR FOR TAIL t;
 ````
 
 Now use [`FETCH`](/sql/fetch) in a loop to retrieve some number of rows within a time window:
 
-```
-FETCH 100 c WITH (TIMEOUT = '1s');
+```sql
+FETCH 100 c WITH (timeout = '1s');
 ```
 
 That will retrieve up to the next 100 rows that are ready in at most `1s`.
 The timeout is only used when there are not any rows ready and a wait must occur.
-If `TIMEOUT` is not specified it defaults to `0s` which means it will only return rows that are immediately available and will never wait for more to come before completing.
+If `timeout` is not specified it defaults to `0s` which means it will only return rows that are immediately available and will never wait for more to come before completing.
 
-#### FETCH with python and psycopg2
+#### `FETCH` with Python and psycopg2
 
 ```python
 #!/usr/bin/env python3
@@ -245,14 +245,16 @@ with conn.cursor() as cur:
     cur.execute("CLOSE c")
 ```
 
-### Tailing with COPY
+### Tailing with `COPY TO`
+
 [`COPY TO`](/sql/copy-to) is supported by many drivers and does not buffer.
 However most drivers do not provide methods to parse the data coming from the `COPY`, in which case you'll have to do your own parsing.
-The Postgres docs describe the [`COPY` text format](https://www.postgresql.org/docs/current/sql-copy.html#id-1.9.3.55.9.2), which is tab-separated lines with escapes and a definition for `NULL`.
+The PostgreSQL docs describe the [`COPY` text format](https://www.postgresql.org/docs/current/sql-copy.html#id-1.9.3.55.9.2), which is tab-separated lines with
+escapes and a sentinel for `NULL`.
 
-#### COPY TO with C# and Npgsql
+#### `COPY TO` with C# and Npgsql
 
-Npgsql [supports](https://www.npgsql.org/doc/copy.html#binary-copy) parsing the `BINARY` format of `COPY TO`:
+Npgsql supports parsing the `BINARY` format of `COPY TO`:
 
 ```
 // The TAIL won't ever end, so use reader.Cancel() to cancel the request.
@@ -267,7 +269,9 @@ using (var reader = Conn.BeginBinaryExport("COPY (TAIL t) TO STDOUT (FORMAT BINA
 }
 ```
 
-#### COPY TO with python and psycopg2
+For more details, see the [Binary `COPY`](https://www.npgsql.org/doc/copy.html#binary-copy) section of the Npgsql documentation.
+
+#### `COPY TO` with Python and psycopg2
 
 ```python
 #!/usr/bin/env python3
