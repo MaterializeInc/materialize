@@ -872,6 +872,10 @@ impl<'a> Parser<'a> {
                         )
                     }
                 }
+                ISNULL => Ok(Expr::IsNull {
+                    expr: Box::new(expr),
+                    negated: false,
+                }),
                 NOT | IN | BETWEEN => {
                     self.prev_token();
                     let negated = self.parse_keyword(NOT);
@@ -1039,7 +1043,7 @@ impl<'a> Parser<'a> {
                     Some(Token::Keyword(LIKE)) => Precedence::Like,
                     _ => Precedence::Zero,
                 },
-                Token::Keyword(IS) => Precedence::Is,
+                Token::Keyword(IS) | Token::Keyword(ISNULL) => Precedence::Is,
                 Token::Keyword(IN) => Precedence::Like,
                 Token::Keyword(BETWEEN) => Precedence::Like,
                 Token::Keyword(LIKE) => Precedence::Like,
