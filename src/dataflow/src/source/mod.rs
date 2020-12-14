@@ -839,6 +839,13 @@ impl Drop for PartitionMetrics {
     }
 }
 
+enum MessageProcessing {
+    Stopped,
+    Active,
+    Yielded,
+    YieldedWithDelay,
+}
+
 /// Creates a source dataflow operator. The type of ExternalSourceConnector determines the
 /// type of source that should be created
 pub(crate) fn create_source<G, S: 'static, Out>(
@@ -962,14 +969,11 @@ where
             // Bound execution of operator to prevent a single operator from hogging
             // the CPU if there are many messages to process
             let timer = Instant::now();
+            const YIELD_INTERVAL_MS: u128 = 10;
             // Accumulate updates to BYTES_READ_COUNTER for Prometheus metrics collection
             let mut bytes_read = 0;
             // Accumulate updates to offsets for system table metrics collection
             let mut metric_updates = HashMap::new();
-            // System table metrics will be written either when we have caught up with the
-            // source or when we have seen METRIC_FLUSH_INTERVAL number of messages
-            const METRIC_FLUSH_INTERVAL: i32 = 1000;
-            let mut messages_until_metric_flush = METRIC_FLUSH_INTERVAL;
 
             // Record operator has been scheduled
             consistency_info
@@ -977,8 +981,10 @@ where
                 .operator_scheduled_counter
                 .inc();
 
-            loop {
-                match source_info.get_next_message(&mut consistency_info, &activator) {
+            let mut source_state = (SourceStatus::Alive, MessageProcessing::Active);
+            while let (_, MessageProcessing::Active) = source_state {
+                source_state = match source_info.get_next_message(&mut consistency_info, &activator)
+                {
                     Ok(NextMessage::Ready(message)) => {
                         let partition = message.partition.clone();
                         let offset = message.offset;
@@ -1007,14 +1013,7 @@ where
                                 // We have not yet decided on a timestamp for this message,
                                 // we need to buffer the message
                                 source_info.buffer_message(message);
-                                consistency_info.downgrade_capability(
-                                    &id,
-                                    cap,
-                                    source_info,
-                                    &timestamp_histories,
-                                );
-                                activator.activate();
-                                return SourceStatus::Alive;
+                                (SourceStatus::Alive, MessageProcessing::Yielded)
                             }
                             Some(ts) => {
                                 source_info.cache_message(
@@ -1056,65 +1055,38 @@ where
                                 partition_metrics.messages_ingested.inc();
 
                                 metric_updates.insert(partition, (offset, ts));
-                                messages_until_metric_flush -= 1;
 
-                                // periodically flush metrics in case we're ingesting a large number of messages
-                                // all at once, eg. during initial startup
-                                if messages_until_metric_flush == 0 {
-                                    messages_until_metric_flush = METRIC_FLUSH_INTERVAL;
-                                    for (partition, (offset, ts)) in metric_updates.drain() {
-                                        let partition_metrics = consistency_info
-                                            .partition_metrics
-                                            .get_mut(&partition)
-                                            .unwrap();
-                                        partition_metrics.record_offset(offset.offset, ts as i64);
-                                    }
+                                if timer.elapsed().as_millis() > YIELD_INTERVAL_MS {
+                                    // We didn't drain the entire queue, so indicate that we
+                                    // should run again but yield the CPU to other operators.
+                                    (SourceStatus::Alive, MessageProcessing::Yielded)
+                                } else {
+                                    (SourceStatus::Alive, MessageProcessing::Active)
                                 }
                             }
                         }
-
-                        //TODO(ncrooks): this behaviour should probably be made configurable
-                        if timer.elapsed().as_millis() > 10 {
-                            // We didn't drain the entire queue, so indicate that we
-                            // should run again.
-                            if bytes_read > 0 {
-                                BYTES_READ_COUNTER.inc_by(bytes_read);
-                            }
-                            // Downgrade capability (if possible) before exiting
-                            consistency_info.downgrade_capability(
-                                &id,
-                                cap,
-                                source_info,
-                                &timestamp_histories,
-                            );
-                            activator.activate();
-                            return SourceStatus::Alive;
-                        }
                     }
                     Ok(NextMessage::Pending) => {
-                        // There were no new messages
-                        break;
+                        // There were no new messages, check again after a delay
+                        (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
                     }
                     Ok(NextMessage::Finished) => {
                         if let Consistency::RealTime = consistency_info.source_type {
-                            return SourceStatus::Done;
+                            (SourceStatus::Done, MessageProcessing::Stopped)
                         } else {
-                            break;
+                            // The coord drives Doneness decisions for BYO, so we must still return Alive
+                            // on EOF
+                            (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
                         }
                     }
                     Err(e) => {
                         output.session(&cap).give(Err(e.to_string()));
-                        consistency_info.downgrade_capability(
-                            &id,
-                            cap,
-                            source_info,
-                            &timestamp_histories,
-                        );
-                        return SourceStatus::Done;
+                        (SourceStatus::Done, MessageProcessing::Stopped)
                     }
                 }
             }
 
+            BYTES_READ_COUNTER.inc_by(bytes_read);
             for (partition, (offset, ts)) in metric_updates {
                 let partition_metrics = consistency_info
                     .partition_metrics
@@ -1126,12 +1098,17 @@ where
             // Downgrade capability (if possible) before exiting
             consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
 
-            // Ensure that we activate the source frequently enough to keep downgrading
-            // capabilities, even when no data has arrived
-            activator.activate_after(Duration::from_millis(
-                consistency_info.downgrade_capability_frequency,
-            ));
-            SourceStatus::Alive
+            let (source_status, processing_status) = source_state;
+            // Schedule our next activation
+            match processing_status {
+                MessageProcessing::Yielded => activator.activate(),
+                MessageProcessing::YieldedWithDelay => activator.activate_after(
+                    Duration::from_millis(consistency_info.downgrade_capability_frequency),
+                ),
+                _ => (),
+            }
+
+            source_status
         }
     });
 
