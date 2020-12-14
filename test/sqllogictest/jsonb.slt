@@ -1887,3 +1887,8 @@ query T
 SELECT jsonb_agg((column1, column2)) FROM (VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02'))
 ----
 [{"f1":null,"f2":"2020-01-02"},{"f1":1.0,"f2":"2020-01-01"}]
+
+query TTT
+SELECT jsonb_agg((column1, column2)), jsonb_agg(column1), jsonb_agg(column2) FROM (VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02'))
+----
+[{"f1":null,"f2":"2020-01-02"},{"f1":1.0,"f2":"2020-01-01"}] [null,1.0] ["2020-01-02","2020-01-01"]
