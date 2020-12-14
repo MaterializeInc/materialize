@@ -248,6 +248,8 @@ show_tables ::=
   'SHOW' 'TABLES' ('FROM' schema_name)?
 show_views ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'VIEWS' ('FROM' schema_name)?
+show_objects ::=
+  'SHOW' 'EXTENDED'? 'FULL'?  'OBJECTS' ('FROM' schema_name)?
 table_ref ::=
   (
     table_name

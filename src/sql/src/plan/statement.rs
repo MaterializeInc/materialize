@@ -1558,9 +1558,7 @@ fn handle_create_table(
                     query::plan_default_expr(scx, expr, &ty)?;
                     default = expr.clone();
                 }
-                other => {
-                    unsupported!(format!("CREATE TABLE with column constraint: {}", other))
-                }
+                other => unsupported!(format!("CREATE TABLE with column constraint: {}", other)),
             }
         }
         column_types.push(ty.nullable(nullable));
@@ -1657,6 +1655,7 @@ fn handle_drop_objects(
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type => handle_drop_items(scx, object_type, if_exists, names, cascade),
+        ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
 }
 

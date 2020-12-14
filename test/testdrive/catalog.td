@@ -19,6 +19,15 @@ public
 mz_catalog
 pg_catalog
 
+# What objects do we have by default?
+> SHOW OBJECTS
+name
+----
+
+> SHOW FULL OBJECTS
+name   type
+-----------
+
 # Creating a schema should be reflected in the output of SHOW SCHEMAS.
 > CREATE SCHEMA s
 > SHOW SCHEMAS
@@ -137,6 +146,25 @@ v2
 > SELECT * FROM v1 UNION ALL SELECT * FROM v2
 1
 2
+
+> SHOW OBJECTS
+name
+----
+v1
+v1_primary_idx
+v2
+v2_primary_idx
+
+! DROP OBJECT v1
+Expected DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, INDEX, or TYPE after DROP, found identifier
+
+> SHOW FULL OBJECTS
+name            type
+--------------------------
+v1              user
+v1_primary_idx  user
+v2              user
+v2_primary_idx  user
 
 # DROP DATABASE should not support RESTRICT or CASCADE.
 ! DROP DATABASE d RESTRICT

@@ -126,6 +126,7 @@ pub fn show_objects<'a>(
         ObjectType::View => show_views(scx, full, materialized, from, filter),
         ObjectType::Sink => show_sinks(scx, full, from, filter),
         ObjectType::Type => show_types(scx, extended, full, from, filter),
+        ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }
@@ -343,6 +344,36 @@ fn show_types<'a>(
         FROM mz_catalog.mz_types t
         JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
         WHERE t.schema_id = {}",
+        schema.id(),
+    );
+    if extended {
+        query += " OR s.database_id IS NULL";
+    }
+    if !full {
+        query = format!("SELECT name FROM ({})", query);
+    }
+
+    Ok(ShowSelect::new(scx, query, filter))
+}
+
+fn show_all_objects<'a>(
+    scx: &'a StatementContext<'a>,
+    extended: bool,
+    full: bool,
+    from: Option<ObjectName>,
+    filter: Option<ShowStatementFilter>,
+) -> Result<ShowSelect<'a>, anyhow::Error> {
+    let schema = if let Some(from) = from {
+        scx.resolve_schema(from)?
+    } else {
+        scx.resolve_default_schema()?
+    };
+
+    let mut query = format!(
+        "SELECT o.name, mz_internal.mz_classify_object_id(o.id) AS type
+        FROM mz_catalog.mz_objects o
+        JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+        WHERE o.schema_id = {}",
         schema.id(),
     );
     if extended {

@@ -2814,7 +2814,7 @@ impl<'a> Parser<'a> {
         let extended = self.parse_keyword(EXTENDED);
         if extended {
             self.expect_one_of_keywords(&[
-                SCHEMAS, INDEX, INDEXES, KEYS, TABLES, TYPES, COLUMNS, FULL,
+                SCHEMAS, INDEX, INDEXES, KEYS, TABLES, TYPES, COLUMNS, OBJECTS, FULL,
             ])?;
             self.prev_token();
         }
@@ -2822,7 +2822,7 @@ impl<'a> Parser<'a> {
         let full = self.parse_keyword(FULL);
         if full {
             if extended {
-                self.expect_one_of_keywords(&[SCHEMAS, COLUMNS, TABLES, TYPES])?;
+                self.expect_one_of_keywords(&[SCHEMAS, COLUMNS, TABLES, TYPES, OBJECTS])?;
             } else {
                 self.expect_one_of_keywords(&[
                     SCHEMAS,
@@ -2832,6 +2832,7 @@ impl<'a> Parser<'a> {
                     VIEWS,
                     SINKS,
                     SOURCES,
+                    OBJECTS,
                     MATERIALIZED,
                 ])?;
             }
@@ -2847,7 +2848,7 @@ impl<'a> Parser<'a> {
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns(extended, full)
         } else if let Some(object_type) =
-            self.parse_one_of_keywords(&[SCHEMAS, SOURCES, VIEWS, SINKS, TABLES, TYPES])
+            self.parse_one_of_keywords(&[SCHEMAS, SOURCES, VIEWS, SINKS, TABLES, TYPES, OBJECTS])
         {
             Ok(Statement::ShowObjects(ShowObjectsStatement {
                 object_type: match object_type {
@@ -2857,6 +2858,7 @@ impl<'a> Parser<'a> {
                     SINKS => ObjectType::Sink,
                     TABLES => ObjectType::Table,
                     TYPES => ObjectType::Type,
+                    OBJECTS => ObjectType::Object,
                     val => panic!(
                         "`parse_one_of_keywords` returned an impossible value: {}",
                         val

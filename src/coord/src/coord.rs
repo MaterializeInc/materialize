@@ -1870,6 +1870,7 @@ where
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
+            ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
         })
     }
 
