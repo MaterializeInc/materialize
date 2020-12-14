@@ -40,9 +40,11 @@ def view_names(
         for row in cursor:
             yield row[0]
 
+class ViewNotReady(Exception):
+    pass
 
-def view_matches(
-    cursor: psycopg2.extensions.cursor, view: str, expected: str, timestamp: int
+def view_contents(
+    cursor: psycopg2.extensions.cursor, view: str, timestamp: int
 ) -> bool:
     """Return True if a SELECT from the VIEW matches the expected string."""
     stream = io.StringIO()
@@ -51,8 +53,8 @@ def view_matches(
         cursor.copy_expert(query, stream)
     except psycopg2.errors.InternalError_:
         # The view is not yet ready to be queried
-        return False
-    return stream.getvalue() == expected
+        raise ViewNotReady()
+    return stream.getvalue().strip()
 
 
 def source_at_offset(
@@ -85,7 +87,7 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
 
     # Create a dictionary mapping view names (as calculated from the filename) to expected contents
     view_snapshots = {
-        p.stem: p.read_text() for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
+        p.stem: p.read_text().strip() for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
     }
 
     # Create a dictionary mapping view names to source name and offset
@@ -118,10 +120,19 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
                     if not timestamp:
                         continue
 
-                    if view_matches(cursor, view, view_snapshots[view], timestamp):
+                    try:
+                        expected = view_snapshots[view]
+                        count = view_contents(cursor, view, timestamp)
+                        if not count:
+                            continue
                         time_taken = time.time() - start_time
-                        print(f"{time_taken:>6.1f}s: {view}")
                         views_to_remove.append(view)
+                        if count == expected:
+                            print(f"PASSED: {time_taken:>6.1f}s: {view} (result={count})")
+                        else:
+                            print(f"FAILED: {time_taken:>6.1f}s: {view} ({count} != {expected})")
+                    except ViewNotReady:
+                        pass
 
             for view in views_to_remove:
                 pending_views.remove(view)
