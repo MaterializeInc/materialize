@@ -40,6 +40,7 @@ Operator | Computes
 `a BETWEEN x AND y` | `a >= x AND a <= y`
 `a NOT BETWEEN x AND y` | `a < x OR a > y`
 `a IS NULL` | `a = NULL`
+`a ISNULL` | `a = NULL`
 `a IS NOT NULL` | `a != NULL`
 `a LIKE match_expr` | `a` matches `match_expr`, using [SQL LIKE matching](https://www.w3schools.com/sql/sql_like.asp)
 
