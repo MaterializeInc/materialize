@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# When this was written, Python3.7 was the most recent version that pyarrow supported
 FROM python:3.7-slim
 
 # This is the directory that we expect to be mounted by Docker so that we can
