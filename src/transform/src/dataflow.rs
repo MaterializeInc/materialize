@@ -15,7 +15,7 @@
 //! in which the views will be executed.
 
 use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::Id;
+use expr::{Id, LocalId, RelationExpr};
 use std::collections::{HashMap, HashSet};
 
 /// Optimizes the implementation of each dataflow.
@@ -23,6 +23,9 @@ use std::collections::{HashMap, HashSet};
 /// This method is currently limited in scope to propagating filtering and
 /// projection information, though it could certainly generalize beyond.
 pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {
+    // Inline views that are used in only one other view.
+    inline_views(dataflow);
+
     optimize_dataflow_filters(dataflow);
     // TODO: when the linear operator contract ensures that propagated
     // predicates are always applied, projections and filters can be removed
@@ -32,6 +35,126 @@ pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {
     // the filters are applied.
     optimize_dataflow_demand(dataflow);
     monotonic::optimize_dataflow_monotonic(dataflow);
+}
+
+/// Inline views used in one other view, and in no exported objects.
+fn inline_views(dataflow: &mut DataflowDesc) {
+    // We cannot inline anything whose `BuildDesc::id` appears in either the
+    // `index_exports` or `sink_exports` of `dataflow`, because we lose our
+    // ability to name it.
+
+    // A view can / should be in-lined in another view if it is only used by
+    // one subsequent view. If there are two distinct views that have not
+    // themselves been merged, then too bad and it doesn't get inlined.
+
+    // Starting from the *last* object to build, walk backwards and inline
+    // any view (not index, because who knows wtf that is) that is neither
+    // referenced by a `index_exports` nor `sink_exports` nor more than two
+    // remaining objects to build.
+
+    for index in (0..dataflow.objects_to_build.len()).rev() {
+        // Capture the name used by others to reference this view.
+        let global_id = dataflow.objects_to_build[index].id;
+        // Determine if any exports directly reference this view.
+        let mut occurs_in_export = false;
+        for (_gid, sink_desc) in dataflow.sink_exports.iter() {
+            if sink_desc.from.0 == global_id {
+                occurs_in_export = true;
+            }
+        }
+        for (_, index_desc, _) in dataflow.index_exports.iter() {
+            if index_desc.on_id == global_id {
+                occurs_in_export = true;
+            }
+        }
+        // Count the number of subsequent views that reference this view.
+        let mut occurrences_in_later_views = Vec::new();
+        for other in (index + 1)..dataflow.objects_to_build.len() {
+            if dataflow.objects_to_build[other]
+                .relation_expr
+                .as_ref()
+                .global_uses()
+                .contains(&global_id)
+            {
+                occurrences_in_later_views.push(other);
+            }
+        }
+        // Inline if the view is referenced in one view and no exports.
+        if !occurs_in_export && occurrences_in_later_views.len() == 1 {
+            // Test that we are not attempting to inline an index.
+            // TODO: Figure out what that would mean and why indexes
+            // are separate concepts in the first place.
+            if dataflow.objects_to_build[index].typ.is_some() {
+                let other = occurrences_in_later_views[0];
+                // We can remove this view and insert it in the later view,
+                // but are not able to relocate the later view `other`.
+
+                // We would like to process `other` to re-bind all local
+                // identifiers (let binding names) so that we can find a
+                // new name that does not clash with any of them.
+                let mut max_local_id = 0;
+                dataflow.objects_to_build[other]
+                    .relation_expr
+                    .as_ref()
+                    .visit(&mut |expr| {
+                        if let RelationExpr::Get {
+                            id: Id::Local(local),
+                            ..
+                        } = expr
+                        {
+                            if max_local_id < local.id() {
+                                max_local_id = local.id();
+                            }
+                        }
+                    });
+                let new_local_id = max_local_id + 1;
+                dataflow.objects_to_build[other]
+                    .relation_expr
+                    .as_mut()
+                    .visit_mut(&mut |expr| {
+                        if let RelationExpr::Get { id, .. } = expr {
+                            if *id == Id::Global(global_id) {
+                                *id = Id::Local(LocalId::new(new_local_id));
+                            }
+                        }
+                    });
+                // With identifiers rewritten, we can replace `other` with
+                // a `RelationExpr::Let` binding, whose value is `index` and
+                // whose body is `other`.
+                let body = dataflow.objects_to_build[other]
+                    .relation_expr
+                    .as_mut()
+                    .take_dangerous();
+                let value = dataflow.objects_to_build[index]
+                    .relation_expr
+                    .as_mut()
+                    .take_dangerous();
+                *dataflow.objects_to_build[other].relation_expr.as_mut() = RelationExpr::Let {
+                    id: LocalId::new(new_local_id),
+                    value: Box::new(value),
+                    body: Box::new(body),
+                };
+                dataflow.objects_to_build.remove(index);
+            }
+        }
+    }
+
+    // Re-optimize each dataflow.
+    // TODO: Unfortunately, we only have access to the indexes that are included in
+    // the dataflow. There could be better indexes to use, could we return to them.
+    let mut indexes = HashMap::new();
+    for (global_id, (desc, _type)) in dataflow.index_imports.iter() {
+        indexes
+            .entry(desc.on_id)
+            .or_insert_with(Vec::new)
+            .push((*global_id, desc.keys.clone()));
+    }
+    let optimizer = crate::Optimizer::default();
+    for object in dataflow.objects_to_build.iter_mut() {
+        optimizer
+            .transform(object.relation_expr.as_mut(), &indexes)
+            .unwrap();
+    }
 }
 
 /// Pushes demand information from published outputs to dataflow inputs.
