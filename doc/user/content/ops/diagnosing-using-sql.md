@@ -136,6 +136,11 @@ group by mdo.id, mdo.name
 order by sum(mas.records) desc;
 ```
 
+We've also bundled a [memory usage visualization tool](https://materialize.com/docs/ops/monitoring/#memory-usage-visualization)
+to aid in debugging. The amount of memory used my Materialize should
+correlate to the number of arrangement records that are displayed by
+the visual interface.
+
 ### How can I check whether work is distributed equally across workers?
 
 Work is distributed across workers by the hash of their keys. Thus, work can
