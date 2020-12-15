@@ -119,8 +119,6 @@ where
                         row_packer.clear();
 
                         // First, evaluate the key selector expressions.
-                        // If any error we produce their errors as output and note
-                        // the fact that the key was not correctly produced.
                         let mut datums_local = std::mem::take(&mut datums);
                         datums_local.extend(row.iter().take(columns_needed));
                         for expr in group_key_clone.iter() {
@@ -132,10 +130,7 @@ where
                             }
                         }
 
-                        // Second, evaluate the value selector.
-                        // If any error occurs we produce both the error as output,
-                        // but also a `Datum::Null` value to avoid causing the later
-                        // "ReduceCollation" operator to panic due to absent aggregates.
+                        // Second, evaluate the value selector expressions.
                         let key = row_packer.finish_and_reuse();
                         for aggr in aggregates_clone.iter() {
                             match aggr.expr.eval(&datums_local, &temp_storage) {
@@ -150,6 +145,8 @@ where
                         datums = repurpose_allocation(datums_local);
 
                         // Mint the final row, ideally re-using resources.
+                        // TODO(mcsherry): This can perhaps be extracted for
+                        // re-use if it seems to be a common pattern.
                         use timely::communication::message::RefOrMut;
                         let row = match row {
                             RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
