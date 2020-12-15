@@ -531,6 +531,7 @@ dependencies = [
  "serde_json",
  "sql",
  "symbiosis",
+ "tempfile",
  "timely",
  "tokio",
  "transform",

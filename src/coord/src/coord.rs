@@ -3015,9 +3015,12 @@ where
             None
         };
 
-        let catalog_path = data_directory.map(|d| d.join("catalog"));
+        let path = match data_directory {
+            Some(path) => path.join("catalog"),
+            None => tempfile::tempdir()?.path().to_owned(),
+        };
         let (catalog, initial_catalog_events) = Catalog::open(catalog::Config {
-            path: catalog_path.as_deref(),
+            path: &path,
             experimental_mode: Some(experimental_mode),
             enable_logging: logging.is_some(),
             cache_directory: cache_config.map(|c| c.path),
