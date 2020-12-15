@@ -20,8 +20,12 @@ RUN python setup.py install
 COPY requirements.txt /tmp
 RUN pip install -r /tmp/requirements.txt
 
+# Add our Python web-server source code into this container
 RUN mkdir /app
 COPY src /app
+
+# Add our executable scripts into the container
+COPY utils /usr/local/bin
 
 WORKDIR /app
 CMD python3 serve.py

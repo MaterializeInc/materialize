@@ -55,3 +55,15 @@ mzconduct:
       - step: wait-for-tcp
         host: app
         port: ${APP_PORT:-8875}
+
+    stream-top10:
+      steps:
+        - step: run
+          service: app
+          command: /usr/local/bin/async_stream.py top10
+
+    tail-top10:
+      steps:
+        - step: run
+          service: app
+          command: /usr/local/bin/async_tail.py top10

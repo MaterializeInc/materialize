@@ -34,10 +34,10 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--host", help="Web server hostname", default="localhost", type=str
+        "--host", help="Web server hostname", default="app", type=str
     )
     parser.add_argument(
-        "-p", "--port", help="Web server port number", default=6875, type=int
+        "-p", "--port", help="Web server port number", default=8875, type=int
     )
 
     parser.add_argument("view", help="Name of the view to TAIL", type=str)

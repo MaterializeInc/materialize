@@ -37,7 +37,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--host", help="Materialize hostname", default="localhost", type=str
+        "--host", help="Materialize hostname", default="materialized", type=str
     )
     parser.add_argument(
         "-p", "--port", help="Materialize port number", default=6875, type=int

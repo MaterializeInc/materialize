@@ -73,7 +73,10 @@ repeated requests to upstream systems:
 
     Wikimedia <-- stream --> database <-- app <-- browser
 
-## Extras
+## Debugging / Utilities
+
+There are multiple ways to debug the data between transferred between the various components in
+this stack.
 
 ### Open a psql client to Materialize
 
@@ -81,30 +84,24 @@ The Materialize database is not exposed on a well-numbered port and instead dock
 a random high-numbered port. To open a Postgres REPL, connected to the Materialized instance
 running as part of this demo, run:
 
-    ./play/wikirecent/bin/open-psql
+    psql -h localhost -p $(./bin/mzconduct list-port wikirecent materialized) materialize
 
 ### Streaming top10 from Materialize to your console
 
-If you have [psycopg3][] installed on your local system ([psycopg3 install instructions][]), you
-can see the same data being pushed to the Python server by running:
+To view the data sent from Materialize server to the browser, use the `tail-top10` workflow:
 
-    ./play/wikirecent/bin/tail_top10
+    ./bin/mzconduct run wikirecent -w stream-top10
 
 The output from this script corresponds to the row-oriented results returned by materialized to
 the web server. The implementation of this script in
-[extras/async_tail.py](./extras/async_tail.py).
+[app/utils/async_tail.py](./app/utils/async_tail.py).
 
-[psycopg3 install instructions]: https://www.psycopg.org/psycopg3/docs/install.html
+### Streaming top10 from the Python Web Server to your console
 
-### TODO: Streaming top10 from the Python Web Server to your console
+To view the data sent from the web server to the browser, use the `stream-top10` workflow:
 
-If you have the [websockets][] module installed on your local system, you can stream the same set
-of updates directly from the web server:
+    ./bin/mzconduct run wikirecent -w stream-top10
 
-    ./play/wikirecent/bin/stream_top10
-
-The output from this script corresponds to the batch oriented, JSON results returned by the web
-server to the Javascript client. The implementation of this script in
-[extras/async_stream.py](./extras/async_stream.py).
-
-[websockets]: https://websockets.readthedocs.io/en/stable/intro.html
+The output corresponds to the batch oriented, JSON results returned by the web server to the
+Javascript client. The implementation of this script in
+[app/utils/async_stream.py](./app/utils/async_stream.py).
