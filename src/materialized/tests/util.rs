@@ -106,6 +106,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
             threads: config.threads,
             process: 0,
             addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
+            timely_worker: timely::WorkerConfig::default(),
             data_directory,
             symbiosis_url: None,
             listen_addr: None,

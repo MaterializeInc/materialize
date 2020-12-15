@@ -12,15 +12,17 @@ The `materialized` binary supports the following command line flags:
 Flag | Default | Modifies
 -----|---------|----------
 [`--address-file`](#horizontally-scaled-clusters) | N/A |  Address of all coordinating Materialize nodes
+[`--cache-max-pending-records`](#source-cache) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
 [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted
+[`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
 [`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
 [`--experimental`](#experimental-mode) | Disabled | Get more details [here](#experimental-mode)
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
-[`--cache-max-pending-records`](#source-cache) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
 [`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
 [`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
+[`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
 [`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file
 [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
@@ -81,11 +83,9 @@ recommended worker setting on this VM is `7`.
 ### Horizontally scaled clusters
 
 {{< warning >}}
-
 Note that multi-node Materialize clusters are **not** supported by Materialize,
 and are not permitted in production under the free usage BSL license without a
 separate commercial agreement with Materialize.
-
 {{< /warning >}}
 
 `--processes` controls the total number of nodes in a horizontally-scaled
@@ -224,12 +224,7 @@ You cannot disable experimental mode for a node. You can, however, extract your
 view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][scs],
 etc.), and then create a new node with those items.
 
-[gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
-[parse-duration-syntax]: https://docs.rs/parse_duration/2.1.0/parse_duration/#syntax
-[scv]: /sql/show-create-view
-[scs]: /sql/show-create-source
-
-### Source Cache
+### Source cache
 
 The `--cache-max-pending-records` specifies the number of input messages
 Materialize buffers in memory before flushing them all to disk when using
@@ -238,10 +233,32 @@ that Materialize will also flush buffered records every 10 minutes as well. See
 the [Deployment section][cache] for more guidance on how to tune this
 parameter.
 
-[cache]: /ops/deployment/#source-caching
-
 ### Telemetry
 
 Unless disabled with `--disable-telemetry`, upon startup `materialized`
 reports its current version and cluster id to a central server operated by
 materialize.com. If a newer version is available a warning will be logged.
+
+### Dataflow tuning
+
+{{< warning >}}
+The dataflow tuning parameters are not stable. Backwards-incompatible changes
+to the dataflow tuning parameters may be made at any time.
+{{< /warning >}}
+
+There are several command-line options that tune various parameters for
+Materialize's underlying dataflow engine:
+
+  * `--differential-idle-merge-effort` controls how aggressively Materialize
+    will perform compaction when idle.
+  * `--timely-progress-mode` sets Timely Dataflow's progress tracking mode.
+
+Using these parameters correctly requires substantial knowledge about how
+the underlying Timely and Differential Dataflow engines work. Typically you
+should only set these parameters in consultation with Materialize engineers.
+
+[gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
+[parse-duration-syntax]: https://docs.rs/parse_duration/2.1.0/parse_duration/#syntax
+[scv]: /sql/show-create-view
+[scs]: /sql/show-create-source
+[cache]: /ops/deployment/#source-caching
