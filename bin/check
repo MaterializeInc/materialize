@@ -181,6 +181,10 @@ disabled_lints=(
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#stable_sort_primitive
     # Unstable sort is not strictly better than sort, notably on partially sorted inputs.
     clippy::stable-sort-primitive
+
+    # Upstream description https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
+    # Breaking symmetry for the sake of this lint can make code harder to read.
+    clippy::needless-return
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word

@@ -23,6 +23,7 @@ use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
+use timely::communication::message::RefOrMut;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
@@ -196,11 +197,14 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        L: FnMut(&V) -> I + 'static,
+        L: FnMut(RefOrMut<V>) -> I + 'static,
         K: FnMut(&[ScalarExpr]) -> Option<V>,
     {
         if let Some((oks, err)) = self.collections.get(relation_expr) {
-            Some((oks.flat_map(move |v| logic(&v)), err.clone()))
+            Some((
+                oks.flat_map(move |mut v| logic(RefOrMut::Mut(&mut v))),
+                err.clone(),
+            ))
         } else if let Some(local) = self.local.get(relation_expr) {
             // Determine a key that is constrained to a literal value.
             let mut constrained_keys = local
@@ -218,7 +222,7 @@ where
             } else {
                 let (oks, errs) = local.values().next().expect("Empty arrangement");
                 Some((
-                    oks.flat_map_ref(move |_k, v| logic(v)),
+                    oks.flat_map_ref(move |_k, v| logic(RefOrMut::Ref(&v))),
                     errs.as_collection(|k, _v| k.clone()),
                 ))
             }
@@ -239,7 +243,7 @@ where
             } else {
                 let (_id, oks, errs) = trace.values().next().expect("Empty arrangement");
                 Some((
-                    oks.flat_map_ref(move |_k, v| logic(v)),
+                    oks.flat_map_ref(move |_k, v| logic(RefOrMut::Ref(&v))),
                     errs.as_collection(|k, _v| k.clone()),
                 ))
             }
@@ -263,7 +267,7 @@ where
         Tr::Cursor: Cursor<V, Tr::Val, S::Timestamp, repr::Diff> + 'static,
         I: IntoIterator,
         I::Item: Data,
-        L: FnMut(&V) -> I + 'static,
+        L: FnMut(RefOrMut<V>) -> I + 'static,
     {
         use differential_dataflow::AsCollection;
         use timely::dataflow::operators::Operator;
@@ -279,7 +283,7 @@ where
                             cursor.seek_key(batch, &row);
                             if cursor.get_key(batch) == Some(&row) {
                                 while let Some(val) = cursor.get_val(batch) {
-                                    for datum in logic(val) {
+                                    for datum in logic(RefOrMut::Ref(val)) {
                                         cursor.map_times(batch, |time, diff| {
                                             session.give((
                                                 datum.clone(),
