@@ -173,5 +173,6 @@ encoded in Avro with the [Debezium diff envelope](/sql/create-sink#debezium-enve
 - [`CREATE VIEW`](/sql/create-view)
 - [`CREATE INDEX`](/sql/create-index)
 - [`CREATE SINK`](/sql/create-sink)
+- [Timely and Differential Dataflow](../timely-differential)
 
 [Debezium]: http://debezium.io

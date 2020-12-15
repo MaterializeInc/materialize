@@ -137,7 +137,7 @@ the same piece of data.
 The actual processing of Differential workers maintaining materialized views is
 also very interesting and one day we hope to explain it to you here. In the
 meantime, more curious readers can [take the first step towards enlightenment
-themselves](https://timelydataflow.github.io/differential-dataflow/).
+themselves](../timely-differential).
 
 Implicit in this design are a few key points:
 
@@ -154,9 +154,5 @@ Check out:
 
 - [API components](../api-components) to better understand Materialize's API
 - [Get started](/get-started) to try out Materialize
-
-[1]:
-https://paper.dropbox.com/doc/Materialize-Product--AbHSqqXlN5YNKHiYEXm3EKyNAg-eMbfh2QTOCPrU7drExDCm
-[Naiad paper]: http://sigops.org/s/conferences/sosp/2013/papers/p439-murray.pdf
-[Timely Dataflow]: https://github.com/TimelyDataflow/timely-dataflow
-[Differential Dataflow]: https://github.com/TimelyDataflow/differential-dataflow
+- [Timely and differential dataflow](../timely-differential) to learn more about
+  Materialize's underlying compute engine
