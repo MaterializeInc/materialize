@@ -67,11 +67,20 @@ async fn get_static_file(path: &str) -> Option<Body> {
 
 #[cfg(feature = "dev-web")]
 async fn get_static_file(path: &str) -> Option<Body> {
+    use futures::future::TryFutureExt;
+    use tokio::fs;
+
     #[cfg(not(debug_assertions))]
     compile_error!("cannot enable insecure `dev-web` feature in release mode");
 
-    let path = format!("{}/src/http/static/{}", env!("CARGO_MANIFEST_DIR"), path);
-    match tokio::fs::read(&path).await {
+    // Prefer the unminified files in static-dev, if they exist.
+    let dev_path = format!(
+        "{}/src/http/static-dev/{}",
+        env!("CARGO_MANIFEST_DIR"),
+        path
+    );
+    let prod_path = format!("{}/src/http/static/{}", env!("CARGO_MANIFEST_DIR"), path);
+    match fs::read(dev_path).or_else(|_| fs::read(prod_path)).await {
         Ok(contents) => Some(Body::from(contents)),
         Err(e) => {
             log::debug!("dev-web failed to load static file: {}: {}", path, e);
