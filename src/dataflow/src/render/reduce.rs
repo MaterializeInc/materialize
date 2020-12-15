@@ -272,7 +272,11 @@ where
                                 let mut basic = DatumList::empty().iter();
 
                                 // TODO assert that there are <= 3 items?
-                                // TODO assert that the diff is positive?
+                                for (val, cnt) in source.iter() {
+                                    if cnt < &0 {
+                                        log::error!("[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?}", val, cnt);
+                                    }
+                                }
 
                                 for ((reduction_type, row), _) in input.iter() {
                                     match reduction_type {
