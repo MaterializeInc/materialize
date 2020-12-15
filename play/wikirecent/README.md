@@ -20,19 +20,17 @@ as the underlying `MATERIALIZED VIEWS` are updated, using the [TAIL][] command.
 
 ## Running it Yourself
 
-Assuming you have Docker and Docker Compose installed, you can run this demo using the helper `up`
-script:
+To run this demo using Docker Compose, run `mzconduct up`:
 
-    ./play/wikirecent/bin/up
+    ./bin/mzconduct up wikirecent -w demo
 
-To view the web app, run the `open-web` helper script:
+To view the web app in your local browser, run the `mzconduct web`:
 
-    ./play/wikirecent/bin/open-web
+    ./bin/mzconduct web wikirecent app
 
-When you're ready to stop the demo, you can run the down script to stop the services and remove
-volumes:
+Once you're done, run `mzconduct down` to stop services and delete the associated volumes:
 
-    ./play/wikirecent/bin/down
+    ./bin/mzconduct down wikirecent -v
 
 ## How This Works
 
