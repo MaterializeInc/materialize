@@ -39,7 +39,9 @@ enum ReductionType {
     // changes to inputs. Examples include sum or count.
     Accumulable = 1,
     // Hierarchical functions are associative, which means we can split up the work of
-    // computing them across subsets. Examples include min or max.
+    // computing them across subsets. Note that hierarchical reductions should also
+    // reduce the data in some way, as otherwise rendering them hierarchically is not
+    // worth it. Examples include min or max.
     Hierarchical = 2,
     // Basic, for lack of a better word, are functions that are neither accumulable
     // nor hierarchical. Examples include jsonb_agg.
@@ -265,7 +267,6 @@ where
                                 //    from the corresponding fused row.
                                 // 3. Stitch all the values together into one row.
 
-                                // TODO change these to be options probably
                                 let mut accumulable = DatumList::empty().iter();
                                 let mut hierarchical = DatumList::empty().iter();
                                 let mut basic = DatumList::empty().iter();
