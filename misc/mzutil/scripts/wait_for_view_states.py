@@ -118,9 +118,6 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
                     if not timestamp:
                         continue
 
-                    print(
-                        f"Source {source_name} at offset {desired_offset}, timestamp {timestamp}"
-                    )
                     if view_matches(cursor, view, view_snapshots[view], timestamp):
                         time_taken = time.time() - start_time
                         print(f"{time_taken:>6.1f}s: {view}")

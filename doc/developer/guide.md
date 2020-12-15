@@ -215,6 +215,9 @@ Note that `dev-web` can only hot-reload the the files in
 `src/materialized/src/templates` use a compile-time templating library called
 [`askama`], and so changes to those templates necessarily require a recompile.
 
+For details about adding a new JavaScript/CSS dependency, see the comment in
+[`src/materialized/build/npm.rs`](/src/materialized/build/npm.rs).
+
 ## Testing
 
 Materialize's testing philosophy is sufficiently complex that it warrants its

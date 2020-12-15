@@ -4,6 +4,7 @@ description = "Streaming SQL materialized views."
 version = "0.5.4-dev"
 edition = "2018"
 publish = false
+build = "build/main.rs"
 default-run = "materialized"
 # required for cargo-deb
 authors = ["Materialize, Inc."]
@@ -75,6 +76,16 @@ repr = { path = "../repr" }
 reqwest = { version = "0.10.8", features = ["blocking"] }
 serde_json = "1"
 tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4"] }
+
+[build-dependencies]
+anyhow = "1.0.34"
+flate2 = "1.0.19"
+hex = "0.4.2"
+hex-literal = "0.3.1"
+reqwest = { version = "0.10.8", features = ["blocking"] }
+sha2 = "0.9.2"
+tar = "0.4.30"
+walkdir = "2.3.1"
 
 [features]
 # When enabled, static assets for the web UI are loaded from disk on every HTTP
