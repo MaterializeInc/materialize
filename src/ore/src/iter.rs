@@ -15,6 +15,52 @@ use std::iter::{self, Chain, Once};
 
 pub use fallible_iterator::FallibleIterator;
 
+#[derive(Debug)]
+/// Iterator created by `repeat_n`. Cannot be instantiated directly.
+pub struct RepeatN<T>
+where
+    T: Clone,
+{
+    n: usize,
+    element: Option<T>,
+}
+
+impl<T> Iterator for RepeatN<T>
+where
+    T: Clone,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret = if self.n > 1 {
+            Some(self.element.clone().unwrap())
+        } else if self.n == 1 {
+            Some(self.element.take().unwrap())
+        } else {
+            // self.remaining == 0
+            None
+        };
+
+        self.n -= 1;
+        ret
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.n, Some(self.n))
+    }
+}
+
+/// Equivalent to `std::iter::repeat(element).take(n)` , but can avoid one clone, at the end.
+pub fn repeat_n<T>(element: T, n: usize) -> RepeatN<T>
+where
+    T: Clone,
+{
+    RepeatN {
+        element: Some(element),
+        n,
+    }
+}
+
 /// An iterator adapter that yields each element that appears more than once.
 #[derive(Debug)]
 pub struct Duplicates<I>
