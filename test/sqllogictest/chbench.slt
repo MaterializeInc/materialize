@@ -1498,7 +1498,8 @@ ORDER BY numwait DESC, su_name
 
 %7 =
 | Get %5 (l0)
-| ArrangeBy (#7, #8, #9, #13)
+| Reduce group=(#1, #7, #8, #9, #13)
+| | agg count(true)
 
 %8 =
 | Get materialize.public.orderline (u19)
@@ -1514,13 +1515,17 @@ ORDER BY numwait DESC, su_name
 
 %10 =
 | Union %9 %6
+| Distinct group=(#0, #1, #2, #3)
+| ArrangeBy (#0, #1, #2, #3)
 
 %11 =
-| Join %7 %10 (= #7 #47) (= #8 #48) (= #9 #49) (= #13 #50)
-| | implementation = Differential %10 %7.(#7, #8, #9, #13)
-| | demand = (#1)
-| Reduce group=(#1)
-| | agg count(true)
+| Join %7 %10 (= #1 #6) (= #2 #7) (= #3 #8) (= #4 #9)
+| | implementation = Differential %7 %10.(#0, #1, #2, #3)
+| | demand = (#0, #5)
+| Reduce group=(#0)
+| | agg sum(#5)
+| Map dectoi64(#1)
+| Project (#0, #2)
 
 Finish order_by=(#1 desc, #0 asc) limit=none offset=0 project=(#0, #1)
 
