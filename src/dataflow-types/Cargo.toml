@@ -18,7 +18,7 @@ repr = { path = "../repr" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.0", features = ["derive"] }
 serde_regex = "1.1.0"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 url = { version = "2.2.0", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
