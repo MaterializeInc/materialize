@@ -218,12 +218,28 @@ DECLARE c CURSOR FOR TAIL t;
 Now use [`FETCH`](/sql/fetch) in a loop to retrieve some number of rows within a time window:
 
 ```sql
-FETCH 100 c WITH (timeout = '1s');
+FETCH ALL c;
 ```
 
-That will retrieve up to the next 100 rows that are ready in at most `1s`.
-The timeout is only used when there are not any rows ready and a wait must occur.
-If `timeout` is not specified it defaults to `0s` which means it will only return rows that are immediately available and will never wait for more to come before completing.
+That will retrieve all of the rows that are currently available.
+If there are no rows available, it will wait until there are some ready and return those.
+A `timeout` can be used to specify a window in which to wait for rows. This will return up to the specified count (or `ALL`) of rows that are ready within the timeout. To retrieve up to 100 rows that are available in at most the next `1s`:
+
+```sql
+FETCH 100 c WITH (timeout='1s');
+```
+
+To retrieve all available rows available over the next `1s`:
+
+```sql
+FETCH ALL c WITH (timeout='1s');
+```
+
+A `0s` timeout can be used to return rows that are available now without waiting:
+
+```sql
+FETCH ALL c WITH (timeout='0s');
+```
 
 #### `FETCH` with Python and psycopg2
 
@@ -239,7 +255,7 @@ conn = psycopg2.connect(dsn)
 with conn.cursor() as cur:
     cur.execute("DECLARE c CURSOR FOR TAIL v")
     while True:
-        cur.execute("FETCH 100 c WITH (TIMEOUT = '1s')")
+        cur.execute("FETCH ALL c")
         for row in cur:
             print(row)
     cur.execute("CLOSE c")

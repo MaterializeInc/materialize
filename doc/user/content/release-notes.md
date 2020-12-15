@@ -46,6 +46,15 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.5.5 %}}
+
+- Add `ALL` to [`FETCH`](/sql/fetch).
+
+- Change [`FETCH`](/sql/fetch) with no `TIMEOUT` to wait for some rows
+  to be available.
+
+  **Backwards-incompatible change.**
+
 {{% version-header v0.5.4 %}}
 
 - Add the [`version`](/sql/functions#postgresql-compatibility-func) and
