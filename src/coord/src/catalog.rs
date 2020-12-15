@@ -1719,7 +1719,7 @@ impl From<PlanContext> for SerializedPlanContext {
 /// identically.
 pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
     let (catalog, _events) = Catalog::open(Config {
-        path: Some(path),
+        path,
         enable_logging: true,
         experimental_mode: None,
         cache_directory: None,
