@@ -137,9 +137,11 @@ order by sum(mas.records) desc;
 ```
 
 We've also bundled a [memory usage visualization tool](https://materialize.com/docs/ops/monitoring/#memory-usage-visualization)
-to aid in debugging. The amount of memory used by Materialize should
-correlate with the number of arrangement records that are displayed by
-the visual interface.
+to aid in debugging. The sql queries above show all arrangements in Materialize
+(including system arrangements), whereas the memory visualization tool shows
+only user-created arrangements, and it shows them by dataflow. The amount of
+memory used by Materialize should correlate with the number of arrangement
+records that are displayed by the visual interface.
 
 ### How can I check whether work is distributed equally across workers?
 
