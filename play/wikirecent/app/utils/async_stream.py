@@ -33,9 +33,7 @@ def main():
     """Parse arguments and run tail query."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--host", help="Web server hostname", default="app", type=str
-    )
+    parser.add_argument("--host", help="Web server hostname", default="app", type=str)
     parser.add_argument(
         "-p", "--port", help="Web server port number", default=8875, type=int
     )
