@@ -109,7 +109,10 @@ in the infrastructure repository. All of these tests can be run in parallel.
     - Commit - Use the default `HEAD`
     - Branch - Enter the release candidate tag (i.e. `v0.4.2-rc1`)
 
-  You can continue on to the next step, but remember to verify that this test passes.
+  You can continue on to the next step, but remember to verify that this test passes. Link to it
+  here, and don't check this off until you've verified that it passed:
+
+  - [ ] "link to test run"
 
 - [ ] **cloud engineer** Start the load tests according to [the same instructions][load-instr],
   using your release tag as the `git-ref` value for the release benchmarks. You can use [This
