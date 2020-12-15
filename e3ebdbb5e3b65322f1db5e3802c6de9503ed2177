@@ -1,0 +1,55 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "8476bc90_e1c4fdfc",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1018720
+      },
+      "writtenOn": "2020-12-15T18:03:56Z",
+      "side": 1,
+      "message": "should use your @materialize.io email address\n\n(actually I don\u0027t care. Just trying out GerritHub\u0027s \"review the commit message\" feature)",
+      "revId": "e3ebdbb5e3b65322f1db5e3802c6de9503ed2177",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "06a2cd42_a68e3227",
+        "filename": "doc/user/content/cli/_index.md",
+        "patchSetId": 1
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1018720
+      },
+      "writtenOn": "2020-12-15T18:03:56Z",
+      "side": 1,
+      "message": "If we are going to mark things as advanced, `--logical-compaction-window` probably merits the same treatment.",
+      "revId": "e3ebdbb5e3b65322f1db5e3802c6de9503ed2177",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "4436e68c_b9a9a8cf",
+        "filename": "doc/user/content/cli/_index.md",
+        "patchSetId": 1
+      },
+      "lineNbr": 257,
+      "author": {
+        "id": 1018720
+      },
+      "writtenOn": "2020-12-15T18:03:56Z",
+      "side": 1,
+      "message": "I\u0027d get rid of the last sentence.",
+      "revId": "e3ebdbb5e3b65322f1db5e3802c6de9503ed2177",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    }
+  ]
+}
