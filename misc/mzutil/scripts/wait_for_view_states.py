@@ -65,7 +65,7 @@ def source_at_offset(
     try:
         cursor.execute(query, (source_name, desired_offset))
         if cursor.rowcount > 1:
-            print("ERROR: More than one row returned when query source offsets:")
+            print("ERROR: More than one row returned when querying source offsets:")
             for row in cursor:
                 print(f"\t{row}")
             sys.exit(1)
