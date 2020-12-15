@@ -48,7 +48,7 @@ impl<T> Drop for ClientTransmitter<T> {
 /// Generates a populated catalog appropriate for tests.
 pub fn generate_test_catalog(path: &Path) -> Result<Catalog, Box<dyn Error>> {
     let config = Config {
-        path: Some(path),
+        path,
         enable_logging: true,
         experimental_mode: Some(false),
         cache_directory: None,
