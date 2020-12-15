@@ -271,8 +271,9 @@ where
                                 let mut hierarchical = DatumList::empty().iter();
                                 let mut basic = DatumList::empty().iter();
 
-                                // TODO assert that there are <= 3 items?
-                                for (val, cnt) in source.iter() {
+                                // We expect not to have any negative multiplicities, but are not 100% sure it will
+                                // never happen so for now just log an error if it does.
+                                for (val, cnt) in input.iter() {
                                     if cnt < &0 {
                                         log::error!("[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?}", val, cnt);
                                     }
