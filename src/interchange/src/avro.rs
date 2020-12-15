@@ -1045,13 +1045,7 @@ fn validate_schema_2(
                     }
                 }
                 let next_node = schema.step(&f.schema);
-                columns.extend(
-                    get_named_columns(seen_avro_nodes, next_node, &f.name)?
-                        .into_iter()
-                        // We strip out the nullability flag, because ScalarType::Record
-                        // fields are always nullable.
-                        .map(|(name, coltype)| (name, coltype.scalar_type)),
-                );
+                columns.extend(get_named_columns(seen_avro_nodes, next_node, &f.name)?.into_iter());
                 if let Some(named_idx) = named_idx {
                     seen_avro_nodes.remove(&named_idx);
                 }

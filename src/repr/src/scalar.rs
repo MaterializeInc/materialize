@@ -403,10 +403,11 @@ impl<'a> Datum<'a> {
                     (Datum::List(list), ScalarType::List(t)) => list
                         .iter()
                         .all(|e| e.is_null() || is_instance_of_scalar(e, t)),
-                    (Datum::List(list), ScalarType::Record { fields }) => list
-                        .iter()
-                        .zip_eq(fields)
-                        .all(|(e, (_, t))| e.is_null() || is_instance_of_scalar(e, t)),
+                    (Datum::List(list), ScalarType::Record { fields }) => {
+                        list.iter().zip_eq(fields).all(|(e, (_, t))| {
+                            (e.is_null() && t.nullable) || is_instance_of_scalar(e, &t.scalar_type)
+                        })
+                    }
                     (Datum::List(_), _) => false,
                     (Datum::Map(map), ScalarType::Map { value_type }) => map
                         .iter()
@@ -697,7 +698,7 @@ pub enum ScalarType {
     Record {
         /// The names and types of the fields of the record, in order from left
         /// to right.
-        fields: Vec<(ColumnName, ScalarType)>,
+        fields: Vec<(ColumnName, ColumnType)>,
     },
     /// A PostgreSQL object identifier.
     Oid,

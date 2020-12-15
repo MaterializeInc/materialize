@@ -3538,7 +3538,7 @@ where
                 if d.is_null() {
                     buf.write_null()
                 } else {
-                    stringify_datum(buf.nonnull_buffer(), d, ty)
+                    stringify_datum(buf.nonnull_buffer(), d, &ty.scalar_type)
                 }
             })
         }
@@ -3997,7 +3997,7 @@ impl VariadicFunc {
                 fields: field_names
                     .clone()
                     .into_iter()
-                    .zip(input_types.into_iter().map(|ty| ty.scalar_type))
+                    .zip(input_types.into_iter())
                     .collect(),
             }
             .nullable(true),
