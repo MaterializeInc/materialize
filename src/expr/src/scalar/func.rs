@@ -1552,21 +1552,37 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datu
     }
     fn truncate_decade(&self) -> Self {
         Self::new(
-            NaiveDate::from_ymd(self.year() - (self.year() % 10), 1, 1),
+            NaiveDate::from_ymd(self.year() - self.year().rem_euclid(10), 1, 1),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
     fn truncate_century(&self) -> Self {
         // Expects the first year of the century, meaning 2001 instead of 2000.
         Self::new(
-            NaiveDate::from_ymd(self.year() - (self.year() % 100) + 1, 1, 1),
+            NaiveDate::from_ymd(
+                if self.year() > 0 {
+                    self.year() - (self.year() - 1) % 100
+                } else {
+                    self.year() - self.year() % 100 - 99
+                },
+                1,
+                1,
+            ),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
     fn truncate_millennium(&self) -> Self {
         // Expects the first year of the millennium, meaning 2001 instead of 2000.
         Self::new(
-            NaiveDate::from_ymd(self.year() - (self.year() % 1_000) + 1, 1, 1),
+            NaiveDate::from_ymd(
+                if self.year() > 0 {
+                    self.year() - (self.year() - 1) % 1000
+                } else {
+                    self.year() - self.year() % 1000 - 999
+                },
+                1,
+                1,
+            ),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
