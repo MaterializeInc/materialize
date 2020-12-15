@@ -402,7 +402,7 @@ mzconduct:
       - step: start-services
         services: [dashboard]
       - step: start-services
-        services: [kafka, schema-registry]
+        services: [kafka, schema-registry, control-center]
       - step: wait-for-tcp
         host: schema-registry
         port: 8081
@@ -650,6 +650,11 @@ mzconduct:
           gen
           --warehouses=${NUM_WAREHOUSES:-1}
           --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
+
+    start-control-center:
+      steps:
+      - step: start-services
+        services: [control-center]
 
     bring-up-postgres-kafka:
       steps:
