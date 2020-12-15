@@ -51,6 +51,36 @@ fn main() {
 fn run() -> Result<(), anyhow::Error> {
     panic::set_hook(Box::new(handle_panic));
 
+    // Clear out any Timely/Differential environment variables so that we have
+    // exact control all configuration parameters to Timely/Differential.
+    //
+    // NOTE(benesch): it would be nice if Timely/Differential used a
+    // configuration struct or builder API for all parameters, rather than
+    // environment variables.
+    for (key, _val) in env::vars() {
+        // TODO(benesch): remove these hints about deprecated environment
+        // variables once a sufficient amount of time has passed, say, March
+        // 2021.
+        match key.as_str() {
+            "DIFFERENTIAL_EAGER_MERGE" => bail!(
+                "the DIFFERENTIAL_EAGER_MERGE environment variable no longer has any effect\n\
+                 hint: use the --dataflow-eager-merge command-line option instead",
+            ),
+            "DEFAULT_PROGRESS_MODE" => bail!(
+                "the DEFAULT_PROGRESS_MODE environment variable no longer has any effect\n\
+                 hint: use the --dataflow-progress-mode command-line option instead",
+            ),
+            _ => (),
+        }
+
+        if key.starts_with("TIMELY_")
+            || key.starts_with("DIFFERENTIAL_")
+            || key == "DEFAULT_PROGRESS_MODE"
+        {
+            env::remove_var(key);
+        }
+    }
+
     let args: Vec<_> = env::args().collect();
     let mut opts = getopts::Options::new();
 
@@ -117,7 +147,19 @@ fn run() -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "cache-max-pending-records",
-        "maximum number of records that have to be present before materialize will cache them immediately. (default 1000000)",
+        "maximum number of records that have to be present before materialize will cache them immediately (default 1000000)",
+        "N",
+    );
+    opts.optopt(
+        "",
+        "dataflow-progress-mode",
+        "[advanced] dataflow progress tracking mode (default: eager)",
+        "<demand|eager>",
+    );
+    opts.optopt(
+        "",
+        "dataflow-eager-merge",
+        "[advanced] amount of compaction to perform when idle",
         "N",
     );
 
@@ -251,6 +293,15 @@ fn run() -> Result<(), anyhow::Error> {
         Some(d) => parse_duration::parse(&d)?,
     };
     let cache_max_pending_records = popts.opt_get_default("cache-max-pending-records", 1000000)?;
+    match popts.opt_str("dataflow-progress-mode").as_deref() {
+        None | Some("eager") => (),
+        Some("demand") => env::set_var("DEFAULT_PROGRESS_MODE", "DEMAND"),
+        Some(other) => bail!("unknown --dataflow-progress-mode value {:?}", other),
+    }
+    match popts.opt_get::<isize>("dataflow-eager-merge")? {
+        None => (),
+        Some(n) => env::set_var("DIFFERENTIAL_EAGER_MERGE", n.to_string()),
+    }
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
@@ -398,13 +449,8 @@ swap: {swap_total}KB total, {swap_used}KB used",
         dep_versions = build_info().join("\n"),
         invocation = {
             use shell_words::quote as escape;
-            // TODO - make this only check for "MZ_" if #1223 is fixed.
             env::vars()
-                .filter(|(name, _value)| {
-                    name.starts_with("MZ_")
-                        || name.starts_with("DIFFERENTIAL_")
-                        || name == "DEFAULT_PROGRESS_MODE"
-                })
+                .filter(|(name, _value)| name.starts_with("MZ_"))
                 .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
                 .chain(args.into_iter().map(|arg| escape(&arg).into_owned()))
                 .join(" ")
