@@ -31,6 +31,7 @@ where
 {
     type Item = T;
 
+    #[allow(clippy::comparison_chain)]
     fn next(&mut self) -> Option<Self::Item> {
         let ret = if self.n > 1 {
             Some(self.element.clone().unwrap())
