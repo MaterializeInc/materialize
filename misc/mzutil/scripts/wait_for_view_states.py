@@ -20,6 +20,7 @@ import argparse
 import glob
 import io
 import os
+import sys
 import pathlib
 import time
 import typing
@@ -61,28 +62,32 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
     }
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
-        installed_views = list(view_names(conn))
+        installed_views = set(view_names(conn))
 
-    assert sorted(view_snapshots.keys()) == sorted(
-        installed_views
-    ), "Installed views do not match snapshot views"
+    # Verify that we have snapshots for all views installed
+    captured_views = set(view_snapshots.keys())
+    if not captured_views.issuperset(installed_views):
+        missing_views = installed_views.difference(captured_views)
+        print(f"ERROR: Missing final state for views: {missing_views}")
+        sys.exit(1)
+
     print("Recording time required until each view matches its snapshot")
 
+    pending_views = installed_views
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
-        while view_snapshots:
+        while pending_views:
             views_to_remove = []
-            for (view, contents) in view_snapshots.items():
+            for view in pending_views:
                 with conn.cursor() as cursor:
-                    if view_matches(cursor, view, contents):
+                    if view_matches(cursor, view, view_snapshots[view]):
                         time_taken = time.time() - start_time
                         print(f"{time_taken:>6.1f}s: {view}")
                         views_to_remove.append(view)
 
             for view in views_to_remove:
-                del view_snapshots[view]
+                pending_views.remove(view)
 
-            if view_snapshots:
-                # Our queries should be very fast, use a fast timer
+            if pending_views:
                 time.sleep(0.1)
 
 
