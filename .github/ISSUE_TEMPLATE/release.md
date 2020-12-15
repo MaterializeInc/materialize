@@ -71,6 +71,15 @@ production readiness.
 
   - [ ] Open a PR with this change, and land it.
 
+    If you have [GitHub cli][gh] this is as easy as typing the following command and following
+    some prompts:
+
+    ```console
+    $ gh pr create --web
+    ```
+
+[gh]: https://cli.github.com/
+
 ### Review Release Notes
 
 Release notes should be updated by engineers as they merge PRs. The release notes
@@ -160,7 +169,8 @@ in the infrastructure repository. All of these tests can be run in parallel.
   bin/mkrelease --no-tag -b continue-$next $next
   ```
 
-  - [ ] Open a PR with that branch, and land it.
+  - [ ] Open a PR with that branch, and land it. Using [gh] from the terminal: `gh pr create
+    --web`
 
 ### Verify the Release Build and Deploy
 
