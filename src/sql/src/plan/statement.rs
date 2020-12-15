@@ -18,7 +18,6 @@ use std::time::{Duration, UNIX_EPOCH};
 use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
 use itertools::Itertools;
-use kafka_util::{extract_config, generate_ccsr_client_config};
 use regex::Regex;
 use rusoto_core::Region;
 use url::Url;
@@ -608,9 +607,8 @@ fn kafka_sink_builder(
         None
     };
 
-    let config_options = extract_config(&with_options)?;
-
-    let ccsr_config = generate_ccsr_client_config(
+    let config_options = kafka_util::extract_config(&with_options)?;
+    let ccsr_config = kafka_util::generate_ccsr_client_config(
         schema_registry_url.clone(),
         &config_options,
         &ccsr_with_options,
