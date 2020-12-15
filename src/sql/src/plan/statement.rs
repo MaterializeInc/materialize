@@ -1558,9 +1558,7 @@ fn handle_create_table(
                     query::plan_default_expr(scx, expr, &ty)?;
                     default = expr.clone();
                 }
-                other => {
-                    unsupported!(format!("CREATE TABLE with column constraint: {}", other))
-                }
+                other => unsupported!(format!("CREATE TABLE with column constraint: {}", other)),
             }
         }
         column_types.push(ty.nullable(nullable));
