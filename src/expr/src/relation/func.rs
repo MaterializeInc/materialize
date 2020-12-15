@@ -513,6 +513,53 @@ impl AggregateFunc {
         };
         scalar_type.nullable(nullable)
     }
+
+    /// get the function that combines the results of partially
+    /// pushing down the aggregation + the function, if necessary, that
+    /// downcasts the type of the aggregation column back to the original
+    pub fn outer_agg(&self) -> (AggregateFunc, Option<crate::UnaryFunc>) {
+        match self {
+            AggregateFunc::Count => (
+                AggregateFunc::SumInt64,
+                Some(crate::UnaryFunc::CastDecimalToInt64(MAX_DECIMAL_PRECISION)),
+            ),
+            AggregateFunc::SumInt32 => (
+                AggregateFunc::SumInt64,
+                Some(crate::UnaryFunc::CastDecimalToInt64(MAX_DECIMAL_PRECISION)),
+            ),
+            AggregateFunc::SumInt64 => (AggregateFunc::SumDecimal, None),
+            _ => (self.clone(), None),
+        }
+    }
+
+    /// returns true for a function f if
+    /// f({f(distinct A), f(distinct B)}) = f(distinct (A union B))
+    pub fn hierarchical_when_distinct(&self) -> bool {
+        match self {
+            AggregateFunc::MaxInt32 => true,
+            AggregateFunc::MaxInt64 => true,
+            AggregateFunc::MaxFloat32 => true,
+            AggregateFunc::MaxFloat64 => true,
+            AggregateFunc::MaxDecimal => true,
+            AggregateFunc::MaxBool => true,
+            AggregateFunc::MaxString => true,
+            AggregateFunc::MaxDate => true,
+            AggregateFunc::MaxTimestamp => true,
+            AggregateFunc::MaxTimestampTz => true,
+            AggregateFunc::MinInt32 => true,
+            AggregateFunc::MinInt64 => true,
+            AggregateFunc::MinFloat32 => true,
+            AggregateFunc::MinFloat64 => true,
+            AggregateFunc::MinDecimal => true,
+            AggregateFunc::MinBool => true,
+            AggregateFunc::MinString => true,
+            AggregateFunc::MinDate => true,
+            AggregateFunc::MinTimestamp => true,
+            AggregateFunc::MinTimestampTz => true,
+            AggregateFunc::Dummy => true,
+            _ => false,
+        }
+    }
 }
 
 fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<(Row, Diff)> {
