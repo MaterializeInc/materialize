@@ -3403,7 +3403,13 @@ impl<'a> Parser<'a> {
     /// has already been consumed.
     fn parse_fetch(&mut self) -> Result<Statement, ParserError> {
         let _ = self.parse_keyword(FORWARD);
-        let count = self.maybe_parse(Parser::parse_literal_uint);
+        let count = if let Some(count) = self.maybe_parse(Parser::parse_literal_uint) {
+            Some(FetchDirection::ForwardCount(count))
+        } else if self.parse_keyword(ALL) {
+            Some(FetchDirection::ForwardAll)
+        } else {
+            None
+        };
         let _ = self.parse_keyword(FROM);
         let name = self.parse_identifier()?;
         let options = self.parse_opt_with_options()?;

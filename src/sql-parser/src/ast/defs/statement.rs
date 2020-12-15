@@ -1407,14 +1407,14 @@ impl_display!(CloseStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FetchStatement {
     pub name: Ident,
-    pub count: Option<u64>,
+    pub count: Option<FetchDirection>,
     pub options: Vec<WithOption>,
 }
 
 impl AstDisplay for FetchStatement {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("FETCH ");
-        if let Some(count) = self.count {
+        if let Some(ref count) = self.count {
             f.write_str(format!("{} ", count));
         }
         f.write_node(&self.name);
@@ -1426,3 +1426,19 @@ impl AstDisplay for FetchStatement {
     }
 }
 impl_display!(FetchStatement);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FetchDirection {
+    ForwardAll,
+    ForwardCount(u64),
+}
+
+impl AstDisplay for FetchDirection {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            FetchDirection::ForwardAll => f.write_str("ALL"),
+            FetchDirection::ForwardCount(count) => f.write_str(format!("{}", count)),
+        }
+    }
+}
+impl_display!(FetchDirection);

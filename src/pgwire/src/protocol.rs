@@ -30,7 +30,7 @@ use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
-use sql::ast::{Ident, Statement};
+use sql::ast::{FetchDirection, Ident, Statement};
 use sql::plan::FetchOptions;
 use sql::plan::{CopyFormat, StatementDesc};
 
@@ -154,8 +154,14 @@ where
                     Ok(0) | Err(_) => ExecuteCount::All, // If `max_rows < 0`, no limit.
                     Ok(n) => ExecuteCount::Count(n),
                 };
-                self.execute(portal_name, max_rows, portal_exec_message, None, None)
-                    .await?
+                self.execute(
+                    portal_name,
+                    max_rows,
+                    portal_exec_message,
+                    None,
+                    ExecuteTimeout::None,
+                )
+                .await?
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
                 self.describe_statement(name).await?
@@ -313,7 +319,7 @@ where
                             ExecuteCount::All,
                             portal_exec_message,
                             None,
-                            None,
+                            ExecuteTimeout::None,
                         )
                         .await
                     }
@@ -356,7 +362,7 @@ where
             }
             Some(Statement::Fetch(stmt)) => {
                 let name = stmt.name.clone();
-                let count = stmt.count;
+                let count = stmt.count.clone();
                 let options = match FetchOptions::try_from(stmt.options.clone()) {
                     Ok(options) => options,
                     Err(e) => {
@@ -369,7 +375,7 @@ where
                         )
                     }
                 };
-                let timeout_secs = match options.timeout {
+                let timeout = match options.timeout {
                     Some(timeout) => {
                         // Limit FETCH timeouts to 1 day. If users have a legitimate need it can be
                         // bumped. If we do bump it, ensure that the new upper limit is within the
@@ -388,10 +394,10 @@ where
                                 .await,
                             );
                         }
-                        Some(timeout_secs)
+                        ExecuteTimeout::Seconds(timeout_secs)
                     }
-                    // FETCH defaults to 0 timeout.
-                    None => Some(0f64),
+                    // FETCH defaults to WaitOnce.
+                    None => ExecuteTimeout::WaitOnce,
                 };
                 Some(
                     self.fetch(
@@ -399,7 +405,7 @@ where
                         count,
                         max_rows,
                         Some(portal_name.to_string()),
-                        timeout_secs,
+                        timeout,
                     )
                     .await,
                 )
@@ -617,7 +623,7 @@ where
         max_rows: ExecuteCount,
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
-        timeout_secs: Option<f64>,
+        timeout: ExecuteTimeout,
     ) -> BoxFuture<'_, Result<State, comm::Error>> {
         async move {
             // Check if the portal has been started and can be continued.
@@ -652,7 +658,7 @@ where
                                 max_rows,
                                 get_response,
                                 fetch_portal_name,
-                                timeout_secs,
+                                timeout,
                             )
                             .await
                         }
@@ -674,7 +680,7 @@ where
                         max_rows,
                         get_response,
                         fetch_portal_name,
-                        timeout_secs,
+                        timeout,
                     )
                     .await
                 }
@@ -768,41 +774,60 @@ where
     async fn fetch(
         &mut self,
         name: Ident,
-        count: Option<u64>,
+        count: Option<FetchDirection>,
         max_rows: ExecuteCount,
         fetch_portal_name: Option<String>,
-        timeout_secs: Option<f64>,
+        timeout: ExecuteTimeout,
     ) -> Result<State, comm::Error> {
         // Unlike Execute, no count specified in FETCH returns 1 row, and 0 means 0
         // instead of All.
-        let count = usize::cast_from(count.unwrap_or(1));
+        let count = count.unwrap_or(FetchDirection::ForwardCount(1));
 
+        // Figure out how many rows we should send back by looking at the various
+        // combinations of the execute and fetch.
+        //
         // In Postgres, Fetch will cache <count> rows from the target portal and
         // return those as requested (if, say, an Execute message was sent with a
         // max_rows < the Fetch's count). We expect that case to be incredibly rare and
         // so have chosen to not support it until users request it. This eases
         // implementation difficulty since we don't have to be able to "send" rows to
         // a buffer.
+        //
         // TODO(mjibson): Test this somehow? Need to divide up the pgtest files in
         // order to have some that are not Postgres compatible.
-        match max_rows {
-            ExecuteCount::Count(max_rows) if max_rows < count => {
+        let count = match (max_rows, count) {
+            (ExecuteCount::Count(max_rows), FetchDirection::ForwardCount(count)) => {
+                let count = usize::cast_from(count);
+                if max_rows < count {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::FEATURE_NOT_SUPPORTED,
+                            "Execute with max_rows < a FETCH's count is not supported",
+                        ))
+                        .await;
+                }
+                ExecuteCount::Count(count)
+            }
+            (ExecuteCount::Count(_), FetchDirection::ForwardAll) => {
                 return self
                     .error(ErrorResponse::error(
                         SqlState::FEATURE_NOT_SUPPORTED,
-                        "Execute with max_rows < a FETCH's count is not supported",
+                        "Execute with max_rows of a FETCH ALL is not supported",
                     ))
                     .await;
             }
-            _ => {}
-        }
+            (ExecuteCount::All, FetchDirection::ForwardAll) => ExecuteCount::All,
+            (ExecuteCount::All, FetchDirection::ForwardCount(count)) => {
+                ExecuteCount::Count(usize::cast_from(count))
+            }
+        };
         let cursor_name = name.to_string();
         self.execute(
             cursor_name,
-            ExecuteCount::Count(count),
+            count,
             fetch_message,
             fetch_portal_name,
-            timeout_secs,
+            timeout,
         )
         .await
     }
@@ -865,7 +890,7 @@ where
         max_rows: ExecuteCount,
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
-        timeout_secs: Option<f64>,
+        timeout: ExecuteTimeout,
     ) -> Result<State, comm::Error> {
         macro_rules! command_complete {
             ($($arg:tt)*) => {{
@@ -961,7 +986,7 @@ where
                             max_rows,
                             get_response,
                             fetch_portal_name,
-                            timeout_secs,
+                            timeout,
                         )
                         .await
                     }
@@ -1012,7 +1037,7 @@ where
                     max_rows,
                     get_response,
                     fetch_portal_name,
-                    timeout_secs,
+                    timeout,
                 )
                 .await
             }
@@ -1064,7 +1089,7 @@ where
         max_rows: ExecuteCount,
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
-        timeout_secs: Option<f64>,
+        timeout: ExecuteTimeout,
     ) -> Result<State, comm::Error> {
         let session = self.coord_client.session();
 
@@ -1085,23 +1110,39 @@ where
             .get_portal_mut(&portal_name)
             .expect("valid portal name for send rows");
 
-        let deadline = timeout_secs.map(|t| Instant::now() + Duration::from_secs_f64(t));
+        let (mut wait_once, mut deadline) = match timeout {
+            ExecuteTimeout::None => (false, None),
+            ExecuteTimeout::Seconds(t) => {
+                (false, Some(Instant::now() + Duration::from_secs_f64(t)))
+            }
+            ExecuteTimeout::WaitOnce => (true, None),
+        };
         // fetch_batch is a helper function that fetches the next row batch and
         // implements timeout deadlines if they were requested.
         async fn fetch_batch(
-            deadline: Option<Instant>,
+            wait_once: &mut bool,
+            deadline: &mut Option<Instant>,
             rows: &mut RowBatchStream,
         ) -> Result<Option<Vec<Row>>, comm::Error> {
-            match deadline {
+            let res = match deadline {
                 None => rows.try_next().await,
-                Some(deadline) => match time::timeout_at(deadline, rows.try_next()).await {
+                Some(deadline) => match time::timeout_at(*deadline, rows.try_next()).await {
                     Ok(batch) => batch,
                     Err(_elapsed) => Ok(None),
                 },
+            };
+            // If wait_once is true: the first time this fn is called it blocks (same as
+            // deadline == None). The second time this fn is called it should behave the
+            // same a 0s timeout.
+            if *wait_once {
+                *deadline = Some(Instant::now());
+                *wait_once = false;
             }
+            res
         };
 
-        let mut batch: Option<Vec<Row>> = fetch_batch(deadline, &mut rows).await?;
+        let mut batch: Option<Vec<Row>> =
+            fetch_batch(&mut wait_once, &mut deadline, &mut rows).await?;
         if let Some([row, ..]) = batch.as_deref() {
             let datums = row.unpack();
             let col_types = &row_desc.typ().column_types;
@@ -1168,7 +1209,7 @@ where
                 break;
             }
             self.conn.flush().await?;
-            batch = fetch_batch(deadline, &mut rows).await?;
+            batch = fetch_batch(&mut wait_once, &mut deadline, &mut rows).await?;
         }
 
         ROWS_RETURNED.inc_by(u64::cast_from(total_sent_rows));
@@ -1384,4 +1425,11 @@ fn fetch_message(
 enum ExecuteCount {
     All,
     Count(usize),
+}
+
+#[derive(Debug, Copy, Clone)]
+enum ExecuteTimeout {
+    None,
+    Seconds(f64),
+    WaitOnce,
 }
