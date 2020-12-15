@@ -8,10 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::env;
-use std::error::Error;
 
-pub fn main() -> Result<(), Box<dyn Error>> {
-    println!("cargo:rerun-if-changed=build.rs");
+mod npm;
+
+fn main() -> Result<(), anyhow::Error> {
     println!("cargo:rustc-env=TARGET_TRIPLE={}", env::var("TARGET")?);
-    Ok(())
+
+    npm::ensure()
 }

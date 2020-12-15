@@ -5,14 +5,11 @@
 {% block head %}
 <link href="/css/memory.css" rel="stylesheet">
 
-<script src="https://cdn.jsdelivr.net/npm/react@16/umd/react.development.js" crossorigin></script>
-<script src="https://cdn.jsdelivr.net/npm/react-dom@16/umd/react-dom.development.js" crossorigin></script>
-<!-- babel is used for JSX compilation -->
-<script src="https://cdn.jsdelivr.net/npm/babel-standalone@6/babel.min.js"></script>
-<!-- hpcc-js/wasm has GraphViz compiled to wasm -->
-<script src="https://cdn.jsdelivr.net/npm/@hpcc-js/wasm@0.3/dist/index.min.js"></script>
-<!-- pako is used for zlib compression -->
-<script src="https://cdn.jsdelivr.net/npm/pako@1/dist/pako.min.js"></script>
+<script src="/js/vendor/react.js"></script>
+<script src="/js/vendor/react-dom.js"></script>
+<script src="/js/vendor/babel-standalone.js"></script> {# JSX compilation #}
+<script src="/js/vendor/@hpcc-js/wasm.js"></script> {# GraphViz in WASM #}
+<script src="/js/vendor/pako.js"></script> {# Zlib compression #}
 <script src="/js/memory.jsx" type="text/babel"></script>
 {% endblock %}
 

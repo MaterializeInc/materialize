@@ -19,6 +19,7 @@ use std::time::SystemTime;
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{GlobalId, ScalarExpr};
 use repr::RelationDesc;
+use sql_parser::ast::Expr;
 use uuid::Uuid;
 
 use crate::names::{FullName, PartialName, SchemaName};
@@ -190,6 +191,10 @@ pub trait CatalogItem {
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.
     fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)>;
+
+    /// Returns the column defaults associated with the catalog item, if the
+    /// catalog item is a table.
+    fn table_details(&self) -> Option<&[Expr]>;
 }
 
 /// The type of a [`CatalogItem`].

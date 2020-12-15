@@ -116,6 +116,7 @@ Intersect
 Interval
 Into
 Is
+Isnull
 Isolation
 Join
 Json
@@ -146,6 +147,7 @@ None
 Not
 Null
 Numeric
+Objects
 Ocf
 Of
 Offset

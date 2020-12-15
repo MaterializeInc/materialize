@@ -523,9 +523,11 @@ pub fn plan_coerce<'a>(
         LiteralRecord(exprs) => {
             let arity = exprs.len();
             let coercions = match coerce_to {
-                ScalarType::Record { fields, .. } if fields.len() == arity => {
-                    fields.iter().map(|(_name, ty)| ty).cloned().collect()
-                }
+                ScalarType::Record { fields, .. } if fields.len() == arity => fields
+                    .iter()
+                    .map(|(_name, ty)| &ty.scalar_type)
+                    .cloned()
+                    .collect(),
                 _ => vec![ScalarType::String; exprs.len()],
             };
             let mut out = vec![];

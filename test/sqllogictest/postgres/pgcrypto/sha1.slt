@@ -1,0 +1,54 @@
+# Copyright 1994, Regents of the University of California.
+# Copyright 1996-2020 PostgreSQL Global Development Group.
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the regression test suite in PostgreSQL.
+# The original file was retrieved on December 14, 2020 from:
+#
+#     https://github.com/postgres/postgres/blob/9b584953e7bf91e342af87ef44606acd6206cd1c/contrib/pgcrypto/expected/sha1.out
+#
+# The original source code is subject to the terms of the PostgreSQL
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository
+
+query T
+SELECT digest('', 'sha1')::text
+----
+\xda39a3ee5e6b4b0d3255bfef95601890afd80709
+
+query T
+SELECT digest('a', 'sha1')::text
+----
+\x86f7e437faa5a7fce15d1ddcb9eaeaea377667b8
+
+query T
+SELECT digest('abc', 'sha1')::text
+----
+\xa9993e364706816aba3e25717850c26c9cd0d89d
+
+query T
+SELECT digest('message digest', 'sha1')::text
+----
+\xc12252ceda8be8994d5fa0290a47231c1d16aae3
+
+query T
+SELECT digest('abcdefghijklmnopqrstuvwxyz', 'sha1')::text
+----
+\x32d10c7b8cf96570ca04ce37f2a19d84240d3a89
+
+query T
+SELECT digest('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', 'sha1')::text
+----
+\x761c457bf73b14d27e9e9265c46f4b4dda11f940
+
+query T
+SELECT digest('12345678901234567890123456789012345678901234567890123456789012345678901234567890', 'sha1')::text
+----
+\x50abf5706a150990a08b2c5ea40fa0e585554732

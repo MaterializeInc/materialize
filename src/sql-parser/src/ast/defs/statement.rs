@@ -837,6 +837,7 @@ impl AstDisplay for ShowObjectsStatement {
             ObjectType::Source => "SOURCES",
             ObjectType::Sink => "SINKS",
             ObjectType::Type => "TYPES",
+            ObjectType::Object => "OBJECTS",
             ObjectType::Index => unreachable!(),
         });
         if let Some(from) = &self.from {
@@ -1112,6 +1113,7 @@ pub enum ObjectType {
     Sink,
     Index,
     Type,
+    Object,
 }
 
 impl AstDisplay for ObjectType {
@@ -1124,6 +1126,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Sink => "SINK",
             ObjectType::Index => "INDEX",
             ObjectType::Type => "TYPE",
+            ObjectType::Object => "OBJECT",
         })
     }
 }

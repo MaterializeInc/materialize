@@ -16,6 +16,7 @@ use std::str;
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
+use repr::ColumnType;
 use uuid::Uuid;
 
 use ore::fmt::FormatBuffer;
@@ -129,7 +130,7 @@ impl Value {
                 let fields = record
                     .iter()
                     .zip(fields)
-                    .map(|(e, (_name, ty))| Value::from_datum(e, ty))
+                    .map(|(e, (_name, ty))| Value::from_datum(e, &ty.scalar_type))
                     .collect();
                 Some(Value::Record(fields))
             }
@@ -485,7 +486,13 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
                 .enumerate()
                 .map(|(i, ty)| {
                     let name = ColumnName::from(format!("f{}", i + 1));
-                    (name, null_datum(ty).1)
+                    (
+                        name,
+                        ColumnType {
+                            nullable: true,
+                            scalar_type: null_datum(ty).1,
+                        },
+                    )
                 })
                 .collect();
             ScalarType::Record { fields }

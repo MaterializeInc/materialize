@@ -210,9 +210,12 @@ impl From<&ScalarType> for Type {
                 value_type: Box::new(From::from(&**value_type)),
             },
             ScalarType::Oid => Type::Oid,
-            ScalarType::Record { fields } => {
-                Type::Record(fields.iter().map(|(_name, ty)| Type::from(ty)).collect())
-            }
+            ScalarType::Record { fields } => Type::Record(
+                fields
+                    .iter()
+                    .map(|(_name, ty)| Type::from(&ty.scalar_type))
+                    .collect(),
+            ),
             ScalarType::String => Type::Text,
             ScalarType::Time => Type::Time,
             ScalarType::Timestamp => Type::Timestamp,

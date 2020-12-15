@@ -29,9 +29,7 @@ names = [
     # make these materialized once we support materialized sources
     "history",
     "district",
-    "nation",
     "region",
-    "supplier",
     "warehouse",
 ]
 
@@ -58,6 +56,12 @@ sleep_ms = 0
 [[groups]]
 name = "loadtest"
 queries = ["q01", "q02", "q05", "q06", "q08", "q09", "q12", "q14", "q17", "q19"]
+thread_count = ${OLAP_THREADS:-5}
+
+[[groups]]
+name = "count-sources"
+queries = ["count_customer", "count_item", "count_nation", "count_neworder", "count_order", "count_orderline", "count_stock", "count_supplier",
+           "count_history", "count_district", "count_region", "count_warehouse"]
 thread_count = ${OLAP_THREADS:-5}
 
 [[groups]]
@@ -537,4 +541,100 @@ WHERE substr(c_phone, 1, 1) IN ('1', '2', '3', '4', '5', '6', '7')
 )
 GROUP BY substr(c_state, 1, 1)
 ORDER BY substr(c_state, 1, 1);
+"""
+
+[[queries]]
+name = "count_customer"
+query = """
+SELECT
+    count(*) AS num_customers
+FROM customer;
+"""
+
+[[queries]]
+name = "count_item"
+query = """
+SELECT
+    count(*) AS num_items
+FROM item;
+"""
+
+[[queries]]
+name = "count_nation"
+query = """
+SELECT
+    count(*) AS num_nations
+FROM nation;
+"""
+
+[[queries]]
+name = "count_neworder"
+query = """
+SELECT
+    count(*) AS num_neworders
+FROM neworder;
+"""
+
+[[queries]]
+name = "count_order"
+query = """
+SELECT
+    count(*) AS num_orders
+FROM order;
+"""
+
+[[queries]]
+name = "count_orderline"
+query = """
+SELECT
+    count(*) AS num_orderlines
+FROM orderline;
+"""
+
+[[queries]]
+name = "count_stock"
+query = """
+SELECT
+    count(*) AS num_stocks
+FROM stock;
+"""
+
+[[queries]]
+name = "count_supplier"
+query = """
+SELECT
+    count(*) AS num_suppliers
+FROM supplier;
+"""
+
+[[queries]]
+name = "count_history"
+query = """
+SELECT
+    count(*) AS num_historys
+FROM history;
+"""
+
+[[queries]]
+name = "count_district"
+query = """
+SELECT
+    count(*) AS num_districts
+FROM district;
+"""
+
+[[queries]]
+name = "count_region"
+query = """
+SELECT
+    count(*) AS num_regions
+FROM region;
+"""
+
+[[queries]]
+name = "count_warehouse"
+query = """
+SELECT
+    count(*) AS num_warehouses
+FROM warehouse;
 """

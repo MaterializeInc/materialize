@@ -48,11 +48,50 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.5.4 %}}
 
+- Add the [`version`](/sql/functions#postgresql-compatibility-func) and
+  [`mz_version`](/sql/functions/#system-information-func) functions to report
+  PostgreSQL-specific and Materialize-specific version information,
+  respectively.
+
+- Add the [`hmac` and `digest` cryptography functions](/sql/functions#cryptography-func).
+  These functions are based on the [`pgcrypto`] PostgreSQL extension.
+
+- Add a `timeout` option to [`FETCH`](/sql/fetch/).
+
+- Fix a bug when requesting binary-formatted values with
+  [`FETCH`](/sql/fetch/) {{% gh 4976 %}}.
+
+- Fix a bug when using COPY with TAIL that could cause some drivers to
+  fail if the TAIL was idle for at least 1 second {{% gh 4976 %}}.
+
 {{% version-header v0.5.3 %}}
 
+- Add support for SQL cursors via the new [`DECLARE`](/sql/declare),
+  [`FETCH`](/sql/fetch), and [`CLOSE`](/sql/close) statements. Cursors
+  facilitate fetching partial results from a query and are therefore
+  particularly useful in conjuction with [`TAIL`](/sql/tail#tailing-with-fetch).
+
+  **Known issue.** Requesting binary-formatted values with [`FETCH`] does not
+  work correctly. This bug will be fixed in the next release.
+
+- Support [common-table expressions (CTEs)](/sql/select#common-table-expressions-ctes)
+  in `SELECT` statements.
+
+- Add a [`map`](/sql/types/map) type to represent unordered key-value pairs.
+  Avro map values in [Avro-formatted sources](/sql/create-source/avro-kafka)
+  will be decoded into the new `map` type.
+
 - Fix a regression in the SQL parser, introduced in v0.5.2, in which nested
-  field accesses, e.g. `SELECT ((col).field1).field2`, would fail to parse
-  {{% gh 4827 %}}.
+  field accesses, e.g.
+
+  ```sql
+  SELECT ((col).field1).field2
+  ```
+
+  would fail to parse {{% gh 4827 %}}.
+
+- Fix a bug that caused the [`real`]/[`float4`] types to be incorrectly
+  interpreted as [`double precision`] {{% gh 4918 %}}.
 
 {{% version-header v0.5.2 %}}
 
@@ -98,13 +137,6 @@ Wrap your release notes at the 80 character mark.
 - Allow slightly more complicated [`INSERT`](/sql/insert) bodies, e.g. inserting
   `SELECT`ed literals {{% gh 4748 %}}.
   characters, e.g., `SELECT ’1’` {{% gh 4755 %}}.
-- [`TAIL`](/sql/tail) now supports timestamp progress.
-- Log messages are no longer emitted to stderr if an explicit `--log-file` is
-  supplied at startup. {{ gh 4777 }}
-- Add the [`version`](/sql/functions#postgresql-compatibility-func) and
-  [`mz_version`](/sql/functions/#system-information-func) functions to report
-  PostgreSQL-specific and Materialize-specific version information,
-  respectively.
 
 {{% version-header v0.5.1 %}}
 
@@ -765,7 +797,11 @@ Wrap your release notes at the 80 character mark.
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE VIEW`]: /sql/create-view
 [`date`]: /sql/types/date
+[`double precision`]: /sql/types/float
 [`interval`]: /sql/types/interval
+[`float4`]: /sql/types/float
+[`pgcrypto`]: https://www.postgresql.org/docs/current/pgcrypto.html
+[`real`]: /sql/types/real
 [`SHOW CREATE SOURCE`]: /sql/show-create-source
 [`SHOW CREATE VIEW`]: /sql/show-create-view
 [`text`]: /sql/types/text
