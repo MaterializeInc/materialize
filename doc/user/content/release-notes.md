@@ -69,6 +69,10 @@ Wrap your release notes at the 80 character mark.
   **Backwards-incompatible change.**
 
 {{% version-header v0.5.4 %}}
+{{% version-header v0.6.0 %}}
+
+- Support `DEFAULT` column values {{% gh 5027 %}}. h/t
+  [@petrosagg](https://github.com/petrosagg)
 
 - Add the [`version`](/sql/functions#postgresql-compatibility-func) and
   [`mz_version`](/sql/functions/#system-information-func) functions to report
@@ -83,8 +87,8 @@ Wrap your release notes at the 80 character mark.
 - Fix a bug when requesting binary-formatted values with
   [`FETCH`](/sql/fetch/) {{% gh 4976 %}}.
 
-- Fix a bug when using COPY with TAIL that could cause some drivers to
-  fail if the TAIL was idle for at least 1 second {{% gh 4976 %}}.
+- Fix a bug when using `COPY` with `TAIL` that could cause some drivers to
+  fail if the `TAIL` was idle for at least 1 second {{% gh 4976 %}}.
 
 {{% version-header v0.5.3 %}}
 
