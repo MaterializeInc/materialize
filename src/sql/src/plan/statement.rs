@@ -1655,6 +1655,7 @@ fn handle_drop_objects(
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type => handle_drop_items(scx, object_type, if_exists, names, cascade),
+        ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
 }
 
