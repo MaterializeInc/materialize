@@ -287,11 +287,38 @@ services:
     image: zookeeper:3.4.13
 ```
 
-### `mzconduct`
+A common complaint with Docker Compose is the lack of proper service
+orchestration. It is not possible to express, for exaple, that the `fancy`
+service cannot be started until `materialized` has booted successfully.
 
-The primary feature that mzconduct provides is set of actions that can be configured
-inside of mzcompose.yml files. While docs are coming soon, see the [chbench demo
-mzcompose](../../demo/chbench/mzcompose.yml) for an example.
+`mzcompose` therefore provides a feature called "workflows" that orchestrate
+interacting with the defined services. The following `load-test` workflow waits
+for `materialized` to start listening on port 6875 before launching the `fancy`
+service.
+
+```
+version: "3.7"
+
+services:
+  fancy:
+    mzbuild: fancy-loadgen
+  materialized:
+    mzbuild: materialized
+
+mzworkflows:
+  load-test:
+    steps:
+    - step: start-services
+      services: [materialized]
+    - step: wait-for-tcp
+      host: materialized
+      port: 6875
+    - step: start-services
+      services: [fancy-loadgen]
+```
+
+To run the workflow, run `./mzcompose run load-test`, just like you would if
+`load-test` were a normal service.
 
 ## Input addressability
 
@@ -423,6 +450,14 @@ services:
   materialized:
     mzbuild: materialized
     propagate-uid-gid: true
+
+mzworkflows:
+  NAME:
+    env:
+      KEY: VALUE
+    steps:
+    - step: STEP-NAME
+      STEP-OPTION: STEP-OPTION-VALUE
 ```
 
 #### Fields
@@ -437,6 +472,15 @@ services:
 * `propagate-uid-gid` (bool) requests that the Docker image be run with the user
   ID and group ID of the host user. It is equivalent to passing `--user $(id
   -u):$(id -g)` to `docker run`. The default is `false`.
+
+* `mzworkflows` (dict) specifies a named set of workflows. A workflow consists
+  of a series of steps that are executed in sequence and a set of environment
+  variables that are set during the execution of the workflow. The available
+  steps and their options are only documented by way of the developer docs.
+  See <https://mtrlz.dev/api/python/materialize/mzcompose.html>.
+
+  Also see the [chbench demo mzcompose](../../demo/chbench/mzcompose.yml) for
+  a detailed example.
 
 ### mzbuild Dockerfile
 

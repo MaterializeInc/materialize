@@ -24,15 +24,14 @@ services:
       - RUST_LOG=smith-fuzz=debug,info
     entrypoint: [smith-fuzz, --materialized-host=materialized]
     depends_on: [materialized]
-mzconduct:
-  workflows:
-    ci:
-      steps:
-      - step: start-services
-        services: [materialized]
-      - step: wait-for-tcp
-        host: materialized
-        port: 6875
-      - step: run
-        service: smith-fuzz
-        command: --query-count=10000
+mzworkflows:
+  ci:
+    steps:
+    - step: start-services
+      services: [materialized]
+    - step: wait-for-tcp
+      host: materialized
+      port: 6875
+    - step: run
+      service: smith-fuzz
+      command: --query-count=10000
