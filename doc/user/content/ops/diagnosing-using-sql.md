@@ -141,7 +141,7 @@ to aid in debugging. The sql queries above show all arrangements in Materialize
 (including system arrangements), whereas the memory visualization tool shows
 only user-created arrangements, and it shows them by dataflow. The amount of
 memory used by Materialize should correlate with the number of arrangement
-records that are displayed by the visual interface.
+records that are displayed by either the visual interface or the sql queries.
 
 ### How can I check whether work is distributed equally across workers?
 
