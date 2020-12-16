@@ -84,7 +84,7 @@ The Materialize database is not exposed on a well-numbered port and instead dock
 a random high-numbered port. To open a Postgres REPL, connected to the Materialized instance
 running as part of this demo, run:
 
-    psql -h localhost -p $(./bin/mzcompose list-port wikirecent materialized) materialize
+    psql -h localhost -p $(./mzcompose --mz-quiet list-ports materialized) materialize
 
 ### Streaming top10 from Materialize to your console
 
