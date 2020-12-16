@@ -29,20 +29,7 @@ say = ui.speaker("")
 MIN_COMPOSE_VERSION = (1, 24, 0)
 
 
-def assert_docker_compose_version() -> None:
-    """Check the version of docker-compose installed.
-
-    Raises `MzRuntimeError` if the version is not recent enough.
-    """
-    cmd = ["docker-compose", "version", "--short"]
-    output = spawn.capture(cmd, unicode=True).strip()
-    version = tuple(int(i) for i in output.split("."))
-    if version < MIN_COMPOSE_VERSION:
-        msg = f"Unsupported docker-compose version: {version}, min required: {MIN_COMPOSE_VERSION}"
-        raise errors.MzConfigurationError(msg)
-
-
-def main(argv: List[str]) -> None:
+def main(argv: List[str]) -> int:
     # Lightly parse the arguments so we know what to do.
     args, unknown_args = ArgumentParser().parse_known_args(argv)
     if not args.file:
@@ -52,20 +39,34 @@ def main(argv: List[str]) -> None:
 
     ui.Verbosity.init_from_env(args.mz_quiet)
 
+    # Load repository and composition state from disk.
     root = Path(os.environ["MZ_ROOT"])
     repo = mzbuild.Repository(root)
-
-    if args.command == "gen-shortcuts":
-        return gen_shortcuts(repo)
-
-    assert_docker_compose_version()
-
-    announce("Collecting mzbuild dependencies")
     composition = mzcompose.Composition(
         repo, args.project_directory or str(Path(config_files[0]).parent),
     )
     for config_file in config_files:
         composition.load_file(config_file)
+
+    # Handle special mzcompose commands.
+    if args.command == "list-workflows":
+        for name in composition.workflows:
+            print(name)
+        return 0
+    elif args.command == "gen-shortcuts":
+        return gen_shortcuts(repo)
+
+    # From here on out we're definitely invoking Docker Compose, so make sure
+    # it's new enough.
+    output = spawn.capture(
+        ["docker-compose", "version", "--short"], unicode=True
+    ).strip()
+    version = tuple(int(i) for i in output.split("."))
+    if version < MIN_COMPOSE_VERSION:
+        msg = f"Unsupported docker-compose version: {version}, min required: {MIN_COMPOSE_VERSION}"
+        raise errors.MzConfigurationError(msg)
+
+    announce("Collecting mzbuild dependencies")
     deps = repo.resolve_dependencies(composition.images)
     for d in deps:
         say(d.spec())
@@ -76,18 +77,34 @@ def main(argv: List[str]) -> None:
     if args.command in ["create", "run", "start", "up"]:
         deps.acquire()
 
+    # Check if this is a run command that names a workflow. If so, run the
+    # workflow instead of Docker Compose.
+    if args.command == "run":
+        workflow = composition.workflows.get(args.first_command_arg, None)
+        if workflow is not None:
+            if args.remainder:
+                raise errors.MzRuntimeError(
+                    f"cannot specify extra arguments ({' '.join(args.remainder)}) "
+                    "when specifying a workflow (rather than a container)"
+                )
+            workflow.run()
+            return 0
+
     # Hand over control to Docker Compose.
     announce("Delegating to Docker Compose")
-    composition.run(
+    proc = composition.run(
         [
             *unknown_args,
             *([args.command] if args.command is not None else []),
-            *args.extra,
-        ]
+            *([args.first_command_arg] if args.first_command_arg is not None else []),
+            *args.remainder,
+        ],
+        check=False,
     )
+    return proc.returncode
 
 
-def gen_shortcuts(repo: mzbuild.Repository) -> None:
+def gen_shortcuts(repo: mzbuild.Repository) -> int:
     template = """#!/usr/bin/env bash
 
 # Copyright Materialize, Inc. All rights reserved.
@@ -109,6 +126,8 @@ exec "$(dirname "$0")/{}/bin/mzcompose" "$@"
             f.write(template.format(os.path.relpath(repo.root, path)))
         mzbuild.chmod_x(mzcompose_path)
 
+    return 0
+
 
 # We subclass `argparse.ArgumentParser` so that we can override its default
 # behavior of exiting on error. We want Docker Compose to be responsible for
@@ -120,7 +139,8 @@ class ArgumentParser(argparse.ArgumentParser):
         self.add_argument("-f", "--file", action="append")
         self.add_argument("--project-directory")
         self.add_argument("command", nargs="?")
-        self.add_argument("extra", nargs=argparse.REMAINDER)
+        self.add_argument("first_command_arg", nargs="?")
+        self.add_argument("remainder", nargs=argparse.REMAINDER)
 
     def parse_known_args(
         self,
@@ -139,4 +159,4 @@ class ArgumentParser(argparse.ArgumentParser):
 
 if __name__ == "__main__":
     with errors.error_handler(lambda *args: print(*args, file=sys.stderr)):
-        main(sys.argv[1:])
+        sys.exit(main(sys.argv[1:]))

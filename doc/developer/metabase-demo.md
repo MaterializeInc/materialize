@@ -13,14 +13,15 @@ with Docker, although many steps are the same between the three.
 
 ## Docker
 
-We use [`mzcompose`](./mzbuild.md) and [`mzconduct`](./mzbuild.md) to conduct our demos.
+We use [`mzcompose`](./mzbuild.md) to conduct our demos.
 
 ### Quickstart
 
 The quickest way to get started is to run the demo workflow:
 
 ```console
-$ bin/mzconduct run chbench -w demo
+$ cd demo/chbench
+$ ./mzcompose run demo
 ```
 
 This will start up materialized, a mysql source, kafka, grafana, and metabase. Metabase
@@ -34,7 +35,7 @@ To get a clean working environment with no load generator you can use the
 `bring-up-source-data` workflow:
 
 ```console
-$ bin/mzconduct run chbench -w bring-up-source-data
+$ ./mzcompose run bring-up-source-data
 ```
 
 Now that the data is loaded into MySQL and Kafka, we want to create sources with it.

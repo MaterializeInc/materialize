@@ -268,7 +268,6 @@ volumes:
   view-snapshots:
 
 mzconduct:
-  name: chbench
   workflows:
     ci:
       env:

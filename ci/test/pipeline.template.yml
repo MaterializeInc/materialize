@@ -131,44 +131,44 @@ steps:
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - ./ci/plugins/mzconduct:
-          test: billing
-          workflow: ci
+      - ./ci/plugins/mzcompose:
+          config: demo/billing/mzcompose.yml
+          run: ci
 
   - id: perf-kinesis
     label: ":shower: kinesis streaming demo"
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - ./ci/plugins/mzconduct:
-          test: perf-kinesis
-          workflow: ci
+      - ./ci/plugins/mzcompose:
+          config: test/performance/perf-kinesis/mzcompose.yml
+          run: ci
 
   - id: perf-upsert
     label: ":point_up: upsert streaming demo"
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - ./ci/plugins/mzconduct:
-          test: perf-upsert
-          workflow: ci
+      - ./ci/plugins/mzcompose:
+          config: test/performance/perf-upsert/mzcompose.yml
+          run: ci
 
   - id: chbench-demo
     label: "chbench sanity check"
     depends_on: build
     plugins:
-      - ./ci/plugins/mzconduct:
-          test: chbench
-          workflow: ci
+      - ./ci/plugins/mzcompose:
+          config: demo/chbench/mzcompose.yml
+          run: ci
     timeout_in_minutes: 30
 
   - id: tb
     label: tb
     depends_on: build
     plugins:
-      - ./ci/plugins/mzconduct:
-          test: tb
-          workflow: ci
+      - ./ci/plugins/mzcompose:
+          config: test/tb/mzcompose.yml
+          run: ci
     timeout_in_minutes: 30
 
   - id: catalog-compat
