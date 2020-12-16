@@ -41,45 +41,44 @@ services:
       - .:/workdir
     depends_on: [kafka]
 
-mzconduct:
-  workflows:
-    #user-facing workflows
+mzworkflows:
+  #user-facing workflows
 
-    start-live-data:
-      steps:
-      - step: workflow
-        workflow: start-everything
-      - step: run
-        service: mbta-demo
-        daemon: true
-        command: >-
-          start_docker
-          ${CONFIG_FILE_PATH:-/workdir/examples/all-frequent-routes-config-weekend.csv}
-          kafka:${KAFKA_PORT:-9092}
-          ${API_KEY}
-          ${ARCHIVE_AT_SHUTDOWN:-0}
+  start-live-data:
+    steps:
+    - step: workflow
+      workflow: start-everything
+    - step: run
+      service: mbta-demo
+      daemon: true
+      command: >-
+        start_docker
+        ${CONFIG_FILE_PATH:-/workdir/examples/all-frequent-routes-config-weekend.csv}
+        kafka:${KAFKA_PORT:-9092}
+        ${API_KEY}
+        ${ARCHIVE_AT_SHUTDOWN:-0}
 
-    replay:
-      steps:
-      - step: workflow
-        workflow: start-everything
-      - step: run
-        service: mbta-demo
-        daemon: true
-        command: >-
-          replay
-          ${CONFIG_FILE_PATH:-/workdir/examples/all-frequent-routes-config-weekend.csv}
-          ${ARCHIVE_PATH}
-          kafka:${KAFKA_PORT:-9092}
+  replay:
+    steps:
+    - step: workflow
+      workflow: start-everything
+    - step: run
+      service: mbta-demo
+      daemon: true
+      command: >-
+        replay
+        ${CONFIG_FILE_PATH:-/workdir/examples/all-frequent-routes-config-weekend.csv}
+        ${ARCHIVE_PATH}
+        kafka:${KAFKA_PORT:-9092}
 
-    # Helper workflows
-    start-everything:
-      steps:
-      - step: start-services
-        services: [kafka, materialized]
-      - step: wait-for-tcp
-        host: kafka
-        port: ${KAFKA_PORT:-9092}
-      - step: wait-for-tcp
-        host: materialized
-        port: ${MZ_PORT:-6875}
+  # Helper workflows
+  start-everything:
+    steps:
+    - step: start-services
+      services: [kafka, materialized]
+    - step: wait-for-tcp
+      host: kafka
+      port: ${KAFKA_PORT:-9092}
+    - step: wait-for-tcp
+      host: materialized
+      port: ${MZ_PORT:-6875}

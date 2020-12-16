@@ -421,7 +421,8 @@ In a future iteration, we'll make this demo more interactive.
 1. Download and start all of the components we've listed above by running:
 
     ```shell
-    bin/mzconduct up billing -w local
+    cd demo/billing
+    ./mzcompose run local
     ```
 
    Note that downloading the Docker images necessary for the demo can take quite

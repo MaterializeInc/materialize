@@ -131,7 +131,8 @@ Putting this all together, our deployment looks like this:
 1. Download and start all of the components we've listed above by running:
 
    ```shell
-   bin/mzconduct run chbench --workflow demo-load
+   cd demo/chbench
+   ./mzcompose run demo-load
    ```
 
    Note that downloading the Docker images necessary for the demo can take quite

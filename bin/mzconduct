@@ -15,4 +15,40 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-exec bin/pyactivate -m materialize.cli.mzconduct "$@"
+. misc/shlib/shlib.bash
+
+if [[ "${1:-}" != run ]]; then
+    die "compatibility shim only supports 'run' command"
+fi
+shift
+
+test=
+workflow=
+workflow_next=false
+for arg; do
+    if $workflow_next; then
+        workflow_next=false
+        workflow=$arg
+        continue
+    fi
+    case "$arg" in
+        --workflow=*) workflow=${arg#--workflow=} ;;
+        --workflow|-w) workflow_next=true ;;
+        -*) die "unknown option $arg" ;;
+        *)
+            if [[ "$test" ]]; then
+                die "specifying more than one test is not permitted"
+            fi
+            test=$arg
+        ;;
+    esac
+done
+
+if [[ ! "$workflow" ]]; then
+    die "missing required option --workflow"
+fi
+
+red "WARNING: mzconduct has been merged into mzcompose; this script will be removed soon\n" >&2
+echo "hint: run \`bin/mzcompose --mz-find $test run $workflow\` instead"
+
+exec bin/mzcompose --mz-find "$test" run "$workflow"

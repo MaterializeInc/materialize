@@ -1,10 +1,10 @@
 ### Chaos
 
-Tests in this crate chaos test Materialize. Each test is implemented as an `mzconduct`
+Tests in this crate chaos test Materialize. Each test is implemented as an `mzcompose`
 workflow and can be run as follows:
 
 ```shell script
-bin/mzconduct up chaos -w test-bytes-to-kafka
+./mzcompose run test-bytes-to-kafka
 ```
 
 In this command, `chaos` indicates the name of the target `mzcompose.yml` file and `test-bytes-to-kafka`

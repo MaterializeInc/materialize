@@ -21,9 +21,9 @@ pipeline.template.yml and the docstring on `trim_pipeline` below.
 
 from collections import OrderedDict
 from materialize import mzbuild
+from materialize import mzcompose
 from materialize import spawn
 from materialize import git
-from materialize.cli.mzconduct import Composition
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import Any, List, Set, Sequence
@@ -103,19 +103,13 @@ def trim_pipeline(pipeline: Any) -> None:
                 raise ValueError(f"unexpected non-str non-list for depends_on: {d}")
         if "plugins" in config:
             for plugin in config["plugins"]:
-                for name, plugin_config in plugin.items():
-                    if name == "./ci/plugins/mzcompose":
-                        step.image_dependencies.update(
-                            find_compose_images(images, plugin_config["config"])
-                        )
-                        step.extra_inputs.add(plugin_config["config"])
-                    elif name == "./ci/plugins/mzconduct":
-                        comp = Composition.find(plugin_config["test"]).path
-                        config = comp / "mzcompose.yml"
-                        step.image_dependencies.update(
-                            find_compose_images(images, config)
-                        )
-                        step.extra_inputs.add(str(config))
+                for plugin_name, plugin_config in plugin.items():
+                    if plugin_name == "./ci/plugins/mzcompose":
+                        name = plugin_config["composition"]
+                        composition = mzcompose.Composition(repo, name)
+                        for image in composition.images:
+                            step.image_dependencies.add(images[image.name])
+                        step.extra_inputs.add(str(repo.compositions[name]))
         steps[step.id] = step
 
     # Make sure we have an up to date view of main.
@@ -169,20 +163,6 @@ def trim_pipeline(pipeline: Any) -> None:
 
     # Restrict the pipeline to the needed steps.
     pipeline["steps"] = [step for step in pipeline["steps"] if step["id"] in needed]
-
-
-def find_compose_images(
-    images: mzbuild.DependencySet, path: Path
-) -> Set[mzbuild.ResolvedImage]:
-    """Extract the images that an mzcompose.yml configuration depends upon."""
-    out = set()
-    with open(path) as f:
-        compose = yaml.safe_load(f)
-    for config in compose["services"].values():
-        if "mzbuild" in config:
-            image_name = config["mzbuild"]
-            out.add(images[image_name])
-    return out
 
 
 if __name__ == "__main__":

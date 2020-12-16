@@ -10,10 +10,7 @@
 
 set -euo pipefail
 
-MTRLZ_GIT_ROOT="${MTRLZ_GIT_ROOT:-$(git rev-parse --show-toplevel)}"
-if [[ "${PWD}" != "${MTRLZ_GIT_ROOT}" ]]; then
-    cd "${MTRLZ_GIT_ROOT}"
-fi
+project=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 cleanup="no"
 data_dir="${HOME}/chbench_snapshot"
@@ -93,10 +90,10 @@ main() {
     export OLTP_THREADS="${oltp_threads}"
     export CHBENCH_RUN_SECONDS="${chbench_seconds}"
 
-    ./bin/mzconduct run chbench -w generate-snapshot
+    "$project"/mzcompose run generate-snapshot
 
     if [[ "${cleanup}" = "yes" ]]; then
-        ./bin/mzconduct down chbench
+        "$project"/mzcompose down
     fi
 }
 

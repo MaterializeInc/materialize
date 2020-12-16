@@ -19,7 +19,7 @@ Get an API key from https://api-v3.mbta.com/ . This will enable you to send 1000
 ## Automatic setup (Docker)
 
 To start working with the streams automatically using Docker, run
-`API_KEY=<insert_api_key_here> ../../bin/mzconduct run mbta -w start-live-data`.
+`API_KEY=<insert_api_key_here> ./mzcompose run start-live-data`.
 
 By default, the streams that get fired up correspond to the ones in
 [examples/all-frequent-routes-config-weekend.csv](../examples/all-frequent-routes-config-weekend.csv),
@@ -30,7 +30,7 @@ environment variable `CONFIG_FILE_PATH=/workdir/examples/<name_of_config_file>`
 If you look in [mzcompose.yml](../mzcompose.yml), there are some other
 environment variables that can be set to customize the setup.
 
-To tear everything down, run `../../bin/mzconduct down mbta`.
+To tear everything down, run `./mzcompose down`.
 
 ### Config file creation
 
@@ -85,7 +85,7 @@ Archives can be found at `workspace-<current_date_and_time>.tar.gz` file
 in the directory `play/mbta/archive`.
 
 To replay an archive, run
-`ARCHIVE_PATH=<insert_path_archive> ../../bin/mzconduct run mbta -w replay`. Do not uncompress the archive.
+`ARCHIVE_PATH=<insert_path_archive> ./mzcompose run replay`. Do not uncompress the archive.
 
 ## Automatic setup (Bash)
 

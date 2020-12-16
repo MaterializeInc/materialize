@@ -12,7 +12,7 @@
 set -euo pipefail
 
 mzcompose() {
-    bin/ci-builder run stable bin/mzcompose -f "$BUILDKITE_PLUGIN_MZCOMPOSE_CONFIG" "$@"
+    bin/ci-builder run stable bin/mzcompose --mz-find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
 service=$BUILDKITE_PLUGIN_MZCOMPOSE_RUN
@@ -31,9 +31,12 @@ echo "--- :docker: Rebuilding non-mzbuild containers"
 mzcompose --mz-quiet build
 
 # Start dependencies under a different heading so that the main heading is less
-# noisy.
-echo "--- :docker: Starting dependencies" >&2
-mzcompose up -d --scale "$service=0" "$service"
+# noisy. But not if the service is actually a workflow, in which case it will
+# do its own dependency management.
+if ! mzcompose --mz-quiet list-workflows | grep -q "$service"; then
+    echo "--- :docker: Starting dependencies" >&2
+    mzcompose up -d --scale "$service=0" "$service"
+fi
 
 echo "+++ :docker: Running command in mzcompose service: $service" >&2
 
