@@ -109,31 +109,34 @@ class Application(tornado.web.Application):
         return psycopg3.AsyncConnection.connect(self.dsn)
 
     async def tail_view(self, view_name):
-        """Spawn a coroutine to tail the view and update listeners on changes."""
+        """Spawn a coroutine that sets up a coroutine to process changes from TAIL."""
         log.info('Spawning coroutine to TAIL VIEW "%s"', view_name)
         async with await self.mzql_connection() as conn:
             async with await conn.cursor() as cursor:
                 query = f"COPY (TAIL {view_name} WITH (PROGRESS)) TO STDOUT"
                 async with cursor.copy(query) as tail:
-                    inserted = []
-                    deleted = []
-                    async for row in tail:
-                        row = row.decode("utf-8")
-                        (timestamp, progressed, diff, *columns) = row.strip().split(
-                            "\t"
-                        )
+                    await self.tail_view_inner(view_name, tail)
 
-                        if progressed == "t":
-                            assert diff == "\\N"
-                            self.views[view_name].update(deleted, inserted, timestamp)
-                            inserted = []
-                            deleted = []
-                        elif diff == "-1":
-                            deleted.append(columns)
-                        elif diff == "1":
-                            inserted.append(columns)
-                        else:
-                            log.error("Failed to correctly decode row %s", row.strip())
+    async def tail_view_inner(self, view_name, tail):
+        """Read rows from TAIL, converting them to updates and broadcasting them."""
+        inserted = []
+        deleted = []
+        async for row in tail:
+            row = row.decode("utf-8")
+            (timestamp, progressed, diff, *columns) = row.strip().split("\t")
+
+            # This row serves as a synchronization primitive indicating that all
+            # rows for an update have been read. We should publish this update.
+            if progressed == "t" and diff == "\\N":
+                self.views[view_name].update(deleted, inserted, timestamp)
+                inserted = []
+                deleted = []
+            elif diff == "-1":
+                deleted.append(columns)
+            elif diff == "1":
+                inserted.append(columns)
+            else:
+                raise ValueError(f"Bad data from TAIL: {row.strip()}")
 
 
 def configure_logging():
