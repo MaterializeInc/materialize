@@ -18,8 +18,8 @@ use uuid::Uuid;
 
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, ObjectName, Query, Select, SelectItem, TableAlias,
-    TableWithJoins, Value,
+    Expr, Function, FunctionArgs, Ident, Query, Select, SelectItem, TableAlias, TableWithJoins,
+    Value,
 };
 
 use crate::normalize;
@@ -89,7 +89,7 @@ impl<'a> FuncRewriter<'a> {
 
     fn plan_agg(name: &'static str, expr: Expr, filter: Option<Box<Expr>>, distinct: bool) -> Expr {
         Expr::Function(Function {
-            name: ObjectName(vec![name.into()]),
+            name: name.into(),
             args: FunctionArgs::Args(vec![expr]),
             filter,
             over: None,

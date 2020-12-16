@@ -23,7 +23,7 @@ use std::fmt;
 use repr::adt::datetime::DateTimeField;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{Ident, ObjectName};
+use crate::ast::ObjectName;
 
 #[derive(Debug)]
 pub struct ValueError(String);
@@ -197,11 +197,10 @@ pub enum DataType {
 impl DataType {
     pub fn internal_canonical_name(&self) -> Option<ObjectName> {
         if let DataType::Other { name, .. } = self {
-            let canonical = |n: &str| Some(ObjectName(vec![Ident::new(n)]));
             match name.to_string().as_str() {
-                "char" | "varchar" => canonical("text"),
-                "json" => canonical("jsonb"),
-                "smallint" => canonical("int4"),
+                "char" | "varchar" => Some("text".into()),
+                "json" => Some("jsonb".into()),
+                "smallint" => Some("int4".into()),
                 _ => None,
             }
         } else {

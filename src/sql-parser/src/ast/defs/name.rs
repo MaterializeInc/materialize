@@ -94,6 +94,12 @@ impl_display!(Ident);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ObjectName(pub Vec<Ident>);
 
+impl From<&str> for ObjectName {
+    fn from(n: &str) -> ObjectName {
+        ObjectName(vec![Ident::new(n)])
+    }
+}
+
 impl AstDisplay for ObjectName {
     fn fmt(&self, f: &mut AstFormatter) {
         display::separated(&self.0, ".").fmt(f);

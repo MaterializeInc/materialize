@@ -652,7 +652,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: ObjectName(vec!["date_part".into()]),
+            name: "date_part".into(),
             args: FunctionArgs::Args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
@@ -701,7 +701,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: ObjectName(vec![name.into()]),
+            name: name.into(),
             args: FunctionArgs::Args(exprs),
             filter: None,
             over: None,
@@ -2204,13 +2204,13 @@ impl<'a> Parser<'a> {
         macro_rules! other {
             ($name:expr) => {{
                 DataType::Other {
-                    name: ObjectName(vec![Ident::new($name)]),
+                    name: $name.into(),
                     typ_mod: vec![],
                 }
             }};
             ($name:expr, $typ_mod:expr) => {{
                 DataType::Other {
-                    name: ObjectName(vec![Ident::new($name)]),
+                    name: $name.into(),
                     typ_mod: $typ_mod,
                 }
             }};
