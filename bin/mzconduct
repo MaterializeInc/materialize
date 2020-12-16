@@ -17,11 +17,8 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-red "WARNING: mzconduct has been merged into mzcompose; this script will be removed soon\n" >&2
-echo 'hint: cd into the test directory and run ./mzcompose run WORKFLOW instead'
-
 if [[ "${1:-}" != run ]]; then
-    die "compatiblity shim only supports 'run' command"
+    die "compatibility shim only supports 'run' command"
 fi
 shift
 
@@ -51,12 +48,7 @@ if [[ ! "$workflow" ]]; then
     die "missing required option --workflow"
 fi
 
-case "$test" in
-    "billing")      cd demo/billing ;;
-    "chaos")        cd test/chaos ;;
-    "chbench")      cd demo/chbench ;;
-    "perf-kinesis") cd test/performance/perf-kinesis ;;
-    *)              die "unknown test $test" ;;
-esac
+red "WARNING: mzconduct has been merged into mzcompose; this script will be removed soon\n" >&2
+echo "hint: run \`bin/mzcompose --mz-find $test run $workflow\` instead"
 
-exec ./mzcompose run "$workflow"
+exec bin/mzcompose --mz-find "$test" run "$workflow"

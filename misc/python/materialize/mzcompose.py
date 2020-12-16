@@ -67,23 +67,18 @@ _BASHLIKE_ENV_VAR_PATTERN = re.compile(
 class Composition:
     """A set of parsed mzcompose.yml files."""
 
-    def __init__(self, repo: mzbuild.Repository, project_dir: str):
-        self.files: List[IO[bytes]] = []
+    def __init__(self, repo: mzbuild.Repository, name: str):
+        self.name = name
+        self.repo = repo
         self.images: List[mzbuild.Image] = []
         self.workflows: Dict[str, Workflow] = {}
-        self.repo = repo
-        self.project_dir = project_dir
 
-    def name(self) -> str:
-        return Path(self.project_dir).resolve().name
-
-    def load_file(self, path: str) -> None:
-        """Loads a single file into the composition.
-
-        Args:
-            path: The path to the file to load.
-        """
         default_tag = os.getenv(f"MZBUILD_TAG", None)
+
+        path = self.repo.compositions.get(name, None)
+        if path is None:
+            raise errors.UnknownComposition
+        path = path / "mzcompose.yml"
 
         with open(path) as f:
             compose = yaml.safe_load(f)
@@ -160,7 +155,7 @@ class Composition:
         os.set_inheritable(tempfile.fileno(), True)
         yaml.dump(compose, tempfile, encoding="utf-8")  # type: ignore
         tempfile.flush()
-        self.files.append(tempfile)
+        self.file = tempfile
 
     def run(
         self,
@@ -183,18 +178,11 @@ class Composition:
             check: Whether to raise an error if the child process exits with
                 a failing exit code.
         """
-        for file in self.files:
-            file.seek(0)
+        self.file.seek(0)
         if env is not None:
             env = dict(os.environ, **env)
         return subprocess.run(
-            [
-                "docker-compose",
-                *[f"-f/dev/fd/{file.fileno()}" for file in self.files],
-                "--project-directory",
-                self.project_dir,
-                *args,
-            ],
+            ["docker-compose", "-f/dev/fd/{self.file.fileno()}", *args],
             env=env,
             close_fds=False,
             check=check,
@@ -689,7 +677,7 @@ class WaitForTcpStep(WorkflowStep):
             f"waiting for {self._host}:{self._port}", "C",
         )
         for remaining in ui.timeout_loop(self._timeout_secs):
-            cmd = f"docker run --rm -t --network {workflow.composition.name()}_default ubuntu:bionic-20200403".split()
+            cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:bionic-20200403".split()
             cmd.extend(
                 [
                     "timeout",
@@ -985,7 +973,7 @@ class WorkflowWorkflowStep(WorkflowStep):
             sub_workflow.run()
         except KeyError:
             raise errors.UnknownItem(
-                f"workflow in {workflow.composition.name()}",
+                f"workflow in {workflow.composition.name}",
                 self._workflow,
                 (w for w in workflow.composition.workflows),
             )
@@ -1048,7 +1036,7 @@ class EnsureStaysUpStep(WorkflowStep):
         self._uptime_secs = seconds
 
     def run(self, workflow: Workflow) -> None:
-        pattern = f"{workflow.composition.name()}_{self._container}"
+        pattern = f"{workflow.composition.name}_{self._container}"
         ui.progress(f"Ensuring {self._container} stays up ", "C")
         for i in range(self._uptime_secs, 0, -1):
             time.sleep(1)

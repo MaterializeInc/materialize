@@ -42,6 +42,10 @@ class UnknownItem(MzConfigurationError):
         return val
 
 
+class UnknownComposition(MzError):
+    """The specified composition was unknown."""
+
+
 class BadSpec(MzConfigurationError):
     """User provided a bad specification"""
 

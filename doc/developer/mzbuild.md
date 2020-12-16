@@ -192,7 +192,7 @@ If you're unfamiliar with Compose, you may want to take a look at the
 Now bring the configuration up with `bin/mzcompose`:
 
 ```shell
-$ bin/mzcompose -f test/fancy/mzcompose.yml up
+$ bin/mzcompose --mz-find fancy up
 ==> Collecting mzbuild dependencies
 materialize/billing-demo:FM4STU42G7W44OLAPKZNEZWGEPTMIVE6
 materialize/fancy-loadgen:Z2GPU4TQMCV2PGFTNUPYLQO2PQAYD6OY
@@ -202,6 +202,10 @@ Attaching to fancy_fancy_1
 fancy_1  | 🎩 load
 fancy_fancy_1 exited with code 0
 ```
+
+The argument you pass to `--mz-find` is the name of the directory containing the
+`mzcompose.yml`. Don't worry: if this directory name is not unique across the
+entire repository, `mzcompose` will complain.
 
 Notice how `mzcompose` automatically acquired images for not just
 `fancy-loadgen` but all of its dependencies before delegating to Docker Compose
