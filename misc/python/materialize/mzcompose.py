@@ -88,12 +88,12 @@ class Composition:
         with open(path) as f:
             compose = yaml.safe_load(f)
 
-        mzconduct = compose.pop("mzconduct", None)
-        if mzconduct is not None:
+        workflows = compose.pop("mzworkflows", None)
+        if workflows is not None:
             # TODO: move this into the workflow so that it can use env vars that are
             # manually defined.
-            mzconduct = _substitute_env_vars(mzconduct)
-            for workflow_name, raw_w in mzconduct["workflows"].items():
+            workflows = _substitute_env_vars(workflows)
+            for workflow_name, raw_w in workflows.items():
                 built_steps = []
                 for raw_step in raw_w["steps"]:
                     step_name = raw_step.pop("step")

@@ -10,6 +10,8 @@
 
 set -euo pipefail
 
+project=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
 cleanup="no"
 data_dir="${HOME}/chbench_snapshot"
 chbench_seconds=43200
@@ -88,10 +90,10 @@ main() {
     export OLTP_THREADS="${oltp_threads}"
     export CHBENCH_RUN_SECONDS="${chbench_seconds}"
 
-    ./mzcompose run generate-snapshot
+    "$project"/mzcompose run generate-snapshot
 
     if [[ "${cleanup}" = "yes" ]]; then
-        ./mzcompose down
+        "$project"/mzcompose down
     fi
 }
 

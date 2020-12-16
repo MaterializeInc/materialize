@@ -10,6 +10,8 @@
 
 set -euo pipefail
 
+project=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
 cleanup="no"
 data_dir="${HOME}/chbench_snapshot"
 num_measurements=6
@@ -93,16 +95,16 @@ main() {
     export PEEKER_QUERIES="${peeker_queries}"
 
     if [[ "${setup}" = "yes" ]]; then
-        ./mzcompose run setup-replay-benchmark
+        "$project"/mzcompose run setup-replay-benchmark
     fi
 
     for i in $(seq 1 "${num_measurements}"); do
         echo "Conducting measurement ${i} of ${num_measurements}"
-        ./mzcompose run measure-ingest-performance
+        "$project"/mzcompose run measure-ingest-performance
     done
 
     if [[ "${cleanup}" = "yes" ]]; then
-        ./mzcompose down chbench
+        "$project"/mzcompose down chbench
     fi
 }
 

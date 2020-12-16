@@ -133,129 +133,128 @@ services:
 volumes:
   chbench-gen:
 
-mzconduct:
-  workflows:
-    # Test workflows
-    test-bytes-to-kafka:
-      steps:
-        - step: workflow
-          workflow: start-everything
-        - step: workflow
-          workflow: chaos-bytes-to-kafka
-        - step: random-chaos
-          other_service: chaos_run
-        - step: workflow
-          workflow: confirm-test
+mzworkflows:
+  # Test workflows
+  test-bytes-to-kafka:
+    steps:
+      - step: workflow
+        workflow: start-everything
+      - step: workflow
+        workflow: chaos-bytes-to-kafka
+      - step: random-chaos
+        other_service: chaos_run
+      - step: workflow
+        workflow: confirm-test
 
-    test-mysql-debezium-kafka:
-      steps:
-        - step: workflow
-          workflow: chbench-load-test
-        - step: workflow
-          workflow: chaos-mysql-debezium-kafka
-        - step: random-chaos
-          other_service: chaos_run
-        - step: workflow
-          workflow: confirm-test
+  test-mysql-debezium-kafka:
+    steps:
+      - step: workflow
+        workflow: chbench-load-test
+      - step: workflow
+        workflow: chaos-mysql-debezium-kafka
+      - step: random-chaos
+        other_service: chaos_run
+      - step: workflow
+        workflow: confirm-test
 
-    # Helper workflows
-    start-everything:
-      steps:
-        - step: start-services
-          services: [materialized, kafka, schema-registry]
-        - step: wait-for-tcp
-          host: kafka
-          port: 9092
-        - step: wait-for-tcp
-          host: schema-registry
-          port: 8081
-        - step: wait-for-tcp
-          host: materialized
-          port: 6875
+  # Helper workflows
+  start-everything:
+    steps:
+      - step: start-services
+        services: [materialized, kafka, schema-registry]
+      - step: wait-for-tcp
+        host: kafka
+        port: 9092
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
+      - step: wait-for-tcp
+        host: materialized
+        port: 6875
 
-    chaos-bytes-to-kafka:
-      steps:
-        - step: run
-          service: chaos
-          daemon: true
-          command: >-
-            --test bytes-to-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 100
-            --message-count 1000000
+  chaos-bytes-to-kafka:
+    steps:
+      - step: run
+        service: chaos
+        daemon: true
+        command: >-
+          --test bytes-to-kafka
+          --materialized-host materialized
+          --materialized-port 6875
+          --kafka-url kafka:9092
+          --kafka-partitions 100
+          --message-count 1000000
 
-    chaos-mysql-debezium-kafka:
-      steps:
-        - step: run
-          service: chaos
-          daemon: true
-          command: >-
-            --test mysql-debezium-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --run-seconds=864000
+  chaos-mysql-debezium-kafka:
+    steps:
+      - step: run
+        service: chaos
+        daemon: true
+        command: >-
+          --test mysql-debezium-kafka
+          --materialized-host materialized
+          --materialized-port 6875
+          --kafka-url kafka:9092
+          --run-seconds=864000
 
-    confirm-test:
-      steps:
-        - step: chaos-confirm
-          service: chaos_run
-          wait: true
-          exit_code: 0
-        - step: chaos-confirm
-          service: materialized
-          running: true
+  confirm-test:
+    steps:
+      - step: chaos-confirm
+        service: chaos_run
+        wait: true
+        exit_code: 0
+      - step: chaos-confirm
+        service: materialized
+        running: true
 
-    # chbench helper workflows
-    chbench-load-test:
-      steps:
-        - step: workflow
-          workflow: bring-up-source-data-mysql
-        - step: workflow
-          workflow: heavy-load
+  # chbench helper workflows
+  chbench-load-test:
+    steps:
+      - step: workflow
+        workflow: bring-up-source-data-mysql
+      - step: workflow
+        workflow: heavy-load
 
-    bring-up-source-data-mysql:
-      steps:
-        - step: start-services
-          services: [materialized, mysql]
-        - step: wait-for-tcp
-          host: materialized
-          port: 6875
-        - step: wait-for-mysql
-          user: root
-          timeout_secs: 30
-        - step: drop-kafka-topics
-          kafka-container: chbench_kafka_1
-          topic_pattern: debezium.tpcch.*
-        - step: start-services
-          services: [connector-mysql]
-        - step: wait-for-tcp
-          host: connect
-          port: 8083
-          timeout_secs: 120
-        - step: wait-for-tcp
-          host: schema-registry
-          port: 8081
-        - step: run
-          service: chbench
-          command: >-
-            gen
-            --warehouses=1
-            --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
+  bring-up-source-data-mysql:
+    steps:
+      - step: start-services
+        services: [materialized, mysql]
+      - step: wait-for-tcp
+        host: materialized
+        port: 6875
+      - step: wait-for-mysql
+        user: root
+        timeout_secs: 30
+      - step: drop-kafka-topics
+        kafka-container: chbench_kafka_1
+        topic_pattern: debezium.tpcch.*
+      - step: start-services
+        services: [connector-mysql]
+      - step: wait-for-tcp
+        host: connect
+        port: 8083
+        timeout_secs: 120
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
+      - step: run
+        service: chbench
+        command: >-
+          gen
+          --warehouses=1
+          --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
 
-    heavy-load:
-      steps:
-        - step: run
-          service: chbench
-          daemon: true
-          command: >-
-            run
-            --dsn=mysql --gen-dir=/var/lib/mysql-files
-            --analytic-threads=0
-            --transactional-threads=1
-            --run-seconds=864000
-            -l /dev/stdout
-            --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-            --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+  heavy-load:
+    steps:
+      - step: run
+        service: chbench
+        daemon: true
+        command: >-
+          run
+          --dsn=mysql --gen-dir=/var/lib/mysql-files
+          --analytic-threads=0
+          --transactional-threads=1
+          --run-seconds=864000
+          -l /dev/stdout
+          --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
+          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
