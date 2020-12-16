@@ -32,29 +32,49 @@ MIN_COMPOSE_VERSION = (1, 24, 0)
 def main(argv: List[str]) -> int:
     # Lightly parse the arguments so we know what to do.
     args, unknown_args = ArgumentParser().parse_known_args(argv)
-    if not args.file:
-        config_files = ["mzcompose.yml"]
-    else:
-        config_files = args.file
+    if args.file:
+        raise errors.MzConfigurationError("-f/--file option not supported")
+    elif args.project_directory:
+        raise errors.MzConfigurationError("--project-directory option not supported")
 
     ui.Verbosity.init_from_env(args.mz_quiet)
 
-    # Load repository and composition state from disk.
+    # Load repository.
     root = Path(os.environ["MZ_ROOT"])
     repo = mzbuild.Repository(root)
-    composition = mzcompose.Composition(
-        repo, args.project_directory or str(Path(config_files[0]).parent),
-    )
-    for config_file in config_files:
-        composition.load_file(config_file)
 
-    # Handle special mzcompose commands.
+    # Handle special mzcompose commands that apply to the repo.
+    if args.command == "gen-shortcuts":
+        return gen_shortcuts(repo)
+    elif args.command == "list-compositions":
+        for name in repo.compositions:
+            print(name)
+        return 0
+
+    # Load composition.
+    try:
+        composition = mzcompose.Composition(repo, args.mz_find or Path.cwd().name)
+    except errors.UnknownComposition:
+        if args.mz_find:
+            print(f"unknown composition {args.mz_find!r}", file=sys.stderr)
+            print("hint: available compositions:", file=sys.stderr)
+            for name in repo.compositions:
+                print(f"    {name}", file=sys.stderr)
+        else:
+            print("error: directory does not contain mzcompose.yml", file=sys.stderr)
+            print(
+                "hint: enter one of the following directories and run ./mzcompose:",
+                file=sys.stderr,
+            )
+            for path in repo.compositions.values():
+                print(f"    {path.relative_to(Path.cwd())}", file=sys.stderr)
+        return 1
+
+    # Handle special mzcompose commands that apply to the composition.
     if args.command == "list-workflows":
         for name in composition.workflows:
             print(name)
         return 0
-    elif args.command == "gen-shortcuts":
-        return gen_shortcuts(repo)
 
     # From here on out we're definitely invoking Docker Compose, so make sure
     # it's new enough.
@@ -120,7 +140,7 @@ def gen_shortcuts(repo: mzbuild.Repository) -> int:
 
 exec "$(dirname "$0")/{}/bin/mzcompose" "$@"
 """
-    for path in repo.compose_dirs:
+    for path in repo.compositions.values():
         mzcompose_path = path / "mzcompose"
         with open(mzcompose_path, "w") as f:
             f.write(template.format(os.path.relpath(repo.root, path)))
@@ -136,7 +156,8 @@ class ArgumentParser(argparse.ArgumentParser):
     def __init__(self) -> None:
         super().__init__(add_help=False)
         self.add_argument("--mz-quiet", action="store_true", default=None)
-        self.add_argument("-f", "--file", action="append")
+        self.add_argument("--mz-find")
+        self.add_argument("-f", "--file")
         self.add_argument("--project-directory")
         self.add_argument("command", nargs="?")
         self.add_argument("first_command_arg", nargs="?")
