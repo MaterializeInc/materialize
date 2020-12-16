@@ -154,7 +154,11 @@ fn inline_views(dataflow: &mut DataflowDesc) {
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.
-        update_let.action(object.relation_expr.as_mut(), &mut HashMap::new(), &mut crate::IdGen::default());
+        update_let.action(
+            object.relation_expr.as_mut(),
+            &mut HashMap::new(),
+            &mut crate::IdGen::default(),
+        );
         // Re-run all optimizations on the composite views.
         optimizer
             .transform(object.relation_expr.as_mut(), &indexes)
