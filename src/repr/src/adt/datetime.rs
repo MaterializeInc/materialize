@@ -96,12 +96,12 @@ impl FromStr for DateTimeUnits {
             "isodow" => Ok(Self::IsoDayOfWeek),
             "isodoy" => Ok(Self::IsoDayOfYear),
             "h" | "hour" | "hours" | "hr" | "hrs" => Ok(Self::Hour),
-            "us" | "usec" | "microsecond" | "microseconds" | "useconds" | "usecs" => {
+            "us" | "usec" | "usecs" | "useconds" | "microsecond" | "microseconds" => {
                 Ok(Self::Microseconds)
             }
             "m" | "min" | "mins" | "minute" | "minutes" => Ok(Self::Minute),
             "mon" | "mons" | "month" | "months" => Ok(Self::Month),
-            "ms" | "msec" | "millisecond" | "milliseconds" | "mseconds" | "msecs" => {
+            "ms" | "msec" | "msecs" | "mseconds" | "millisecond" | "milliseconds" => {
                 Ok(Self::Milliseconds)
             }
             "s" | "sec" | "second" | "seconds" | "secs" => Ok(Self::Second),
