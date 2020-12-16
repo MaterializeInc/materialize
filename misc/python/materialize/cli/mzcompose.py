@@ -113,12 +113,12 @@ def main(argv: List[str]) -> int:
             return 0
     # Check if we are being asked to list ports
     elif args.command == "list-ports":
-        for port in list_ports(composition, args.first_command_arg):
+        for port in composition.find_host_ports(args.first_command_arg):
             print(port)
         return 0
     # Check if we are being asked to open a web connection to this service
     elif args.command == "web":
-        ports = list_ports(composition, args.first_command_arg)
+        ports = composition.find_host_ports(args.first_command_arg)
         if len(ports) == 1:
             webbrowser.open(f"http://localhost:{ports[0]}")
         elif not ports:
@@ -167,24 +167,6 @@ exec "$(dirname "$0")/{}/bin/mzcompose" "$@"
         mzbuild.chmod_x(mzcompose_path)
 
     return 0
-
-
-def list_ports(composition: mzcompose.Composition, service: str) -> List[int]:
-    """Find all ports open on the host for a given service"""
-    # Parsing the output of `docker-compose ps` directly is fraught, as the
-    # output depends on terminal width (!). Using the `-q` flag is safe,
-    # however, and we can pipe the container IDs into `docker inspect`,
-    # which supports machine-readable output.
-    containers = composition.run(["ps", "-q"], capture=True).stdout.splitlines()
-    metadata = spawn.capture(["docker", "inspect", "-f", "{{json .}}", *containers,])
-    metadata = [json.loads(line) for line in metadata.splitlines()]
-    ports = []
-    for md in metadata:
-        if md["Config"]["Labels"]["com.docker.compose.service"] == service:
-            for (name, port_entry) in md["NetworkSettings"]["Ports"].items():
-                for p in port_entry or []:
-                    ports.append(p["HostPort"])
-    return ports
 
 
 # We subclass `argparse.ArgumentParser` so that we can override its default
