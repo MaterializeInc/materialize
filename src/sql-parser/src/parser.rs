@@ -652,7 +652,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: ObjectName(vec!["date_part".into()]),
+            name: ObjectName::unqualified("date_part"),
             args: FunctionArgs::Args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
@@ -701,7 +701,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: ObjectName(vec![name.into()]),
+            name: ObjectName::unqualified(name),
             args: FunctionArgs::Args(exprs),
             filter: None,
             over: None,
@@ -2202,7 +2202,7 @@ impl<'a> Parser<'a> {
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
     fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
         let other = |name: &str| DataType::Other {
-            name: ObjectName(vec![Ident::new(name)]),
+            name: ObjectName::unqualified(name),
             typ_mod: vec![],
         };
 
@@ -2216,7 +2216,7 @@ impl<'a> Parser<'a> {
                         "char"
                     };
                     DataType::Other {
-                        name: ObjectName(vec![Ident::new(name)]),
+                        name: ObjectName::unqualified(name),
                         typ_mod: match self.parse_optional_precision()? {
                             Some(u) => vec![u],
                             None => vec![],
@@ -2224,7 +2224,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 VARCHAR => DataType::Other {
-                    name: ObjectName(vec![Ident::new("varchar")]),
+                    name: ObjectName::unqualified("varchar"),
                     typ_mod: match self.parse_optional_precision()? {
                         Some(u) => vec![u],
                         None => vec![],
@@ -2235,7 +2235,7 @@ impl<'a> Parser<'a> {
                 // Number-like types
                 BIGINT => other("int8"),
                 DEC | DECIMAL => DataType::Other {
-                    name: ObjectName(vec![Ident::new("numeric")]),
+                    name: ObjectName::unqualified("numeric"),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 DOUBLE => {

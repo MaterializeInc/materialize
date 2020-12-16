@@ -307,7 +307,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
                     } => {
                         *option = SqlOption::ObjectName {
                             name: name.clone(),
-                            object_name: resolve_item(&ObjectName(vec![Ident::new(val.clone())]))?,
+                            object_name: resolve_item(&ObjectName::unqualified(&val))?,
                         }
                     }
                     _ => (),

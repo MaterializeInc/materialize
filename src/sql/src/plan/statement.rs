@@ -971,7 +971,7 @@ fn handle_create_type(
             Some(SqlOption::Value {
                 value: Value::String(val),
                 ..
-            }) => ObjectName(vec![Ident::new(val)]),
+            }) => ObjectName::unqualified(&val),
             Some(SqlOption::ObjectName { object_name, .. }) => object_name,
             Some(_) => bail!("{} must be a string or identifier", key),
             None => bail!("{} parameter required", key),
@@ -1932,7 +1932,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_default_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
-        self.resolve_schema(ObjectName(vec![Ident::new("public")]))
+        self.resolve_schema(ObjectName::unqualified("public"))
     }
 
     pub fn resolve_database(&self, name: ObjectName) -> Result<&dyn CatalogDatabase, PlanError> {

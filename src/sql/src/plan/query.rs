@@ -2607,9 +2607,9 @@ pub fn scalar_type_from_sql(
             // Rewrite some unqualified aliases to the name we know they should
             // use in the catalog, i.e. canonicalize the catalog name.
             let canonical_name = match name.to_string().as_str() {
-                "char" | "varchar" => ObjectName(vec![Ident::new("text")]),
-                "json" => ObjectName(vec![Ident::new("jsonb")]),
-                "smallint" => ObjectName(vec![Ident::new("int4")]),
+                "char" | "varchar" => ObjectName::unqualified("text"),
+                "json" => ObjectName::unqualified("jsonb"),
+                "smallint" => ObjectName::unqualified("int4"),
                 _ => name.clone(),
             };
             let canonical_name = normalize::object_name(canonical_name)?;

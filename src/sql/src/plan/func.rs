@@ -22,7 +22,7 @@ use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
 use repr::{ColumnName, Datum, RelationType, ScalarType};
-use sql_parser::ast::{Expr, Ident, ObjectName};
+use sql_parser::ast::{Expr, ObjectName};
 
 use super::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
@@ -1399,7 +1399,7 @@ lazy_static! {
                         Some(id) => id,
                         None => bail!("source passed to internal_read_cached_data must be literal string"),
                     };
-                    let item = ecx.qcx.scx.resolve_item(ObjectName(vec![Ident::new(source.clone())]))?;
+                    let item = ecx.qcx.scx.resolve_item(ObjectName::unqualified(&source))?;
                     match item.item_type() {
                         CatalogItemType::Source => {},
                         _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, item.item_type()),
