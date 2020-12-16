@@ -80,16 +80,8 @@ class View:
 
 
 class IndexHandler(tornado.web.RequestHandler):
-    async def get(self):
-        async with await self.application.mzql_connection() as conn:
-            async with await conn.cursor() as cursor:
-                query = "SELECT * FROM counter"
-                async with await cursor.execute(query) as counts:
-                    assert counts.rowcount == 1
-                    row = await counts.fetchone()
-                    edit_count = row[0]
-
-        self.render("index.html", edit_count=edit_count)
+    def get(self):
+        self.render("index.html")
 
 
 class StreamHandler(tornado.websocket.WebSocketHandler):
