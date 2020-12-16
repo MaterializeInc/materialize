@@ -31,55 +31,54 @@ services:
 volumes:
   tbshare:
 
-mzconduct:
-  workflows:
-    ci:
-      steps:
-      - step: down
-        destroy_volumes: true
-      - step: start-services
-        services: [materialized, mysql]
-      - step: wait-for-mysql
-        timeout_secs: 30
-      - step: run-mysql
-        query: |
-            CREATE DATABASE tb_test;
-            USE tb_test;
-            CREATE TABLE stonks (ticker varchar(255) NOT NULL, price int NOT NULL);
-            INSERT INTO stonks VALUES ('AAPL', 499), ('GOOG', 1608);
-      - step: start-services
-        services: [tb]
-      - step: wait-for-mz
-        timeout_secs: 10
-        query: |
-            CREATE MATERIALIZED SOURCE stonks
-            FROM AVRO OCF '/tbshare/data/tb.tb_test.stonks' WITH (tail = true)
-            ENVELOPE DEBEZIUM;
-        expected: any
-      - step: wait-for-mz
-        timeout_secs: 10
-        query: SELECT * FROM stonks ORDER BY ticker
-        expected:
-          - [AAPL, 499]
-          - [GOOG, 1608]
-      - step: run-mysql
-        query: UPDATE tb_test.stonks SET price = 501 WHERE ticker = 'AAPL'
-      - step: wait-for-mz
-        timeout_secs: 10
-        query: SELECT * FROM stonks ORDER BY ticker
-        expected:
-          - [AAPL, 501]
-          - [GOOG, 1608]
-      - step: stop-services
-        services: [tb]
-      - step: start-services
-        services: [tb]
-      - step: run-mysql
-        query: INSERT INTO tb_test.stonks VALUES ('MSFT', 221)
-      - step: wait-for-mz
-        timeout_secs: 10
-        query: SELECT * FROM stonks ORDER BY ticker
-        expected:
-          - [AAPL, 501]
-          - [GOOG, 1608]
-          - [MSFT, 221]
+mzworkflows:
+  ci:
+    steps:
+    - step: down
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized, mysql]
+    - step: wait-for-mysql
+      timeout_secs: 30
+    - step: run-mysql
+      query: |
+          CREATE DATABASE tb_test;
+          USE tb_test;
+          CREATE TABLE stonks (ticker varchar(255) NOT NULL, price int NOT NULL);
+          INSERT INTO stonks VALUES ('AAPL', 499), ('GOOG', 1608);
+    - step: start-services
+      services: [tb]
+    - step: wait-for-mz
+      timeout_secs: 10
+      query: |
+          CREATE MATERIALIZED SOURCE stonks
+          FROM AVRO OCF '/tbshare/data/tb.tb_test.stonks' WITH (tail = true)
+          ENVELOPE DEBEZIUM;
+      expected: any
+    - step: wait-for-mz
+      timeout_secs: 10
+      query: SELECT * FROM stonks ORDER BY ticker
+      expected:
+        - [AAPL, 499]
+        - [GOOG, 1608]
+    - step: run-mysql
+      query: UPDATE tb_test.stonks SET price = 501 WHERE ticker = 'AAPL'
+    - step: wait-for-mz
+      timeout_secs: 10
+      query: SELECT * FROM stonks ORDER BY ticker
+      expected:
+        - [AAPL, 501]
+        - [GOOG, 1608]
+    - step: stop-services
+      services: [tb]
+    - step: start-services
+      services: [tb]
+    - step: run-mysql
+      query: INSERT INTO tb_test.stonks VALUES ('MSFT', 221)
+    - step: wait-for-mz
+      timeout_secs: 10
+      query: SELECT * FROM stonks ORDER BY ticker
+      expected:
+        - [AAPL, 501]
+        - [GOOG, 1608]
+        - [MSFT, 221]

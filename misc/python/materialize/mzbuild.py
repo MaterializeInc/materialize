@@ -655,7 +655,7 @@ class Repository:
     def __init__(self, root: Path):
         self.rd = RepositoryDetails(root)
         self.images: Dict[str, Image] = {}
-        self.compose_dirs = set()
+        self.compositions: Dict[str, Path] = {}
         for (path, dirs, files) in os.walk(self.root, topdown=True):
             # Filter out some particularly massive ignored directories to keep
             # things snappy. Not required for correctness.
@@ -668,7 +668,10 @@ class Repository:
                     raise ValueError(f"image {image.name} exists twice")
                 self.images[image.name] = image
             if "mzcompose.yml" in files:
-                self.compose_dirs.add(Path(path))
+                name = Path(path).name
+                if name in self.compositions:
+                    raise ValueError(f"composition {name} exists twice")
+                self.compositions[name] = Path(path) / "mzcompose.yml"
 
         # Validate dependencies.
         for image in self.images.values():

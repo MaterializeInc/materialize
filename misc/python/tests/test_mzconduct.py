@@ -8,23 +8,23 @@
 # by the Apache License, Version 2.0.
 
 import os
-from materialize.cli import mzconduct
+from materialize import mzcompose
 
 
 def test_bash_subst() -> None:
     step = {"step": "run", "cmd": "${EXAMPLE}"}
     one = {"mzconduct": {"workflows": {"ci": {"steps": [step]}}}}
     os.environ["EXAMPLE"] = "foo"
-    mzconduct._substitute_env_vars(one)
+    mzcompose._substitute_env_vars(one)
     assert step["cmd"] == "foo"
 
     step = {"step": "run", "cmd": "${EXAMPLE:-bar}"}
     one = {"mzconduct": {"workflows": {"ci": {"steps": [step]}}}}
     del os.environ["EXAMPLE"]
-    mzconduct._substitute_env_vars(one)
+    mzcompose._substitute_env_vars(one)
     assert step["cmd"] == "bar"
 
     step = {"step": "run", "cmd": "${NOPE NOPE}"}
     one = {"mzconduct": {"workflows": {"ci": {"steps": [step]}}}}
-    mzconduct._substitute_env_vars(one)
+    mzcompose._substitute_env_vars(one)
     assert step["cmd"] == "${NOPE NOPE}"

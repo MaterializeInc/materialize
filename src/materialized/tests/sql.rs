@@ -341,7 +341,60 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
         assert_eq!(rows[i].get::<_, i64>(2), expected[i])
     }
 
-    // Test that an unspecified timeout defaults to 0s.
+    // Another fetch should return nothing.
+    let rows = client.query("FETCH c WITH (TIMEOUT = '0s')", &[])?;
+    assert_eq!(rows.len(), 0);
+
+    Ok(())
+}
+
+#[test]
+fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().threads(2);
+    let (_server, mut client) = util::start_server(config)?;
+
+    client.batch_execute(
+        "BEGIN;
+         CREATE TABLE t (i INT8);
+         INSERT INTO t VALUES (1), (2), (3);
+         DECLARE c CURSOR FOR TAIL t;",
+    )?;
+
+    let expected: Vec<i64> = vec![1, 2, 3];
+    let mut expected_iter = expected.iter();
+    let mut next = expected_iter.next();
+
+    while let Some(expect) = next {
+        // FETCH with no timeout will wait for at least 1 result.
+        let rows = client.query("FETCH c", &[])?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get::<_, i64>(2), *expect);
+        next = expected_iter.next();
+    }
+
+    // Try again with FETCH ALL. ALL only guarantees that all available rows will
+    // be returned, but it's up to the system to decide what is available. This
+    // means that we could still get only one row per request, and we won't know
+    // how many rows will come back otherwise.
+    client.batch_execute("DECLARE c CURSOR FOR TAIL t;")?;
+    let mut expected_iter = expected.iter().peekable();
+    while expected_iter.peek().is_some() {
+        let rows = client.query("FETCH ALL c", &[])?;
+        assert!(rows.len() > 0);
+        for row in rows {
+            let next = expected_iter.next().unwrap();
+            assert_eq!(*next, row.get::<_, i64>(2));
+        }
+    }
+
+    // Verify that the wait only happens for TAIL. A SELECT with 0 rows should not
+    // block.
+    client.batch_execute(
+        "CREATE TABLE empty ();
+         DECLARE c CURSOR FOR SELECT * FROM empty;",
+    )?;
     let rows = client.query("FETCH c", &[])?;
     assert_eq!(rows.len(), 0);
 

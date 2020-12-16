@@ -64,7 +64,7 @@ steps:
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
-          config: ci/test/cargo-test.mzcompose.yml
+          composition: cargo-test
           run: app
 
   - id: miri-test
@@ -82,7 +82,7 @@ steps:
     inputs: [test/testdrive]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/testdrive/mzcompose.yml
+          composition: testdrive
           run: testdrive
 
   - id: kafka-ssl
@@ -92,7 +92,7 @@ steps:
     inputs: [test/kafka-ssl/smoketest.td]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/kafka-ssl/mzcompose.yml
+          composition: kafka-ssl
           run: testdrive
 
   - id: kafka-krb5
@@ -102,7 +102,7 @@ steps:
     inputs: [test/kafka-krb5/smoketest.td]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/kafka-krb5/mzcompose.yml
+          composition: kafka-krb5
           run: testdrive
 
   - id: kafka-sasl-plain
@@ -112,7 +112,7 @@ steps:
     inputs: [test/kafka-sasl-plain/smoketest.td]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/kafka-sasl-plain/mzcompose.yml
+          composition: kafka-sasl-plain
           run: testdrive
 
   - id: short-sqllogictest
@@ -123,7 +123,7 @@ steps:
     inputs: [test/sqllogictest]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/sqllogictest/mzcompose.yml
+          composition: sqllogictest
           run: sqllogictest
 
   - id: streaming-demo
@@ -131,44 +131,44 @@ steps:
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - ./ci/plugins/mzconduct:
-          test: billing
-          workflow: ci
+      - ./ci/plugins/mzcompose:
+          composition: billing
+          run: ci
 
   - id: perf-kinesis
     label: ":shower: kinesis streaming demo"
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - ./ci/plugins/mzconduct:
-          test: perf-kinesis
-          workflow: ci
+      - ./ci/plugins/mzcompose:
+          composition: perf-kinesis
+          run: ci
 
   - id: perf-upsert
     label: ":point_up: upsert streaming demo"
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - ./ci/plugins/mzconduct:
-          test: perf-upsert
-          workflow: ci
+      - ./ci/plugins/mzcompose:
+          composition: perf-upsert
+          run: ci
 
   - id: chbench-demo
     label: "chbench sanity check"
     depends_on: build
     plugins:
-      - ./ci/plugins/mzconduct:
-          test: chbench
-          workflow: ci
+      - ./ci/plugins/mzcompose:
+          composition: chbench
+          run: ci
     timeout_in_minutes: 30
 
   - id: tb
     label: tb
     depends_on: build
     plugins:
-      - ./ci/plugins/mzconduct:
-          test: tb
-          workflow: ci
+      - ./ci/plugins/mzcompose:
+          composition: tb
+          run: ci
     timeout_in_minutes: 30
 
   - id: catalog-compat
@@ -177,7 +177,7 @@ steps:
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/catalog-compat/mzcompose.yml
+          composition: catalog-compat
           run: catalog-compat
 
   - id: metabase-demo
@@ -186,7 +186,7 @@ steps:
     timeout_in_minutes: 10
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/metabase/mzcompose.yml
+          composition: metabase
           run: smoketest
 
   - id: lang-csharp
@@ -196,7 +196,7 @@ steps:
     inputs: [test/lang/csharp]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/lang/csharp/mzcompose.yml
+          composition: csharp
           run: csharp
 
   - id: lang-js
@@ -206,7 +206,7 @@ steps:
     inputs: [test/lang/js]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/lang/js/mzcompose.yml
+          composition: js
           run: js
 
   - id: lang-java
@@ -216,7 +216,7 @@ steps:
     inputs: [test/lang/java]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/lang/java/mzcompose.yml
+          composition: java
           run: java-smoketest
 
   - id: lang-python
@@ -226,7 +226,7 @@ steps:
     inputs: [test/lang/python]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/lang/python/mzcompose.yml
+          composition: python
           run: python
 
   - id: deploy

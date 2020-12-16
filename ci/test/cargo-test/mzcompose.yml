@@ -22,7 +22,7 @@ services:
     - "--"
     - "run-tests"
     volumes:
-    - ../../:/workdir
+    - ../../../:/workdir
     environment:
     - ZOOKEEPER_ADDR=zookeeper:2181
     - KAFKA_ADDR=kafka:9092

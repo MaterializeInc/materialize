@@ -23,4 +23,11 @@ Supported `WITH` option values:
 
 Option name | Value type | Default | Describes
 ------------|------------|---------|----------
-`timeout`   | `interval` | `0s`    | When fetching from a [`TAIL`](/sql/tail) cursor, complete if there are no more rows ready after this timeout. The default `0s` will cause `FETCH` to only return rows that have already been produced since the previous `FETCH`. {{< version-added v0.5.4 >}}
+`timeout`   | `interval` | None    | When fetching from a [`TAIL`](/sql/tail) cursor, complete if there are no more rows ready after this timeout. The default will cause `FETCH` to wait for rows to be available. {{< version-added v0.5.5 >}}
+
+## Details
+
+`FETCH` will return at most the specified _count_ of available rows (or all available rows with `ALL`).
+
+For [`TAIL`](/sql/tail) queries, `FETCH` by default will wait for rows to be available before returning.
+Specify a timeout of `0s` to return only rows that are immediately available.

@@ -10,10 +10,7 @@
 
 set -euo pipefail
 
-MTRLZ_GIT_ROOT="${MTRLZ_GIT_ROOT:-$(git rev-parse --show-toplevel)}"
-if [[ "${PWD}" != "${MTRLZ_GIT_ROOT}" ]]; then
-    cd "${MTRLZ_GIT_ROOT}"
-fi
+project=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 chbench_seconds=43200
 cleanup="no"
@@ -87,15 +84,15 @@ main() {
     export NUM_WAREHOUSES="${warehouses}"
     export CHBENCH_RUN_SECONDS="${chbench_seconds}"
 
-    ./bin/mzconduct run chbench -w setup-ingest-benchmark
+    "$project"/mzcompose run setup-ingest-benchmark
 
     for i in $(seq 1 "${num_measurements}"); do
         echo "Conducting measurement ${i} of ${num_measurements}"
-        ./bin/mzconduct run chbench -w measure-ingest-performance
+        "$project"/mzcompose run measure-ingest-performance
     done
 
     if [[ "${cleanup}" = "yes" ]]; then
-        ./bin/mzconduct down chbench
+        "$project"/mzcompose down
     fi
 }
 
