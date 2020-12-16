@@ -67,8 +67,11 @@ class View:
     def update(self, deleted, inserted, timestamp):
         """Update our internal view based on this diff."""
         self.current_timestamp = timestamp
-        # Keep any rows that have not been deleted
-        self.current_rows = [r for r in self.current_rows if r not in deleted]
+
+        # Remove any rows that have been deleted
+        for r in deleted:
+            self.current_rows.remove(r)
+
         # And add any rows that have been inserted
         self.current_rows.extend(inserted)
 
@@ -131,12 +134,21 @@ class Application(tornado.web.Application):
                 self.views[view_name].update(deleted, inserted, timestamp)
                 inserted = []
                 deleted = []
-            elif diff == "-1":
-                deleted.append(columns)
-            elif diff == "1":
-                inserted.append(columns)
+            # This is a row that we should insert or delete "diff" number of times
+            # Simplify our implementation by creating "diff" copies of each row instead
+            # of tracking counts per row
             else:
-                raise ValueError(f"Bad data from TAIL: {row.strip()}")
+                try:
+                    diff = int(diff)
+                except ValueError:
+                    raise
+
+                if diff < 0:
+                    deleted.extend([columns for _ in range(diff, 0)])
+                elif diff > 0:
+                    inserted.extend([columns for _ in range(0, diff)])
+                else:
+                    raise ValueError(f"Bad data from TAIL: {row.strip()}")
 
 
 def configure_logging():
