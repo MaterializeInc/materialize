@@ -10,17 +10,15 @@
 # mzcompose.py — runs Docker Compose with Materialize customizations.
 
 from pathlib import Path
-from tempfile import TemporaryFile
 from typing import IO, List, Tuple, Text, Optional, Sequence
 from typing_extensions import NoReturn
 import argparse
 import os
-import subprocess
 import sys
-import yaml
 
 from materialize import errors
 from materialize import mzbuild
+from materialize import mzcompose
 from materialize import spawn
 from materialize import ui
 
@@ -44,7 +42,7 @@ def assert_docker_compose_version() -> None:
         raise errors.MzConfigurationError(msg)
 
 
-def main(argv: List[str]) -> int:
+def main(argv: List[str]) -> None:
     # Lightly parse the arguments so we know what to do.
     args, unknown_args = ArgumentParser().parse_known_args(argv)
     if not args.file:
@@ -63,88 +61,33 @@ def main(argv: List[str]) -> int:
     assert_docker_compose_version()
 
     announce("Collecting mzbuild dependencies")
-    composes = []
+    composition = mzcompose.Composition(
+        repo, args.project_directory or str(Path(config_files[0]).parent),
+    )
     for config_file in config_files:
-        composes.append(build_compose_file(repo, args.command, config_file))
-
-    # Hand over control to Docker Compose.
-    announce("Delegating to Docker Compose")
-    dc_args = [
-        "docker-compose",
-        *[f"-f/dev/fd/{comp.fileno()}" for comp in composes],
-        "--project-directory",
-        args.project_directory or str(Path(config_file).parent),
-        *unknown_args,
-        *([args.command] if args.command is not None else []),
-        *args.extra,
-    ]
-    os.execvp("docker-compose", dc_args)
-
-
-def build_compose_file(
-    repo: mzbuild.Repository, command: str, config_file: str
-) -> IO[bytes]:
-    """Substitute known keys with mzbuild-provided values
-
-    * Replace `mzimage` with fingerprinted image names
-    """
-    images = []
-    default_tag = os.getenv(f"MZBUILD_TAG", None)
-    with open(config_file) as f:
-        compose = yaml.safe_load(f)
-        # strip mzconduct top-level key, if it exists
-        compose.pop("mzconduct", None)
-        for config in compose["services"].values():
-            if "mzbuild" in config:
-                image_name = config["mzbuild"]
-
-                if image_name not in repo.images:
-                    raise errors.BadSpec(f"mzcompose: unknown image {image_name}")
-
-                image = repo.images[image_name]
-                override_tag = os.getenv(
-                    f"MZBUILD_{image.env_var_name()}_TAG", default_tag
-                )
-                if override_tag is not None:
-                    config["image"] = image.docker_name(override_tag)
-                    print(
-                        f"mzcompose: warning: overriding {image_name} image to tag {override_tag}",
-                        file=sys.stderr,
-                    )
-                    del config["mzbuild"]
-                else:
-                    images.append(image)
-
-            if "propagate-uid-gid" in config:
-                config["user"] = f"{os.getuid()}:{os.getgid()}"
-                del config["propagate-uid-gid"]
-
-    deps = repo.resolve_dependencies(images)
+        composition.load_file(config_file)
+    deps = repo.resolve_dependencies(composition.images)
     for d in deps:
         say(d.spec())
-
-    for config in compose["services"].values():
-        if "mzbuild" in config:
-            config["image"] = deps[config["mzbuild"]].spec()
-            del config["mzbuild"]
 
     # Check if the command is going to create or start containers, and if so
     # build the dependencies. This can be slow, so we don't want to do it if we
     # can help it (e.g., for `down` or `ps`).
-    if command in ["create", "run", "start", "up"]:
+    if args.command in ["create", "run", "start", "up"]:
         deps.acquire()
 
-    # Construct a configuration that will point Docker Compose at the correct
-    # images.
-    tempfile = TemporaryFile()
-    os.set_inheritable(tempfile.fileno(), True)
-    yaml.dump(compose, tempfile, encoding="utf-8")  # type: ignore
-    tempfile.flush()
-    tempfile.seek(0)
-    return tempfile
+    # Hand over control to Docker Compose.
+    announce("Delegating to Docker Compose")
+    composition.run(
+        [
+            *unknown_args,
+            *([args.command] if args.command is not None else []),
+            *args.extra,
+        ]
+    )
 
 
-def gen_shortcuts(repo: mzbuild.Repository) -> int:
+def gen_shortcuts(repo: mzbuild.Repository) -> None:
     template = """#!/usr/bin/env bash
 
 # Copyright Materialize, Inc. All rights reserved.
@@ -165,7 +108,6 @@ exec "$(dirname "$0")/{}/bin/mzcompose" "$@"
         with open(mzcompose_path, "w") as f:
             f.write(template.format(os.path.relpath(repo.root, path)))
         mzbuild.chmod_x(mzcompose_path)
-    return 0
 
 
 # We subclass `argparse.ArgumentParser` so that we can override its default
@@ -197,4 +139,4 @@ class ArgumentParser(argparse.ArgumentParser):
 
 if __name__ == "__main__":
     with errors.error_handler(lambda *args: print(*args, file=sys.stderr)):
-        sys.exit(main(sys.argv[1:]))
+        main(sys.argv[1:])
