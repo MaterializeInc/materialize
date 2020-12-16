@@ -20,17 +20,17 @@ as the underlying `MATERIALIZED VIEWS` are updated, using the [TAIL][] command.
 
 ## Running it Yourself
 
-To run this demo using Docker Compose, run `mzconduct up`:
+To run this demo using Docker Compose, run `mzcompose up` within the `play/wikirecent` directory:
 
-    ./bin/mzconduct up wikirecent -w demo
+    ./mzcompose run demo
 
-To view the web app in your local browser, run the `mzconduct web`:
+To view the web app in your local browser, run the `mzcompose web`:
 
-    ./bin/mzconduct web wikirecent app
+    ./mzcompose web app
 
-Once you're done, run `mzconduct down` to stop services and delete the associated volumes:
+Once you're done, run `mzcompose down` to stop services and delete the associated volumes:
 
-    ./bin/mzconduct down wikirecent -v
+    ./mzcompose down -v
 
 ## How This Works
 
@@ -84,13 +84,13 @@ The Materialize database is not exposed on a well-numbered port and instead dock
 a random high-numbered port. To open a Postgres REPL, connected to the Materialized instance
 running as part of this demo, run:
 
-    psql -h localhost -p $(./bin/mzconduct list-port wikirecent materialized) materialize
+    psql -h localhost -p $(./bin/mzcompose list-port wikirecent materialized) materialize
 
 ### Streaming top10 from Materialize to your console
 
 To view the data sent from Materialize server to the browser, use the `tail-top10` workflow:
 
-    ./bin/mzconduct run wikirecent -w stream-top10
+    ./bin/mzcompose run tail-top10
 
 The output from this script corresponds to the row-oriented results returned by materialized to
 the web server. The implementation of this script in
@@ -100,7 +100,7 @@ the web server. The implementation of this script in
 
 To view the data sent from the web server to the browser, use the `stream-top10` workflow:
 
-    ./bin/mzconduct run wikirecent -w stream-top10
+    ./bin/mzcompose run stream-top10
 
 The output corresponds to the batch oriented, JSON results returned by the web server to the
 Javascript client. The implementation of this script in
