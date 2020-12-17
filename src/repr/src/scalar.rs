@@ -400,16 +400,16 @@ impl<'a> Datum<'a> {
                         })
                     }
                     (Datum::Array(_), _) => false,
-                    (Datum::List(list), ScalarType::List(t)) => list
+                    (Datum::List(list), ScalarType::List { element_type, .. }) => list
                         .iter()
-                        .all(|e| e.is_null() || is_instance_of_scalar(e, t)),
+                        .all(|e| e.is_null() || is_instance_of_scalar(e, element_type)),
                     (Datum::List(list), ScalarType::Record { fields }) => {
                         list.iter().zip_eq(fields).all(|(e, (_, t))| {
                             (e.is_null() && t.nullable) || is_instance_of_scalar(e, &t.scalar_type)
                         })
                     }
                     (Datum::List(_), _) => false,
-                    (Datum::Map(map), ScalarType::Map { value_type }) => map
+                    (Datum::Map(map), ScalarType::Map { value_type, .. }) => map
                         .iter()
                         .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, value_type)),
                     (Datum::Map(_), _) => false,
@@ -699,7 +699,10 @@ pub enum ScalarType {
     ///
     /// Elements within the list are of the specified type. List elements may
     /// always be [`Datum::Null`].
-    List(Box<ScalarType>),
+    List {
+        element_type: Box<ScalarType>,
+        custom_oid: Option<u32>,
+    },
     /// An ordered and named sequence of datums.
     Record {
         /// The names and types of the fields of the record, in order from left
@@ -713,7 +716,10 @@ pub enum ScalarType {
     /// Keys within the map are always of type [`ScalarType::String`].
     /// Values within the map are of the specified type. Values may always
     /// be [`Datum::Null`].
-    Map { value_type: Box<ScalarType> },
+    Map {
+        value_type: Box<ScalarType>,
+        custom_oid: Option<u32>,
+    },
 }
 
 impl<'a> ScalarType {
@@ -735,7 +741,7 @@ impl<'a> ScalarType {
     /// Panics if called on anything other than a [`ScalarType::List`].
     pub fn unwrap_list_element_type(&self) -> &ScalarType {
         match self {
-            ScalarType::List(s) => s,
+            ScalarType::List { element_type, .. } => element_type,
             _ => panic!("ScalarType::unwrap_list_element_type called on {:?}", self),
         }
     }
@@ -750,9 +756,9 @@ impl<'a> ScalarType {
         let mut descender = self.unwrap_list_element_type();
         let mut dims = 1;
 
-        while let ScalarType::List(s) = descender {
+        while let ScalarType::List { element_type, .. } = descender {
             dims += 1;
-            descender = s;
+            descender = element_type;
         }
 
         dims
@@ -777,7 +783,7 @@ impl<'a> ScalarType {
     /// Panics if called on anything other than a [`ScalarType::Map`].
     pub fn unwrap_map_value_type(&self) -> &ScalarType {
         match self {
-            ScalarType::Map { value_type } => &**value_type,
+            ScalarType::Map { value_type, .. } => &**value_type,
             _ => panic!("ScalarType::unwrap_map_value_type called on {:?}", self),
         }
     }
@@ -795,7 +801,7 @@ impl<'a> ScalarType {
     /// [`ScalarType::List`] or [`ScalarType::Array`], irrespective of its
     /// element type.
     pub fn is_vec(&self) -> bool {
-        matches!(self, ScalarType::List(_) | ScalarType::Array(_))
+        matches!(self, ScalarType::List{..} | ScalarType::Array(_))
     }
 }
 
@@ -823,17 +829,29 @@ impl PartialEq for ScalarType {
             | (Uuid, Uuid)
             | (Jsonb, Jsonb)
             | (Oid, Oid) => true,
+            (
+                List {
+                    element_type: element_l,
+                    custom_oid: oid_l,
+                },
+                List {
+                    element_type: element_r,
+                    custom_oid: oid_r,
+                },
+            ) => element_l.eq(element_r) && oid_l == oid_r,
 
-            (List(a), List(b)) | (Array(a), Array(b)) => a.eq(b),
+            (Array(a), Array(b)) => a.eq(b),
             (Record { fields: fields_a }, Record { fields: fields_b }) => fields_a.eq(fields_b),
             (
                 Map {
-                    value_type: value_type_a,
+                    value_type: value_l,
+                    custom_oid: oid_l,
                 },
                 Map {
-                    value_type: value_type_b,
+                    value_type: value_r,
+                    custom_oid: oid_r,
                 },
-            ) => value_type_a.eq(value_type_b),
+            ) => value_l.eq(value_r) && oid_l == oid_r,
 
             (Bool, _)
             | (Int32, _)
@@ -851,7 +869,7 @@ impl PartialEq for ScalarType {
             | (Jsonb, _)
             | (Uuid, _)
             | (Array(_), _)
-            | (List(_), _)
+            | (List { .. }, _)
             | (Record { .. }, _)
             | (Oid, _)
             | (Map { .. }, _) => false,
@@ -886,9 +904,13 @@ impl Hash for ScalarType {
                 state.write_u8(14);
                 t.hash(state);
             }
-            List(t) => {
+            List {
+                element_type,
+                custom_oid,
+            } => {
                 state.write_u8(15);
-                t.hash(state);
+                element_type.hash(state);
+                custom_oid.hash(state);
             }
             Record { fields } => {
                 state.write_u8(16);
@@ -896,9 +918,13 @@ impl Hash for ScalarType {
             }
             Uuid => state.write_u8(16),
             Oid => state.write_u8(17),
-            Map { value_type } => {
+            Map {
+                value_type,
+                custom_oid,
+            } => {
                 state.write_u8(18);
                 value_type.hash(state);
+                custom_oid.hash(state);
             }
         }
     }
@@ -929,14 +955,14 @@ impl fmt::Display for ScalarType {
             Jsonb => f.write_str("jsonb"),
             Uuid => f.write_str("uuid"),
             Array(t) => write!(f, "{}[]", t),
-            List(t) => write!(f, "{} list", t),
+            List { element_type, .. } => write!(f, "{} list", element_type),
             Record { fields } => {
                 f.write_str("record(")?;
                 write_delimited(f, ", ", fields, |f, (n, t)| write!(f, "{}: {}", n, t))?;
                 f.write_str(")")
             }
             Oid => f.write_str("oid"),
-            Map { value_type } => write!(f, "map(text=>{})", value_type),
+            Map { value_type, .. } => write!(f, "map(text=>{})", value_type),
         }
     }
 }

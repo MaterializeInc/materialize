@@ -1066,7 +1066,10 @@ fn validate_schema_2(
                 }
             }
             let next_node = schema.step(inner);
-            let ret = ScalarType::List(Box::new(validate_schema_2(seen_avro_nodes, next_node)?));
+            let ret = ScalarType::List {
+                element_type: Box::new(validate_schema_2(seen_avro_nodes, next_node)?),
+                custom_oid: None,
+            };
             if let Some(named_idx) = named_idx {
                 seen_avro_nodes.remove(&named_idx);
             }
@@ -1074,6 +1077,7 @@ fn validate_schema_2(
         }
         SchemaPiece::Map(inner) => ScalarType::Map {
             value_type: Box::new(validate_schema_2(seen_avro_nodes, schema.step(inner))?),
+            custom_oid: None,
         },
 
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
@@ -2597,7 +2601,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
                 ScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
                 ScalarType::Array(_t) => unimplemented!("array types"),
-                ScalarType::List(_t) => unimplemented!("list types"),
+                ScalarType::List { .. } => unimplemented!("list types"),
                 ScalarType::Record { .. } => unimplemented!("record types"),
                 ScalarType::Map { .. } => unimplemented!("map types"),
             };
@@ -2718,7 +2722,7 @@ fn build_row_schema_json(
                 "logicalType": "uuid",
             }),
             ScalarType::Array(_t) => unimplemented!("array types"),
-            ScalarType::List(_t) => unimplemented!("list types"),
+            ScalarType::List { .. } => unimplemented!("list types"),
             ScalarType::Record { .. } => unimplemented!("record types"),
             ScalarType::Map { .. } => unimplemented!("map types"),
         };

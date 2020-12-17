@@ -1961,7 +1961,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
             let ty = ecx.scalar_type(&expr);
             let func = match &ty {
-                ScalarType::List(_) => BinaryFunc::ListIndex,
+                ScalarType::List { .. } => BinaryFunc::ListIndex,
                 ScalarType::Array(_) => BinaryFunc::ArrayIndex,
                 ty => bail!("cannot subscript type {}", ty),
             };
@@ -1990,7 +1990,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
             let ty = ecx.scalar_type(&expr);
             match &ty {
-                ScalarType::List(_) => {
+                ScalarType::List { .. } => {
                     let pos_len = positions.len();
                     let n_dims = ty.unwrap_list_n_dims();
                     if pos_len > n_dims {
@@ -2186,14 +2186,14 @@ fn plan_list(
     type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (elem_type, exprs) = if exprs.is_empty() {
-        if let Some(ScalarType::List(elem_type)) = type_hint {
-            ((**elem_type).clone(), vec![])
+        if let Some(ScalarType::List { element_type, .. }) = type_hint {
+            ((**element_type).clone(), vec![])
         } else {
             bail!("cannot determine type of empty list");
         }
     } else {
         let type_hint = match type_hint {
-            Some(ScalarType::List(elem_type)) => Some(&**elem_type),
+            Some(ScalarType::List { element_type, .. }) => Some(&**element_type),
             _ => None,
         };
         let mut out = vec![];
@@ -2588,9 +2588,10 @@ pub fn scalar_type_from_sql(
         DataType::Array(elem_type) => {
             ScalarType::Array(Box::new(scalar_type_from_sql(scx, &elem_type)?))
         }
-        DataType::List(elem_type) => {
-            ScalarType::List(Box::new(scalar_type_from_sql(scx, &elem_type)?))
-        }
+        DataType::List(elem_type) => ScalarType::List {
+            element_type: Box::new(scalar_type_from_sql(scx, &elem_type)?),
+            custom_oid: None,
+        },
         DataType::Map {
             key_type,
             value_type,
@@ -2601,6 +2602,7 @@ pub fn scalar_type_from_sql(
             }
             ScalarType::Map {
                 value_type: Box::new(scalar_type_from_sql(scx, &value_type)?),
+                custom_oid: None,
             }
         }
         DataType::Other { name, typ_mod } => {
@@ -2714,13 +2716,17 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
         pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
         pgrepr::Type::Uuid => Ok(ScalarType::Uuid),
         pgrepr::Type::Array(t) => Ok(ScalarType::Array(Box::new(scalar_type_from_pg(t)?))),
-        pgrepr::Type::List(l) => Ok(ScalarType::List(Box::new(scalar_type_from_pg(l)?))),
+        pgrepr::Type::List(l) => Ok(ScalarType::List {
+            element_type: Box::new(scalar_type_from_pg(l)?),
+            custom_oid: None,
+        }),
         pgrepr::Type::Record(_) => {
             bail!("internal error: can't convert from pg record to materialize record")
         }
         pgrepr::Type::Oid => Ok(ScalarType::Oid),
         pgrepr::Type::Map { value_type } => Ok(ScalarType::Map {
             value_type: Box::new(scalar_type_from_pg(value_type)?),
+            custom_oid: None,
         }),
     }
 }
