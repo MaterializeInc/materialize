@@ -47,13 +47,6 @@ impl LocalId {
     pub fn new(v: u64) -> LocalId {
         LocalId(v)
     }
-    /// Read the contained identifier.
-    ///
-    /// The contained value is not semantically meaningful, and this method
-    /// exists mainly to assist others in finding distinct identifiers.
-    pub fn id(&self) -> u64 {
-        self.0
-    }
 }
 
 impl fmt::Display for LocalId {

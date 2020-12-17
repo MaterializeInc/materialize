@@ -89,35 +89,37 @@ fn inline_views(dataflow: &mut DataflowDesc) {
                 // We can remove this view and insert it in the later view,
                 // but are not able to relocate the later view `other`.
 
-                // We would like to process `other` to re-bind all local
-                // identifiers (let binding names) so that we can find a
-                // new name that does not clash with any of them.
-                let mut max_local_id = 0;
-                dataflow.objects_to_build[other]
-                    .relation_expr
-                    .as_ref()
-                    .visit(&mut |expr| {
-                        if let RelationExpr::Get {
-                            id: Id::Local(local),
-                            ..
-                        } = expr
-                        {
-                            if max_local_id < local.id() {
-                                max_local_id = local.id();
-                            }
-                        }
-                    });
-                let new_local_id = max_local_id + 1;
+                // When splicing in the `index` view, we need to create disjoint
+                // identifiers for the Let's `body` and `value`, as well as a new
+                // identifier for the binding itself. Following `UpdateLet`, we
+                // go with the binding first, then the value, then the body.
+                let update_let = crate::update_let::UpdateLet;
+                let mut id_gen = crate::IdGen::default();
+                let new_local = LocalId::new(id_gen.allocate_id());
+                // Use the same `id_gen` to assign new identifiers to `index`.
+                update_let.action(
+                    dataflow.objects_to_build[index].relation_expr.as_mut(),
+                    &mut HashMap::new(),
+                    &mut id_gen,
+                );
+                // Assign new identifiers to the other relation.
+                update_let.action(
+                    dataflow.objects_to_build[other].relation_expr.as_mut(),
+                    &mut HashMap::new(),
+                    &mut id_gen,
+                );
+                // Install the `new_local` name wherever `global_id` was used.
                 dataflow.objects_to_build[other]
                     .relation_expr
                     .as_mut()
                     .visit_mut(&mut |expr| {
                         if let RelationExpr::Get { id, .. } = expr {
-                            if *id == Id::Global(global_id) {
-                                *id = Id::Local(LocalId::new(new_local_id));
+                            if id == &Id::Global(global_id) {
+                                *id = Id::Local(new_local);
                             }
                         }
                     });
+
                 // With identifiers rewritten, we can replace `other` with
                 // a `RelationExpr::Let` binding, whose value is `index` and
                 // whose body is `other`.
@@ -130,7 +132,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
                     .as_mut()
                     .take_dangerous();
                 *dataflow.objects_to_build[other].relation_expr.as_mut() = RelationExpr::Let {
-                    id: LocalId::new(new_local_id),
+                    id: new_local,
                     value: Box::new(value),
                     body: Box::new(body),
                 };
@@ -150,15 +152,9 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             .push((*global_id, desc.keys.clone()));
     }
     let optimizer = crate::Optimizer::default();
-    let update_let = crate::update_let::UpdateLet;
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.
-        update_let.action(
-            object.relation_expr.as_mut(),
-            &mut HashMap::new(),
-            &mut crate::IdGen::default(),
-        );
         // Re-run all optimizations on the composite views.
         optimizer
             .transform(object.relation_expr.as_mut(), &indexes)
