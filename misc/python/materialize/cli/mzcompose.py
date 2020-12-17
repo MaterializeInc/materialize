@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import IO, List, Tuple, Text, Optional, Sequence
 from typing_extensions import NoReturn
 import argparse
+import json
 import os
 import sys
+import webbrowser
 
 from materialize import errors
 from materialize import mzbuild
@@ -109,6 +111,24 @@ def main(argv: List[str]) -> int:
                 )
             workflow.run()
             return 0
+    # Check if we are being asked to list ports
+    elif args.command == "list-ports":
+        for port in composition.find_host_ports(args.first_command_arg):
+            print(port)
+        return 0
+    # Check if we are being asked to open a web connection to this service
+    elif args.command == "web":
+        ports = composition.find_host_ports(args.first_command_arg)
+        if len(ports) == 1:
+            webbrowser.open(f"http://localhost:{ports[0]}")
+        elif not ports:
+            raise errors.MzRuntimeError(
+                f"No running services matched {args.first_command_arg}"
+            )
+        else:
+            raise errors.MzRuntimeError(
+                f"Too many ports matched {args.first_command_arg}, found: {ports}"
+            )
 
     # Hand over control to Docker Compose.
     announce("Delegating to Docker Compose")
