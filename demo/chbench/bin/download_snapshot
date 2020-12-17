@@ -55,7 +55,7 @@ main() {
 
     if [[ -z "${AWS_SESSION_TOKEN:-}" ]]; then
         echo "ERROR: AWS_SESSION_TOKEN variable is required to authenticate with S3"
-        echo "TIP: try running 'aws-vault exec <profile> -- ${BASH_SOURCE[0]} $@"
+        echo "TIP: try running 'aws-vault exec <profile> -- ${BASH_SOURCE[0]}" "$@"
         exit 1
     fi
 
