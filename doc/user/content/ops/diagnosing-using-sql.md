@@ -181,3 +181,64 @@ where
     mse.id = dod.id
 order by ratio desc;
 ```
+
+### I found a problematic operator! How do I find where it came from?
+
+Look up the operator in `mz_dataflow_operator_addresses`. If an operator has
+value `x` in slot `n`, then it is part of the `x` subregion of the region
+defined by slots `0..n-1`. The example SQL query and result below shows an
+operator whose id is 515 that belongs to "subregion 5 of region 1 of dataflow
+21".
+```sql 
+select * from mz_dataflow_operator_addresses where id=515 and worker=0;
+```
+```
+ id  | worker | slot | value 
+-----+--------+------+-------
+ 515 |      0 |    0 |    21
+ 515 |      0 |    1 |     1
+ 515 |      0 |    2 |     5
+```
+
+Usually, it is only important to know the name of the dataflow a problematic
+operator comes from. Once the name is known, the dataflow can be correlated to
+an index or view in Materialize.
+
+Each dataflow has an operator representing the entire dataflow. The address of
+said operator has only a single slot. For the example operator 515 above, you
+can find the name of the dataflow if you can find the name of the operator whose
+address is just "dataflow 21." 
+
+```sql
+-- get id and name of the operator representing the entirety of the dataflow
+-- that a problematic operator comes from
+SELECT
+    mdo.id as id,
+    mdo.name as name
+FROM
+    mz_dataflow_operator_addresses mdoa1,
+    mz_dataflow_operator_addresses mdoa2,
+    -- source of operator names
+    mz_dataflow_operators mdo,
+    -- view containing operators representing entire dataflows
+    (SELECT
+        mz_dataflow_operator_addresses.id
+    FROM
+        mz_catalog.mz_dataflow_operator_addresses
+    WHERE 
+        mz_dataflow_operator_addresses.worker=0
+    GROUP BY
+        mz_dataflow_operator_addresses.id,
+        mz_dataflow_operator_addresses.worker
+    HAVING count(*) = 1) operator_unit_address
+WHERE
+    mdoa1.slot = 0
+    AND mdoa1.worker = 0
+    AND mdoa1.id = <problematic_operator_id>
+    AND mdoa2.slot = 0
+    AND mdoa2.worker = 0
+    AND mdoa1.value = mdoa2.value
+    AND mdoa2.id = operator_unit_address.id
+    AND mdo.id = mdoa2.id
+    AND mdo.worker = 0
+```
