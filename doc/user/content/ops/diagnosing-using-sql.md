@@ -189,11 +189,11 @@ value `x` in slot `n`, then it is part of the `x` subregion of the region
 defined by slots `0..n-1`. The example SQL query and result below shows an
 operator whose id is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
-```sql 
+```sql
 select * from mz_dataflow_operator_addresses where id=515 and worker=0;
 ```
 ```
- id  | worker | slot | value 
+ id  | worker | slot | value
 -----+--------+------+-------
  515 |      0 |    0 |    21
  515 |      0 |    1 |     1
@@ -207,7 +207,7 @@ an index or view in Materialize.
 Each dataflow has an operator representing the entire dataflow. The address of
 said operator has only a single slot. For the example operator 515 above, you
 can find the name of the dataflow if you can find the name of the operator whose
-address is just "dataflow 21." 
+address is just "dataflow 21."
 
 ```sql
 -- get id and name of the operator representing the entirety of the dataflow
@@ -216,29 +216,27 @@ SELECT
     mdo.id as id,
     mdo.name as name
 FROM
-    mz_dataflow_operator_addresses mdoa1,
-    mz_dataflow_operator_addresses mdoa2,
+    mz_dataflow_operator_addresses mdoa,
     -- source of operator names
     mz_dataflow_operators mdo,
     -- view containing operators representing entire dataflows
     (SELECT
-        mz_dataflow_operator_addresses.id
+      mdoa.id as dataflow_operator,
+      sum(mdoa.value) as dataflow_value
     FROM
-        mz_catalog.mz_dataflow_operator_addresses
-    WHERE 
-        mz_dataflow_operator_addresses.worker=0
+      mz_dataflow_operator_addresses mdoa
+    WHERE
+      mdoa.worker = 0
     GROUP BY
-        mz_dataflow_operator_addresses.id,
-        mz_dataflow_operator_addresses.worker
-    HAVING count(*) = 1) operator_unit_address
+      mdoa.id,
+      mdoa.worker
+    HAVING
+      count(*) = 1) dataflows
 WHERE
-    mdoa1.slot = 0
-    AND mdoa1.worker = 0
-    AND mdoa1.id = <problematic_operator_id>
-    AND mdoa2.slot = 0
-    AND mdoa2.worker = 0
-    AND mdoa1.value = mdoa2.value
-    AND mdoa2.id = operator_unit_address.id
-    AND mdo.id = mdoa2.id
+    mdoa.slot = 0
+    AND mdoa.worker = 0
+    AND mdoa.id = <problematic_operator_id>
+    AND mdoa.value = dataflows.dataflow_value
+    AND mdo.id = dataflows.dataflow_operator
     AND mdo.worker = 0
 ```
