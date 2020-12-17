@@ -39,7 +39,7 @@ First, create a source from the kafka topic.
 
 ```
 CREATE SOURCE x
-  FROM KAFKA BROKER 'kafka:9092' TOPIC 'x-live'
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 't'
   FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT;
 ```
 
