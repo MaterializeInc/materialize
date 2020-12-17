@@ -42,7 +42,7 @@ soley as transformations from previous state. This has two major benefits:
 - Real-time push notifications. Applications are notified as soon as data changes and are not
   required to repeatedly poll for the same information over and over again.
 
-- Economy of resources required. Each result set only contains information about datum that have
+- Economy of resources required. Each result set only contains information about rows that have
   changed. Fewer bytes are sent over the network and processing updates is more efficient.
 
 ### Services and Service Dependency
