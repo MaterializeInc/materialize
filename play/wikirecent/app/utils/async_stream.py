@@ -10,8 +10,11 @@
 
 """async_stream
 
-Module showing an example for how to asynchronously stream a VIEW using websockets from the local
+Example utility that streams a VIEW via the websocket interface provided by the application
+server. Useful for debugging / viewing the data transferred between the Javascript clients and the
 Python web server.
+
+Can also be used as a very simple example for how to use websockets in an asynchronous context.
 """
 
 import argparse

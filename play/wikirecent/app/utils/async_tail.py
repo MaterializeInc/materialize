@@ -10,7 +10,10 @@
 
 """async_tail
 
-Module showing an example for how to asynchronously TAIL a Materialized view.
+Example utility that streams a VIEW using the TAIL command provided by Materialized. Useful for
+debugging / viewing the data transferred between materialized and the Python web server.
+
+Can also be used as a very simple example for how to use psycopg3 in an asynchronous context.
 """
 
 import argparse
