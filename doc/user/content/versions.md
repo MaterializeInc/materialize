@@ -26,12 +26,16 @@ Binary tarballs are built for every merge to the [main branch on
 GitHub][github]. These tarballs are not suitable for use in production.
 **Run unstable builds at your own risk.**
 
-Version | Binary tarball links
---------|---------------------
-main    | [Linux] / [macOS]
+| Method       | Available at                        |
+|--------------|-------------------------------------|
+| Tarball      | [Linux] / [macOS]                   |
+| Docker image | `materialize/materialized:unstable` |
 
-The tarballs for other commits on main can be constructed by replacing
-`latest` in the links above with the full 40-character commit hash.
+To get an arbitrary commit for:
+
+- **Tarballs**, replace `latest` in the URL with the full 40-character commit hash.
+- **Docker images**, append `-[40-char hash]` to the image name, e.g.
+  `materialize/materialized:unstable-edcedc23df0cc29f1d9f77a656444a00b53cfcb1`
 
 ## Support
 
