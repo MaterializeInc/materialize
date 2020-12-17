@@ -12,10 +12,10 @@ set -euo pipefail
 
 project=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
-data_dir="${HOME}/materialize/benchmark_data/chbench"
+snapshot_dir="${HOME}/materialize/benchmark_data/chbench"
 
 usage() {
-    echo -n "usage: $0 [-d DATA_DIRECTORY] SNAPSHOT_ID
+    echo -n "usage: $0 [-d SNAPSHOT_DIRECTORY] SNAPSHOT_ID
 
 Download a chbench Kafka topic snapshot from S3, to the desired data directory.
 
@@ -28,7 +28,7 @@ Help:
 
 Options:
 
-    -d|--data-directory     Directory that contains the chbench state snapshot
+    -d|--snapshot-directory     Directory that contains the chbench state snapshot
 "
     exit "$1"
 }
@@ -38,8 +38,8 @@ parse_args() {
     while [[ $# -gt 1 ]]; do
         arg="$1" && shift
         case "$arg" in
-            -d|--data-directory)
-                data_dir="${1:?--data-directory requires an argument}" && shift
+            -d|--snapshot-directory)
+                snapshot_dir="${1:?--snapshot-directory requires an argument}" && shift
                 ;;
             -h|--help) usage 0;;
             *)
@@ -61,12 +61,12 @@ main() {
 
     parse_args "$@"
 
-    local snapshot_dir
-    snapshot_dir="${data_dir}/${snapshot_id}"
-    mkdir -p "${snapshot_dir}"
+    local snapshot
+    snapshot="${snapshot_dir}/${snapshot_id}"
+    mkdir -p "${snapshot}"
 
     export MZ_CHBENCH_SNAP_ID="${snapshot_id}"
-    export MZ_CHBENCH_SNAPSHOT="${snapshot_dir}"
+    export MZ_CHBENCH_SNAPSHOT="${snapshot}"
 
     "$project"/mzcompose run download-snapshot
 }

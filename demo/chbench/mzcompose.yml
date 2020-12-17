@@ -189,13 +189,13 @@ services:
     mzbuild: mzutil
     volumes:
       - type: bind
-        source: ${MZ_TOPIC_SNAPSHOTS}
+        source: ${MZ_CHBENCH_SNAPSHOT}
         target: /snapshot
   kafka-util:
     mzbuild: kafka-util
     volumes:
       - type: bind
-        source: ${MZ_TOPIC_SNAPSHOTS}
+        source: ${MZ_CHBENCH_SNAPSHOT}
         target: /snapshot
 
   # Metabase
