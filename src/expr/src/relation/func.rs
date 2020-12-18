@@ -848,6 +848,24 @@ impl TableFunc {
             | TableFunc::UnnestList { .. } => true,
         }
     }
+
+    /// True iff the table function preserves the append-only property of its input.
+    pub fn preserves_monotonicity(&self) -> bool {
+        // Most variants preserve monotonicity, but all variants are enumerated to
+        // ensure that added variants at least check that this is the case.
+        match self {
+            TableFunc::JsonbEach { .. } => true,
+            TableFunc::JsonbObjectKeys => true,
+            TableFunc::JsonbArrayElements { .. } => true,
+            TableFunc::RegexpExtract(_) => true,
+            TableFunc::CsvExtract(_) => true,
+            TableFunc::GenerateSeriesInt32 => true,
+            TableFunc::GenerateSeriesInt64 => true,
+            TableFunc::Repeat => false,
+            TableFunc::ReadCachedData { .. } => true,
+            TableFunc::UnnestList { .. } => true,
+        }
+    }
 }
 
 impl fmt::Display for TableFunc {

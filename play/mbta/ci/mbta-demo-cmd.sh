@@ -160,6 +160,7 @@ function start_stream_convert() {
 function start_streams_from_config_file() {
   config_file=$1
   api_key=$2
+  kafka_addr=$3
 
   while true ; do date +%s >> workspace/current_time ; sleep 1; done &
   echo "$!" >> workspace/steady-pid.log
@@ -204,7 +205,7 @@ function start_streams_from_config_file() {
   #system. If we start reading from the stream too quickly, the snapshot can be
   #incomplete.
   sleep 5
-  start_stream_convert 0 "$config_file" $kafka_addr
+  start_stream_convert 0 "$config_file" "$kafka_addr"
 }
 
 function pause() {
@@ -264,9 +265,10 @@ case "$1" in
       echo "usage: $0 start <config-file> <api-key> [kafka-addr]"
       exit 1
     fi
+    api_key=$3
     cleanup_log_files;
     refresh_metadata;
-    start_streams_from_config_file "$2" "$3" "$4";
+    start_streams_from_config_file "$2" "$api_key" "$4";
     ;;
   start_docker)
     if [[ $# -lt 3 ]]; then

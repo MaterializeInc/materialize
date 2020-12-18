@@ -1448,6 +1448,30 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datu
         s + ns
     }
 
+    fn extract_millisecond(&self) -> f64 {
+        let s = f64::from(self.second() * 1_000);
+        let ns = f64::from(self.nanosecond()) / 1e6;
+        s + ns
+    }
+
+    fn extract_microsecond(&self) -> f64 {
+        let s = f64::from(self.second() * 1_000_000);
+        let ns = f64::from(self.nanosecond()) / 1e3;
+        s + ns
+    }
+
+    fn extract_millennium(&self) -> f64 {
+        f64::from((self.year() + if self.year() > 0 { 999 } else { -1_000 }) / 1_000)
+    }
+
+    fn extract_century(&self) -> f64 {
+        f64::from((self.year() + if self.year() > 0 { 99 } else { -100 }) / 100)
+    }
+
+    fn extract_decade(&self) -> f64 {
+        f64::from(self.year().div_euclid(10))
+    }
+
     /// Extract the iso week of the year
     ///
     /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
@@ -1552,21 +1576,37 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datu
     }
     fn truncate_decade(&self) -> Self {
         Self::new(
-            NaiveDate::from_ymd(self.year() - (self.year() % 10), 1, 1),
+            NaiveDate::from_ymd(self.year() - self.year().rem_euclid(10), 1, 1),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
     fn truncate_century(&self) -> Self {
         // Expects the first year of the century, meaning 2001 instead of 2000.
         Self::new(
-            NaiveDate::from_ymd(self.year() - (self.year() % 100) + 1, 1, 1),
+            NaiveDate::from_ymd(
+                if self.year() > 0 {
+                    self.year() - (self.year() - 1) % 100
+                } else {
+                    self.year() - self.year() % 100 - 99
+                },
+                1,
+                1,
+            ),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
     fn truncate_millennium(&self) -> Self {
         // Expects the first year of the millennium, meaning 2001 instead of 2000.
         Self::new(
-            NaiveDate::from_ymd(self.year() - (self.year() % 1_000) + 1, 1, 1),
+            NaiveDate::from_ymd(
+                if self.year() > 0 {
+                    self.year() - (self.year() - 1) % 1000
+                } else {
+                    self.year() - self.year() % 1000 - 999
+                },
+                1,
+                1,
+            ),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
@@ -1727,12 +1767,12 @@ where
         DateTimeUnits::Minute => Ok(ts.extract_minute().into()),
         DateTimeUnits::Second => Ok(ts.extract_second().into()),
         DateTimeUnits::Month => Ok(ts.extract_month().into()),
-        DateTimeUnits::Millennium
-        | DateTimeUnits::Century
-        | DateTimeUnits::Decade
-        | DateTimeUnits::Milliseconds
-        | DateTimeUnits::Microseconds
-        | DateTimeUnits::Timezone
+        DateTimeUnits::Milliseconds => Ok(ts.extract_millisecond().into()),
+        DateTimeUnits::Microseconds => Ok(ts.extract_microsecond().into()),
+        DateTimeUnits::Millennium => Ok(ts.extract_millennium().into()),
+        DateTimeUnits::Century => Ok(ts.extract_century().into()),
+        DateTimeUnits::Decade => Ok(ts.extract_decade().into()),
+        DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
