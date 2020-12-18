@@ -81,12 +81,11 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
     say("Updating Cargo.lock")
     spawn.runv(["cargo", "check", "-p", "materialized"])
     spawn.runv(["cargo", "check", "-p", "materialized"])
+    spawn.runv(["cargo", "check", "-p", "materialized", "--locked"])
     if tag:
-        spawn.runv(["cargo", "check", "-p", "materialized", "--locked"])
         git.commit_all_changed(f"release: {the_tag}")
         git.tag_annotated(the_tag)
     else:
-        spawn.runv(["cargo", "check", "-p", "materialized", "--locked"])
         git.commit_all_changed(f"Prepare next phase of development: {the_tag}")
 
     matching = git.first_remote_matching("MaterializeInc/materialize")
