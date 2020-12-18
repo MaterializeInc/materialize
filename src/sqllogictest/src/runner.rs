@@ -506,7 +506,7 @@ impl Runner {
             threads: NUM_TIMELY_WORKERS,
             process: 0,
             addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
-            data_directory: None,
+            data_directory: tempfile::tempdir().unwrap().into_path(),
             symbiosis_url: Some("postgres://".into()),
             listen_addr: None,
             tls: None,

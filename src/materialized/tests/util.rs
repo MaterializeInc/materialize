@@ -24,7 +24,7 @@ use tokio::runtime::Runtime;
 
 #[derive(Clone)]
 pub struct Config {
-    data_directory: Option<PathBuf>,
+    data_directory: PathBuf,
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
     experimental_mode: bool,
@@ -34,7 +34,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            data_directory: None,
+            data_directory: tempfile::tempdir().unwrap().into_path(),
             logging_granularity: Some(Duration::from_millis(10)),
             tls: None,
             experimental_mode: false,
@@ -46,11 +46,6 @@ impl Default for Config {
 impl Config {
     pub fn logging_granularity(mut self, granularity: Option<Duration>) -> Self {
         self.logging_granularity = granularity;
-        self
-    }
-
-    pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
-        self.data_directory = Some(data_directory.into());
         self
     }
 

@@ -120,7 +120,7 @@ where
     pub num_timely_workers: usize,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
-    pub data_directory: Option<&'a Path>,
+    pub data_directory: &'a Path,
     pub timestamp: TimestampConfig,
     pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
@@ -3015,10 +3015,7 @@ where
             None
         };
 
-        let path = match data_directory {
-            Some(path) => path.join("catalog"),
-            None => tempfile::tempdir()?.path().to_owned(),
-        };
+        let path = data_directory.join("catalog");
         let (catalog, initial_catalog_events) = Catalog::open(catalog::Config {
             path: &path,
             experimental_mode: Some(experimental_mode),

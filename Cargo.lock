@@ -3822,6 +3822,7 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
+ "tempfile",
  "tokio",
  "tokio-postgres",
  "uuid",
