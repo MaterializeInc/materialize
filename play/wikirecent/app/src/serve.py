@@ -171,6 +171,7 @@ class IndexHandler(tornado.web.RequestHandler):
     This is a template, as opposed to a static HTML page, because we render the reverse_url
     location for our stream Handlers as the websocket paths.
     """
+
     def get(self):
         self.render("index.html")
 
