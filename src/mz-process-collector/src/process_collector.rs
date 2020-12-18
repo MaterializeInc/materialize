@@ -182,6 +182,14 @@ impl Collector for ProcessCollector {
             }
         }
 
+        // swap
+        if let Ok(status) = p.status() {
+            if let Some(vmswap_kib) = status.vmswap {
+                let vmswap = vmswap_kib / 1024;
+                self.swap.set(vmswap as f64);
+            }
+        }
+
         // proc_start_time
         if let Some(boot_time) = *BOOT_TIME {
             self.start_time
