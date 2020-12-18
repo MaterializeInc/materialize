@@ -774,7 +774,7 @@ class RandomChaos(WorkflowStep):
         self._other_service = other_service
 
     @staticmethod
-    def get_docker_processes(running: bool = False) -> str:
+    def get_docker_processes(running: bool = False) -> List[Dict[str, Any]]:
         """
         Use 'docker ps' to return all Docker process information.
 
@@ -783,40 +783,35 @@ class RandomChaos(WorkflowStep):
         """
         try:
             if running:
-                cmd = f"docker ps".split()
+                cmd = ["docker", "ps", "--format", "{{ json . }}"]
             else:
-                cmd = f"docker ps -a".split()
-            return spawn.capture(cmd, unicode=True)
+                cmd = ["docker", "ps", "-a", "--format", "{{ json . }}"]
+            # json technically returns any
+            out = spawn.capture(cmd, unicode=True)
+            procs = [json.loads(line) for line in out.splitlines()]
+            return cast(List[Dict[str, Any]], procs)
         except subprocess.CalledProcessError as e:
             raise errors.Failed(f"failed to get Docker container ids: {e}")
 
-    def get_container_ids(
+    def get_container_names(
         self, services: List[str] = [], running: bool = False
     ) -> List[str]:
         """
-        Parse Docker processes for container ids.
+        Parse Docker processes for container names.
 
         :param services: If provided, only return container ids for these services.
         :param running: If True, only return container ids of running processes.
         :return: Docker container id strs
         """
+        matches = []
         try:
             docker_processes = self.get_docker_processes(running=running)
-
-            patterns = []
-            if services:
-                for service in services:
-                    patterns.append(f"^(?P<c_id>[^ ]+).*{service}")
-            else:
-                patterns.append(f"^(?P<c_id>[^ ]+).*")
-
-            matches = []
-            for pattern in patterns:
-                compiled_pattern = re.compile(pattern)
-                for process in docker_processes.splitlines():
-                    m = compiled_pattern.search(process)
-                    if m and m.group("c_id") != "CONTAINER":
-                        matches.append(m.group("c_id"))
+            for process in docker_processes:
+                if services:
+                    if any(s in process["Names"] for s in services):
+                        matches.append(process["Names"])
+                else:
+                    matches.append(process["Names"])
 
             return matches
         except subprocess.CalledProcessError as e:
@@ -844,7 +839,7 @@ class RandomChaos(WorkflowStep):
         if not self._chaos:
             self._chaos = self.default_chaos
         if not self._services:
-            self._services = self.get_container_ids(running=True)
+            self._services = self.get_container_names(running=True)
         say(
             f"will run these chaos types: {self._chaos} on these containers: {self._services}"
         )
@@ -854,7 +849,7 @@ class RandomChaos(WorkflowStep):
             while True:
                 self.add_chaos()
         else:
-            container_ids = self.get_container_ids(services=[self._other_service])
+            container_ids = self.get_container_names(services=[self._other_service])
             if len(container_ids) != 1:
                 raise errors.Failed(
                     f"wrong number of container ids found for service {self._other_service}. expected 1, found: {len(container_ids)}"
