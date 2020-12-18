@@ -193,7 +193,7 @@ class Composition:
             close_fds=False,
             check=check,
             stdout=subprocess.PIPE if capture else 1,
-            stderr=subprocess.STDOUT if capture else 2,
+            stderr=subprocess.PIPE if capture else 1,
         )
 
     def find_host_ports(self, service: str) -> List[str]:
