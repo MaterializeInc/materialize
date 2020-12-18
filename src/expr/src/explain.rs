@@ -20,6 +20,7 @@
 //! It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
 
 use std::fmt;
+use std::iter;
 
 use super::{
     AggregateExpr, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, RowSetFinishing,
@@ -40,6 +41,8 @@ pub struct Explanation<'a> {
     expr_chains: HashMap<*const RelationExpr, usize>,
     /// Records the chain ID that was assigned to each let.
     local_id_chains: HashMap<LocalId, usize>,
+    /// Records the local ID that corresponds to a chain ID, if any.
+    chain_local_ids: HashMap<usize, LocalId>,
     /// The ID of the current chain. Incremented while constructing the
     /// `Explanation`.
     chain: usize,
@@ -63,14 +66,13 @@ impl<'a> fmt::Display for Explanation<'a> {
                 if node.chain != 0 {
                     writeln!(f)?;
                 }
-                writeln!(f, "%{} =", node.chain)?;
+                write!(f, "%{} =", node.chain)?;
+                if let Some(local_id) = self.chain_local_ids.get(&node.chain) {
+                    write!(f, " Let {} =", local_id)?;
+                }
+                writeln!(f)?;
             }
             prev_chain = node.chain;
-
-            // skip Let
-            if let RelationExpr::Let { .. } = node.expr {
-                continue;
-            }
 
             node.fmt(self, f)?;
         }
@@ -298,30 +300,23 @@ impl RelationExpr {
                 | Negate { input, .. }
                 | Threshold { input, .. }
                 | ArrangeBy { input, .. } => walk(input, explanation),
-                Join { inputs, .. } => {
-                    // For join, each of the inputs goes in its own chain.
-                    for input in inputs {
-                        walk(input, explanation);
-                        explanation.chain += 1;
-                    }
-                }
+                // For join and union, each input may need to go in its own
+                // chain.
+                Join { inputs, .. } => walk_many(inputs, explanation),
                 Union { base, inputs, .. } => {
-                    // Ditto for union.
-                    walk(base, explanation);
-                    explanation.chain += 1;
-                    for input in inputs {
-                        walk(input, explanation);
-                        explanation.chain += 1;
-                    }
+                    walk_many(iter::once(&**base).chain(inputs), explanation)
                 }
                 Let { id, body, value } => {
                     // Similarly the definition of a let goes in its own chain.
                     walk(value, explanation);
                     explanation.chain += 1;
+
+                    // Keep track of the chain ID <-> local ID correspondence.
+                    let value_chain = explanation.expr_chain(value);
+                    explanation.local_id_chains.insert(*id, value_chain);
+                    explanation.chain_local_ids.insert(value_chain, *id);
+
                     walk(body, explanation);
-                    explanation
-                        .local_id_chains
-                        .insert(*id, explanation.expr_chain(value));
                 }
             }
 
@@ -336,12 +331,33 @@ impl RelationExpr {
                 .insert(expr as *const RelationExpr, explanation.chain);
         }
 
+        fn walk_many<'a, E>(exprs: E, explanation: &mut Explanation<'a>)
+        where
+            E: IntoIterator<Item = &'a RelationExpr>,
+        {
+            for expr in exprs {
+                // Elide chains that would consist only a of single Get node.
+                if let RelationExpr::Get {
+                    id: Id::Local(id), ..
+                } = expr
+                {
+                    explanation
+                        .expr_chains
+                        .insert(expr as *const RelationExpr, explanation.local_id_chains[id]);
+                } else {
+                    walk(expr, explanation);
+                    explanation.chain += 1;
+                }
+            }
+        }
+
         let mut explanation = Explanation {
             id_humanizer,
             nodes: vec![],
             finishing: None,
             expr_chains: HashMap::new(),
             local_id_chains: HashMap::new(),
+            chain_local_ids: HashMap::new(),
             chain: 0,
         };
         walk(self, &mut explanation);

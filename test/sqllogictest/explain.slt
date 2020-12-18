@@ -53,17 +53,14 @@ EOF
 query T multiline
 EXPLAIN DECORRELATED PLAN FOR SELECT * FROM (SELECT 1)
 ----
-%0 =
+%0 = Let l0 =
 | Constant ()
 
 %1 =
-| Get %0
-
-%2 =
 | Constant ()
 
-%3 =
-| Join %1 %2
+%2 =
+| Join %0 %1
 | | implementation = Unimplemented
 | Map 1
 
@@ -91,17 +88,14 @@ CREATE VIEW foo AS SELECT * FROM (SELECT 1)
 query T multiline
 EXPLAIN DECORRELATED PLAN FOR VIEW foo
 ----
-%0 =
+%0 = Let l0 =
 | Constant ()
 
 %1 =
-| Get %0
-
-%2 =
 | Constant ()
 
-%3 =
-| Join %1 %2
+%2 =
+| Join %0 %1
 | | implementation = Unimplemented
 | Map 1
 
@@ -118,27 +112,24 @@ EOF
 query T multiline
 EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 ----
-%0 =
+%0 = Let l0 =
 | Constant ()
 | | types = ()
 | | keys = ()
 
 %1 =
-| Get %0
-| | types = ()
-| | keys = ()
-
-%2 =
 | Constant ()
 | | types = ()
 | | keys = ()
 
-%3 =
-| Join %1 %2
+%2 =
+| Join %0 %1
 | | implementation = Unimplemented
 | | types = ()
 | | keys = ()
 | Map 1
+| | types = (i32)
+| | keys = ()
 | | types = (i32)
 | | keys = ()
 
@@ -182,17 +173,14 @@ EOF
 query T multiline
 EXPLAIN DECORRELATED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
-%0 =
+%0 = Let l0 =
 | Constant ()
 
 %1 =
-| Get %0
-
-%2 =
 | Get materialize.public.ordered (u2)
 
-%3 =
-| Join %1 %2
+%2 =
+| Join %0 %1
 | | implementation = Unimplemented
 
 Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
