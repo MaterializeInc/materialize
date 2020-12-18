@@ -124,21 +124,22 @@ class View:
                 self.update(deleted, inserted, timestamp)
                 inserted = []
                 deleted = []
+                continue
+
             # This is a row that we should insert or delete "diff" number of times
+            try:
+                diff = int(diff)
+            except ValueError:
+                raise
+
             # Simplify our implementation by creating "diff" copies of each row instead
             # of tracking counts per row
+            if diff < 0:
+                deleted.extend([columns] * abs(diff))
+            elif diff > 0:
+                inserted.extend([columns] * diff)
             else:
-                try:
-                    diff = int(diff)
-                except ValueError:
-                    raise
-
-                if diff < 0:
-                    deleted.extend([columns for _ in range(diff, 0)])
-                elif diff > 0:
-                    inserted.extend([columns for _ in range(0, diff)])
-                else:
-                    raise ValueError(f"Bad data from TAIL: {row.strip()}")
+                raise ValueError(f"Bad data from TAIL: {row.strip()}")
 
     def update(self, deleted, inserted, timestamp):
         """Update our internal view based on this diff and broadcast the update to listeners.
