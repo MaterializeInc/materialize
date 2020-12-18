@@ -29,7 +29,7 @@ use prometheus::proto;
 use prometheus::{Counter, CounterVec, Gauge, GaugeVec, Opts};
 
 /// Six metrics per ProcessCollector.
-const METRICS_NUMBER: usize = 6;
+const METRICS_NUMBER: usize = 9;
 /// The `pid_t` data type represents process IDs.
 use libc::pid_t;
 
@@ -48,6 +48,8 @@ pub struct ProcessCollector {
     swap: Gauge,
     threads: ThreadsCollector,
     start_time: Gauge,
+    system_swap: Gauge,
+    system_swap_free: Gauge,
 }
 
 impl ProcessCollector {
@@ -125,6 +127,19 @@ impl ProcessCollector {
         .unwrap();
         descs.extend(start_time.desc().into_iter().cloned());
 
+        let system_swap = Gauge::with_opts(Opts::new(
+            "system_swap_memory_bytes",
+            "Total amount of swap configured on the system",
+        ))
+        .unwrap();
+        descs.extend(system_swap.desc().into_iter().cloned());
+        let system_swap_free = Gauge::with_opts(Opts::new(
+            "system_swap_memory_free_bytes",
+            "Amount of swap available for use on the system",
+        ))
+        .unwrap();
+        descs.extend(system_swap_free.desc().into_iter().cloned());
+
         let threads = ThreadsCollector::new(pid);
         descs.extend(threads.desc().into_iter().cloned());
 
@@ -139,6 +154,8 @@ impl ProcessCollector {
             swap,
             threads,
             start_time,
+            system_swap,
+            system_swap_free,
         }
     }
 
@@ -190,6 +207,11 @@ impl Collector for ProcessCollector {
             }
         }
 
+        if let Ok(s) = procfs::Meminfo::new() {
+            self.system_swap.set(s.swap_total as f64);
+            self.system_swap_free.set(s.swap_free as f64);
+        }
+
         // proc_start_time
         if let Some(boot_time) = *BOOT_TIME {
             self.start_time
@@ -207,7 +229,8 @@ impl Collector for ProcessCollector {
         };
 
         // collect MetricFamilys.
-        let mut mfs = Vec::with_capacity(METRICS_NUMBER);
+        let threads = self.threads.collect();
+        let mut mfs = Vec::with_capacity(METRICS_NUMBER + threads.len());
         mfs.extend(cpu_total_mfs);
         mfs.extend(self.open_fds.collect());
         mfs.extend(self.max_fds.collect());
@@ -215,7 +238,9 @@ impl Collector for ProcessCollector {
         mfs.extend(self.rss.collect());
         mfs.extend(self.swap.collect());
         mfs.extend(self.start_time.collect());
-        mfs.extend(self.threads.collect());
+        mfs.extend(self.system_swap.collect());
+        mfs.extend(self.system_swap_free.collect());
+        mfs.extend(threads);
         mfs
     }
 }
