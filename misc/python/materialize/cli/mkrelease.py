@@ -50,11 +50,11 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
     Arguments:
         version: The version to release. The `v` prefix is optional
     """
-    if git.is_dirty():
-        raise errors.MzConfigurationError(
-            "working directory is not clean, stash or commit your changes"
-        )
-        sys.exit(1)
+    # if git.is_dirty():
+    #     raise errors.MzConfigurationError(
+    #         "working directory is not clean, stash or commit your changes"
+    #     )
+    #     sys.exit(1)
 
     version = version.lstrip("v")
     the_tag = f"v{version}"
@@ -80,10 +80,13 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
 
     say("Updating Cargo.lock")
     spawn.runv(["cargo", "check", "-p", "materialized"])
+    spawn.runv(["cargo", "check", "-p", "materialized"])
     if tag:
+        spawn.runv(["cargo", "check", "-p", "materialized", "--locked"])
         git.commit_all_changed(f"release: {the_tag}")
         git.tag_annotated(the_tag)
     else:
+        spawn.runv(["cargo", "check", "-p", "materialized", "--locked"])
         git.commit_all_changed(f"Prepare next phase of development: {the_tag}")
 
     matching = git.first_remote_matching("MaterializeInc/materialize")

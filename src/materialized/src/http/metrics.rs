@@ -21,6 +21,7 @@ use lazy_static::lazy_static;
 use prometheus::{
     register_gauge_vec, register_int_gauge_vec, Encoder, Gauge, GaugeVec, IntGauge, IntGaugeVec,
 };
+use sysinfo::{ProcessorExt, SystemExt};
 
 use crate::http::{util, Server};
 use crate::BUILD_INFO;
@@ -29,14 +30,36 @@ lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(
         "mz_server_metadata_seconds",
         "server metadata, value is uptime",
-        &["build_time", "build_version", "build_sha"]
+        &[
+            "build_time",
+            "build_version",
+            "build_sha",
+            "os",
+            "ncpus_logical",
+            "ncpus_physical",
+            "cpu0",
+            "memory_total",
+        ]
     )
     .expect("can build mz_server_metadata");
-    static ref SERVER_METADATA: Gauge = SERVER_METADATA_RAW.with_label_values(&[
-        BUILD_INFO.time,
-        BUILD_INFO.version,
-        BUILD_INFO.sha,
-    ]);
+    static ref SERVER_METADATA: Gauge = {
+        let mut system = sysinfo::System::new();
+        system.refresh_system();
+
+        SERVER_METADATA_RAW.with_label_values(&[
+            BUILD_INFO.time,
+            BUILD_INFO.version,
+            BUILD_INFO.sha,
+            &os_info::get().to_string(),
+            &num_cpus::get().to_string(),
+            &num_cpus::get_physical().to_string(),
+            &{
+                let cpu0 = &system.get_processors()[0];
+                format!("{} {}MHz", cpu0.get_brand(), cpu0.get_frequency())
+            },
+            &system.get_total_memory().to_string(),
+        ])
+    };
     pub static ref WORKER_COUNT: IntGaugeVec = register_int_gauge_vec!(
         "mz_server_metadata_timely_worker_threads",
         "number of timely workers materialized is running with",
