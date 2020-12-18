@@ -50,12 +50,6 @@ detail, but requires more memory. A smaller compaction window uses less memory
 but also retains less historical detail. Larger compaction windows also increase
 CPU usage, as more detailed histories require more compute time to maintain.
 
-{{< warning >}}
-Setting the compaction window too small can prevent Materialize from finding a
-suitable timestamp at which to execute a `SELECT` query if that query depends
-upon multiple sources.
-{{< /warning >}}
-
 Note that compaction is triggered in response to updates arriving. As a result,
 if updates stop arriving for a source, Materialize may never compact the source
 fully. This can result in higher-than-expected memory usage.
