@@ -101,6 +101,10 @@ main() {
     for i in $(seq 1 "${num_measurements}"); do
         echo "Conducting measurement ${i} of ${num_measurements}"
         "$project"/mzcompose run measure-ingest-performance
+        for query in $(ls "${project}"/bin/queries/*); do
+            query_name="$(basename "${query}")"
+            psql -h localhost -p 6875 -f "${query}" -o "${query_name}-$i.out" materialize
+        done
     done
 
     if [[ "${cleanup}" = "yes" ]]; then
