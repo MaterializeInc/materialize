@@ -3023,7 +3023,7 @@ where
         }
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow);
+        transform::optimize_dataflow(&mut dataflow, self.catalog.indexes());
 
         // Finalize the dataflow by broadcasting its construction to all workers.
         broadcast(

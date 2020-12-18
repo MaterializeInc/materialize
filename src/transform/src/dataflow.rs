@@ -53,38 +53,38 @@ fn inline_views(dataflow: &mut DataflowDesc) {
     // remaining objects to build.
 
     for index in (0..dataflow.objects_to_build.len()).rev() {
-        // Capture the name used by others to reference this view.
-        let global_id = dataflow.objects_to_build[index].id;
-        // Determine if any exports directly reference this view.
-        let mut occurs_in_export = false;
-        for (_gid, sink_desc) in dataflow.sink_exports.iter() {
-            if sink_desc.from.0 == global_id {
-                occurs_in_export = true;
+        // Test that we are not attempting to inline an index.
+        // TODO: Figure out what that would mean and why indexes
+        // are separate concepts in the first place.
+        if dataflow.objects_to_build[index].typ.is_some() {
+            // Capture the name used by others to reference this view.
+            let global_id = dataflow.objects_to_build[index].id;
+            // Determine if any exports directly reference this view.
+            let mut occurs_in_export = false;
+            for (_gid, sink_desc) in dataflow.sink_exports.iter() {
+                if sink_desc.from.0 == global_id {
+                    occurs_in_export = true;
+                }
             }
-        }
-        for (_, index_desc, _) in dataflow.index_exports.iter() {
-            if index_desc.on_id == global_id {
-                occurs_in_export = true;
+            for (_, index_desc, _) in dataflow.index_exports.iter() {
+                if index_desc.on_id == global_id {
+                    occurs_in_export = true;
+                }
             }
-        }
-        // Count the number of subsequent views that reference this view.
-        let mut occurrences_in_later_views = Vec::new();
-        for other in (index + 1)..dataflow.objects_to_build.len() {
-            if dataflow.objects_to_build[other]
-                .relation_expr
-                .as_ref()
-                .global_uses()
-                .contains(&global_id)
-            {
-                occurrences_in_later_views.push(other);
+            // Count the number of subsequent views that reference this view.
+            let mut occurrences_in_later_views = Vec::new();
+            for other in (index + 1)..dataflow.objects_to_build.len() {
+                if dataflow.objects_to_build[other]
+                    .relation_expr
+                    .as_ref()
+                    .global_uses()
+                    .contains(&global_id)
+                {
+                    occurrences_in_later_views.push(other);
+                }
             }
-        }
-        // Inline if the view is referenced in one view and no exports.
-        if !occurs_in_export && occurrences_in_later_views.len() == 1 {
-            // Test that we are not attempting to inline an index.
-            // TODO: Figure out what that would mean and why indexes
-            // are separate concepts in the first place.
-            if dataflow.objects_to_build[index].typ.is_some() {
+            // Inline if the view is referenced in one view and no exports.
+            if !occurs_in_export && occurrences_in_later_views.len() == 1 {
                 let other = occurrences_in_later_views[0];
                 // We can remove this view and insert it in the later view,
                 // but are not able to relocate the later view `other`.
@@ -142,6 +142,12 @@ fn inline_views(dataflow: &mut DataflowDesc) {
     }
 
     // Re-optimize each dataflow.
+    // TODO: We should attempt to minimize the number of re-optimizations, as each
+    // may introduce e.g. `ArrangeBy` operators that make sense at that optimization
+    // moment, but less sense later on (i.e. cost, but aren't needed). One candidate
+    // is to perform *logical* optimizations early (on view definition, when params
+    // are instatiated, here) and then *physical* optimization (e.g. join planning)
+    // only once (and probably in here).
     // TODO: Unfortunately, we only have access to the indexes that are included in
     // the dataflow. There could be better indexes to use, could we return to them.
     let mut indexes = HashMap::new();
