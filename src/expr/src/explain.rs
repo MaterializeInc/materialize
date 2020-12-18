@@ -18,6 +18,9 @@
 //! * Collections of columns are written as ranges where possible eg "#2..#5"
 //!
 //! It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
+
+use std::fmt;
+
 use super::{
     AggregateExpr, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, RowSetFinishing,
     ScalarExpr,
@@ -27,28 +30,33 @@ use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Explanation<'a> {
-    /// One ExplanationNode for each RelationExpr in the plan, in left-to-right post-order
-    pub nodes: Vec<ExplanationNode<'a>>,
-    /// Anything else we want to mention at the end
-    pub appendix: String,
+    id_humanizer: &'a dyn IdHumanizer,
+    /// One `ExplanationNode` for each `RelationExpr` in the plan, in
+    /// left-to-right post-order.
+    nodes: Vec<ExplanationNode<'a>>,
+    /// An optional `RowSetFinishing` to mention at the end.
+    finishing: Option<RowSetFinishing>,
+    /// Records the chain ID that was assigned to each expression.
+    expr_chains: HashMap<*const RelationExpr, usize>,
+    /// Records the chain ID that was assigned to each let.
+    local_id_chains: HashMap<LocalId, usize>,
+    /// The ID of the current chain. Incremented while constructing the
+    /// `Explanation`.
+    chain: usize,
 }
 
 #[derive(Debug)]
 pub struct ExplanationNode<'a> {
-    /// The expr being explained
+    /// The expression being explained.
     pub expr: &'a RelationExpr,
-    /// The parent of expr
-    pub parent_expr: Option<&'a RelationExpr>,
-    /// A pretty-printed representation of the expr
-    pub pretty: String,
-    /// A list of annotations containing extra information about this expr
-    pub annotations: Vec<String>,
-    /// Nodes are grouped into chains of linear operations for easy printing
+    /// The type of the expression, if desired.
+    pub typ: Option<RelationType>,
+    /// The ID of the linear chain to which this node belongs.
     pub chain: usize,
 }
 
-impl<'a> std::fmt::Display for Explanation<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+impl<'a> fmt::Display for Explanation<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut prev_chain = usize::max_value();
         for node in &self.nodes {
             if node.chain != prev_chain {
@@ -64,177 +72,107 @@ impl<'a> std::fmt::Display for Explanation<'a> {
                 continue;
             }
 
-            // explain output shows up in SLT where the linter will not allow trailing whitespace, so need to trim stuff
-            writeln!(f, "| {}", node.pretty.trim())?;
-            for annotation in &node.annotations {
-                writeln!(f, "| | {}", annotation.trim_end())?;
-            }
+            node.fmt(self, f)?;
         }
 
-        if !self.appendix.is_empty() {
-            writeln!(f, "\n{}", self.appendix.trim())?;
+        if let Some(finishing) = &self.finishing {
+            writeln!(
+                f,
+                "\nFinish order_by={} limit={} offset={} project={}",
+                Bracketed("(", ")", Separated(", ", finishing.order_by.clone())),
+                match finishing.limit {
+                    Some(limit) => limit.to_string(),
+                    None => "none".to_owned(),
+                },
+                finishing.offset,
+                Bracketed("(", ")", Indices(&finishing.project))
+            )?;
         }
 
         Ok(())
     }
 }
 
-impl RelationExpr {
-    /// Create an Explanation, to which annotations can be added before printing
-    pub fn explain(&self, id_humanizer: &impl IdHumanizer) -> Explanation {
+impl<'a> ExplanationNode<'a> {
+    fn fmt(&self, explanation: &Explanation, f: &mut fmt::Formatter) -> fmt::Result {
         use RelationExpr::*;
 
-        // get nodes in post-order
-        let mut nodes = vec![];
-        let mut stack: Vec<(Option<&RelationExpr>, &RelationExpr)> = vec![(None, self)];
-        while let Some((parent_expr, expr)) = stack.pop() {
-            nodes.push(ExplanationNode {
-                expr,
-                parent_expr,
-                pretty: String::new(),
-                annotations: vec![],
-                chain: 0, // will set this later
-            });
-            expr.visit1(&mut |child_expr| {
-                stack.push((Some(expr), child_expr));
-            });
-        }
-        nodes.reverse();
-
-        // map from RelationExpr nodes to chain used in the explanation
-        // keyed by expr identity, not by expr value
-        let mut expr_chain: HashMap<*const RelationExpr, usize> = HashMap::new();
-
-        // group into linear chains of exprs
-        let mut chain = 0;
-        for node in &mut nodes {
-            node.chain = chain;
-            let breaks_chain = match &node.parent_expr {
-                None => true,
-                Some(parent_expr) => match parent_expr {
-                    Project { .. }
-                    | Map { .. }
-                    | FlatMap { .. }
-                    | Filter { .. }
-                    | Reduce { .. }
-                    | TopK { .. }
-                    | Negate { .. }
-                    | Threshold { .. }
-                    | ArrangeBy { .. } => false,
-                    Join { .. } | Union { .. } => true,
-                    Let { value, .. } => {
-                        // only the value child goes in a different chain
-                        (node.expr as *const RelationExpr) == ((&**value) as *const RelationExpr)
-                    }
-                    Constant { .. } | Get { .. } => unreachable!(), // these don't have children
-                },
-            };
-            if breaks_chain {
-                expr_chain.insert(node.expr as *const RelationExpr, chain);
-                chain += 1;
+        match self.expr {
+            Constant { rows, .. } => writeln!(
+                f,
+                "| Constant {}",
+                Separated(
+                    " ",
+                    rows.iter()
+                        .flat_map(|(row, count)| (0..*count).map(move |_| row))
+                        .collect::<Vec<_>>()
+                )
+            )?,
+            Get { id, .. } => match id {
+                Id::Local(local_id) => writeln!(
+                    f,
+                    "| Get %{} ({})",
+                    explanation
+                        .local_id_chains
+                        .get(local_id)
+                        .map_or_else(|| "?".to_owned(), |i| i.to_string()),
+                    local_id,
+                )?,
+                Id::Global(id) => writeln!(
+                    f,
+                    "| Get {} ({})",
+                    explanation
+                        .id_humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| "?".to_owned()),
+                    id,
+                )?,
+            },
+            // Lets are annotated on the chain ID that they correspond to.
+            Let { .. } => (),
+            Project { outputs, .. } => {
+                writeln!(f, "| Project {}", Bracketed("(", ")", Indices(outputs)))?
             }
-        }
-
-        // slighly easier to use
-        let expr_chain = |expr: &RelationExpr| expr_chain[&(expr as *const RelationExpr)];
-
-        // track which chain each LocalId refers to so we can map them directly
-        // assumes LocalId is unique
-        let mut local_id_chain: HashMap<&LocalId, usize> = HashMap::new();
-        for node in &mut nodes {
-            if let Let { id, value, .. } = node.expr {
-                local_id_chain.insert(id, expr_chain(value));
+            Map { scalars, .. } => writeln!(f, "| Map {}", Separated(", ", scalars.clone()))?,
+            FlatMap {
+                func,
+                exprs,
+                demand,
+                ..
+            } => {
+                writeln!(f, "| FlatMap {}({})", func, Separated(", ", exprs.clone()))?;
+                if let Some(demand) = demand {
+                    writeln!(f, "| | demand = {}", Bracketed("(", ")", Indices(demand)))?;
+                }
             }
-        }
-
-        for ExplanationNode {
-            expr,
-            pretty,
-            annotations,
-            ..
-        } in nodes.iter_mut()
-        {
-            use std::fmt::Write;
-
-            // write the expr
-            match expr {
-                Constant { rows, .. } => {
+            Filter { predicates, .. } => {
+                writeln!(f, "| Filter {}", Separated(", ", predicates.clone()))?
+            }
+            Join {
+                inputs,
+                equivalences,
+                demand,
+                implementation,
+            } => {
+                let input_chains = inputs
+                    .iter()
+                    .map(|inp| explanation.expr_chain(inp))
+                    .collect::<Vec<_>>();
+                write!(
+                    f,
+                    "| Join {}",
+                    Separated(
+                        " ",
+                        inputs
+                            .iter()
+                            .map(|input| Bracketed("%", "", explanation.expr_chain(input)))
+                            .collect()
+                    ),
+                )?;
+                if !equivalences.is_empty() {
                     write!(
-                        pretty,
-                        "Constant {}",
-                        Separated(
-                            " ",
-                            rows.iter()
-                                .flat_map(|(row, count)| (0..*count).map(move |_| row))
-                                .collect::<Vec<_>>()
-                        )
-                    )
-                    .unwrap();
-                }
-                Get { id, .. } => match id {
-                    Id::Local(local_id) => write!(
-                        pretty,
-                        "Get %{}",
-                        local_id_chain
-                            .get(local_id)
-                            .map_or_else(|| "?".to_owned(), |i| i.to_string())
-                    )
-                    .unwrap(),
-                    Id::Global(id) => write!(
-                        pretty,
-                        "Get {} ({})",
-                        id_humanizer
-                            .humanize_id(*id)
-                            .unwrap_or_else(|| "?".to_owned()),
-                        id,
-                    )
-                    .unwrap(),
-                },
-                Let { id, .. } => write!(pretty, "Let %{}", local_id_chain[id]).unwrap(),
-                Project { outputs, .. } => {
-                    write!(pretty, "Project {}", Bracketed("(", ")", Indices(outputs))).unwrap()
-                }
-                Map { scalars, .. } => {
-                    write!(pretty, "Map {}", Separated(", ", scalars.clone())).unwrap();
-                }
-                FlatMap {
-                    func,
-                    exprs,
-                    demand,
-                    ..
-                } => {
-                    write!(
-                        pretty,
-                        "FlatMap {}({})",
-                        func,
-                        Separated(", ", exprs.clone())
-                    )
-                    .unwrap();
-                    if let Some(demand) = demand {
-                        annotations
-                            .push(format!("demand = {}", Bracketed("(", ")", Indices(demand))));
-                    }
-                }
-                Filter { predicates, .. } => {
-                    write!(pretty, "Filter {}", Separated(", ", predicates.clone())).unwrap();
-                }
-                Join {
-                    inputs,
-                    equivalences,
-                    demand,
-                    implementation,
-                } => {
-                    let input_chains = inputs.iter().map(expr_chain).collect::<Vec<_>>();
-                    write!(
-                        pretty,
-                        "Join {} {}",
-                        Separated(
-                            " ",
-                            inputs
-                                .iter()
-                                .map(|input| Bracketed("%", "", expr_chain(input)))
-                                .collect()
-                        ),
+                        f,
+                        " {}",
                         Separated(
                             " ",
                             equivalences
@@ -246,131 +184,196 @@ impl RelationExpr {
                                 ))
                                 .collect()
                         )
-                    )
-                    .unwrap();
-                    annotations.append(&mut implementation.fmt_with(&input_chains));
-                    if let Some(demand) = demand {
-                        annotations
-                            .push(format!("demand = {}", Bracketed("(", ")", Indices(demand))));
-                    }
+                    )?;
                 }
-                Reduce {
-                    group_key,
-                    aggregates,
-                    ..
-                } => {
-                    if aggregates.is_empty() {
-                        write!(
-                            pretty,
-                            "Distinct group={}",
-                            Bracketed("(", ")", Separated(", ", group_key.clone())),
-                        )
-                        .unwrap();
-                    } else {
-                        write!(
-                            pretty,
-                            "Reduce group={}",
-                            Bracketed("(", ")", Separated(", ", group_key.clone())),
-                        )
-                        .unwrap();
-                        annotations.extend(aggregates.iter().map(|agg| format!("agg {}", agg)));
-                    }
+                writeln!(f)?;
+                for line in implementation.fmt_with(&input_chains) {
+                    writeln!(f, "| | {}", line)?;
                 }
-                TopK {
-                    group_key,
-                    order_key,
-                    limit,
-                    offset,
-                    ..
-                } => {
-                    write!(
-                        pretty,
-                        "TopK group={} order={}",
-                        Bracketed("(", ")", Indices(group_key)),
-                        Bracketed("(", ")", Separated(", ", order_key.clone())),
-                    )
-                    .unwrap();
-                    if let Some(limit) = limit {
-                        write!(pretty, " limit={}", limit).unwrap();
-                    }
-                    write!(pretty, " offset={}", offset).unwrap();
-                }
-                Negate { .. } => {
-                    write!(pretty, "Negate").unwrap();
-                }
-                Threshold { .. } => {
-                    write!(pretty, "Threshold").unwrap();
-                }
-                Union { base, inputs } => {
-                    let input_chains: Vec<_> = inputs
-                        .iter()
-                        .map(|input| Bracketed("%", "", expr_chain(input)))
-                        .collect();
-                    write!(
-                        pretty,
-                        "Union %{} {}",
-                        expr_chain(base),
-                        Separated(" ", input_chains)
-                    )
-                    .unwrap();
-                }
-                ArrangeBy { keys, .. } => {
-                    write!(
-                        pretty,
-                        "ArrangeBy {}",
-                        Separated(
-                            " ",
-                            keys.iter()
-                                .map(|key| Bracketed("(", ")", Separated(", ", key.clone())))
-                                .collect::<Vec<_>>()
-                        ),
-                    )
-                    .unwrap();
+                if let Some(demand) = demand {
+                    writeln!(f, "| | demand = {}", Bracketed("(", ")", Indices(demand)))?;
                 }
             }
+            Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                if aggregates.is_empty() {
+                    writeln!(
+                        f,
+                        "| Distinct group={}",
+                        Bracketed("(", ")", Separated(", ", group_key.clone())),
+                    )?
+                } else {
+                    writeln!(
+                        f,
+                        "| Reduce group={}",
+                        Bracketed("(", ")", Separated(", ", group_key.clone())),
+                    )?;
+                    for agg in aggregates {
+                        writeln!(f, "| | agg {}", agg)?;
+                    }
+                }
+            }
+            TopK {
+                group_key,
+                order_key,
+                limit,
+                offset,
+                ..
+            } => {
+                write!(
+                    f,
+                    "| TopK group={} order={}",
+                    Bracketed("(", ")", Indices(group_key)),
+                    Bracketed("(", ")", Separated(", ", order_key.clone())),
+                )?;
+                if let Some(limit) = limit {
+                    write!(f, " limit={}", limit)?;
+                }
+                writeln!(f, " offset={}", offset)?
+            }
+            Negate { .. } => writeln!(f, "| Negate")?,
+            Threshold { .. } => write!(f, "| Threshold")?,
+            Union { base, inputs } => {
+                let input_chains: Vec<_> = inputs
+                    .iter()
+                    .map(|input| Bracketed("%", "", explanation.expr_chain(input)))
+                    .collect();
+                writeln!(
+                    f,
+                    "| Union %{} {}",
+                    explanation.expr_chain(base),
+                    Separated(" ", input_chains)
+                )?
+            }
+            ArrangeBy { keys, .. } => writeln!(
+                f,
+                "| ArrangeBy {}",
+                Separated(
+                    " ",
+                    keys.iter()
+                        .map(|key| Bracketed("(", ")", Separated(", ", key.clone())))
+                        .collect::<Vec<_>>()
+                ),
+            )?,
         }
 
-        Explanation {
-            nodes,
-            appendix: String::new(),
+        if let Some(RelationType { column_types, keys }) = &self.typ {
+            writeln!(f, "| | types = ({})", Separated(", ", column_types.clone()))?;
+            writeln!(
+                f,
+                "| | keys = ({})",
+                Separated(", ", keys.iter().map(|key| Indices(key)).collect())
+            )?;
         }
+
+        Ok(())
+    }
+}
+
+impl RelationExpr {
+    /// Create an Explanation, to which annotations can be added before printing
+    pub fn explain<'a>(&'a self, id_humanizer: &'a dyn IdHumanizer) -> Explanation<'a> {
+        use RelationExpr::*;
+
+        // Do a post-order traversal of the expression, grouping "chains" of
+        // nodes together as we go. We have to break the chain whenever we
+        // encounter a node with multiple inputs, like a join.
+
+        fn walk<'a>(expr: &'a RelationExpr, explanation: &mut Explanation<'a>) {
+            // First, walk the children, in order to perform a post-order
+            // traversal.
+            match expr {
+                // Leaf expressions. Nothing more to visit.
+                Constant { .. } | Get { .. } => (),
+                // Single-input expressions continue the chain.
+                Project { input, .. }
+                | Map { input, .. }
+                | FlatMap { input, .. }
+                | Filter { input, .. }
+                | Reduce { input, .. }
+                | TopK { input, .. }
+                | Negate { input, .. }
+                | Threshold { input, .. }
+                | ArrangeBy { input, .. } => walk(input, explanation),
+                Join { inputs, .. } => {
+                    // For join, each of the inputs goes in its own chain.
+                    for input in inputs {
+                        walk(input, explanation);
+                        explanation.chain += 1;
+                    }
+                }
+                Union { base, inputs, .. } => {
+                    // Ditto for union.
+                    walk(base, explanation);
+                    explanation.chain += 1;
+                    for input in inputs {
+                        walk(input, explanation);
+                        explanation.chain += 1;
+                    }
+                }
+                Let { id, body, value } => {
+                    // Similarly the definition of a let goes in its own chain.
+                    walk(value, explanation);
+                    explanation.chain += 1;
+                    walk(body, explanation);
+                    explanation
+                        .local_id_chains
+                        .insert(*id, explanation.expr_chain(value));
+                }
+            }
+
+            // Then record the node.
+            explanation.nodes.push(ExplanationNode {
+                expr,
+                typ: None,
+                chain: explanation.chain,
+            });
+            explanation
+                .expr_chains
+                .insert(expr as *const RelationExpr, explanation.chain);
+        }
+
+        let mut explanation = Explanation {
+            id_humanizer,
+            nodes: vec![],
+            finishing: None,
+            expr_chains: HashMap::new(),
+            local_id_chains: HashMap::new(),
+            chain: 0,
+        };
+        walk(self, &mut explanation);
+        explanation
     }
 }
 
 impl<'a> Explanation<'a> {
+    /// Retrieves the chain ID for the specified expression.
+    ///
+    /// The `ExplanationNode` for `expr` must have already been inserted into
+    /// the explanation.
+    fn expr_chain(&self, expr: &RelationExpr) -> usize {
+        self.expr_chains[&(expr as *const RelationExpr)]
+    }
+
+    /// Attach type information into the explanation.
     pub fn explain_types(&mut self) {
         for node in &mut self.nodes {
             // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
-            let RelationType { column_types, keys } = node.expr.typ();
-            node.annotations
-                .push(format!("types = ({})", Separated(", ", column_types)));
-            node.annotations.push(format!(
-                "keys = ({})",
-                Separated(", ", keys.iter().map(|key| Indices(key)).collect())
-            ));
+            node.typ = Some(node.expr.typ());
         }
     }
 
-    pub fn explain_row_set_finishing(&mut self, row_set_finishing: RowSetFinishing) {
-        self.appendix.push_str(&format!(
-            "Finish order_by={} limit={} offset={} project={}",
-            Bracketed(
-                "(",
-                ")",
-                Separated(", ", row_set_finishing.order_by.clone())
-            ),
-            match row_set_finishing.limit {
-                Some(limit) => limit.to_string(),
-                None => "none".to_owned(),
-            },
-            row_set_finishing.offset,
-            Bracketed("(", ")", Indices(&row_set_finishing.project))
-        ))
+    /// Attach a `RowSetFinishing` to the explanation.
+    pub fn explain_row_set_finishing(&mut self, finishing: RowSetFinishing) {
+        self.finishing = Some(finishing);
     }
 }
 
-impl std::fmt::Display for ScalarExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+impl fmt::Display for ScalarExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         use ScalarExpr::*;
         match self {
             Column(i) => write!(f, "#{}", i)?,
@@ -398,8 +401,8 @@ impl std::fmt::Display for ScalarExpr {
     }
 }
 
-impl std::fmt::Display for AggregateExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+impl fmt::Display for AggregateExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
             "{}({}{})",
@@ -469,11 +472,11 @@ impl JoinImplementation {
 #[derive(Debug)]
 pub struct Separated<'a, T>(pub &'a str, pub Vec<T>);
 
-impl<'a, T> std::fmt::Display for Separated<'a, T>
+impl<'a, T> fmt::Display for Separated<'a, T>
 where
-    T: std::fmt::Display,
+    T: fmt::Display,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         for (i, elem) in self.1.iter().enumerate() {
             if i != 0 {
                 write!(f, "{}", self.0)?;
@@ -487,11 +490,11 @@ where
 #[derive(Debug)]
 pub struct Bracketed<'a, T>(pub &'a str, pub &'a str, pub T);
 
-impl<'a, T> std::fmt::Display for Bracketed<'a, T>
+impl<'a, T> fmt::Display for Bracketed<'a, T>
 where
-    T: std::fmt::Display,
+    T: fmt::Display,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(f, "{}{}{}", self.0, self.2, self.1)
     }
 }
@@ -499,8 +502,8 @@ where
 #[derive(Debug)]
 pub struct Indices<'a>(pub &'a [usize]);
 
-impl<'a> std::fmt::Display for Indices<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+impl<'a> fmt::Display for Indices<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let mut is_first = true;
         let mut slice = self.0;
         while !slice.is_empty() {
