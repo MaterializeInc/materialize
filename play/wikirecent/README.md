@@ -2,8 +2,8 @@
 
 This directory contains a demonstration application showing how to build an event-driven data
 pipeline. The example application comes from our [Getting Started Guide][], where Materialize is
-configured with three `MATERIALIZED VIEWS` that update as new edits are appended to the
-`wikirecent` source. The three views are:
+configured with three materialized views that update as new edits are appended to the `wikirecent`
+source. The three views are:
 
 - `counter`: The count all edits that have ever been observed.
 - `useredits`: The count of all edits observed, grouped by user.
@@ -14,7 +14,7 @@ configured with three `MATERIALIZED VIEWS` that update as new edits are appended
 
 The Python web application then serves a basic page that renders both the current value for
 `counter` and a visualization of the `top10` table. These counts and visualization are updated
-as the underlying `MATERIALIZED VIEWS` are updated, using the [TAIL][] command.
+as the underlying materialized views are updated, using the [TAIL][] command.
 
 [TAIL]: https://materialize.com/docs/sql/tail/
 
@@ -52,9 +52,9 @@ There are 4 major components that comprise this stack:
 - `stream`: A service to curl [Wikimedia's Recent Change Stream][] and write append the
   results to a file called `recentchanges`.
 - `materialized`: An instance of `materialized` configured to `TAIL` the `recentchanges` file and
-  maintain the `counter`, `useredits` and `top10` `MATERIALIZED VIEWS`.
+  maintain the `counter`, `useredits` and `top10` materialized views.
 - `app`: A Python web server, written as an asynchronous application using [tornado-web][] and
-  [psycopg3][], to `TAIL` the `counter` and `top10` views and present updates to these views over
+  [psycopg3][], to tail the `counter` and `top10` views and present updates to these views over
   websockets.
 - The user's web browser. The webpage rendered by `app` includes Javascript code that opens two
   websockets to `app`. Each message, pushed by `app`, contains an update that is then rendered by
@@ -78,17 +78,17 @@ repeated requests to upstream systems:
 There are multiple ways to debug the data between transferred between the various components in
 this stack.
 
-### Open a psql client to Materialize
+### Open a psql client to materialized
 
-The Materialize database is not exposed on a well-numbered port and instead docker-compose chooses
-a random high-numbered port. To open a Postgres REPL, connected to the Materialized instance
-running as part of this demo, run:
+The materialized instance is not exposed on a well-numbered port and instead docker-compose
+chooses a random high-numbered port. To open a Postgres REPL, connected to the materialized
+instance running as part of this demo, run:
 
     psql -h localhost -p $(./mzcompose --mz-quiet list-ports materialized) materialize
 
-### Streaming top10 from Materialize to your console
+### Streaming top10 from materialized to your console
 
-To view the data sent from Materialize server to the browser, use the `tail-top10` workflow:
+To view the data sent from the materialized to the app server, use the `tail-top10` workflow:
 
     ./bin/mzcompose run tail-top10
 

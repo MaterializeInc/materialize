@@ -18,14 +18,13 @@ This file is written in a bottom-up structure. The code flows as follows:
 - `IndexHandler` is responsible for serving our HTML / Javacript page.
 - `StreamHandler` is responsible for accepting new client connections, adding them as listeners on
   `View` objects and removing them when connections are closed.
-- `Application` is responsible for creating an internal VIEW object per MATERIALIZED VIEW that are
-  interesting in tailing. It's also the class that enables `StreamHandler` objects to locate
-  `View` objects.
-- `View` objects represents a mirror copy of a MATERIALIZED VIEW in materialized. Views spawn a
-  background coroutine that runs `TAIL`, processing rows and turning them into updates that can be
-  broadcast to listeners. The background thread is also responsible for maintaining an internal
-  copy of the view that can be used to initialize state for new listeners.
-
+- `Application` is responsible for creating an internal `View` object per materialized view that
+  we are interesting in tailing. It's also the class that enables `StreamHandler` objects to
+  locate `View` objects.
+- `View` objects represents a mirror copy of a materialized view in materialized. Views spawn a
+  background coroutine that runs the `TAIL` command, processing rows and turning them into updates
+  that can be broadcast to listeners. The background thread is also responsible for maintaining an
+  internal copy of the view that can be used to initialize state for new listeners.
 """
 
 import collections
@@ -49,7 +48,7 @@ class View:
 
         :Params:
             - `dsn`: The postgres connection string to locate materialized.
-            - `view_name`: The name of the MATERIALIZED VIEW to TAIL.
+            - `view_name`: The name of the materialized view to TAIL.
         """
         self.current_rows = []
         self.current_timestamp = []
@@ -182,7 +181,7 @@ class StreamHandler(tornado.websocket.WebSocketHandler):
         """New websocket connection; broadcast views updates to this listener.
 
         :Params:
-            - `view`: The name of the MATERIALIED VIEW to follow.
+            - `view`: The name of the materialized view to follow.
         """
         self.view = view
         self.application.views[view].add_listener(self)
@@ -200,7 +199,7 @@ class Application(tornado.web.Application):
         / remove listeners as connections are opened / closed.
 
         :Params:
-            - `configured_views`: A list of MATERIALIED VIEW names.
+            - `configured_views`: A list of materialized view names.
             - `dsn`: A postgres connection string for our materialized instance.
         """
         super().__init__(*args, **kwargs)
