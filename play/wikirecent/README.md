@@ -7,8 +7,8 @@ source. The three views are:
 
 - `counter`: The count all edits that have ever been observed.
 - `useredits`: The count of all edits observed, grouped by user.
-- `top10`: The top-10 users, where top means most edits by count. This view is a `MATERIALIZED
-  VIEW` on top of `useredits`.
+- `top10`: The top-10 users, where top means most edits by count. This view is a materialized
+  view on top of `useredits`.
 
 [Getting Started Guide]: https://materialize.com/docs/get-started/
 
