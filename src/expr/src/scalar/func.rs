@@ -1721,14 +1721,14 @@ fn date_part_interval_inner(
         DateTimeUnits::Hour => Ok(interval.hours().into()),
         DateTimeUnits::Minute => Ok(interval.minutes().into()),
         DateTimeUnits::Second => Ok(interval.seconds().into()),
-        DateTimeUnits::Millennium
-        | DateTimeUnits::Century
-        | DateTimeUnits::Decade
-        | DateTimeUnits::Quarter
-        | DateTimeUnits::Week
-        | DateTimeUnits::Month
-        | DateTimeUnits::Milliseconds
-        | DateTimeUnits::Microseconds
+        DateTimeUnits::Millennium => Ok(interval.millennia().into()),
+        DateTimeUnits::Century => Ok(interval.centuries().into()),
+        DateTimeUnits::Decade => Ok(interval.decades().into()),
+        DateTimeUnits::Quarter => Ok(interval.quarters().into()),
+        DateTimeUnits::Month => Ok(interval.months().into()),
+        DateTimeUnits::Milliseconds => Ok(interval.milliseconds().into()),
+        DateTimeUnits::Microseconds => Ok(interval.microseconds().into()),
+        DateTimeUnits::Week
         | DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
