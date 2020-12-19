@@ -190,16 +190,13 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         }
     }
     /// Returns the number of partitions expected *for this worker*. Partitions are assigned
-    /// round-robin in worker id order
-    /// Ex: a partition count of 4 for 3 workers will assign worker 0 with partitions 0,3,
-    /// worker 1 with partition 1, and worker 2 with partition 2
+    /// round-robin in worker id order, offset by source id to round robins sources as well
+    /// Ex: a source id of 0 and partition count of 4 for 3 workers will assign worker 0 with
+    /// partitions 0,3, worker 1 with partition 1, and worker 2 with partition 2
     fn get_worker_partition_count(&self) -> i32 {
-        let pcount = self.known_partitions / self.worker_count;
-        if self.worker_id < (self.known_partitions % self.worker_count) {
-            pcount + 1
-        } else {
-            pcount
-        }
+        (0 .. self.known_partitions).filter(|&partition_id| {
+            has_partition(self.worker_id, self.worker_count, self.id, partition_id)
+        }).count() as i32
     }
 
     /// Returns true if this worker is responsible for this partition
@@ -210,7 +207,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             PartitionId::Kafka(pid) => pid,
             _ => unreachable!(),
         };
-        (pid % self.worker_count) == self.worker_id
+        has_partition(self.worker_id, self.worker_count, self.id, pid)
     }
 
     /// Ensures that a partition queue for `pid` exists.
@@ -471,7 +468,7 @@ impl KafkaSourceInfo {
                         match metadata {
                             Ok(Some(meta)) => {
                                 assert_eq!(source_id.source_id, meta.source_id);
-                                has_partition(worker_id, worker_count, meta.partition_id)
+                                has_partition(worker_id, worker_count, source_id, meta.partition_id)
                             }
                             _ => {
                                 error!("Failed to parse path: {}", f.display());
@@ -511,7 +508,7 @@ impl KafkaSourceInfo {
     /// Ex: if pid=0 and worker_id = 0, then true
     /// if pid=1 and worker_id = 0, then false
     fn has_partition(&self, partition_id: i32) -> bool {
-        has_partition(self.worker_id, self.worker_count, partition_id)
+        has_partition(self.worker_id, self.worker_count, self.id, partition_id)
     }
 
     /// Returns a count of total number of consumers for this source
@@ -762,6 +759,11 @@ impl ConsumerContext for GlueConsumerContext {
     }
 }
 
-fn has_partition(worker_id: i32, worker_count: i32, partition_id: i32) -> bool {
-    (partition_id % worker_count) == worker_id
+// Calculate whether or not the given worker should be responsible for reading from the given
+// source and partition
+fn has_partition(worker_id: i32, worker_count: i32, source_id: SourceInstanceId, partition_id: i32) -> bool {
+    // Distribute read responsibility across workers
+    use differential_dataflow::hashable::Hashable;
+    let hash = source_id.hashed() as i32;
+    ((hash + partition_id) % worker_count) == worker_id
 }
