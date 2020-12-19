@@ -96,6 +96,46 @@ impl Interval {
         }
     }
 
+    pub fn checked_mul(&self, other: f64) -> Option<Self> {
+        let months = self.months as f64 * other;
+        if months.is_nan() || months < i32::MIN as f64 || months > i32::MAX as f64 {
+            return None;
+        }
+
+        let seconds =
+            self.dur_as_secs() as f64 * other + months.fract() * 60.0 * 60.0 * 24.0 * 30.0;
+        if seconds.is_nan() || seconds < i64::MIN as f64 || seconds > i64::MAX as f64 {
+            return None;
+        }
+
+        let nanos = self.nanoseconds() as f64 * other + seconds.fract() * 1e9;
+        if nanos.is_nan() || nanos < i64::MIN as f64 || nanos > i64::MAX as f64 {
+            return None;
+        }
+
+        Self::new(months as i32, seconds as i64, nanos as i64).ok()
+    }
+
+    pub fn checked_div(&self, other: f64) -> Option<Self> {
+        let months = self.months as f64 / other;
+        if months.is_nan() || months < i32::MIN as f64 || months > i32::MAX as f64 {
+            return None;
+        }
+
+        let seconds =
+            self.dur_as_secs() as f64 / other + months.fract() * 60.0 * 60.0 * 24.0 * 30.0;
+        if seconds.is_nan() || seconds < i64::MIN as f64 || seconds > i64::MAX as f64 {
+            return None;
+        }
+
+        let nanos = self.nanoseconds() as f64 / other + seconds.fract() * 1e9;
+        if nanos.is_nan() || nanos < i64::MIN as f64 || nanos > i64::MAX as f64 {
+            return None;
+        }
+
+        Self::new(months as i32, seconds as i64, nanos as i64).ok()
+    }
+
     /// Returns the total number of whole seconds in the `Interval`'s duration.
     pub fn dur_as_secs(&self) -> i64 {
         (self.duration / 1_000_000_000) as i64
