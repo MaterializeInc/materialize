@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+x-port-mappings:
+  - &app ${APP_PORT:-8875}
+  - &materialized ${MZ_PORT:-6875}
+
+version: '3.7'
+services:
+  app:
+    mzbuild: wikirecent-app
+    ports:
+      - *app
+  create-views:
+    mzbuild: wikirecent-create-views
+  materialized:
+    mzbuild: materialized
+    ports:
+      - *materialized
+    init: true
+    volumes:
+      - type: volume
+        source: wikidata
+        target: /tmp/wikidata
+        read_only: true
+  stream:
+    mzbuild: wikirecent-stream
+    volumes:
+      - type: volume
+        source: wikidata
+        target: /tmp/wikidata
+
+volumes:
+  wikidata:
+
+mzworkflows:
+  demo:
+    steps:
+    - step: start-services
+      services: [materialized, stream]
+    - step: wait-for-tcp
+      host: materialized
+      port: ${MZ_PORT:-6875}
+    - step: run
+      service: create-views
+    - step: start-services
+      services: [app]
+    - step: wait-for-tcp
+      host: app
+      port: ${APP_PORT:-8875}
+
+  stream-top10:
+    steps:
+      - step: run
+        service: app
+        command: /usr/local/bin/async_stream.py top10
+
+  tail-top10:
+    steps:
+      - step: run
+        service: app
+        command: /usr/local/bin/async_tail.py top10
