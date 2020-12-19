@@ -153,10 +153,15 @@ pub mod monotonic {
                 false
             }
             RelationExpr::Reduce {
-                input, monotonic, ..
+                input,
+                aggregates,
+                monotonic,
+                ..
             } => {
                 *monotonic = is_monotonic(input, sources);
-                false
+                // Reduce is monotonic iff its input is and it is a "distinct",
+                // with no aggregate values; otherwise it may need to retract.
+                *monotonic && aggregates.is_empty()
             }
             RelationExpr::Union { base, inputs } => {
                 let mut monotonic = is_monotonic(base, sources);
@@ -167,6 +172,22 @@ pub mod monotonic {
                 monotonic
             }
             RelationExpr::ArrangeBy { input, .. } => is_monotonic(input, sources),
+            RelationExpr::FlatMap { input, func, .. } => {
+                let is_monotonic = is_monotonic(input, sources);
+                is_monotonic && func.preserves_monotonicity()
+            }
+            RelationExpr::Join { inputs, .. } => {
+                // If all inputs to the join are monotonic then so is the join.
+                let mut monotonic = true;
+                for input in inputs.iter_mut() {
+                    let monotonic_i = is_monotonic(input, sources);
+                    monotonic = monotonic && monotonic_i;
+                }
+                monotonic
+            }
+            RelationExpr::Constant { rows, .. } => rows.iter().all(|(_, diff)| diff > &0),
+            RelationExpr::Threshold { input } => is_monotonic(input, sources),
+            // Let and Negate remain
             _ => {
                 expr.visit1_mut(|e| {
                     is_monotonic(e, sources);

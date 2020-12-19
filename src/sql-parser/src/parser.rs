@@ -320,7 +320,7 @@ impl<'a> Parser<'a> {
             }),
             Token::Keyword(ROW) => self.parse_row_expr(),
             Token::Keyword(TRIM) => self.parse_trim_expr(),
-            Token::Keyword(kw) if kw.is_reserved_in_expr() => {
+            Token::Keyword(kw) if kw.is_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
                     "expected expression, but found reserved keyword".into(),
@@ -2249,9 +2249,7 @@ impl<'a> Parser<'a> {
                 TIMESTAMPTZ => other("timestamptz"),
 
                 // MZ "proprietary" types
-                MAP => DataType::Map {
-                    value_type: Box::new(self.parse_map()?),
-                },
+                MAP => return self.parse_map(),
 
                 kw => DataType::Other(kw.into_ident()),
             },
@@ -2454,14 +2452,14 @@ impl<'a> Parser<'a> {
 
     fn parse_map(&mut self) -> Result<DataType, ParserError> {
         self.expect_token(&Token::LBracket)?;
-        if self.parse_data_type()? != DataType::Other(Ident::new("text")) {
-            self.prev_token();
-            return self.expected(self.peek_prev_pos(), "TEXT", self.peek_token());
-        }
+        let key_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::Op("=>".to_owned()))?;
-        let typ = self.parse_data_type()?;
+        let value_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::RBracket)?;
-        Ok(typ)
+        Ok(DataType::Map {
+            key_type,
+            value_type,
+        })
     }
 
     fn parse_delete(&mut self) -> Result<Statement, ParserError> {
@@ -2726,7 +2724,7 @@ impl<'a> Parser<'a> {
         let projection = match self.peek_token() {
             // An empty target list is permissible to match PostgreSQL, which
             // permits these for symmetry with zero column tables.
-            Some(Token::Keyword(kw)) if kw.is_reserved_in_column_alias() => vec![],
+            Some(Token::Keyword(kw)) if kw.is_reserved() => vec![],
             Some(Token::Semicolon) | None => vec![],
             _ => self.parse_comma_separated(Parser::parse_select_item)?,
         };

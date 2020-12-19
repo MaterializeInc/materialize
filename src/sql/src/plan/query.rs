@@ -2615,9 +2615,18 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::
             ScalarType::Float64
         }
         DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
-        DataType::Map { value_type } => ScalarType::Map {
-            value_type: Box::new(scalar_type_from_sql(value_type)?),
-        },
+        DataType::Map {
+            key_type,
+            value_type,
+        } => {
+            match scalar_type_from_sql(&key_type)? {
+                ScalarType::String => {}
+                other => bail!("map key type must be text, got {}", other),
+            };
+            ScalarType::Map {
+                value_type: Box::new(scalar_type_from_sql(value_type)?),
+            }
+        }
         DataType::Other(n) => match n.as_str() {
             "bool" | "boolean" => ScalarType::Bool,
             "bytea" | "bytes" => ScalarType::Bytes,

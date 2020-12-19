@@ -44,7 +44,10 @@ impl Ident {
             .map(|ch| (ch >= 'a' && ch <= 'z') || (ch == '_'))
             .unwrap_or(false)
             && chars.all(|ch| (ch >= 'a' && ch <= 'z') || (ch == '_') || (ch >= '0' && ch <= '9'))
-            && !self.as_keyword().map(Keyword::is_reserved).unwrap_or(false)
+            && !self
+                .as_keyword()
+                .map(Keyword::is_sometimes_reserved)
+                .unwrap_or(false)
     }
 
     pub fn as_str(&self) -> &str {
