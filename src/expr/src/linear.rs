@@ -213,12 +213,12 @@ impl MapFilterProject {
                 expr2,
             } = predicate
             {
-                if let Some(Ok(datum1)) = expr1.as_literal() {
+                if let Some(datum1) = expr1.as_literal() {
                     if &**expr2 == expr {
                         return Some(datum1);
                     }
                 }
-                if let Some(Ok(datum2)) = expr2.as_literal() {
+                if let Some(datum2) = expr2.as_literal() {
                     if &**expr1 == expr {
                         return Some(datum2);
                     }

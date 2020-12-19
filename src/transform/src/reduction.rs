@@ -51,7 +51,7 @@ impl FoldConstants {
                 expected_group_size: _,
             } => {
                 for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.reduce(&input.typ());
+                    aggregate.expr.reduce(&input.typ())?;
                 }
                 if let RelationExpr::Constant { rows, .. } = &**input {
                     // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
@@ -160,7 +160,7 @@ impl FoldConstants {
                             current_type = current_type.with_key(key.clone());
                         }
                     }
-                    scalar.reduce(&current_type);
+                    scalar.reduce(&current_type)?;
                 }
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
@@ -190,7 +190,7 @@ impl FoldConstants {
                 demand: _,
             } => {
                 for expr in exprs.iter_mut() {
-                    expr.reduce(&input.typ());
+                    expr.reduce(&input.typ())?;
                 }
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
@@ -220,7 +220,7 @@ impl FoldConstants {
             }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates.iter_mut() {
-                    predicate.reduce(&input.typ());
+                    predicate.reduce(&input.typ())?;
                 }
                 predicates.retain(|p| !p.is_literal_true());
 
@@ -530,7 +530,7 @@ pub mod undistribute_and {
             suppress_ands(expr2, ands);
 
             // If either argument is in our list, replace it by `true`.
-            let tru = ScalarExpr::literal_ok(Datum::True, ScalarType::Bool.nullable(false));
+            let tru = ScalarExpr::literal(Datum::True, ScalarType::Bool.nullable(false));
             if ands.contains(expr1) {
                 *expr = std::mem::replace(expr2, tru);
             } else if ands.contains(expr2) {

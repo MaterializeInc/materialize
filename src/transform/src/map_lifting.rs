@@ -85,7 +85,7 @@ impl LiteralLifting {
                         the_same.pop();
                         let datum = data.pop().unwrap();
                         let typum = typ.column_types.pop().unwrap();
-                        literals.push(ScalarExpr::literal_ok(datum, typum));
+                        literals.push(ScalarExpr::literal(datum, typum));
                     }
                     literals.reverse();
 
@@ -349,7 +349,7 @@ impl LiteralLifting {
                 let mut result = Vec::new();
                 while aggregates.last().map(|a| {
                     (a.func == expr::AggregateFunc::Any || a.func == expr::AggregateFunc::All)
-                        && a.expr.is_literal_ok()
+                        && a.expr.is_literal()
                 }) == Some(true)
                 {
                     let aggr = aggregates.pop().unwrap();
@@ -357,7 +357,7 @@ impl LiteralLifting {
                     let eval = aggr
                         .func
                         .eval(Some(aggr.expr.eval(&[], &temp).unwrap()), &temp);
-                    result.push(ScalarExpr::literal_ok(
+                    result.push(ScalarExpr::literal(
                         eval,
                         // This type information should be available in the `a.expr` literal,
                         // but extracting it with pattern matching seems awkward.

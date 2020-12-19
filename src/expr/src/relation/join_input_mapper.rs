@@ -374,7 +374,7 @@ mod tests {
             func: BinaryFunc::AddInt32,
             expr1: Box::new(ScalarExpr::Column(2)),
             expr2: Box::new(ScalarExpr::literal(
-                Ok(Datum::Int32(4)),
+                Datum::Int32(4),
                 ScalarType::Int32.nullable(false),
             )),
         };

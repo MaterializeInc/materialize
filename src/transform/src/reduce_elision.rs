@@ -57,11 +57,11 @@ impl ReduceElision {
                         AggregateFunc::Count => {
                             let column_type = a.typ(&input_type);
                             a.expr.clone().call_unary(UnaryFunc::IsNull).if_then_else(
-                                ScalarExpr::literal_ok(
+                                ScalarExpr::literal(
                                     Datum::Int64(0),
                                     column_type.scalar_type.clone().nullable(false),
                                 ),
-                                ScalarExpr::literal_ok(
+                                ScalarExpr::literal(
                                     Datum::Int64(1),
                                     column_type.scalar_type.nullable(false),
                                 ),
