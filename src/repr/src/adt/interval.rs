@@ -209,7 +209,8 @@ impl Interval {
 
     /// Computes the total number of seconds in the interval.
     pub fn as_seconds(&self) -> f64 {
-        (self.months as f64) * 60.0 * 60.0 * 24.0 * 30.0
+        self.years() * 60.0 * 60.0 * 24.0 * 365.25
+            + self.months() * 60.0 * 60.0 * 24.0 * 30.0
             + (self.dur_as_secs() as f64)
             + f64::from(self.nanoseconds()) / 1e9
     }
