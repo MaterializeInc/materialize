@@ -7,28 +7,36 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This is the implementation for the EXPLAIN (DECORRELATED | OPTIMIZED) PLAN command.
+//! This module houses a pretty printer for [`RelationExpr`]s.
 //!
-//! Conventions:
-//! * RelationExprs are printed in post-order, left to right
-//! * RelationExprs which only have a single input are grouped together
-//! * Each group of RelationExprs is referred by id eg %4
-//! * RelationExprs may be followed by additional annotations on lines starting with | |
-//! * Columns are referred to by position eg #4
-//! * Collections of columns are written as ranges where possible eg "#2..#5"
+//! Format details:
 //!
-//! It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
+//!   * The nodes in a `RelationExpr` are printed in post-order, left to right.
+//!   * Nodes which only have a single input are grouped together
+//!     into "chains."
+//!   * Each chain of `RelationExpr`s is referred to by ID, e.g. %4.
+//!   * Nodes may be followed by additional, indented annotations.
+//!   * Columns are referred to by position, e.g. #4.
+//!   * Collections of columns are written as ranges where possible,
+//!     e.g. "#2..#5".
+//!
+//! It's important to avoid trailing whitespace everywhere, as plans may be
+//! printed in contexts where trailing whitespace is unacceptable, like
+//! sqllogictest files.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::iter;
 
-use super::{
-    AggregateExpr, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, RowSetFinishing,
-    ScalarExpr,
-};
 use repr::RelationType;
-use std::collections::HashMap;
 
+use crate::{Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, RowSetFinishing};
+
+/// An `Explanation` facilitates pretty-printing of a [`RelationExpr`].
+///
+/// By default, the [`fmt::Display`] implementation renders the expression as
+/// described in the module docs. Additional information may be attached to the
+/// explanation via the other public methods on the type.
 #[derive(Debug)]
 pub struct Explanation<'a> {
     id_humanizer: &'a dyn IdHumanizer,
@@ -74,7 +82,7 @@ impl<'a> fmt::Display for Explanation<'a> {
             }
             prev_chain = node.chain;
 
-            node.fmt(self, f)?;
+            self.fmt_node(f, node)?;
         }
 
         if let Some(finishing) = &self.finishing {
@@ -95,189 +103,9 @@ impl<'a> fmt::Display for Explanation<'a> {
     }
 }
 
-impl<'a> ExplanationNode<'a> {
-    fn fmt(&self, explanation: &Explanation, f: &mut fmt::Formatter) -> fmt::Result {
-        use RelationExpr::*;
-
-        match self.expr {
-            Constant { rows, .. } => writeln!(
-                f,
-                "| Constant {}",
-                Separated(
-                    " ",
-                    rows.iter()
-                        .flat_map(|(row, count)| (0..*count).map(move |_| row))
-                        .collect::<Vec<_>>()
-                )
-            )?,
-            Get { id, .. } => match id {
-                Id::Local(local_id) => writeln!(
-                    f,
-                    "| Get %{} ({})",
-                    explanation
-                        .local_id_chains
-                        .get(local_id)
-                        .map_or_else(|| "?".to_owned(), |i| i.to_string()),
-                    local_id,
-                )?,
-                Id::Global(id) => writeln!(
-                    f,
-                    "| Get {} ({})",
-                    explanation
-                        .id_humanizer
-                        .humanize_id(*id)
-                        .unwrap_or_else(|| "?".to_owned()),
-                    id,
-                )?,
-            },
-            // Lets are annotated on the chain ID that they correspond to.
-            Let { .. } => (),
-            Project { outputs, .. } => {
-                writeln!(f, "| Project {}", Bracketed("(", ")", Indices(outputs)))?
-            }
-            Map { scalars, .. } => writeln!(f, "| Map {}", Separated(", ", scalars.clone()))?,
-            FlatMap {
-                func,
-                exprs,
-                demand,
-                ..
-            } => {
-                writeln!(f, "| FlatMap {}({})", func, Separated(", ", exprs.clone()))?;
-                if let Some(demand) = demand {
-                    writeln!(f, "| | demand = {}", Bracketed("(", ")", Indices(demand)))?;
-                }
-            }
-            Filter { predicates, .. } => {
-                writeln!(f, "| Filter {}", Separated(", ", predicates.clone()))?
-            }
-            Join {
-                inputs,
-                equivalences,
-                demand,
-                implementation,
-            } => {
-                let input_chains = inputs
-                    .iter()
-                    .map(|inp| explanation.expr_chain(inp))
-                    .collect::<Vec<_>>();
-                write!(
-                    f,
-                    "| Join {}",
-                    Separated(
-                        " ",
-                        inputs
-                            .iter()
-                            .map(|input| Bracketed("%", "", explanation.expr_chain(input)))
-                            .collect()
-                    ),
-                )?;
-                if !equivalences.is_empty() {
-                    write!(
-                        f,
-                        " {}",
-                        Separated(
-                            " ",
-                            equivalences
-                                .iter()
-                                .map(|equivalence| Bracketed(
-                                    "(= ",
-                                    ")",
-                                    Separated(" ", equivalence.clone())
-                                ))
-                                .collect()
-                        )
-                    )?;
-                }
-                writeln!(f)?;
-                for line in implementation.fmt_with(&input_chains) {
-                    writeln!(f, "| | {}", line)?;
-                }
-                if let Some(demand) = demand {
-                    writeln!(f, "| | demand = {}", Bracketed("(", ")", Indices(demand)))?;
-                }
-            }
-            Reduce {
-                group_key,
-                aggregates,
-                ..
-            } => {
-                if aggregates.is_empty() {
-                    writeln!(
-                        f,
-                        "| Distinct group={}",
-                        Bracketed("(", ")", Separated(", ", group_key.clone())),
-                    )?
-                } else {
-                    writeln!(
-                        f,
-                        "| Reduce group={}",
-                        Bracketed("(", ")", Separated(", ", group_key.clone())),
-                    )?;
-                    for agg in aggregates {
-                        writeln!(f, "| | agg {}", agg)?;
-                    }
-                }
-            }
-            TopK {
-                group_key,
-                order_key,
-                limit,
-                offset,
-                ..
-            } => {
-                write!(
-                    f,
-                    "| TopK group={} order={}",
-                    Bracketed("(", ")", Indices(group_key)),
-                    Bracketed("(", ")", Separated(", ", order_key.clone())),
-                )?;
-                if let Some(limit) = limit {
-                    write!(f, " limit={}", limit)?;
-                }
-                writeln!(f, " offset={}", offset)?
-            }
-            Negate { .. } => writeln!(f, "| Negate")?,
-            Threshold { .. } => write!(f, "| Threshold")?,
-            Union { base, inputs } => {
-                let input_chains: Vec<_> = inputs
-                    .iter()
-                    .map(|input| Bracketed("%", "", explanation.expr_chain(input)))
-                    .collect();
-                writeln!(
-                    f,
-                    "| Union %{} {}",
-                    explanation.expr_chain(base),
-                    Separated(" ", input_chains)
-                )?
-            }
-            ArrangeBy { keys, .. } => writeln!(
-                f,
-                "| ArrangeBy {}",
-                Separated(
-                    " ",
-                    keys.iter()
-                        .map(|key| Bracketed("(", ")", Separated(", ", key.clone())))
-                        .collect::<Vec<_>>()
-                ),
-            )?,
-        }
-
-        if let Some(RelationType { column_types, keys }) = &self.typ {
-            writeln!(f, "| | types = ({})", Separated(", ", column_types.clone()))?;
-            writeln!(
-                f,
-                "| | keys = ({})",
-                Separated(", ", keys.iter().map(|key| Indices(key)).collect())
-            )?;
-        }
-
-        Ok(())
-    }
-}
-
-impl RelationExpr {
-    /// Create an Explanation, to which annotations can be added before printing
-    pub fn explain<'a>(&'a self, id_humanizer: &'a dyn IdHumanizer) -> Explanation<'a> {
+impl<'a> Explanation<'a> {
+    /// Creates an explanation for a [`RelationExpr`].
+    pub fn new(expr: &'a RelationExpr, id_humanizer: &'a dyn IdHumanizer) -> Explanation<'a> {
         use RelationExpr::*;
 
         // Do a post-order traversal of the expression, grouping "chains" of
@@ -360,18 +188,8 @@ impl RelationExpr {
             chain_local_ids: HashMap::new(),
             chain: 0,
         };
-        walk(self, &mut explanation);
+        walk(expr, &mut explanation);
         explanation
-    }
-}
-
-impl<'a> Explanation<'a> {
-    /// Retrieves the chain ID for the specified expression.
-    ///
-    /// The `ExplanationNode` for `expr` must have already been inserted into
-    /// the explanation.
-    fn expr_chain(&self, expr: &RelationExpr) -> usize {
-        self.expr_chains[&(expr as *const RelationExpr)]
     }
 
     /// Attach type information into the explanation.
@@ -386,56 +204,189 @@ impl<'a> Explanation<'a> {
     pub fn explain_row_set_finishing(&mut self, finishing: RowSetFinishing) {
         self.finishing = Some(finishing);
     }
-}
 
-impl fmt::Display for ScalarExpr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        use ScalarExpr::*;
-        match self {
-            Column(i) => write!(f, "#{}", i)?,
-            Literal(Ok(row), _) => write!(f, "{}", row.unpack_first())?,
-            Literal(Err(e), _) => write!(f, "(err: {})", e)?,
-            CallNullary(func) => write!(f, "{}()", func)?,
-            CallUnary { func, expr } => {
-                write!(f, "{}({})", func, expr)?;
+    fn fmt_node(&self, f: &mut fmt::Formatter, node: &ExplanationNode) -> fmt::Result {
+        use RelationExpr::*;
+
+        match node.expr {
+            Constant { rows, .. } => writeln!(
+                f,
+                "| Constant {}",
+                Separated(
+                    " ",
+                    rows.iter()
+                        .flat_map(|(row, count)| (0..*count).map(move |_| row))
+                        .collect::<Vec<_>>()
+                )
+            )?,
+            Get { id, .. } => match id {
+                Id::Local(local_id) => writeln!(
+                    f,
+                    "| Get %{} ({})",
+                    self.local_id_chains
+                        .get(local_id)
+                        .map_or_else(|| "?".to_owned(), |i| i.to_string()),
+                    local_id,
+                )?,
+                Id::Global(id) => writeln!(
+                    f,
+                    "| Get {} ({})",
+                    self.id_humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| "?".to_owned()),
+                    id,
+                )?,
+            },
+            // Lets are annotated on the chain ID that they correspond to.
+            Let { .. } => (),
+            Project { outputs, .. } => {
+                writeln!(f, "| Project {}", Bracketed("(", ")", Indices(outputs)))?
             }
-            CallBinary { func, expr1, expr2 } => {
-                if func.is_infix_op() {
-                    write!(f, "({} {} {})", expr1, func, expr2)?;
-                } else {
-                    write!(f, "{}({}, {})", func, expr1, expr2)?;
+            Map { scalars, .. } => writeln!(f, "| Map {}", Separated(", ", scalars.clone()))?,
+            FlatMap {
+                func,
+                exprs,
+                demand,
+                ..
+            } => {
+                writeln!(f, "| FlatMap {}({})", func, Separated(", ", exprs.clone()))?;
+                if let Some(demand) = demand {
+                    writeln!(f, "| | demand = {}", Bracketed("(", ")", Indices(demand)))?;
                 }
             }
-            CallVariadic { func, exprs } => {
-                write!(f, "{}({})", func, Separated(", ", exprs.clone()))?;
+            Filter { predicates, .. } => {
+                writeln!(f, "| Filter {}", Separated(", ", predicates.clone()))?
             }
-            If { cond, then, els } => {
-                write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)?;
+            Join {
+                inputs,
+                equivalences,
+                demand,
+                implementation,
+            } => {
+                write!(
+                    f,
+                    "| Join {}",
+                    Separated(
+                        " ",
+                        inputs
+                            .iter()
+                            .map(|input| Bracketed("%", "", self.expr_chain(input)))
+                            .collect()
+                    ),
+                )?;
+                if !equivalences.is_empty() {
+                    write!(
+                        f,
+                        " {}",
+                        Separated(
+                            " ",
+                            equivalences
+                                .iter()
+                                .map(|equivalence| Bracketed(
+                                    "(= ",
+                                    ")",
+                                    Separated(" ", equivalence.clone())
+                                ))
+                                .collect()
+                        )
+                    )?;
+                }
+                writeln!(f)?;
+                write!(f, "| | implementation = ")?;
+                self.fmt_join_implementation(f, inputs, implementation)?;
+                if let Some(demand) = demand {
+                    writeln!(f, "| | demand = {}", Bracketed("(", ")", Indices(demand)))?;
+                }
             }
+            Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                if aggregates.is_empty() {
+                    writeln!(
+                        f,
+                        "| Distinct group={}",
+                        Bracketed("(", ")", Separated(", ", group_key.clone())),
+                    )?
+                } else {
+                    writeln!(
+                        f,
+                        "| Reduce group={}",
+                        Bracketed("(", ")", Separated(", ", group_key.clone())),
+                    )?;
+                    for agg in aggregates {
+                        writeln!(f, "| | agg {}", agg)?;
+                    }
+                }
+            }
+            TopK {
+                group_key,
+                order_key,
+                limit,
+                offset,
+                ..
+            } => {
+                write!(
+                    f,
+                    "| TopK group={} order={}",
+                    Bracketed("(", ")", Indices(group_key)),
+                    Bracketed("(", ")", Separated(", ", order_key.clone())),
+                )?;
+                if let Some(limit) = limit {
+                    write!(f, " limit={}", limit)?;
+                }
+                writeln!(f, " offset={}", offset)?
+            }
+            Negate { .. } => writeln!(f, "| Negate")?,
+            Threshold { .. } => write!(f, "| Threshold")?,
+            Union { base, inputs } => {
+                let input_chains: Vec<_> = inputs
+                    .iter()
+                    .map(|input| Bracketed("%", "", self.expr_chain(input)))
+                    .collect();
+                writeln!(
+                    f,
+                    "| Union %{} {}",
+                    self.expr_chain(base),
+                    Separated(" ", input_chains)
+                )?
+            }
+            ArrangeBy { keys, .. } => writeln!(
+                f,
+                "| ArrangeBy {}",
+                Separated(
+                    " ",
+                    keys.iter()
+                        .map(|key| Bracketed("(", ")", Separated(", ", key.clone())))
+                        .collect::<Vec<_>>()
+                ),
+            )?,
         }
+
+        if let Some(RelationType { column_types, keys }) = &node.typ {
+            writeln!(f, "| | types = ({})", Separated(", ", column_types.clone()))?;
+            writeln!(
+                f,
+                "| | keys = ({})",
+                Separated(", ", keys.iter().map(|key| Indices(key)).collect())
+            )?;
+        }
+
         Ok(())
     }
-}
 
-impl fmt::Display for AggregateExpr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "{}({}{})",
-            self.func,
-            if self.distinct { "distinct " } else { "" },
-            self.expr
-        )
-    }
-}
-
-impl JoinImplementation {
-    fn fmt_with(&self, input_chains: &[usize]) -> Vec<String> {
-        use JoinImplementation::*;
-        let mut result = match self {
-            Differential((pos, first_arr), inputs) => vec![format!(
+    fn fmt_join_implementation(
+        &self,
+        f: &mut fmt::Formatter,
+        join_inputs: &[RelationExpr],
+        implementation: &JoinImplementation,
+    ) -> fmt::Result {
+        match implementation {
+            JoinImplementation::Differential((pos, first_arr), inputs) => writeln!(
+                f,
                 "Differential %{}{} {}",
-                input_chains[*pos],
+                self.expr_chain(&join_inputs[*pos]),
                 if let Some(arr) = first_arr {
                     format!(".({})", Separated(", ", arr.clone()))
                 } else {
@@ -448,19 +399,20 @@ impl JoinImplementation {
                         .map(|(pos, input)| {
                             format!(
                                 "%{}.({})",
-                                input_chains[*pos],
+                                self.expr_chain(&join_inputs[*pos]),
                                 Separated(", ", input.clone())
                             )
                         })
                         .collect()
-                )
-            )],
-            DeltaQuery(inputss) => {
-                let mut result = vec!["DeltaQuery".to_owned()];
-                result.extend(inputss.iter().enumerate().map(|(pos, inputs)| {
-                    format!(
-                        "  delta %{} {}",
-                        input_chains[pos],
+                ),
+            ),
+            JoinImplementation::DeltaQuery(inputs) => {
+                writeln!(f, "DeltaQuery")?;
+                for (pos, inputs) in inputs.iter().enumerate() {
+                    writeln!(
+                        f,
+                        "| |   delta %{} {}",
+                        self.expr_chain(&join_inputs[pos]),
                         Separated(
                             " ",
                             inputs
@@ -468,20 +420,26 @@ impl JoinImplementation {
                                 .map(|(pos, input)| {
                                     format!(
                                         "%{}.({})",
-                                        input_chains[*pos],
+                                        self.expr_chain(&join_inputs[*pos]),
                                         Separated(", ", input.clone())
                                     )
                                 })
                                 .collect()
                         )
-                    )
-                }));
-                result
+                    )?;
+                }
+                Ok(())
             }
-            Unimplemented => vec!["Unimplemented".to_owned()],
-        };
-        result[0] = format!("implementation = {}", result[0]);
-        result
+            JoinImplementation::Unimplemented => writeln!(f, "Unimplemented"),
+        }
+    }
+
+    /// Retrieves the chain ID for the specified expression.
+    ///
+    /// The `ExplanationNode` for `expr` must have already been inserted into
+    /// the explanation.
+    fn expr_chain(&self, expr: &RelationExpr) -> usize {
+        self.expr_chains[&(expr as *const RelationExpr)]
     }
 }
 
