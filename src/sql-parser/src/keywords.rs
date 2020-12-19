@@ -62,11 +62,16 @@ impl Keyword {
         Ident::new(self.as_str().to_lowercase())
     }
 
-    fn is_reserved_in_alias(self) -> bool {
+    /// Reports whether this keyword requires quoting when used as an
+    /// identifier in any context.
+    ///
+    /// The only exception to the rule is when the keyword follows `AS` in a
+    /// column or table alias.
+    pub fn is_reserved(self) -> bool {
         matches!(
             self,
             // Keywords that can appear at the top-level of a SELECT statement.
-            WITH | SELECT | WHERE | GROUP | HAVING | ORDER | LIMIT | OFFSET | FETCH | OPTION |
+            WITH | SELECT | FROM | WHERE | GROUP | HAVING | ORDER | LIMIT | OFFSET | FETCH | OPTION |
             // Set operations.
             UNION | EXCEPT | INTERSECT
         )
@@ -74,6 +79,9 @@ impl Keyword {
 
     /// Reports whether this keyword requires quoting when used as a table
     /// alias.
+    ///
+    /// Note that this rule is only applies when the table alias is "bare";
+    /// i.e., when the table alias is not preceded by `AS`.
     ///
     /// Ensures that `FROM <table_name> <table_alias>` can be parsed
     /// unambiguously.
@@ -87,28 +95,35 @@ impl Keyword {
             // b` from parsing as `a AS outer JOIN b`, instead producing a nice
             // syntax error.
             OUTER
-        ) || self.is_reserved_in_alias()
+        ) || self.is_reserved()
     }
 
     /// Reports whether this keyword requires quoting when used as a column
     /// alias.
     ///
+    ///
+    /// Note that this rule is only applies when the column alias is "bare";
+    /// i.e., when the column alias is not preceded by `AS`.
+    ///
     /// Ensures that `SELECT <column_name> <column_alias>` can be parsed
     /// unambiguously.
     pub fn is_reserved_in_column_alias(self) -> bool {
-        matches!(self, FROM) || self.is_reserved_in_alias()
+        matches!(
+            self,
+            // These timelike keywords conflict with interval timeframe
+            // suffixes. They are not strictly ambiguous, but marking them
+            // reserved prevents e.g. `SELECT pg_catalog.interval '1' year` from
+            // parsing as `SELECT pg_catalog.interval '1' AS YEAR`.
+            YEAR | MONTH | DAY | HOUR | MINUTE | SECOND
+        ) || self.is_reserved()
     }
 
-    /// Reports whether this keyword requires quoting when used as an identifier
-    /// in an expression.
-    pub fn is_reserved_in_expr(self) -> bool {
-        matches!(self, FROM)
-    }
-
-    pub fn is_reserved(self) -> bool {
-        self.is_reserved_in_table_alias()
+    /// Reports whether a keyword is considered reserved in any context:
+    /// either in table aliases, column aliases, or in all contexts.
+    pub fn is_sometimes_reserved(self) -> bool {
+        self.is_reserved()
+            || self.is_reserved_in_table_alias()
             || self.is_reserved_in_column_alias()
-            || self.is_reserved_in_expr()
     }
 }
 
