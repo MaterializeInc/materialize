@@ -70,6 +70,13 @@ pub trait Transform: std::fmt::Debug {
         relation: &mut RelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError>;
+    /// A string describing the transform.
+    ///
+    /// This is useful mainly when iterating through many `Box<Tranform>`
+    /// and one wants to judge progress before some defect occurs.
+    fn debug(&self) -> String {
+        format!("{:?}", self)
+    }
 }
 
 /// Errors that can occur during a transformation.
