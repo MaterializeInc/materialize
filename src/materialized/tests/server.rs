@@ -11,10 +11,9 @@
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs::File;
-use std::path::Path;
 
 use reqwest::{blocking::Client, StatusCode, Url};
+use tempfile::NamedTempFile;
 
 pub mod util;
 
@@ -22,11 +21,10 @@ pub mod util;
 fn test_persistence() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let config = util::Config::default();
+    let data_dir = tempfile::tempdir()?;
+    let config = util::Config::default().data_directory(data_dir.path());
 
-    let temp_dir = tempfile::tempdir()?;
-    let temp_file = Path::join(temp_dir.path(), "source.txt");
-    File::create(&temp_file)?;
+    let source_file = NamedTempFile::new()?;
 
     {
         let (_server, mut client) = util::start_server(config.clone())?;
@@ -38,7 +36,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
              CREATE DATABASE d; \
              CREATE SCHEMA d.s; \
              CREATE VIEW d.s.v AS SELECT 1;",
-            temp_file.display(),
+            source_file.path().display(),
         ))?;
     }
 
@@ -116,7 +114,8 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
 // `--experimental` on reboot.
 #[test]
 fn test_experimental_mode_reboot() -> Result<(), Box<dyn Error>> {
-    let config = util::Config::default();
+    let data_dir = tempfile::tempdir()?;
+    let config = util::Config::default().data_directory(data_dir.path());
 
     {
         let (_server, _) = util::start_server(config.clone().experimental_mode())?;
@@ -146,7 +145,8 @@ fn test_experimental_mode_reboot() -> Result<(), Box<dyn Error>> {
 // Ensures that only new nodes can start in experimental mode.
 #[test]
 fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
-    let config = util::Config::default();
+    let data_dir = tempfile::tempdir()?;
+    let config = util::Config::default().data_directory(data_dir.path());
 
     {
         let (_server, _) = util::start_server(config.clone())?;

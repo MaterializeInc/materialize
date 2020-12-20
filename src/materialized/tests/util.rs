@@ -20,11 +20,12 @@ use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
 use openssl::x509::extension::SubjectAlternativeName;
 use openssl::x509::{X509NameBuilder, X509};
+use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 #[derive(Clone)]
 pub struct Config {
-    data_directory: PathBuf,
+    data_directory: Option<PathBuf>,
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
     experimental_mode: bool,
@@ -34,7 +35,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            data_directory: tempfile::tempdir().unwrap().into_path(),
+            data_directory: None,
             logging_granularity: Some(Duration::from_millis(10)),
             tls: None,
             experimental_mode: false,
@@ -46,6 +47,11 @@ impl Default for Config {
 impl Config {
     pub fn logging_granularity(mut self, granularity: Option<Duration>) -> Self {
         self.logging_granularity = granularity;
+        self
+    }
+
+    pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
+        self.data_directory = Some(data_directory.into());
         self
     }
 
@@ -74,6 +80,17 @@ impl Config {
 
 pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
     let mut runtime = Runtime::new()?;
+    let (data_directory, temp_dir) = match config.data_directory {
+        None => {
+            // If no data directory is provided, we create a temporary
+            // directory. The temporary directory is cleaned up when the
+            // `TempDir` is dropped, so we keep it alive until the `Server` is
+            // dropped.
+            let temp_dir = tempfile::tempdir()?;
+            (temp_dir.path().to_path_buf(), Some(temp_dir))
+        }
+        Some(data_directory) => (data_directory, None),
+    };
     let inner = runtime.block_on(materialized::serve(materialized::Config {
         logging: config
             .logging_granularity
@@ -87,7 +104,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         threads: config.threads,
         process: 0,
         addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
-        data_directory: config.data_directory,
+        data_directory,
         symbiosis_url: None,
         listen_addr: None,
         tls: config.tls,
@@ -97,6 +114,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
     let server = Server {
         inner,
         _runtime: runtime,
+        _temp_dir: temp_dir,
     };
     let client = server.connect()?;
     Ok((server, client))
@@ -105,6 +123,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
 pub struct Server {
     pub inner: materialized::Server,
     _runtime: Runtime,
+    _temp_dir: Option<TempDir>,
 }
 
 impl Server {

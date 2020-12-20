@@ -42,7 +42,7 @@ use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use postgres_protocol::types;
 use regex::Regex;
-
+use tempfile::TempDir;
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
@@ -274,6 +274,7 @@ pub(crate) struct Runner {
     // Drop order matters for these fields.
     client: Client,
     _server: Server,
+    _temp_dir: TempDir,
 }
 
 #[derive(Debug)]
@@ -498,6 +499,7 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 
 impl Runner {
     pub async fn start() -> Result<Self, anyhow::Error> {
+        let temp_dir = tempfile::tempdir()?;
         let config = Config {
             logging: None,
             timestamp_frequency: Duration::from_millis(10),
@@ -506,7 +508,7 @@ impl Runner {
             threads: NUM_TIMELY_WORKERS,
             process: 0,
             addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
-            data_directory: tempfile::tempdir().unwrap().into_path(),
+            data_directory: temp_dir.path().to_path_buf(),
             symbiosis_url: Some("postgres://".into()),
             listen_addr: None,
             tls: None,
@@ -529,6 +531,7 @@ impl Runner {
 
         Ok(Runner {
             _server: server,
+            _temp_dir: temp_dir,
             client,
         })
     }
