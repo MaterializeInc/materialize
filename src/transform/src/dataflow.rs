@@ -148,8 +148,9 @@ fn inline_views(dataflow: &mut DataflowDesc) {
     // is to perform *logical* optimizations early (on view definition, when params
     // are instatiated, here) and then *physical* optimization (e.g. join planning)
     // only once (and probably in here).
-    // TODO: Unfortunately, we only have access to the indexes that are included in
-    // the dataflow. There could be better indexes to use, could we return to them.
+    // TODO(mcsherry): we should determine indexes from the optimized representation
+    // just before we plan to install the dataflow. This would also allow us to not
+    // add indexes imperatively to `DataflowDesc`.
     let mut indexes = HashMap::new();
     for (global_id, (desc, _type)) in dataflow.index_imports.iter() {
         indexes
