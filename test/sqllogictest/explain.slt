@@ -23,13 +23,13 @@ EXPLAIN RAW PLAN FOR SELECT (SELECT (SELECT 1))
 ----
 %0 =
 | Constant ()
-| Map select(%2)
+| Map select(%1)
 | |
-| | %2 =
+| | %1 =
 | | | Constant ()
-| | | Map select(%4)
+| | | Map select(%2)
 | | | |
-| | | | %4 =
+| | | | %2 =
 | | | | | Constant ()
 | | | | | Map 1
 | | | |
@@ -46,6 +46,94 @@ EXPLAIN TYPED RAW PLAN FOR SELECT * FROM (SELECT 1)
 | | keys = ()
 | Map 1
 | | types = (i32)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FROM (VALUES (1, 'b'))
+----
+%0 =
+| Constant
+
+%1 =
+| Constant ()
+| Map 1, "b"
+
+%2 =
+| Union %0 %1
+| Map select(%3), select(%4)
+| |
+| | %3 =
+| | | Constant ()
+| | | Map #^1
+| |
+| |
+| | %4 =
+| | | Constant ()
+| | | Map select(%5)
+| | | |
+| | | | %5 =
+| | | | | Constant ()
+| | | | | Map #^^0
+| | | |
+| |
+| Project (#2, #3)
+
+EOF
+
+query T multiline
+EXPLAIN TYPED RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FROM (VALUES (1, 'b'))
+----
+%0 =
+| Constant
+| | types = (i32, string)
+| | keys = ()
+
+%1 =
+| Constant ()
+| | types = ()
+| | keys = ()
+| Map 1, "b"
+| | types = (i32, string)
+| | keys = ()
+
+%2 =
+| Union %0 %1
+| | types = (i32, string)
+| | keys = ()
+| Map select(%3), select(%4)
+| | types = (i32, string, string?, i32?)
+| | keys = ()
+| |
+| | %3 =
+| | | Constant ()
+| | | | types = ()
+| | | | keys = ()
+| | | Map #^1
+| | | | types = (string)
+| | | | keys = ()
+| |
+| |
+| | %4 =
+| | | Constant ()
+| | | | types = ()
+| | | | keys = ()
+| | | Map select(%5)
+| | | | types = (i32?)
+| | | | keys = ()
+| | | |
+| | | | %5 =
+| | | | | Constant ()
+| | | | | | types = ()
+| | | | | | keys = ()
+| | | | | Map #^^0
+| | | | | | types = (i32)
+| | | | | | keys = ()
+| | | |
+| |
+| Project (#2, #3)
+| | types = (string?, i32?)
 | | keys = ()
 
 EOF

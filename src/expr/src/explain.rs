@@ -89,13 +89,13 @@ impl<'a> fmt::Display for Explanation<'a> {
             writeln!(
                 f,
                 "\nFinish order_by={} limit={} offset={} project={}",
-                Bracketed("(", ")", Separated(", ", finishing.order_by.clone())),
+                bracketed("(", ")", separated(", ", &finishing.order_by)),
                 match finishing.limit {
                     Some(limit) => limit.to_string(),
                     None => "none".to_owned(),
                 },
                 finishing.offset,
-                Bracketed("(", ")", Indices(&finishing.project))
+                bracketed("(", ")", Indices(&finishing.project))
             )?;
         }
 
@@ -212,11 +212,10 @@ impl<'a> Explanation<'a> {
             Constant { rows, .. } => writeln!(
                 f,
                 "| Constant {}",
-                Separated(
+                separated(
                     " ",
                     rows.iter()
                         .flat_map(|(row, count)| (0..*count).map(move |_| row))
-                        .collect::<Vec<_>>()
                 )
             )?,
             Get { id, .. } => match id {
@@ -240,23 +239,21 @@ impl<'a> Explanation<'a> {
             // Lets are annotated on the chain ID that they correspond to.
             Let { .. } => (),
             Project { outputs, .. } => {
-                writeln!(f, "| Project {}", Bracketed("(", ")", Indices(outputs)))?
+                writeln!(f, "| Project {}", bracketed("(", ")", Indices(outputs)))?
             }
-            Map { scalars, .. } => writeln!(f, "| Map {}", Separated(", ", scalars.clone()))?,
+            Map { scalars, .. } => writeln!(f, "| Map {}", separated(", ", scalars))?,
             FlatMap {
                 func,
                 exprs,
                 demand,
                 ..
             } => {
-                writeln!(f, "| FlatMap {}({})", func, Separated(", ", exprs.clone()))?;
+                writeln!(f, "| FlatMap {}({})", func, separated(", ", exprs))?;
                 if let Some(demand) = demand {
-                    writeln!(f, "| | demand = {}", Bracketed("(", ")", Indices(demand)))?;
+                    writeln!(f, "| | demand = {}", bracketed("(", ")", Indices(demand)))?;
                 }
             }
-            Filter { predicates, .. } => {
-                writeln!(f, "| Filter {}", Separated(", ", predicates.clone()))?
-            }
+            Filter { predicates, .. } => writeln!(f, "| Filter {}", separated(", ", predicates))?,
             Join {
                 inputs,
                 equivalences,
@@ -266,28 +263,24 @@ impl<'a> Explanation<'a> {
                 write!(
                     f,
                     "| Join {}",
-                    Separated(
+                    separated(
                         " ",
                         inputs
                             .iter()
-                            .map(|input| Bracketed("%", "", self.expr_chain(input)))
-                            .collect()
+                            .map(|input| bracketed("%", "", self.expr_chain(input)))
                     ),
                 )?;
                 if !equivalences.is_empty() {
                     write!(
                         f,
                         " {}",
-                        Separated(
+                        separated(
                             " ",
-                            equivalences
-                                .iter()
-                                .map(|equivalence| Bracketed(
-                                    "(= ",
-                                    ")",
-                                    Separated(" ", equivalence.clone())
-                                ))
-                                .collect()
+                            equivalences.iter().map(|equivalence| bracketed(
+                                "(= ",
+                                ")",
+                                separated(" ", equivalence)
+                            ))
                         )
                     )?;
                 }
@@ -295,7 +288,7 @@ impl<'a> Explanation<'a> {
                 write!(f, "| | implementation = ")?;
                 self.fmt_join_implementation(f, inputs, implementation)?;
                 if let Some(demand) = demand {
-                    writeln!(f, "| | demand = {}", Bracketed("(", ")", Indices(demand)))?;
+                    writeln!(f, "| | demand = {}", bracketed("(", ")", Indices(demand)))?;
                 }
             }
             Reduce {
@@ -307,13 +300,13 @@ impl<'a> Explanation<'a> {
                     writeln!(
                         f,
                         "| Distinct group={}",
-                        Bracketed("(", ")", Separated(", ", group_key.clone())),
+                        bracketed("(", ")", separated(", ", group_key)),
                     )?
                 } else {
                     writeln!(
                         f,
                         "| Reduce group={}",
-                        Bracketed("(", ")", Separated(", ", group_key.clone())),
+                        bracketed("(", ")", separated(", ", group_key)),
                     )?;
                     for agg in aggregates {
                         writeln!(f, "| | agg {}", agg)?;
@@ -330,8 +323,8 @@ impl<'a> Explanation<'a> {
                 write!(
                     f,
                     "| TopK group={} order={}",
-                    Bracketed("(", ")", Indices(group_key)),
-                    Bracketed("(", ")", Separated(", ", order_key.clone())),
+                    bracketed("(", ")", Indices(group_key)),
+                    bracketed("(", ")", separated(", ", order_key)),
                 )?;
                 if let Some(limit) = limit {
                     write!(f, " limit={}", limit)?;
@@ -340,36 +333,34 @@ impl<'a> Explanation<'a> {
             }
             Negate { .. } => writeln!(f, "| Negate")?,
             Threshold { .. } => write!(f, "| Threshold")?,
-            Union { base, inputs } => {
-                let input_chains: Vec<_> = inputs
-                    .iter()
-                    .map(|input| Bracketed("%", "", self.expr_chain(input)))
-                    .collect();
-                writeln!(
-                    f,
-                    "| Union %{} {}",
-                    self.expr_chain(base),
-                    Separated(" ", input_chains)
-                )?
-            }
+            Union { base, inputs } => writeln!(
+                f,
+                "| Union %{} {}",
+                self.expr_chain(base),
+                separated(
+                    " ",
+                    inputs
+                        .iter()
+                        .map(|input| bracketed("%", "", self.expr_chain(input)))
+                )
+            )?,
             ArrangeBy { keys, .. } => writeln!(
                 f,
                 "| ArrangeBy {}",
-                Separated(
+                separated(
                     " ",
                     keys.iter()
-                        .map(|key| Bracketed("(", ")", Separated(", ", key.clone())))
-                        .collect::<Vec<_>>()
+                        .map(|key| bracketed("(", ")", separated(", ", key)))
                 ),
             )?,
         }
 
         if let Some(RelationType { column_types, keys }) = &node.typ {
-            writeln!(f, "| | types = ({})", Separated(", ", column_types.clone()))?;
+            writeln!(f, "| | types = ({})", separated(", ", column_types))?;
             writeln!(
                 f,
                 "| | keys = ({})",
-                Separated(", ", keys.iter().map(|key| Indices(key)).collect())
+                separated(", ", keys.iter().map(|key| Indices(key)))
             )?;
         }
 
@@ -388,22 +379,19 @@ impl<'a> Explanation<'a> {
                 "Differential %{}{} {}",
                 self.expr_chain(&join_inputs[*pos]),
                 if let Some(arr) = first_arr {
-                    format!(".({})", Separated(", ", arr.clone()))
+                    format!(".({})", separated(", ", arr))
                 } else {
                     "".to_string()
                 },
-                Separated(
+                separated(
                     " ",
-                    inputs
-                        .iter()
-                        .map(|(pos, input)| {
-                            format!(
-                                "%{}.({})",
-                                self.expr_chain(&join_inputs[*pos]),
-                                Separated(", ", input.clone())
-                            )
-                        })
-                        .collect()
+                    inputs.iter().map(|(pos, input)| {
+                        format!(
+                            "%{}.({})",
+                            self.expr_chain(&join_inputs[*pos]),
+                            separated(", ", input)
+                        )
+                    })
                 ),
             ),
             JoinImplementation::DeltaQuery(inputs) => {
@@ -413,18 +401,15 @@ impl<'a> Explanation<'a> {
                         f,
                         "| |   delta %{} {}",
                         self.expr_chain(&join_inputs[pos]),
-                        Separated(
+                        separated(
                             " ",
-                            inputs
-                                .iter()
-                                .map(|(pos, input)| {
-                                    format!(
-                                        "%{}.({})",
-                                        self.expr_chain(&join_inputs[*pos]),
-                                        Separated(", ", input.clone())
-                                    )
-                                })
-                                .collect()
+                            inputs.iter().map(|(pos, input)| {
+                                format!(
+                                    "%{}.({})",
+                                    self.expr_chain(&join_inputs[*pos]),
+                                    separated(", ", input)
+                                )
+                            })
                         )
                     )?;
                 }
@@ -443,41 +428,75 @@ impl<'a> Explanation<'a> {
     }
 }
 
-#[derive(Debug)]
-pub struct Separated<'a, T>(pub &'a str, pub Vec<T>);
-
-impl<'a, T> fmt::Display for Separated<'a, T>
+/// Creates a type whose [`fmt::Display`] implementation outputs each item in
+/// `iter` separated by `separator`.
+pub fn separated<'a, I>(separator: &'a str, iter: I) -> impl fmt::Display + 'a
 where
-    T: fmt::Display,
+    I: IntoIterator,
+    I::IntoIter: Clone + 'a,
+    I::Item: fmt::Display + 'a,
 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        for (i, elem) in self.1.iter().enumerate() {
-            if i != 0 {
-                write!(f, "{}", self.0)?;
+    struct Separated<'a, I> {
+        separator: &'a str,
+        iter: I,
+    }
+
+    impl<'a, I> fmt::Display for Separated<'a, I>
+    where
+        I: Iterator + Clone,
+        I::Item: fmt::Display,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            for (i, item) in self.iter.clone().enumerate() {
+                if i != 0 {
+                    write!(f, "{}", self.separator)?;
+                }
+                write!(f, "{}", item)?;
             }
-            write!(f, "{}", elem)?;
+            Ok(())
         }
-        Ok(())
+    }
+
+    Separated {
+        separator,
+        iter: iter.into_iter(),
     }
 }
 
-#[derive(Debug)]
-pub struct Bracketed<'a, T>(pub &'a str, pub &'a str, pub T);
-
-impl<'a, T> fmt::Display for Bracketed<'a, T>
+/// Creates a type whose [`fmt::Display`] implementation outputs item preceded
+/// by `open` and followed by `close`.
+pub fn bracketed<'a, D>(open: &'a str, close: &'a str, contents: D) -> impl fmt::Display + 'a
 where
-    T: fmt::Display,
+    D: fmt::Display + 'a,
 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "{}{}{}", self.0, self.2, self.1)
+    struct Bracketed<'a, D> {
+        open: &'a str,
+        close: &'a str,
+        contents: D,
+    }
+
+    impl<'a, D> fmt::Display for Bracketed<'a, D>
+    where
+        D: fmt::Display,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}{}{}", self.open, self.contents, self.close)
+        }
+    }
+
+    Bracketed {
+        open,
+        close,
+        contents,
     }
 }
 
+/// Pretty-prints a list of indices.
 #[derive(Debug)]
 pub struct Indices<'a>(pub &'a [usize]);
 
 impl<'a> fmt::Display for Indices<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut is_first = true;
         let mut slice = self.0;
         while !slice.is_empty() {

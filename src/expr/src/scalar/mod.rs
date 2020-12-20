@@ -605,7 +605,7 @@ impl fmt::Display for ScalarExpr {
                 }
             }
             CallVariadic { func, exprs } => {
-                write!(f, "{}({})", func, explain::Separated(", ", exprs.clone()))?;
+                write!(f, "{}({})", func, explain::separated(", ", exprs.clone()))?;
             }
             If { cond, then, els } => {
                 write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)?;

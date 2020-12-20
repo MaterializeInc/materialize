@@ -1901,7 +1901,7 @@ ORDER BY
 | |
 | | %3 =
 | | | Get materialize.public.partsupp (u11)
-| | | Filter (select(%4) && ((i32todec(#2) * 1000dec) > select(%6)))
+| | | Filter (select(%4) && ((i32todec(#2) * 1000dec) > select(%5)))
 | | | |
 | | | | %4 =
 | | | | | Get materialize.public.part (u6)
@@ -1910,7 +1910,7 @@ ORDER BY
 | | | | | Reduce group=() any(((#^0 = #0) && true))
 | | | |
 | | | |
-| | | | %6 =
+| | | | %5 =
 | | | | | Get materialize.public.lineitem (u21)
 | | | | | Filter ((((#1 = #^0) && (#2 = #^1)) && (#10 >= strtodate("1995-01-01"))) && (datetots(#10) < (strtodate("1995-01-01") + 1 year)))
 | | | | | Reduce group=() sum(#4)
