@@ -31,12 +31,17 @@ You might want to create a table when...
 
 {{< diagram "create-table.svg" >}}
 
+### `col_option`
+
+{{< diagram "col-option.svg" >}}
+
 Field | Use
 ------|-----
 _table&lowbar;name_ | A name for the table.
 _col&lowbar;name_ | The name of the column to be created in the table.
 _col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
 **NOT NULL** | Do not allow the column to contain _NULL_ values. Columns without this constraint can contain _NULL_ values.
+*default_expr* | A default value to use for the column in an [`INSERT`](/sql/insert) statement if an explicit value is not provided. If not specified, `NULL` is assumed.
 
 ## Details
 
@@ -49,22 +54,23 @@ Additionally, tables do not currently support:
 - Primary keys
 - Unique constraints
 - Check constraints
-- Default column values
-- Insert statements that use anything other than a `VALUES` clause, such as
-  `INSERT INTO ... SELECT`
+- Insert statements that refer to data in other relations, e.g.:
+  ```sql
+  INSERT INTO t1 SELECT * FROM t2
+  ```
 - `UPDATE ...` and `DELETE` statements
 
 ## Examples
 
 ### Creating a table
 
-We can create a table `t` with the following statement:
+You can create a table `t` with the following statement:
 
 ```sql
 CREATE TABLE t (a int, b text NOT NULL);
 ```
 
-Once a table is created, we can inspect the table with various `SHOW` commands.
+Once a table is created, you can inspect the table with various `SHOW` commands.
 
 ```sql
 SHOW TABLES;
