@@ -115,7 +115,7 @@ pub struct Config {
 
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
-    pub data_directory: Option<PathBuf>,
+    pub data_directory: PathBuf,
     pub cache: Option<CacheConfig>,
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
@@ -257,7 +257,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             num_timely_workers,
             symbiosis_url: config.symbiosis_url.as_deref(),
             logging: config.logging,
-            data_directory: config.data_directory.as_deref(),
+            data_directory: &config.data_directory,
             timestamp: coord::TimestampConfig {
                 frequency: config.timestamp_frequency,
             },

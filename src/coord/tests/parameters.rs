@@ -9,9 +9,11 @@
 
 use std::error::Error;
 
+use tempfile::NamedTempFile;
+
+use coord::catalog::Catalog;
 use ore::collections::CollectionExt;
 use pgrepr::Type;
-use sql::catalog::DummyCatalog;
 
 #[test]
 fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
@@ -75,10 +77,14 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
         ("SELECT $1::int, $1 + $2", vec![Type::Int4, Type::Int4]),
         ("SELECT '[0, 1, 2]'::jsonb - $1", vec![Type::Text]),
     ];
+
+    let catalog_file = NamedTempFile::new()?;
+    let catalog = Catalog::open_debug(catalog_file.path())?;
+    let catalog = catalog.for_system_session();
     for (sql, types) in test_cases {
         println!("> {}", sql);
         let stmt = sql::parse::parse(sql)?.into_element();
-        let desc = sql::plan::describe(&DummyCatalog, stmt, &[])?;
+        let desc = sql::plan::describe(&catalog, stmt, &[])?;
         assert_eq!(desc.param_types, types);
     }
     Ok(())

@@ -626,6 +626,23 @@ impl Catalog {
         Ok((catalog, events))
     }
 
+    /// Opens the catalog at `path` with parameters set appropriately for debug
+    /// contexts, like in tests.
+    ///
+    /// This function should not be called in production contexts. Use
+    /// [`Catalog::open`] with appropriately set configuration parameters
+    /// instead.
+    pub fn open_debug(path: &Path) -> Result<Catalog, anyhow::Error> {
+        let (catalog, _) = Self::open(Config {
+            path,
+            enable_logging: true,
+            experimental_mode: None,
+            cache_directory: None,
+            build_info: &DUMMY_BUILD_INFO,
+        })?;
+        Ok(catalog)
+    }
+
     pub fn for_session(&self, session: &Session) -> ConnCatalog {
         ConnCatalog {
             catalog: self,
@@ -1581,6 +1598,11 @@ impl Catalog {
         }
     }
 
+    /// Serializes the catalog's in-memory state.
+    ///
+    /// There are no guarantees about the format of the serialized state, except
+    /// that the serialized state for two identical catalogs will compare
+    /// identically.
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
@@ -1710,22 +1732,6 @@ impl From<PlanContext> for SerializedPlanContext {
             wall_time: Some(cx.wall_time),
         }
     }
-}
-
-/// Loads the catalog stored at `path` and returns its serialized state.
-///
-/// There are no guarantees about the format of the serialized state, except
-/// that the serialized state for two identical catalogs will compare
-/// identically.
-pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
-    let (catalog, _events) = Catalog::open(Config {
-        path: Some(path),
-        enable_logging: true,
-        experimental_mode: None,
-        cache_directory: None,
-        build_info: &DUMMY_BUILD_INFO,
-    })?;
-    Ok(catalog.dump())
 }
 
 impl sql::catalog::Catalog for ConnCatalog<'_> {

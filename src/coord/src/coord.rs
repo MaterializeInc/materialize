@@ -120,7 +120,7 @@ where
     pub num_timely_workers: usize,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
-    pub data_directory: Option<&'a Path>,
+    pub data_directory: &'a Path,
     pub timestamp: TimestampConfig,
     pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
@@ -3015,9 +3015,9 @@ where
             None
         };
 
-        let catalog_path = data_directory.map(|d| d.join("catalog"));
+        let path = data_directory.join("catalog");
         let (catalog, initial_catalog_events) = Catalog::open(catalog::Config {
-            path: catalog_path.as_deref(),
+            path: &path,
             experimental_mode: Some(experimental_mode),
             enable_logging: logging.is_some(),
             cache_directory: cache_config.map(|c| c.path),
