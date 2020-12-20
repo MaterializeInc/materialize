@@ -128,13 +128,17 @@ impl SexpParser {
 
 #[cfg(test)]
 mod tests {
-    use super::{Sexp, SexpParser};
-    use anyhow::{anyhow, bail, Error};
-    use expr::{GlobalId, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, ScalarExpr};
-    use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
     use std::collections::HashMap;
     use std::fmt::Write;
+
+    use anyhow::{anyhow, bail, Error};
+
+    use expr::explain::Explanation;
+    use expr::{GlobalId, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, ScalarExpr};
+    use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
     use transform::{Optimizer, Transform, TransformArgs};
+
+    use super::{Sexp, SexpParser};
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     enum TestType {
@@ -499,9 +503,9 @@ mod tests {
                 let mut opt: Optimizer = Default::default();
                 rel = opt.optimize(rel, &HashMap::new()).unwrap().into_inner();
 
-                Ok(rel.explain(cat).to_string())
+                Ok(Explanation::new(&rel, cat).to_string())
             }
-            TestType::Build => Ok(rel.explain(cat).to_string()),
+            TestType::Build => Ok(Explanation::new(&rel, cat).to_string()),
             TestType::Steps => {
                 // TODO(justin): this thing does not currently peek into fixpoints, so it's not
                 // that helpful for optimizations that involve those (which is most of them).
@@ -510,7 +514,7 @@ mod tests {
                 // Buffer of the names of the transformations that have been applied with no changes.
                 let mut no_change: Vec<String> = Vec::new();
 
-                writeln!(out, "{}", rel.explain(cat).to_string())?;
+                writeln!(out, "{}", Explanation::new(&rel, cat).to_string())?;
                 writeln!(out, "====")?;
 
                 for transform in opt.transforms.iter() {
@@ -536,7 +540,7 @@ mod tests {
                         no_change = vec![];
 
                         write!(out, "Applied {:?}:", transform)?;
-                        writeln!(out, "\n{}", rel.explain(cat).to_string())?;
+                        writeln!(out, "\n{}", Explanation::new(&rel, cat).to_string())?;
                         writeln!(out, "====")?;
                     } else {
                         no_change.push(format!("{:?}", transform));
@@ -554,7 +558,7 @@ mod tests {
                 }
 
                 writeln!(out, "Final:")?;
-                writeln!(out, "{}", rel.explain(cat).to_string())?;
+                writeln!(out, "{}", Explanation::new(&rel, cat).to_string())?;
                 writeln!(out, "====")?;
 
                 Ok(out)

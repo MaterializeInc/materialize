@@ -299,35 +299,32 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 %1 =
 | Get materialize.public.t3 (u21)
 
-%2 =
+%2 = Let l0 =
 | Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
 | | demand = (#0, #2)
 
 %3 =
-| Get %2
-
-%4 =
-| Get %2
+| Get %2 (l0)
 | Distinct group=(#2)
 | ArrangeBy (#0)
 
-%5 =
+%4 =
 | Get materialize.public.t2 (u19)
 | ArrangeBy (#0)
 
-%6 =
-| Join %4 %5 (= #0 #1)
+%5 =
+| Join %3 %4 (= #0 #1)
 | | implementation = DeltaQuery
-| |   delta %4 %5.(#0)
-| |   delta %5 %4.(#0)
+| |   delta %3 %4.(#0)
+| |   delta %4 %3.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%7 =
-| Join %3 %6 (= #2 #3)
-| | implementation = Differential %3 %6.(#0)
+%6 =
+| Join %2 %5 (= #2 #3)
+| | implementation = Differential %2 %5.(#0)
 | | demand = (#0, #2)
 | Project (#0, #0, #2)
 
@@ -470,19 +467,19 @@ true
 query T multiline
 EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.y (u27)
 | Distinct group=(#0)
 
 %1 =
-| Get %0
+| Get %0 (l0)
 | ArrangeBy (#0)
 
 %2 =
 | Get materialize.public.x (u25)
 | ArrangeBy (#0)
 
-%3 =
+%3 = Let l1 =
 | Join %1 %2 (= #0 #1)
 | | implementation = DeltaQuery
 | |   delta %1 %2.(#0)
@@ -495,26 +492,23 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 | ArrangeBy (#0)
 
 %5 =
-| Get %3
+| Get %3 (l1)
 | Map true
 
 %6 =
-| Get %3
+| Get %3 (l1)
 | Negate
 
 %7 =
-| Get %0
-
-%8 =
-| Union %6 %7
+| Union %6 %0
 | Map false
 
-%9 =
-| Union %5 %8
+%8 =
+| Union %5 %7
 
-%10 =
-| Join %4 %9 (= #0 #1)
-| | implementation = Differential %9 %4.(#0)
+%9 =
+| Join %4 %8 (= #0 #1)
+| | implementation = Differential %8 %4.(#0)
 | | demand = (#2)
 | Project (#2)
 
@@ -523,19 +517,19 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.y (u27)
 | Distinct group=(#0)
 
 %1 =
-| Get %0
+| Get %0 (l0)
 | ArrangeBy (#0)
 
 %2 =
 | Get materialize.public.x (u25)
 | ArrangeBy (#0)
 
-%3 =
+%3 = Let l1 =
 | Join %1 %2 (= #0 #1)
 | | implementation = DeltaQuery
 | |   delta %1 %2.(#0)
@@ -548,26 +542,23 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 | ArrangeBy (#0)
 
 %5 =
-| Get %3
+| Get %3 (l1)
 | Map true
 
 %6 =
-| Get %3
+| Get %3 (l1)
 | Negate
 
 %7 =
-| Get %0
-
-%8 =
-| Union %6 %7
+| Union %6 %0
 | Map false
 
-%9 =
-| Union %5 %8
+%8 =
+| Union %5 %7
 
-%10 =
-| Join %4 %9 (= #0 #1)
-| | implementation = Differential %9 %4.(#0)
+%9 =
+| Join %4 %8 (= #0 #1)
+| | implementation = Differential %8 %4.(#0)
 | | demand = (#2)
 | Map !(#2)
 | Project (#3)
@@ -578,18 +569,18 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.y (u27)
 | Distinct group=(#0)
 
 %1 =
-| Get %0
+| Get %0 (l0)
 | ArrangeBy ()
 
 %2 =
 | Get materialize.public.x (u25)
 
-%3 =
+%3 = Let l1 =
 | Join %1 %2
 | | implementation = Differential %2 %1.()
 | | demand = (#0, #1)
@@ -601,26 +592,23 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | ArrangeBy (#0)
 
 %5 =
-| Get %3
+| Get %3 (l1)
 | Map true
 
 %6 =
-| Get %3
+| Get %3 (l1)
 | Negate
 
 %7 =
-| Get %0
-
-%8 =
-| Union %6 %7
+| Union %6 %0
 | Map false
 
-%9 =
-| Union %5 %8
+%8 =
+| Union %5 %7
 
-%10 =
-| Join %4 %9 (= #0 #1)
-| | implementation = Differential %9 %4.(#0)
+%9 =
+| Join %4 %8 (= #0 #1)
+| | implementation = Differential %8 %4.(#0)
 | | demand = (#2)
 | Map !(#2)
 | Project (#3)

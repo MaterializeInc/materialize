@@ -2292,18 +2292,18 @@ where
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let explanation_string = match stage {
             ExplainStage::RawPlan => {
-                let mut explanation = raw_plan.explain(&self.catalog);
+                let mut explanation = sql::plan::Explanation::new(&raw_plan, &self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
                 if options.typed {
-                    // TODO(jamii) does this fail?
                     explanation.explain_types(&BTreeMap::new());
                 }
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
-                let mut explanation = decorrelated_plan.explain(&self.catalog);
+                let mut explanation =
+                    expr::explain::Explanation::new(&decorrelated_plan, &self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2316,7 +2316,8 @@ where
                 let optimized_plan = self
                     .prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?
                     .into_inner();
-                let mut explanation = optimized_plan.explain(&self.catalog);
+                let mut explanation =
+                    expr::explain::Explanation::new(&optimized_plan, &self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }

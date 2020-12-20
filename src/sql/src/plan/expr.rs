@@ -14,6 +14,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::mem;
 
 use anyhow::bail;
@@ -300,6 +301,23 @@ pub enum JoinKind {
     LeftOuter { lateral: bool },
     RightOuter,
     FullOuter,
+}
+
+impl fmt::Display for JoinKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                JoinKind::Inner { lateral: false } => "Inner",
+                JoinKind::Inner { lateral: true } => "InnerLateral",
+                JoinKind::LeftOuter { lateral: false } => "LeftOuter",
+                JoinKind::LeftOuter { lateral: true } => "LeftOuterLateral",
+                JoinKind::RightOuter => "RightOuter",
+                JoinKind::FullOuter => "FullOuter",
+            }
+        )
+    }
 }
 
 impl JoinKind {
