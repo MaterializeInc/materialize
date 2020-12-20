@@ -46,7 +46,7 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-{{% version-header v0.5.5 %}}
+{{% version-header v0.6.1 %}}
 
 - Add `ALL` to [`FETCH`](/sql/fetch).
 
@@ -68,7 +68,7 @@ Wrap your release notes at the 80 character mark.
 
   **Backwards-incompatible change.**
 
-{{% version-header v0.5.4 %}}
+{{% version-header v0.6.0 %}}
 
 - Add the [`version`](/sql/functions#postgresql-compatibility-func) and
   [`mz_version`](/sql/functions/#system-information-func) functions to report
