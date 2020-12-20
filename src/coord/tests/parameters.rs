@@ -9,7 +9,9 @@
 
 use std::error::Error;
 
-use coord::util;
+use tempfile::NamedTempFile;
+
+use coord::catalog::Catalog;
 use ore::collections::CollectionExt;
 use pgrepr::Type;
 
@@ -76,8 +78,8 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
         ("SELECT '[0, 1, 2]'::jsonb - $1", vec![Type::Text]),
     ];
 
-    let path = tempfile::tempdir()?.path().to_owned();
-    let catalog = util::generate_test_catalog(&path)?;
+    let catalog_file = NamedTempFile::new()?;
+    let catalog = Catalog::open_debug(catalog_file.path())?;
     let catalog = catalog.for_system_session();
     for (sql, types) in test_cases {
         println!("> {}", sql);

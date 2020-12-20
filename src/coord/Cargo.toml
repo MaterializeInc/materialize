@@ -40,10 +40,12 @@ serde = "1.0"
 serde_json = "1.0.60"
 sql = { path = "../sql" }
 symbiosis = { path = "../symbiosis" }
-tempfile = "3.1"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.2"
 transform = { path = "../transform" }
 unicase = "2.6.0"
 url = "2"
 uuid = { version = "0.8", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3.1"

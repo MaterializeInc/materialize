@@ -7,12 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::error::Error;
-use std::path::Path;
-
-use build_info::DUMMY_BUILD_INFO;
-
-use crate::catalog::{Catalog, Config};
 use crate::command::Response;
 use crate::session::Session;
 
@@ -43,17 +37,4 @@ impl<T> Drop for ClientTransmitter<T> {
             panic!("client transmitter dropped without send")
         }
     }
-}
-
-/// Generates a populated catalog appropriate for tests.
-pub fn generate_test_catalog(path: &Path) -> Result<Catalog, Box<dyn Error>> {
-    let config = Config {
-        path,
-        enable_logging: true,
-        experimental_mode: Some(false),
-        cache_directory: None,
-        build_info: &DUMMY_BUILD_INFO,
-    };
-    let (catalog, _) = Catalog::open(config)?;
-    Ok(catalog)
 }

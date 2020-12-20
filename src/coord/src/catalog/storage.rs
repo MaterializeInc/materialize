@@ -208,11 +208,8 @@ impl Connection {
             }
             // Reading existing catalog
             (Some(cs), None) => Ok(cs.parse::<usize>().unwrap() != 0),
-            // Shouldn't happen!
-            (None, None) => {
-                tx.commit()?;
-                panic!("experimental_mode not set in catalog and not provided on server init")
-            }
+            // Test code that doesn't care. Just disable experimental mode.
+            (None, None) => Ok(false),
         };
         tx.commit()?;
         res
