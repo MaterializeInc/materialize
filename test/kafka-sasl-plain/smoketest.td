@@ -58,3 +58,19 @@ a
 ---
 1
 2
+
+> CREATE SINK data_snk
+  FROM data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (
+      security_protocol = 'SASL_SSL',
+      sasl_mechanisms = 'PLAIN',
+      sasl_username = 'materialize',
+      sasl_password = 'sekurity',
+      ssl_ca_location = '/share/secrets/ca.crt'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.data_snk
+{"before": null, "after": {"row": {"a": 1}}}
+{"before": null, "after": {"row": {"a": 2}}}

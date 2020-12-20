@@ -31,7 +31,7 @@ $ set schema={
 
 $ kafka-create-topic topic=data
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 {"before": null, "after": {"row": {"a": 102}}}
 {"before": null, "after": {"row": {"a": 201}}}
 
@@ -43,10 +43,26 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
     sasl_kerberos_service_name = 'kafka',
     sasl_kerberos_principal = 'materialized@CI.MATERIALIZE.IO'
   )
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW data_view as SELECT * from data
 
 > SELECT * FROM data_view
 102
 201
+
+> CREATE SINK data_snk
+  FROM data_view
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (
+    security_protocol = 'sasl_plaintext',
+    sasl_kerberos_keytab = '/share/secrets/materialized.key',
+    sasl_kerberos_service_name = 'kafka',
+    sasl_kerberos_principal = 'materialized@CI.MATERIALIZE.IO'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.data_snk
+{"before": null, "after": {"row": {"a": 102}}}
+{"before": null, "after": {"row": {"a": 201}}}
