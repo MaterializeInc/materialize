@@ -50,11 +50,11 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
     Arguments:
         version: The version to release. The `v` prefix is optional
     """
-    # if git.is_dirty():
-    #     raise errors.MzConfigurationError(
-    #         "working directory is not clean, stash or commit your changes"
-    #     )
-    #     sys.exit(1)
+    if git.is_dirty():
+        raise errors.MzConfigurationError(
+            "working directory is not clean, stash or commit your changes"
+        )
+        sys.exit(1)
 
     version = version.lstrip("v")
     the_tag = f"v{version}"
