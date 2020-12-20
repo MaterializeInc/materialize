@@ -979,6 +979,13 @@ fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
 }
 
+fn mul_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_interval()
+        .checked_mul(b.unwrap_float64())
+        .ok_or(EvalError::IntervalOutOfRange)
+        .map(Datum::from)
+}
+
 fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_int32();
     if b == 0 {
@@ -1021,6 +1028,18 @@ fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_decimal() / b))
+    }
+}
+
+fn div_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let b = b.unwrap_float64();
+    if b == 0.0 {
+        Err(EvalError::DivisionByZero)
+    } else {
+        a.unwrap_interval()
+            .checked_div(b)
+            .ok_or(EvalError::IntervalOutOfRange)
+            .map(Datum::from)
     }
 }
 
@@ -1721,14 +1740,14 @@ fn date_part_interval_inner(
         DateTimeUnits::Hour => Ok(interval.hours().into()),
         DateTimeUnits::Minute => Ok(interval.minutes().into()),
         DateTimeUnits::Second => Ok(interval.seconds().into()),
-        DateTimeUnits::Millennium
-        | DateTimeUnits::Century
-        | DateTimeUnits::Decade
-        | DateTimeUnits::Quarter
-        | DateTimeUnits::Week
-        | DateTimeUnits::Month
-        | DateTimeUnits::Milliseconds
-        | DateTimeUnits::Microseconds
+        DateTimeUnits::Millennium => Ok(interval.millennia().into()),
+        DateTimeUnits::Century => Ok(interval.centuries().into()),
+        DateTimeUnits::Decade => Ok(interval.decades().into()),
+        DateTimeUnits::Quarter => Ok(interval.quarters().into()),
+        DateTimeUnits::Month => Ok(interval.months().into()),
+        DateTimeUnits::Milliseconds => Ok(interval.milliseconds().into()),
+        DateTimeUnits::Microseconds => Ok(interval.microseconds().into()),
+        DateTimeUnits::Week
         | DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
@@ -1922,11 +1941,13 @@ pub enum BinaryFunc {
     MulFloat32,
     MulFloat64,
     MulDecimal,
+    MulInterval,
     DivInt32,
     DivInt64,
     DivFloat32,
     DivFloat64,
     DivDecimal,
+    DivInterval,
     ModInt32,
     ModInt64,
     ModFloat32,
@@ -2034,11 +2055,13 @@ impl BinaryFunc {
             BinaryFunc::MulFloat32 => Ok(eager!(mul_float32)),
             BinaryFunc::MulFloat64 => Ok(eager!(mul_float64)),
             BinaryFunc::MulDecimal => Ok(eager!(mul_decimal)),
+            BinaryFunc::MulInterval => eager!(mul_interval),
             BinaryFunc::DivInt32 => eager!(div_int32),
             BinaryFunc::DivInt64 => eager!(div_int64),
             BinaryFunc::DivFloat32 => eager!(div_float32),
             BinaryFunc::DivFloat64 => eager!(div_float64),
             BinaryFunc::DivDecimal => eager!(div_decimal),
+            BinaryFunc::DivInterval => eager!(div_interval),
             BinaryFunc::ModInt32 => eager!(mod_int32),
             BinaryFunc::ModInt64 => eager!(mod_int64),
             BinaryFunc::ModFloat32 => eager!(mod_float32),
@@ -2156,9 +2179,8 @@ impl BinaryFunc {
                 ScalarType::Float64.nullable(in_nullable || is_div_mod)
             }
 
-            AddInterval | SubInterval | SubTimestamp | SubTimestampTz | SubDate => {
-                ScalarType::Interval.nullable(in_nullable)
-            }
+            AddInterval | SubInterval | SubTimestamp | SubTimestampTz | SubDate | MulInterval
+            | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
             // TODO(benesch): we correctly compute types for decimal scale, but
             // not decimal precision... because nothing actually cares about
@@ -2306,6 +2328,8 @@ impl BinaryFunc {
                 | AddTimeInterval
                 | AddInterval
                 | SubInterval
+                | MulInterval
+                | DivInterval
                 | AddDecimal
                 | SubInt32
                 | SubInt64
@@ -2354,6 +2378,8 @@ impl BinaryFunc {
             | AddTimeInterval
             | AddInterval
             | SubInterval
+            | MulInterval
+            | DivInterval
             | AddDecimal
             | SubInt32
             | SubInt64
@@ -2470,11 +2496,13 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MulFloat32 => f.write_str("*"),
             BinaryFunc::MulFloat64 => f.write_str("*"),
             BinaryFunc::MulDecimal => f.write_str("*"),
+            BinaryFunc::MulInterval => f.write_str("*"),
             BinaryFunc::DivInt32 => f.write_str("/"),
             BinaryFunc::DivInt64 => f.write_str("/"),
             BinaryFunc::DivFloat32 => f.write_str("/"),
             BinaryFunc::DivFloat64 => f.write_str("/"),
             BinaryFunc::DivDecimal => f.write_str("/"),
+            BinaryFunc::DivInterval => f.write_str("/"),
             BinaryFunc::ModInt32 => f.write_str("%"),
             BinaryFunc::ModInt64 => f.write_str("%"),
             BinaryFunc::ModFloat32 => f.write_str("%"),
