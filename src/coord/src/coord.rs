@@ -120,7 +120,7 @@ where
     pub num_timely_workers: usize,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
-    pub data_directory: Option<&'a Path>,
+    pub data_directory: &'a Path,
     pub timestamp: TimestampConfig,
     pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
@@ -2292,18 +2292,18 @@ where
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let explanation_string = match stage {
             ExplainStage::RawPlan => {
-                let mut explanation = raw_plan.explain(&self.catalog);
+                let mut explanation = sql::plan::Explanation::new(&raw_plan, &self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
                 if options.typed {
-                    // TODO(jamii) does this fail?
                     explanation.explain_types(&BTreeMap::new());
                 }
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
-                let mut explanation = decorrelated_plan.explain(&self.catalog);
+                let mut explanation =
+                    expr::explain::Explanation::new(&decorrelated_plan, &self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2316,7 +2316,8 @@ where
                 let optimized_plan = self
                     .prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?
                     .into_inner();
-                let mut explanation = optimized_plan.explain(&self.catalog);
+                let mut explanation =
+                    expr::explain::Explanation::new(&optimized_plan, &self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -3014,9 +3015,9 @@ where
             None
         };
 
-        let catalog_path = data_directory.map(|d| d.join("catalog"));
+        let path = data_directory.join("catalog");
         let (catalog, initial_catalog_events) = Catalog::open(catalog::Config {
-            path: catalog_path.as_deref(),
+            path: &path,
             experimental_mode: Some(experimental_mode),
             enable_logging: logging.is_some(),
             cache_directory: cache_config.map(|c| c.path),

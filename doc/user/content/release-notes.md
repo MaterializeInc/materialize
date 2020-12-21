@@ -46,7 +46,7 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-{{% version-header v0.5.5 %}}
+{{% version-header v0.6.1 %}}
 
 - Add `ALL` to [`FETCH`](/sql/fetch).
 
@@ -68,23 +68,39 @@ Wrap your release notes at the 80 character mark.
 
   **Backwards-incompatible change.**
 
-{{% version-header v0.5.4 %}}
+{{% version-header v0.6.0 %}}
 
-- Add the [`version`](/sql/functions#postgresql-compatibility-func) and
-  [`mz_version`](/sql/functions/#system-information-func) functions to report
-  PostgreSQL-specific and Materialize-specific version information,
-  respectively.
+- Support specifying default values for table columns via the new
+  [`DEFAULT` column option](/sql/create-table#syntax) in `CREATE TABLE`.
+  Thanks to external contributor [@petrosagg](https://github.com/petrosagg).
 
-- Add the [`hmac` and `digest` cryptography functions](/sql/functions#cryptography-func).
-  These functions are based on the [`pgcrypto`] PostgreSQL extension.
+- Add a `timeout` option to [`FETCH`](/sql/fetch/) to facilitate using `FETCH`
+  to poll a [`TAIL`](/sql/tail) operation for new records.
 
-- Add a `timeout` option to [`FETCH`](/sql/fetch/).
+- Add several new SQL functions:
 
-- Fix a bug when requesting binary-formatted values with
-  [`FETCH`](/sql/fetch/) {{% gh 4976 %}}.
+  - The [`digest`](/sql/functions#cryptography-func) and
+    [`hmac`](/sql/functions#cryptography-func) cryptography functions
+    compute message digests and authentication codes, respectively. These
+    functions are based on the [`pgcrypto`] PostgreSQL extension.
 
-- Fix a bug when using COPY with TAIL that could cause some drivers to
-  fail if the TAIL was idle for at least 1 second {{% gh 4976 %}}.
+  - The [`version`](/sql/functions#postgresql-compatibility-func) and
+    [`mz_version`](/sql/functions/#system-information-func) functions report
+    PostgreSQL-specific and Materialize-specific version information,
+    respectively.
+
+  - The [`current_schema`](/sql/functions#postgresql-compatibility-func)
+    function reports the name of the SQL schema that appears first in the
+    search path.
+
+- Fix a bug that would cause invalid data to be returned when requesting
+  binary-formatted values with [`FETCH`](/sql/fetch/) {{% gh 4976 %}}.
+
+- Fix a bug when using `COPY` with `TAIL` that could cause some drivers to
+  fail if the `TAIL` was idle for at least one second {{% gh 4976 %}}.
+
+- Avoid panicking if a record in a regex-formatted source fails to decode
+  as UTF-8 {{% gh 5008 %}}.
 
 {{% version-header v0.5.3 %}}
 

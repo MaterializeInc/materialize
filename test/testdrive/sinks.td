@@ -29,11 +29,15 @@ goofus,gallant
 > CREATE MATERIALIZED VIEW v3 AS
   SELECT a || b AS c FROM src
 
-# We should refuse to create a sink with an invalid schema registry URL
+# We should refuse to create a sink with an invalid schema registry URL.
+# We use the Kafka address as the invalid schema registry address, as it is
+# known to immediately produce an error. Previous attempts used
+# `example.com:8080` and `materialize.com:8080` which can blackhole the request
+# for minutes rather than surfacing an error in a timely manner.
 
 ! CREATE SINK bad_schema_registry FROM src
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://materialize.com:8080'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.kafka-addr}'
 unable to publish value schema to registry in kafka sink
 
 > SHOW SINKS

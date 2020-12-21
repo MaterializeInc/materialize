@@ -7,152 +7,143 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This is the implementation for the EXPLAIN RAW PLAN command.
+//! This module houses a pretty printer for the SQL-specific version of
+//! [`RelationExpr`]. See also [`expr::explain`].
 //!
-//! Conventions:
-//! * RelationExprs are printed in post-order, left to right
-//! * RelationExprs which only have a single input are grouped together
-//! * Each group of RelationExprs is referred by id eg %4
-//! * RelationExprs may be followed by additional annotations on lines starting with | |
-//! * Columns are referred by position eg #4
-//! * References to columns in outer scopes are indicated by adding a ^ per level of nesting eg #^^4
-//! * Collections of columns are written as ranges where possible eg "#2..#5"
+//! The format is the same, except for the following extensions:
 //!
-//! It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
+//!   * References to columns in outer scopes are indicated by adding a ^ per
+//!     level of nesting, e.g. #^^4.
+//!   * Subqueries can be embedded in scalar expressions.
+//!
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 
-use expr::explain::{Bracketed, Indices, Separated};
-use expr::{Id, IdHumanizer, RowSetFinishing};
+use expr::explain::{bracketed, separated, Indices};
+use expr::{Id, IdGen, IdHumanizer, RowSetFinishing};
 use repr::{RelationType, ScalarType};
 
-use crate::plan::expr::{AggregateExpr, JoinKind, RelationExpr, ScalarExpr};
+use crate::plan::expr::{AggregateExpr, RelationExpr, ScalarExpr};
 
+/// An `Explanation` facilitates pretty-printing of a [`RelationExpr`].
+///
+/// By default, the [`fmt::Display`] implementation renders the expression as
+/// described in the module docs. Additional information may be attached to the
+/// explanation via the other public methods on the type.
 #[derive(Debug)]
 pub struct Explanation<'a> {
-    /// One ExplanationNode for each RelationExpr in the plan, in left-to-right post-order
-    pub nodes: Vec<ExplanationNode<'a>>,
-    /// Anything else we want to mention at the end
-    pub appendix: String,
+    id_humanizer: &'a dyn IdHumanizer,
+    /// One `ExplanationNode` for each `RelationExpr` in the plan, in
+    /// left-to-right post-order.
+    nodes: Vec<ExplanationNode<'a>>,
+    /// An optional `RowSetFinishing` to mention at the end.
+    finishing: Option<RowSetFinishing>,
+    /// Records the chain ID that was assigned to each expression.
+    expr_chains: HashMap<*const RelationExpr, u64>,
+    /// The ID of the current chain. Incremented while constructing the
+    /// `Explanation`.
+    chain: u64,
 }
 
 #[derive(Debug)]
 pub struct ExplanationNode<'a> {
-    /// The expr being explained
+    /// The expression being explained.
     pub expr: &'a RelationExpr,
-    /// The parent of expr
-    pub parent_expr: Option<&'a RelationExpr>,
-    /// A pretty-printed representation of the expr
-    pub pretty: String,
-    /// A list of annotations containing extra information about this expr
-    pub annotations: Vec<String>,
-    /// Nodes are grouped into chains of linear operations for easy printing
-    pub chain: usize,
-    /// Nodes with subqueries have a nested explanation for the subquery
+    /// The type of the expression, if desired.
+    pub typ: Option<RelationType>,
+    /// The ID of the linear chain to which this node belongs.
+    pub chain: u64,
+    /// Nexted explanations for any subqueries in the node.
     pub subqueries: Vec<Explanation<'a>>,
 }
 
-impl<'a> std::fmt::Display for Explanation<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        let mut prev_chain = usize::max_value();
+impl<'a> fmt::Display for Explanation<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut prev_chain = u64::max_value();
         for node in &self.nodes {
             if node.chain != prev_chain {
                 if node.chain != 0 {
                     writeln!(f)?;
                 }
-                writeln!(f, "%{} =", node.chain)?;
+                write!(f, "%{} =", node.chain)?;
+                writeln!(f)?;
             }
             prev_chain = node.chain;
 
-            // explain output shows up in SLT where the linter will not allow trailing whitespace, so need to trim stuff
-            writeln!(f, "| {}", node.pretty.trim())?;
-            for annotation in &node.annotations {
-                writeln!(f, "| | {}", annotation.trim())?;
-            }
-            for subquery in &node.subqueries {
-                for line in subquery.to_string().split('\n') {
-                    if line.is_empty() {
-                        writeln!(f, "| |")?;
-                    } else {
-                        writeln!(f, "| | {}", line)?;
-                    }
-                }
-            }
+            self.fmt_node(f, node)?;
         }
 
-        if !self.appendix.is_empty() {
-            writeln!(f, "\n{}", self.appendix.trim())?;
+        if let Some(finishing) = &self.finishing {
+            writeln!(
+                f,
+                "\nFinish order_by={} limit={} offset={} project={}",
+                bracketed("(", ")", separated(", ", &finishing.order_by)),
+                match finishing.limit {
+                    Some(limit) => limit.to_string(),
+                    None => "none".to_owned(),
+                },
+                finishing.offset,
+                bracketed("(", ")", Indices(&finishing.project))
+            )?;
         }
 
         Ok(())
     }
 }
 
-impl RelationExpr {
-    /// Create an Explanation, to which annotations can be added before printing
-    pub fn explain(&self, id_humanizer: &impl IdHumanizer) -> Explanation {
-        self.explain_internal(id_humanizer, &mut 0)
+impl<'a> Explanation<'a> {
+    /// Creates an explanation for a [`RelationExpr`].
+    pub fn new(expr: &'a RelationExpr, id_humanizer: &'a dyn IdHumanizer) -> Explanation<'a> {
+        Self::new_internal(expr, id_humanizer, &mut IdGen::default())
     }
 
-    fn explain_internal(
-        &self,
-        id_humanizer: &impl IdHumanizer,
-        next_chain: &mut usize,
-    ) -> Explanation {
+    pub fn new_internal(
+        expr: &'a RelationExpr,
+        id_humanizer: &'a dyn IdHumanizer,
+        id_gen: &mut IdGen,
+    ) -> Explanation<'a> {
         use RelationExpr::*;
 
-        // get nodes in post-order
-        let mut nodes = vec![];
-        let mut stack: Vec<(Option<&RelationExpr>, &RelationExpr)> = vec![(None, self)];
-        while let Some((parent_expr, expr)) = stack.pop() {
-            nodes.push(ExplanationNode {
-                expr,
-                parent_expr,
-                pretty: String::new(),
-                annotations: vec![],
-                chain: 0,           // will set this later
-                subqueries: vec![], // will set this later
-            });
-            expr.visit1(&mut |child_expr| {
-                stack.push((Some(expr), child_expr));
-            });
-        }
-        nodes.reverse();
+        // Do a post-order traversal of the expression, grouping "chains" of
+        // nodes together as we go. We have to break the chain whenever we
+        // encounter a node with multiple inputs, like a join.
 
-        // map from RelationExpr nodes to chain used in the explanation
-        // keyed by expr identity, not by expr value
-        let mut expr_chain: HashMap<*const RelationExpr, usize> = HashMap::new();
-
-        // group into linear chains of exprs
-        let mut current_chain = *next_chain;
-        *next_chain += 1;
-        for node in &mut nodes {
-            node.chain = current_chain;
-            let breaks_chain = match &node.parent_expr {
-                None => true,
-                Some(parent_expr) => match parent_expr {
-                    Project { .. }
-                    | Map { .. }
-                    | CallTable { .. }
-                    | Filter { .. }
-                    | Reduce { .. }
-                    | TopK { .. }
-                    | Negate { .. }
-                    | Threshold { .. }
-                    | Distinct { .. } => false,
-                    Join { .. } | Union { .. } => true,
-                    Constant { .. } | Get { .. } => unreachable!(), // these don't have children
-                },
-            };
-            if breaks_chain {
-                expr_chain.insert(node.expr as *const RelationExpr, current_chain);
-                current_chain = *next_chain;
-                *next_chain += 1;
+        fn walk<'a>(expr: &'a RelationExpr, explanation: &mut Explanation<'a>, id_gen: &mut IdGen) {
+            // First, walk the children, in order to perform a post-order
+            // traversal.
+            match expr {
+                // Leaf expressions. Nothing more to visit.
+                Constant { .. } | Get { .. } | CallTable { .. } => (),
+                // Single-input expressions continue the chain.
+                Project { input, .. }
+                | Map { input, .. }
+                | Filter { input, .. }
+                | Reduce { input, .. }
+                | Distinct { input }
+                | TopK { input, .. }
+                | Negate { input, .. }
+                | Threshold { input, .. } => walk(input, explanation, id_gen),
+                // For join and union, each input needs to go in its own chain.
+                Join { left, right, .. } => {
+                    walk(left, explanation, id_gen);
+                    explanation.chain = id_gen.allocate_id();
+                    walk(right, explanation, id_gen);
+                    explanation.chain = id_gen.allocate_id();
+                }
+                Union { base, inputs, .. } => {
+                    walk(base, explanation, id_gen);
+                    explanation.chain = id_gen.allocate_id();
+                    for input in inputs {
+                        walk(input, explanation, id_gen);
+                        explanation.chain = id_gen.allocate_id();
+                    }
+                }
             }
 
-            // look for subqueries
-            let mut scalar_exprs = vec![];
-            match &node.expr {
+            // Then collect subqueries.
+            let mut scalars = vec![];
+            match expr {
                 Constant { .. }
                 | Get { .. }
                 | Project { .. }
@@ -161,307 +152,295 @@ impl RelationExpr {
                 | Threshold { .. }
                 | Union { .. }
                 | TopK { .. } => (),
-                Map { scalars, .. } => scalar_exprs.extend(scalars),
-                Filter { predicates, .. } => scalar_exprs.extend(predicates),
-                CallTable { exprs, .. } => scalar_exprs.extend(exprs),
-                Join { on, .. } => scalar_exprs.push(on),
+                Map { scalars: exprs, .. }
+                | Filter {
+                    predicates: exprs, ..
+                }
+                | CallTable { exprs, .. } => scalars.extend(exprs),
+                Join { on, .. } => scalars.push(on),
                 Reduce { aggregates, .. } => {
-                    scalar_exprs.extend(aggregates.iter().map(|a| &*a.expr))
+                    for agg in aggregates {
+                        scalars.push(&agg.expr);
+                    }
                 }
             }
-            for scalar_expr in scalar_exprs {
-                scalar_expr.visit(&mut |scalar_expr| {
-                    use ScalarExpr::*;
-                    match scalar_expr {
-                        Column(..)
-                        | Parameter(..)
-                        | Literal(..)
-                        | CallNullary(..)
-                        | CallUnary { .. }
-                        | CallBinary { .. }
-                        | CallVariadic { .. }
-                        | If { .. } => (),
-                        Exists(relation_expr) | Select(relation_expr) => {
-                            node.subqueries
-                                .push(relation_expr.explain_internal(id_humanizer, next_chain));
-                        }
+            let mut subqueries = vec![];
+            for scalar in scalars {
+                scalar.visit(&mut |scalar| match scalar {
+                    ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
+                        let subquery =
+                            Explanation::new_internal(expr, explanation.id_humanizer, id_gen);
+                        explanation.expr_chains.insert(
+                            &**expr as *const RelationExpr,
+                            subquery.nodes.last().unwrap().chain,
+                        );
+                        subqueries.push(subquery);
                     }
-                });
+                    _ => (),
+                })
             }
+
+            // Finally, record the node.
+            explanation.nodes.push(ExplanationNode {
+                expr,
+                typ: None,
+                chain: explanation.chain,
+                subqueries,
+            });
+            explanation
+                .expr_chains
+                .insert(expr as *const RelationExpr, explanation.chain);
         }
 
-        // slighly easier to use
-        let expr_chain = |expr: &RelationExpr| expr_chain[&(expr as *const RelationExpr)];
-
-        for ExplanationNode {
-            expr,
-            pretty,
-            subqueries,
-            ..
-        } in nodes.iter_mut()
-        {
-            use std::fmt::Write;
-
-            // going to pop these off as we go through scalar_exprs
-            let mut subqueries = subqueries.iter().collect::<Vec<_>>();
-
-            // write the expr
-            match expr {
-                Constant { rows, .. } => {
-                    write!(pretty, "Constant {}", Separated(" ", rows.clone())).unwrap();
-                }
-                Get { id, .. } => match id {
-                    Id::Local(_) => {
-                        unimplemented!("sql::RelationExpr::Get can't contain LocalId yet")
-                    }
-                    Id::Global(id) => write!(
-                        pretty,
-                        "Get {} ({})",
-                        id_humanizer
-                            .humanize_id(*id)
-                            .unwrap_or_else(|| "?".to_owned()),
-                        id,
-                    )
-                    .unwrap(),
-                },
-                Project { outputs, .. } => {
-                    write!(pretty, "Project {}", Bracketed("(", ")", Indices(outputs))).unwrap()
-                }
-                Map { scalars, .. } => {
-                    write!(
-                        pretty,
-                        "Map {}",
-                        Separated(
-                            ", ",
-                            scalars
-                                .iter()
-                                .map(|s| s.fmt_with(&mut subqueries))
-                                .collect()
-                        )
-                    )
-                    .unwrap();
-                }
-                CallTable { func, exprs } => {
-                    write!(
-                        pretty,
-                        "CallTable {}({})",
-                        func,
-                        Separated(
-                            ", ",
-                            exprs.iter().map(|p| p.fmt_with(&mut subqueries)).collect()
-                        )
-                    )
-                    .unwrap();
-                }
-                Filter { predicates, .. } => {
-                    write!(
-                        pretty,
-                        "Filter {}",
-                        Separated(
-                            ", ",
-                            predicates
-                                .iter()
-                                .map(|p| p.fmt_with(&mut subqueries))
-                                .collect()
-                        )
-                    )
-                    .unwrap();
-                }
-                Join {
-                    left,
-                    right,
-                    on,
-                    kind,
-                } => {
-                    write!(
-                        pretty,
-                        "{}Join %{} %{} on {}",
-                        kind,
-                        expr_chain(left),
-                        expr_chain(right),
-                        on.fmt_with(&mut subqueries),
-                    )
-                    .unwrap();
-                }
-                Reduce {
-                    group_key,
-                    aggregates,
-                    ..
-                } => {
-                    write!(
-                        pretty,
-                        "Reduce group={} {}",
-                        Bracketed("(", ")", Separated(", ", group_key.clone())),
-                        Separated(
-                            " ",
-                            aggregates
-                                .iter()
-                                .map(|a| a.fmt_with(&mut subqueries))
-                                .collect()
-                        )
-                    )
-                    .unwrap();
-                }
-                Distinct { .. } => {
-                    write!(pretty, "Distinct").unwrap();
-                }
-                TopK {
-                    group_key,
-                    order_key,
-                    limit,
-                    offset,
-                    ..
-                } => {
-                    write!(
-                        pretty,
-                        "TopK group={} order={}",
-                        Bracketed("(", ")", Indices(group_key)),
-                        Bracketed("(", ")", Separated(", ", order_key.clone())),
-                    )
-                    .unwrap();
-                    if let Some(limit) = limit {
-                        write!(pretty, " limit={}", limit).unwrap();
-                    }
-                    write!(pretty, " offset={}", offset).unwrap();
-                }
-                Negate { .. } => {
-                    write!(pretty, "Negate").unwrap();
-                }
-                Threshold { .. } => {
-                    write!(pretty, "Threshold").unwrap();
-                }
-                Union { base, inputs } => {
-                    let input_chains: Vec<_> = inputs
-                        .iter()
-                        .map(|input| Bracketed("%", "", expr_chain(input)))
-                        .collect();
-                    write!(
-                        pretty,
-                        "Union %{} {}",
-                        expr_chain(base),
-                        Separated(" ", input_chains)
-                    )
-                    .unwrap();
-                }
-            }
-        }
-
-        Explanation {
-            nodes,
-            appendix: String::new(),
-        }
+        let mut explanation = Explanation {
+            id_humanizer,
+            nodes: vec![],
+            finishing: None,
+            expr_chains: HashMap::new(),
+            chain: id_gen.allocate_id(),
+        };
+        walk(expr, &mut explanation, id_gen);
+        explanation
     }
-}
 
-impl<'a> Explanation<'a> {
+    /// Attach type information into the explanation.
     pub fn explain_types(&mut self, params: &BTreeMap<usize, ScalarType>) {
+        self.explain_types_internal(&[], params)
+    }
+
+    fn explain_types_internal(
+        &mut self,
+        outers: &[RelationType],
+        params: &BTreeMap<usize, ScalarType>,
+    ) {
         for node in &mut self.nodes {
             // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
-            let RelationType { column_types, keys } = node.expr.typ(&[], params);
-            node.annotations
-                .push(format!("types = ({})", Separated(", ", column_types)));
-            node.annotations.push(format!(
-                "keys = ({})",
-                Separated(", ", keys.iter().map(|key| Indices(key)).collect())
-            ));
+            let typ = node.expr.typ(outers, params);
+            let mut outers = outers.to_vec();
+            outers.push(typ);
+            for subquery in &mut node.subqueries {
+                subquery.explain_types_internal(&outers, params);
+            }
+            node.typ = outers.pop();
         }
     }
 
-    pub fn explain_row_set_finishing(&mut self, row_set_finishing: RowSetFinishing) {
-        self.appendix.push_str(&format!(
-            "Finish order_by={} limit={} offset={} project={}",
-            Bracketed(
-                "(",
-                ")",
-                Separated(", ", row_set_finishing.order_by.clone())
-            ),
-            match row_set_finishing.limit {
-                Some(limit) => limit.to_string(),
-                None => "none".to_owned(),
-            },
-            row_set_finishing.offset,
-            Bracketed("(", ")", Indices(&row_set_finishing.project))
-        ))
+    /// Attach a `RowSetFinishing` to the explanation.
+    pub fn explain_row_set_finishing(&mut self, finishing: RowSetFinishing) {
+        self.finishing = Some(finishing);
     }
-}
 
-impl ScalarExpr {
-    fn fmt_with(&self, subqueries: &mut Vec<&Explanation>) -> String {
+    fn fmt_node(&self, f: &mut fmt::Formatter, node: &ExplanationNode) -> fmt::Result {
+        use RelationExpr::*;
+
+        match node.expr {
+            Constant { rows, .. } => {
+                write!(f, "| Constant")?;
+                for row in rows {
+                    write!(f, " {}", row)?;
+                }
+                writeln!(f)?;
+            }
+            Get { id, .. } => match id {
+                Id::Local(_) => unreachable!("SQL expressions do not support Lets yet"),
+                Id::Global(id) => writeln!(
+                    f,
+                    "| Get {} ({})",
+                    self.id_humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| "?".to_owned()),
+                    id,
+                )?,
+            },
+            Project { outputs, .. } => {
+                writeln!(f, "| Project {}", bracketed("(", ")", Indices(outputs)))?
+            }
+            Map { scalars, .. } => {
+                write!(f, "| Map")?;
+                for (i, e) in scalars.iter().enumerate() {
+                    write!(f, "{}", if i == 0 { " " } else { ", " })?;
+                    self.fmt_scalar_expr(f, e)?;
+                }
+                writeln!(f)?;
+            }
+            CallTable { func, exprs } => {
+                write!(f, "| CallTable {}(", func,)?;
+                for (i, e) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    self.fmt_scalar_expr(f, e)?;
+                }
+                writeln!(f, ")")?;
+            }
+            Filter { predicates, .. } => {
+                write!(f, "| Filter")?;
+                for (i, e) in predicates.iter().enumerate() {
+                    write!(f, "{}", if i == 0 { " " } else { ", " })?;
+                    self.fmt_scalar_expr(f, e)?;
+                }
+                writeln!(f)?;
+            }
+            Join {
+                left,
+                right,
+                on,
+                kind,
+            } => {
+                write!(
+                    f,
+                    "| {}Join %{} %{} on ",
+                    kind,
+                    self.expr_chain(left),
+                    self.expr_chain(right),
+                )?;
+                self.fmt_scalar_expr(f, on)?;
+                writeln!(f)?;
+            }
+            Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                write!(
+                    f,
+                    "| Reduce group={}",
+                    bracketed("(", ")", separated(", ", group_key)),
+                )?;
+                for agg in aggregates {
+                    write!(f, " ")?;
+                    self.fmt_aggregate_expr(f, agg)?;
+                }
+                writeln!(f)?;
+            }
+            Distinct { .. } => writeln!(f, "| Distinct")?,
+            TopK {
+                group_key,
+                order_key,
+                limit,
+                offset,
+                ..
+            } => {
+                write!(
+                    f,
+                    "| TopK group={} order={}",
+                    bracketed("(", ")", Indices(group_key)),
+                    bracketed("(", ")", separated(", ", order_key)),
+                )?;
+                if let Some(limit) = limit {
+                    write!(f, " limit={}", limit)?;
+                }
+                writeln!(f, " offset={}", offset)?
+            }
+            Negate { .. } => writeln!(f, "| Negate")?,
+            Threshold { .. } => write!(f, "| Threshold")?,
+            Union { base, inputs } => writeln!(
+                f,
+                "| Union %{} {}",
+                self.expr_chain(base),
+                separated(
+                    " ",
+                    inputs
+                        .iter()
+                        .map(|input| bracketed("%", "", self.expr_chain(input)))
+                )
+            )?,
+        }
+
+        if let Some(RelationType { column_types, keys }) = &node.typ {
+            writeln!(f, "| | types = ({})", separated(", ", column_types))?;
+            writeln!(
+                f,
+                "| | keys = ({})",
+                separated(", ", keys.iter().map(|key| Indices(key)))
+            )?;
+        }
+
+        for subquery in &node.subqueries {
+            for line in subquery.to_string().split('\n') {
+                if line.is_empty() {
+                    writeln!(f, "| |")?;
+                } else {
+                    writeln!(f, "| | {}", line)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn fmt_scalar_expr(&self, f: &mut fmt::Formatter, expr: &ScalarExpr) -> fmt::Result {
         use ScalarExpr::*;
-        match self {
-            Column(i) => format!(
+
+        match expr {
+            Column(i) => write!(
+                f,
                 "#{}{}",
                 (0..i.level).map(|_| '^').collect::<String>(),
                 i.column
             ),
-            Parameter(i) => format!("${}", i),
-            Literal(row, _) => format!("{}", row.unpack_first()),
-            CallNullary(func) => format!("{}()", func),
-            CallUnary { func, expr } => format!("{}({})", func, expr.fmt_with(subqueries)),
+            Parameter(i) => write!(f, "${}", i),
+            Literal(row, _) => write!(f, "{}", row.unpack_first()),
+            CallNullary(func) => write!(f, "{}()", func),
+            CallUnary { func, expr } => {
+                write!(f, "{}(", func)?;
+                self.fmt_scalar_expr(f, expr)?;
+                write!(f, ")")
+            }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {
-                    format!(
-                        "({} {} {})",
-                        expr1.fmt_with(subqueries),
-                        func,
-                        expr2.fmt_with(subqueries)
-                    )
+                    write!(f, "(")?;
+                    self.fmt_scalar_expr(f, expr1)?;
+                    write!(f, " {} ", func)?;
+                    self.fmt_scalar_expr(f, expr2)?;
+                    write!(f, ")")
                 } else {
-                    format!(
-                        "{}({}, {})",
-                        func,
-                        expr1.fmt_with(subqueries),
-                        expr2.fmt_with(subqueries)
-                    )
+                    write!(f, "{}", func)?;
+                    write!(f, "(")?;
+                    self.fmt_scalar_expr(f, expr1)?;
+                    write!(f, ", ")?;
+                    self.fmt_scalar_expr(f, expr2)?;
+                    write!(f, ")")
                 }
             }
-            CallVariadic { func, exprs } => format!(
-                "{}({})",
-                func,
-                Separated(", ", exprs.iter().map(|e| e.fmt_with(subqueries)).collect())
-            ),
-            If { cond, then, els } => format!(
-                "if {} then {{{}}} else {{{}}}",
-                cond.fmt_with(subqueries),
-                then.fmt_with(subqueries),
-                els.fmt_with(subqueries)
-            ),
-            Exists(..) => {
-                let chain = subqueries.remove(0).nodes.last().unwrap().chain;
-                format!("exists(%{})", chain)
+            CallVariadic { func, exprs } => {
+                write!(f, "{}(", func)?;
+                for (i, expr) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    self.fmt_scalar_expr(f, expr)?;
+                }
+                write!(f, ")")
             }
-            Select(..) => {
-                let chain = subqueries.remove(0).nodes.last().unwrap().chain;
-                format!("select(%{})", chain)
+            If { cond, then, els } => {
+                write!(f, "if ")?;
+                self.fmt_scalar_expr(f, cond)?;
+                write!(f, " then {{")?;
+                self.fmt_scalar_expr(f, then)?;
+                write!(f, "}} els {{")?;
+                self.fmt_scalar_expr(f, els)?;
+                write!(f, "}}")
             }
+            Exists(expr) => write!(f, "exists(%{})", self.expr_chain(expr)),
+            Select(expr) => write!(f, "select(%{})", self.expr_chain(expr)),
         }
     }
-}
 
-impl AggregateExpr {
-    fn fmt_with(&self, subqueries: &mut Vec<&Explanation>) -> String {
-        format!(
-            "{}({}{})",
-            self.func,
-            if self.distinct { "distinct " } else { "" },
-            self.expr.fmt_with(subqueries)
-        )
+    fn fmt_aggregate_expr(&self, f: &mut fmt::Formatter, expr: &AggregateExpr) -> fmt::Result {
+        write!(f, "{}(", expr.func)?;
+        if expr.distinct {
+            write!(f, "distinct ")?;
+        }
+        self.fmt_scalar_expr(f, &expr.expr)?;
+        write!(f, ")")
     }
-}
 
-impl std::fmt::Display for JoinKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        write!(
-            f,
-            "{}",
-            match self {
-                JoinKind::Inner { lateral: false } => "Inner",
-                JoinKind::Inner { lateral: true } => "InnerLateral",
-                JoinKind::LeftOuter { lateral: false } => "LeftOuter",
-                JoinKind::LeftOuter { lateral: true } => "LeftOuterLateral",
-                JoinKind::RightOuter => "RightOuter",
-                JoinKind::FullOuter => "FullOuter",
-            }
-        )
+    /// Retrieves the chain ID for the specified expression.
+    ///
+    /// The `ExplanationNode` for `expr` must have already been inserted into
+    /// the explanation.
+    fn expr_chain(&self, expr: &RelationExpr) -> u64 {
+        self.expr_chains[&(expr as *const RelationExpr)]
     }
 }

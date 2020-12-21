@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# This test is broken.
+# See: https://github.com/MaterializeInc/materialize/issues/2895
+
 $ kinesis-create-stream stream=test shards=1
 
 $ kinesis-ingest format=bytes stream=test
@@ -24,7 +27,7 @@ If providing a custom region, an `endpoint` option must also be provided
 
 > CREATE SOURCE f
   FROM KINESIS ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
-  WITH (access_key_id = '${testdrive.aws-access-key}',
+  WITH (access_key_id = '${testdrive.aws-access-key-id}',
         secret_access_key = '${testdrive.aws-secret-access-key}',
         token = '${testdrive.aws-token}',
         endpoint = '${testdrive.aws-endpoint}')
