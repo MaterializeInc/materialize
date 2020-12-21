@@ -9,7 +9,6 @@
 
 - id: sqlsmith
   label: SQLsmith fuzzing
-  command: --query-count 100000
   timeout_in_minutes: 240
   plugins:
     - ./ci/plugins/mzcompose:
