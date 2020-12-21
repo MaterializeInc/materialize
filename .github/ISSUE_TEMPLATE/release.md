@@ -71,6 +71,15 @@ production readiness.
 
   - [ ] Open a PR with this change, and land it.
 
+    If you have [GitHub cli][gh] this is as easy as typing the following command and following
+    some prompts:
+
+    ```console
+    $ gh pr create --web
+    ```
+
+[gh]: https://cli.github.com/
+
 ### Review Release Notes
 
 Release notes should be updated by engineers as they merge PRs. The release notes
@@ -83,6 +92,9 @@ a release is published.
   good.
 
 ### Test the release candidate
+
+Cloud engineers run many of the steps in this section, their steps are prefixed with **cloud
+engineer**.
 
 To run the required load tests on the release candidate tag, Materialize employees
 can follow [these instructions for running semi-automatic load tests][load-instr]
@@ -97,23 +109,28 @@ in the infrastructure repository. All of these tests can be run in parallel.
     - Commit - Use the default `HEAD`
     - Branch - Enter the release candidate tag (i.e. `v0.4.2-rc1`)
 
-  You can continue on to the next step, but remember to verify that this test passes.
+  You can continue on to the next step, but remember to verify that this test passes. Link to it
+  here, and don't check this off until you've verified that it passed:
 
-- [ ] Start the load tests according to [the same instructions][load-instr], using your release tag as the
-  `git-ref` value for the release benchmarks. You can use [This commit][] as an example to follow.
+  - [ ] "link to test run"
+
+- [ ] **cloud engineer** Start the load tests according to [the same instructions][load-instr],
+  using your release tag as the `git-ref` value for the release benchmarks. You can use [This
+  commit][] as an example to follow.
 
 [This commit]: https://github.com/MaterializeInc/infra/commit/fd7f594d6f9fb2fda3a604f21b730f8d401fe81c
 
-- [ ] Find the load tests in https://grafana.i.mtrlz.dev/d/materialize-overview, and link
-  to them in #release, validating that data is present. Note that the default view of
-  that dashboard is of a full day, so it may look like the test started and aborted
-  suddenly:
+- [ ] **cloud engineer** Find the load tests in
+  https://grafana.i.mtrlz.dev/d/materialize-overview, and link to them in #release, validating
+  that data is present. Note that the default view of that dashboard is of a full day, so it may
+  look like the test started and aborted suddenly:
 
   - [ ] chbench
   - [ ] billing-demo
   - [ ] perf-kinesis
 
-- [ ] Let the tests run for at least 24 hours, with the following success criteria:
+- [ ] **cloud engineer** Let the tests run for at least 24 hours, with the following success
+  criteria:
 
   - [ ] chbench: The ingest rate should not be slower than the previous release.
   - [ ] billing-demo: The container should run and finish without error. You can get the exit code
@@ -132,12 +149,12 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
     have remained at 0ms or similar for the entirety of the run.
 
-- [ ] Let the chaos test run for 24 hours. The test's `chaos_run` container should complete
-    with a `0` exit code. To check this, SSH into the EC2 instance running the chaos test and
-    run `docker ps -a`. You can ssh in using our [teleport cluster][], the chaos test has a
-    `purpose=chaos` label.
+- [ ] **cloud engineer** Let the chaos test run for 24 hours. The test's `chaos_run` container
+  should complete with a `0` exit code. To check this, SSH into the EC2 instance running the chaos
+  test and run `docker ps -a`. You can ssh in using our [teleport cluster][], the chaos test has a
+  `purpose=chaos` label.
 
-- [ ] Remove all load test machines, documented on [the same page][load-instr].
+- [ ] **cloud engineer** Remove all load test machines, documented on [the same page][load-instr].
 
 [teleport cluster]: https://tsh.i.mtrlz.dev/cluster/tsh/nodes
 
@@ -160,7 +177,8 @@ in the infrastructure repository. All of these tests can be run in parallel.
   bin/mkrelease --no-tag -b continue-$next $next
   ```
 
-  - [ ] Open a PR with that branch, and land it.
+  - [ ] Open a PR with that branch, and land it. Using [gh] from the terminal: `gh pr create
+    --web`
 
 ### Verify the Release Build and Deploy
 
