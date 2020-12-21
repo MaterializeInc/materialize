@@ -21,6 +21,7 @@ from materialize import ui
 
 BIN_CARGO_TOML = "src/materialized/Cargo.toml"
 LICENSE = "LICENSE"
+USER_DOC_CONFIG = "doc/user/config.toml"
 
 say = ui.speaker("")
 
@@ -98,6 +99,13 @@ def main(
         git.tag_annotated(the_tag)
     else:
         git.commit_all_changed(f"Prepare next phase of development: {the_tag}")
+        latest_tag = get_latest_tag(fetch=False)
+        # we have made an actual release
+        if latest_tag.prerelease is None and click.confirm(
+            f"Update doc/user/config.toml marking v{latest_tag} as released"
+        ):
+            update_versions_list(latest_tag)
+            git.commit_all_changed(f"Update released versions to include v{latest_tag}")
 
     matching = git.first_remote_matching("MaterializeInc/materialize")
     if tag:
@@ -115,6 +123,23 @@ def main(
         branch = git.rev_parse("HEAD", abbrev=True)
         say("")
         say(f"Create a PR with your branch: '{branch}'")
+
+
+def update_versions_list(released_version: semver.VersionInfo) -> None:
+    """Update the doc config with the passed-in version"""
+    today = date.today().strftime("%d %B %Y")
+    toml_line = f'  {{ name = "v{released_version}", date = "{today}" }},\n'
+    with open(USER_DOC_CONFIG) as fh:
+        docs = fh.readlines()
+    wrote_line = False
+    with open(USER_DOC_CONFIG, "w") as fh:
+        for line in docs:
+            fh.write(line)
+            if line == "versions = [\n":
+                fh.write(toml_line)
+                wrote_line = True
+    if not wrote_line:
+        raise errors.MzRuntimeError("Couldn't determine where to insert new version")
 
 
 def change_line(fname: str, line_start: str, replacement: str) -> None:
@@ -203,7 +228,7 @@ def confirm_on_latest_rc(affect_remote: bool) -> None:
 def get_latest_tag(fetch: bool) -> semver.VersionInfo:
     """Get the most recent tag in this repo"""
     tags = git.get_version_tags(fetch=fetch)
-    return semver.VersionInfo.parse(tags[0].lstrip("v"))
+    return tags[0]
 
 
 if __name__ == "__main__":
