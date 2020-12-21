@@ -13,7 +13,7 @@ steps:
     artifact_paths: target/slt-summary.json
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/sqllogictest/mzcompose.yml
+          composition: sqllogictest
           run: sqllogictest
   - wait
   - command: bin/ci-builder run stable ci/slt/upload.sh
