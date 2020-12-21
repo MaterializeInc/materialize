@@ -29,7 +29,7 @@ pgrepr = { path = "../pgrepr" }
 tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4", "with-serde_json-1"] }
 postgres_array = "0.10.0"
 protobuf = { version = "2.17", features = ["with-serde"] }
-rand = "0.7.3"
+rand = "0.8.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1"
 repr = { path = "../repr" }

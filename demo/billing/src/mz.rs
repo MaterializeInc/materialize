@@ -99,8 +99,8 @@ pub async fn create_csv_source(
         writer
             .write_record(&[
                 i.to_string(),
-                rng.gen_range(1, 10).to_string(),
-                rng.gen_range(1, 10).to_string(),
+                rng.gen_range(1..10).to_string(),
+                rng.gen_range(1..10).to_string(),
             ])
             .with_context(|| format!("failed to write data to {}", path.display()))?;
     }
