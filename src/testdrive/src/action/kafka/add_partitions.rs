@@ -12,7 +12,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rdkafka::admin::NewPartitions;
 
-use ore::cast::CastFrom;
 use ore::collections::CollectionExt;
 use ore::retry;
 
@@ -21,7 +20,7 @@ use crate::parser::BuiltinCommand;
 
 pub struct AddPartitionsAction {
     topic_prefix: String,
-    partitions: i32,
+    partitions: usize,
 }
 
 pub fn build_add_partitions(mut cmd: BuiltinCommand) -> Result<AddPartitionsAction, String> {
@@ -65,7 +64,7 @@ impl Action for AddPartitionsAction {
             }
         }
 
-        let partitions = NewPartitions::new(&topic_name, usize::cast_from(self.partitions));
+        let partitions = NewPartitions::new(&topic_name, self.partitions);
         let res = state
             .kafka_admin
             .create_partitions(&[partitions], &state.kafka_admin_opts)
@@ -91,7 +90,7 @@ impl Action for AddPartitionsAction {
                 return Err("metadata fetch returned no topics".to_string());
             }
             let topic = metadata.topics().into_element();
-            if topic.partitions().len() as i32 != self.partitions {
+            if topic.partitions().len() != self.partitions {
                 return Err(format!(
                     "topic {} has {} partitions when exactly {} was expected",
                     topic_name,

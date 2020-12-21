@@ -15,8 +15,6 @@ use std::error::Error;
 
 use postgres_types::{private, FromSql, Kind, Type, WrongType};
 
-use ore::cast::CastFrom;
-
 /// A wrapper for tuples that implements [`FromSql`] for PostgreSQL composite
 /// types.
 #[derive(Debug, PartialEq, Eq)]
@@ -33,7 +31,8 @@ macro_rules! impl_tuple {
                 mut raw: &'a [u8],
             ) -> Result<Record<($($ty_ident,)*)>, Box<dyn Error + Sync + Send>> {
                 let num_fields = private::read_be_i32(&mut raw)?;
-                if usize::cast_from(num_fields) != $n {
+                let num_fields = u32::try_from(num_fields).map_err(|_| format!("number of fields cannot be negative: {}", num_fields))?;
+                if num_fields != $n {
                     return Err(format!(
                         "Postgres record field count does not match Rust tuple length: {} vs {}",
                         num_fields,

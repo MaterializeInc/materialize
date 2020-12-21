@@ -134,7 +134,7 @@ impl Connection {
 
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run.
-        let version: i32 = sqlite.query_row("PRAGMA user_version", params![], |row| row.get(0))?;
+        let version: u32 = sqlite.query_row("PRAGMA user_version", params![], |row| row.get(0))?;
         for (i, sql) in MIGRATIONS
             .iter()
             .enumerate()

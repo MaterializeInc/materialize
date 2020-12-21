@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -18,7 +19,7 @@ use crate::parser::BuiltinCommand;
 
 pub struct CreateTopicAction {
     topic_prefix: String,
-    partitions: i32,
+    partitions: usize,
     compression: String,
 }
 
@@ -146,7 +147,9 @@ impl Action for CreateTopicAction {
             "Creating Kafka topic {} with partition count of {}",
             topic_name, self.partitions
         );
-        let new_topic = NewTopic::new(&topic_name, self.partitions, TopicReplication::Fixed(1))
+        let partitions = i32::try_from(self.partitions)
+            .map_err(|_| format!("partition count must fit in an i32: {}", self.partitions))?;
+        let new_topic = NewTopic::new(&topic_name, partitions, TopicReplication::Fixed(1))
             // Disabling retention is very important! Our testdrive tests
             // use hardcoded timestamps that are immediately eligible for
             // deletion by Kafka's garbage collector. E.g., the timestamp
