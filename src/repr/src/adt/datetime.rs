@@ -21,6 +21,7 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
+use std::cmp::Ordering;
 
 /// Units of measurements associated with dates and times.
 ///
@@ -306,6 +307,24 @@ mod fixed_offset_serde {
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         serializer.serialize_i32(offset.local_minus_utc())
+    }
+}
+
+impl PartialOrd for Timezone {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Timezone {
+    fn cmp(&self, other: &Self) -> Ordering {
+        use Timezone::*;
+        match (self, other) {
+            (FixedOffset(a), FixedOffset(b)) => a.local_minus_utc().cmp(&b.local_minus_utc()),
+            (Tz(a), Tz(b)) => a.name().cmp(b.name()),
+            (FixedOffset(_), Tz(_)) => Ordering::Less,
+            (Tz(_), FixedOffset(_)) => Ordering::Greater,
+        }
     }
 }
 

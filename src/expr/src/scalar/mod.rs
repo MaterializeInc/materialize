@@ -22,6 +22,7 @@ use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
 use crate::explain;
+use crate::scalar::func::parse_timezone;
 
 pub mod func;
 pub mod like_pattern;
@@ -382,6 +383,33 @@ impl ScalarExpr {
                             expr: Box::new(expr2.take()),
                         },
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
+                    }
+                } else if *func == BinaryFunc::TimezoneTimestamp && expr1.is_literal() {
+                    let tz = expr1.as_literal_str().unwrap();
+                    *e = match parse_timezone(tz) {
+                        Ok(tz) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::TimezoneTimestamp(tz),
+                            expr: Box::new(expr2.take()),
+                        },
+                        Err(err) => ScalarExpr::literal(Err(err), e.typ(&relation_type)),
+                    }
+                } else if *func == BinaryFunc::TimezoneTimestampTz && expr1.is_literal() {
+                    let tz = expr1.as_literal_str().unwrap();
+                    *e = match parse_timezone(tz) {
+                        Ok(tz) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::TimezoneTimestampTz(tz),
+                            expr: Box::new(expr2.take()),
+                        },
+                        Err(err) => ScalarExpr::literal(Err(err), e.typ(&relation_type)),
+                    }
+                } else if *func == BinaryFunc::TimezoneTime && expr1.is_literal() {
+                    let tz = expr1.as_literal_str().unwrap();
+                    *e = match parse_timezone(tz) {
+                        Ok(tz) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::TimezoneTime(tz),
+                            expr: Box::new(expr2.take()),
+                        },
+                        Err(err) => ScalarExpr::literal(Err(err), e.typ(&relation_type)),
                     }
                 } else if *func == BinaryFunc::And {
                     // If we are here, not both inputs are literals.
