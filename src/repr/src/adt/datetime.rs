@@ -282,10 +282,31 @@ impl DateTimeFieldValue {
 }
 
 /// Parsed timezone.
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Timezone {
+    #[serde(with = "fixed_offset_serde")]
     FixedOffset(FixedOffset),
     Tz(Tz),
+}
+
+mod fixed_offset_serde {
+    use super::*;
+    use serde::{de::Error, Deserializer, Serializer};
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<FixedOffset, D::Error> {
+        let offset = i32::deserialize(deserializer)?;
+        FixedOffset::east_opt(offset).ok_or_else(|| {
+            Error::custom(format!("Invalid timezone offset: |{}| >= 86_400", offset))
+        })
+    }
+
+    pub fn serialize<S: Serializer>(
+        offset: &FixedOffset,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i32(offset.local_minus_utc())
+    }
 }
 
 impl Default for Timezone {
