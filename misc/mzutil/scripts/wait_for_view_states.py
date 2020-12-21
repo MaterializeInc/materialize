@@ -60,7 +60,7 @@ def source_at_offset(
 ) -> typing.Union[None, int]:
     """Return the mz timestamp from a source if it has reached the desired offset."""
     query = (
-        "SELECT timestamp FROM mz_source_info WHERE source_name = %s and offset = %s"
+        'SELECT timestamp FROM mz_source_info WHERE source_name = %s and "offset" = %s'
     )
     try:
         cursor.execute(query, (source_name, desired_offset))
