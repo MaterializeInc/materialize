@@ -33,7 +33,7 @@ lazy_static = "1.4.0"
 log = "0.4.11"
 mz-process-collector = { path = "../mz-process-collector" }
 num_cpus = "1.0"
-openssl = { version = "0.10.30", features = ["vendored"] }
+openssl = { version = "0.10.31", features = ["vendored"] }
 openssl-sys = { version = "0.9.59", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.1"
