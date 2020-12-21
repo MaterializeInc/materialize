@@ -1220,6 +1220,14 @@ lazy_static! {
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 })
             },
+            "timezone" => Scalar {
+                params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp,
+                params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz,
+                params!(String, Time) => BinaryFunc::TimezoneTime,
+                params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp,
+                params!(Interval, TimestampTz) => BinaryFunc::TimezoneIntervalTimestampTz,
+                params!(Interval, Time) => BinaryFunc::TimezoneIntervalTime
+            },
             "to_char" => Scalar {
                 params!(Timestamp, String) => BinaryFunc::ToCharTimestamp,
                 params!(TimestampTz, String) => BinaryFunc::ToCharTimestampTz

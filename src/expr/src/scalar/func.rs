@@ -14,7 +14,10 @@ use std::fmt;
 use std::iter;
 use std::str;
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{
+    DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Offset,
+    TimeZone, Timelike, Utc,
+};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
 use hmac::{Hmac, Mac, NewMac};
@@ -29,7 +32,7 @@ use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
 use repr::adt::array::ArrayDimension;
-use repr::adt::datetime::DateTimeUnits;
+use repr::adt::datetime::{parse_timezone_offset_second, DateTimeUnits};
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
@@ -1838,6 +1841,59 @@ where
     }
 }
 
+fn parse_timezone<'a>(a: Datum<'a>) -> Result<impl TimeZone, EvalError> {
+    let tz = a.unwrap_str();
+    match parse_timezone_offset_second(tz) {
+        Ok(offset) => Ok(FixedOffset::east(offset as i32)),
+        Err(_) => Err(EvalError::InvalidTimezone(tz.to_owned())),
+    }
+}
+
+fn timezone_time<'a, T: TimeZone>(tz: T, t: NaiveTime) -> Datum<'a> {
+    (t + tz.offset_from_utc_datetime(&Utc::now().naive_utc()).fix()).into()
+}
+
+fn timezone_timestamp<'a, T: TimeZone>(tz: T, dt: NaiveDateTime) -> Result<Datum<'a>, EvalError> {
+    tz.from_local_datetime(&dt)
+        .earliest()
+        .map(|dt| dt.with_timezone(&Utc).into())
+        .ok_or(EvalError::InvalidTimezoneConversion)
+}
+
+fn timezone_timestamptz<'a, T: TimeZone>(tz: T, utc: DateTime<Utc>) -> Datum<'a> {
+    utc.with_timezone(&tz).naive_local().into()
+}
+
+fn timezone_interval_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let interval = a.unwrap_interval();
+    if interval.months != 0 {
+        Err(EvalError::InvalidTimezoneInterval)
+    } else {
+        Ok(b.unwrap_time()
+            .overflowing_add_signed(interval.duration_as_chrono())
+            .0
+            .into())
+    }
+}
+
+fn timezone_interval_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let interval = a.unwrap_interval();
+    if interval.months != 0 {
+        Err(EvalError::InvalidTimezoneInterval)
+    } else {
+        Ok(DateTime::from_utc(b.unwrap_timestamp() - interval.duration_as_chrono(), Utc).into())
+    }
+}
+
+fn timezone_interval_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let interval = a.unwrap_interval();
+    if interval.months != 0 {
+        Err(EvalError::InvalidTimezoneInterval)
+    } else {
+        Ok((b.unwrap_timestamptz().naive_utc() + interval.duration_as_chrono()).into())
+    }
+}
+
 fn to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
     let f = a.unwrap_float64();
     if !f.is_finite() {
@@ -1969,6 +2025,12 @@ pub enum BinaryFunc {
     DatePartTimestampTz,
     DateTruncTimestamp,
     DateTruncTimestampTz,
+    TimezoneTimestamp,
+    TimezoneTimestampTz,
+    TimezoneTime,
+    TimezoneIntervalTimestamp,
+    TimezoneIntervalTimestampTz,
+    TimezoneIntervalTime,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
     TextConcat,
@@ -2094,6 +2156,20 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestampTz => {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz()))
             }
+            BinaryFunc::TimezoneTimestamp => {
+                eager!(|a, b: Datum| parse_timezone(a)
+                    .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp())))
+            }
+            BinaryFunc::TimezoneTimestampTz => {
+                eager!(|a, b: Datum| parse_timezone(a)
+                    .map(|tz| timezone_timestamptz(tz, b.unwrap_timestamptz())))
+            }
+            BinaryFunc::TimezoneTime => {
+                eager!(|a, b: Datum| parse_timezone(a).map(|tz| timezone_time(tz, b.unwrap_time())))
+            }
+            BinaryFunc::TimezoneIntervalTimestamp => eager!(timezone_interval_timestamp),
+            BinaryFunc::TimezoneIntervalTimestampTz => eager!(timezone_interval_timestamptz),
+            BinaryFunc::TimezoneIntervalTime => eager!(timezone_interval_time),
             BinaryFunc::CastFloat32ToDecimal => eager!(cast_float32_to_decimal),
             BinaryFunc::CastFloat64ToDecimal => eager!(cast_float64_to_decimal),
             BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),
@@ -2232,15 +2308,22 @@ impl BinaryFunc {
             | AddTimeInterval
             | SubTimeInterval => input1_type,
 
-            AddDateInterval | SubDateInterval | AddDateTime | DateTruncTimestamp => {
-                ScalarType::Timestamp.nullable(true)
-            }
+            AddDateInterval
+            | SubDateInterval
+            | AddDateTime
+            | DateTruncTimestamp
+            | TimezoneTimestampTz
+            | TimezoneIntervalTimestampTz => ScalarType::Timestamp.nullable(true),
 
             DatePartInterval | DatePartTimestamp | DatePartTimestampTz => {
                 ScalarType::Float64.nullable(true)
             }
 
-            DateTruncTimestampTz => ScalarType::TimestampTz.nullable(true),
+            DateTruncTimestampTz | TimezoneTimestamp | TimezoneIntervalTimestamp => {
+                ScalarType::TimestampTz.nullable(true)
+            }
+
+            TimezoneTime | TimezoneIntervalTime => ScalarType::Time.nullable(true),
 
             SubTime => ScalarType::Interval.nullable(true),
 
@@ -2446,6 +2529,12 @@ impl BinaryFunc {
             | DatePartTimestampTz
             | DateTruncTimestamp
             | DateTruncTimestampTz
+            | TimezoneTimestamp
+            | TimezoneTimestampTz
+            | TimezoneTime
+            | TimezoneIntervalTimestamp
+            | TimezoneIntervalTimestampTz
+            | TimezoneIntervalTime
             | CastFloat32ToDecimal
             | CastFloat64ToDecimal
             | RoundDecimal(_)
@@ -2528,6 +2617,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DatePartTimestampTz => f.write_str("date_parttstz"),
             BinaryFunc::DateTruncTimestamp => f.write_str("date_truncts"),
             BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
+            BinaryFunc::TimezoneTimestamp => f.write_str("timezonets"),
+            BinaryFunc::TimezoneTimestampTz => f.write_str("timezonetstz"),
+            BinaryFunc::TimezoneTime => f.write_str("timezonet"),
+            BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
+            BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
+            BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::TextConcat => f.write_str("||"),
