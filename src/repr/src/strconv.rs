@@ -28,8 +28,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use chrono::offset::TimeZone;
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::offset::{Offset, TimeZone};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use ore::lex::LexBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -200,7 +200,7 @@ where
 /// <time zone interval> ::=
 ///     <sign> <hours value> <colon> <minutes value>
 /// ```
-fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, i64), String> {
+fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, datetime::Timezone), String> {
     if s.is_empty() {
         return Err("timestamp string is empty".into());
     }
@@ -213,7 +213,7 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, i64), String
         return Ok((
             NaiveDate::from_ymd(1970, 1, 1),
             NaiveTime::from_hms(0, 0, 0),
-            0,
+            Default::default(),
         ));
     }
 
@@ -224,9 +224,9 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, i64), String
     let t: NaiveTime = pdt.compute_time()?;
 
     let offset = if tz_string.is_empty() {
-        0
+        Default::default()
     } else {
-        datetime::parse_timezone_offset_second(tz_string)?
+        tz_string.parse()?
     };
 
     Ok((d, t, offset))
@@ -294,12 +294,18 @@ where
 /// Parses a `DateTime<Utc>` from `s`.
 pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
     parse_timestamp_string(s)
-        .and_then(|(date, time, offset)| {
-            let offset = FixedOffset::east(offset as i32)
-                .from_local_datetime(&date.and_time(time))
-                .earliest()
-                .ok_or_else(|| "invalid timezone conversion".to_owned())?;
-            Ok(DateTime::<Utc>::from_utc(offset.naive_utc(), Utc))
+        .and_then(|(date, time, timezone)| {
+            use datetime::Timezone::*;
+            let dt = date.and_time(time);
+            let offset = match timezone {
+                FixedOffset(offset) => offset,
+                Tz(tz) => tz
+                    .offset_from_local_datetime(&dt)
+                    .earliest()
+                    .ok_or_else(|| "invalid timezone conversion".to_owned())?
+                    .fix(),
+            };
+            Ok(DateTime::from_utc(dt - offset, Utc))
         })
         .map_err(|e| ParseError::new("timestamptz", s).with_details(e))
 }

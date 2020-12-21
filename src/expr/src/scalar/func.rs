@@ -15,8 +15,8 @@ use std::iter;
 use std::str;
 
 use chrono::{
-    DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Offset,
-    TimeZone, Timelike, Utc,
+    DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
+    Utc,
 };
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
@@ -32,7 +32,7 @@ use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
 use repr::adt::array::ArrayDimension;
-use repr::adt::datetime::{parse_timezone_offset_second, DateTimeUnits};
+use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
@@ -1841,27 +1841,40 @@ where
     }
 }
 
-fn parse_timezone<'a>(a: Datum<'a>) -> Result<impl TimeZone, EvalError> {
+fn parse_timezone<'a>(a: Datum<'a>) -> Result<Timezone, EvalError> {
     let tz = a.unwrap_str();
-    match parse_timezone_offset_second(tz) {
-        Ok(offset) => Ok(FixedOffset::east(offset as i32)),
-        Err(_) => Err(EvalError::InvalidTimezone(tz.to_owned())),
-    }
+    tz.parse()
+        .map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
 }
 
-fn timezone_time<'a, T: TimeZone>(tz: T, t: NaiveTime) -> Datum<'a> {
-    (t + tz.offset_from_utc_datetime(&Utc::now().naive_utc()).fix()).into()
+fn timezone_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let offset = match parse_timezone(a)? {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&Utc::now().naive_utc()).fix(),
+    };
+    Ok((b.unwrap_time() + offset).into())
 }
 
-fn timezone_timestamp<'a, T: TimeZone>(tz: T, dt: NaiveDateTime) -> Result<Datum<'a>, EvalError> {
-    tz.from_local_datetime(&dt)
-        .earliest()
-        .map(|dt| dt.with_timezone(&Utc).into())
-        .ok_or(EvalError::InvalidTimezoneConversion)
+fn timezone_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let dt = b.unwrap_timestamp();
+    let offset = match parse_timezone(a)? {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => tz
+            .offset_from_local_datetime(&dt)
+            .earliest()
+            .ok_or(EvalError::InvalidTimezoneConversion)?
+            .fix(),
+    };
+    Ok(DateTime::from_utc(dt - offset, Utc).into())
 }
 
-fn timezone_timestamptz<'a, T: TimeZone>(tz: T, utc: DateTime<Utc>) -> Datum<'a> {
-    utc.with_timezone(&tz).naive_local().into()
+fn timezone_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let utc = b.unwrap_timestamptz();
+    let offset = match parse_timezone(a)? {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&utc.naive_utc()).fix(),
+    };
+    Ok((utc.naive_utc() + offset).into())
 }
 
 fn timezone_interval_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -2156,17 +2169,9 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestampTz => {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz()))
             }
-            BinaryFunc::TimezoneTimestamp => {
-                eager!(|a, b: Datum| parse_timezone(a)
-                    .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp())))
-            }
-            BinaryFunc::TimezoneTimestampTz => {
-                eager!(|a, b: Datum| parse_timezone(a)
-                    .map(|tz| timezone_timestamptz(tz, b.unwrap_timestamptz())))
-            }
-            BinaryFunc::TimezoneTime => {
-                eager!(|a, b: Datum| parse_timezone(a).map(|tz| timezone_time(tz, b.unwrap_time())))
-            }
+            BinaryFunc::TimezoneTimestamp => eager!(timezone_timestamp),
+            BinaryFunc::TimezoneTimestampTz => eager!(timezone_timestamptz),
+            BinaryFunc::TimezoneTime => eager!(timezone_time),
             BinaryFunc::TimezoneIntervalTimestamp => eager!(timezone_interval_timestamp),
             BinaryFunc::TimezoneIntervalTimestampTz => eager!(timezone_interval_timestamptz),
             BinaryFunc::TimezoneIntervalTime => eager!(timezone_interval_time),

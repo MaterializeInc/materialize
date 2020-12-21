@@ -16,7 +16,8 @@ use std::convert::TryInto;
 use std::fmt;
 use std::str::FromStr;
 
-use chrono::{NaiveDate, NaiveTime};
+use chrono::{FixedOffset, NaiveDate, NaiveTime};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
@@ -280,6 +281,42 @@ impl DateTimeFieldValue {
     }
 }
 
+/// Parsed timezone.
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+pub enum Timezone {
+    FixedOffset(FixedOffset),
+    Tz(Tz),
+}
+
+impl Default for Timezone {
+    fn default() -> Self {
+        Self::FixedOffset(FixedOffset::east(0))
+    }
+}
+
+impl fmt::Debug for Timezone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Timezone::FixedOffset(offset) => offset.fmt(f),
+            Timezone::Tz(tz) => tz.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for Timezone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl FromStr for Timezone {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, String> {
+        build_timezone_offset_second(&tokenize_timezone(value)?, value)
+    }
+}
+
 /// All of the fields that can appear in a literal `DATE`, `TIME`, `TIMESTAMP`
 /// or `INTERVAL` string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -291,7 +328,7 @@ pub struct ParsedDateTime {
     pub minute: Option<DateTimeFieldValue>,
     // second.fraction is equivalent to nanoseconds.
     pub second: Option<DateTimeFieldValue>,
-    pub timezone_offset_second: Option<i64>,
+    pub timezone_offset_second: Option<Timezone>,
 }
 
 impl Default for ParsedDateTime {
@@ -1582,7 +1619,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
     Ok(toks)
 }
 
-fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<i64, String> {
+fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<Timezone, String> {
     use TimeStrToken::*;
     let all_formats = [
         vec![Plus, Num(0, 1), Colon, Num(0, 1)],
@@ -1649,14 +1686,16 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         (None, Some(_)) => unreachable!("parsed a minute before an hour!"),
                     }
                 }
-                (Zulu, Zulu) => return Ok(0 as i64),
+                (Zulu, Zulu) => return Ok(Default::default()),
                 (TzName(val), TzName(_)) => {
-                    // For now, we don't support named timezones
-                    return Err(format!(
-                        "Invalid timezone string ({}): named timezones are not supported. \
-                         Failed to parse {} at token index {}",
-                        value, val, i
-                    ));
+                    return match val.parse() {
+                        Ok(tz) => Ok(Timezone::Tz(tz)),
+                        Err(err) => Err(format!(
+                            "Invalid timezone string ({}): {}. \
+                            Failed to parse {} at token index {}",
+                            value, err, val, i
+                        )),
+                    };
                 }
                 (_, _) => {
                     // Theres a mismatch between this format and the actual
@@ -1678,10 +1717,13 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                 tz_offset_second += minute_offset * 60;
             }
 
-            if !is_positive {
-                tz_offset_second *= -1
-            }
-            return Ok(tz_offset_second);
+            let offset = if is_positive {
+                FixedOffset::east(tz_offset_second as i32)
+            } else {
+                FixedOffset::west(tz_offset_second as i32)
+            };
+
+            return Ok(Timezone::FixedOffset(offset));
         }
     }
 
@@ -1730,11 +1772,6 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 
         (value.trim(), "")
     }
-}
-
-pub fn parse_timezone_offset_second(value: &str) -> Result<i64, String> {
-    let toks = tokenize_timezone(value)?;
-    Ok(build_timezone_offset_second(&toks, value)?)
 }
 
 #[cfg(test)]
@@ -3111,74 +3148,76 @@ mod test {
 
     #[test]
     fn test_parse_timezone_offset_second() {
+        use Timezone::{FixedOffset as F, Tz as T};
         let test_cases = [
-            ("+0:00", 0),
-            ("-0:00", 0),
-            ("+0:000000", 0),
-            ("+000000:00", 0),
-            ("+000000:000000", 0),
-            ("+0", 0),
-            ("+00", 0),
-            ("+000", 0),
-            ("+0000", 0),
-            ("+00000000", 0),
-            ("+0000001:000000", 3600),
-            ("+0000000:000001", 60),
-            ("+0000001:000001", 3660),
-            ("+4:00", 14400),
-            ("-4:00", -14400),
-            ("+2:30", 9000),
-            ("-5:15", -18900),
-            ("+0:20", 1200),
-            ("-0:20", -1200),
-            ("+5", 18000),
-            ("-5", -18000),
-            ("+05", 18000),
-            ("-05", -18000),
-            ("+500", 18000),
-            ("-500", -18000),
-            ("+530", 19800),
-            ("-530", -19800),
-            ("+050", 3000),
-            ("-050", -3000),
-            ("+15", 54000),
-            ("-15", -54000),
-            ("+1515", 54900),
-            ("+015", 900),
-            ("-015", -900),
-            ("+0015", 900),
-            ("-0015", -900),
-            ("+00015", 900),
-            ("-00015", -900),
-            ("+005", 300),
-            ("-005", -300),
-            ("+0000005", 300),
-            ("+00000100", 3600),
-            ("Z", 0),
-            ("z", 0),
+            ("+0:00", F(FixedOffset::east(0))),
+            ("-0:00", F(FixedOffset::east(0))),
+            ("+0:000000", F(FixedOffset::east(0))),
+            ("+000000:00", F(FixedOffset::east(0))),
+            ("+000000:000000", F(FixedOffset::east(0))),
+            ("+0", F(FixedOffset::east(0))),
+            ("+00", F(FixedOffset::east(0))),
+            ("+000", F(FixedOffset::east(0))),
+            ("+0000", F(FixedOffset::east(0))),
+            ("+00000000", F(FixedOffset::east(0))),
+            ("+0000001:000000", F(FixedOffset::east(3600))),
+            ("+0000000:000001", F(FixedOffset::east(60))),
+            ("+0000001:000001", F(FixedOffset::east(3660))),
+            ("+4:00", F(FixedOffset::east(14400))),
+            ("-4:00", F(FixedOffset::west(14400))),
+            ("+2:30", F(FixedOffset::east(9000))),
+            ("-5:15", F(FixedOffset::west(18900))),
+            ("+0:20", F(FixedOffset::east(1200))),
+            ("-0:20", F(FixedOffset::west(1200))),
+            ("+5", F(FixedOffset::east(18000))),
+            ("-5", F(FixedOffset::west(18000))),
+            ("+05", F(FixedOffset::east(18000))),
+            ("-05", F(FixedOffset::west(18000))),
+            ("+500", F(FixedOffset::east(18000))),
+            ("-500", F(FixedOffset::west(18000))),
+            ("+530", F(FixedOffset::east(19800))),
+            ("-530", F(FixedOffset::west(19800))),
+            ("+050", F(FixedOffset::east(3000))),
+            ("-050", F(FixedOffset::west(3000))),
+            ("+15", F(FixedOffset::east(54000))),
+            ("-15", F(FixedOffset::west(54000))),
+            ("+1515", F(FixedOffset::east(54900))),
+            ("+015", F(FixedOffset::east(900))),
+            ("-015", F(FixedOffset::west(900))),
+            ("+0015", F(FixedOffset::east(900))),
+            ("-0015", F(FixedOffset::west(900))),
+            ("+00015", F(FixedOffset::east(900))),
+            ("-00015", F(FixedOffset::west(900))),
+            ("+005", F(FixedOffset::east(300))),
+            ("-005", F(FixedOffset::west(300))),
+            ("+0000005", F(FixedOffset::east(300))),
+            ("+00000100", F(FixedOffset::east(3600))),
+            ("Z", F(FixedOffset::east(0))),
+            ("z", F(FixedOffset::east(0))),
+            ("UTC", T(Tz::UTC)),
+            ("Pacific/Auckland", T(Tz::Pacific__Auckland)),
+            ("America/New_York", T(Tz::America__New_York)),
+            ("America/Los_Angeles", T(Tz::America__Los_Angeles)),
         ];
 
-        for test in test_cases.iter() {
-            match parse_timezone_offset_second(test.0) {
-                Ok(tz_offset) => {
-                    let expected: i64 = test.1 as i64;
-                    assert_eq!(tz_offset, expected);
-                }
+        for (timezone, expected) in test_cases.iter() {
+            match timezone.parse::<Timezone>() {
+                Ok(tz) => assert_eq!(&tz, expected),
                 Err(e) => panic!(
                     "Test failed when expected to pass test case: {} error: {}",
-                    test.0, e
+                    timezone, e
                 ),
             }
         }
 
         let failure_test_cases = [
             "+25:00", "+120:00", "+0:61", "+0:500", " 12:30", "+-12:30", "+2525", "+2561",
-            "+255900", "+25", "+5::30", "+5:30:", "+5:30:16", "+5:", "++5:00", "--5:00", "UTC",
-            " UTC", "a", "zzz", "ZZZ", "ZZ Top", " +", " -", " ", "1", "12", "1234",
+            "+255900", "+25", "+5::30", "+5:30:", "+5:30:16", "+5:", "++5:00", "--5:00", " UTC",
+            "a", "zzz", "ZZZ", "ZZ Top", " +", " -", " ", "1", "12", "1234",
         ];
 
         for test in failure_test_cases.iter() {
-            match parse_timezone_offset_second(test) {
+            match test.parse::<Timezone>() {
                 Ok(t) => panic!("Test passed when expected to fail test case: {} parsed tz offset (seconds): {}", test, t),
                 Err(e) => println!("{}", e),
             }
