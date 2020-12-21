@@ -521,6 +521,12 @@ impl<'a> From<NaiveDate> for Datum<'a> {
     }
 }
 
+impl<'a> From<NaiveTime> for Datum<'a> {
+    fn from(t: NaiveTime) -> Datum<'a> {
+        Datum::Time(t)
+    }
+}
+
 impl<'a> From<NaiveDateTime> for Datum<'a> {
     fn from(dt: NaiveDateTime) -> Datum<'a> {
         Datum::Timestamp(dt)

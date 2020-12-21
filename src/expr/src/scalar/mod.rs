@@ -623,6 +623,9 @@ pub enum EvalError {
     IntegerOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
+    InvalidTimezone(String),
+    InvalidTimezoneInterval,
+    InvalidTimezoneConversion,
     InvalidDimension {
         max_dim: usize,
         val: i64,
@@ -654,6 +657,11 @@ impl fmt::Display for EvalError {
             EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
+            EvalError::InvalidTimezone(tz) => write!(f, "invalid time zone '{}'", tz),
+            EvalError::InvalidTimezoneInterval => {
+                f.write_str("timezone interval must not contain months or years")
+            }
+            EvalError::InvalidTimezoneConversion => f.write_str("invalid timezone conversion"),
             EvalError::InvalidDimension { max_dim, val } => write!(
                 f,
                 "invalid dimension: {}; must use value within [1, {}]",

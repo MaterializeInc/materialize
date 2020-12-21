@@ -1732,7 +1732,7 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
     }
 }
 
-pub(crate) fn parse_timezone_offset_second(value: &str) -> Result<i64, String> {
+pub fn parse_timezone_offset_second(value: &str) -> Result<i64, String> {
     let toks = tokenize_timezone(value)?;
     Ok(build_timezone_offset_second(&toks, value)?)
 }
