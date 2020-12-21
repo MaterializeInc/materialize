@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.34"
 fstrings = "0.2.3"
 ore = { path = "../ore" }
-quote = { version = "1.0.7" }
+quote = { version = "1.0.8" }
 syn = { version = "1.0.54", features = ["extra-traits", "full", "parsing"] }
 
 [dev-dependencies]
