@@ -13,7 +13,7 @@ set -euo pipefail
 project=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 cleanup="no"
-data_dir="${HOME}/chbench_snapshot"
+snapshot_dir="${HOME}/materialize/benchmark_data/chbench"
 num_measurements=6
 peeker_queries="count-sources"
 setup="no"
@@ -21,11 +21,12 @@ topic_filter="debezium.tpcch.*"
 workers=24
 
 usage() {
-    echo -n "usage: $0 [-d DATA_DIRECTORY] [-q QUERIES] [-t TOPIC_FILTER] [-w WORKERS]
+    echo -n "usage: $0 [-d SNAPSHOT_DIRECTORY] [-q QUERIES] [-t TOPIC_FILTER]
+                       [-w WORKERS] SNAPSHOT_ID
 
 Start a benchmark that measures Materialize performance when ingesting VIEWS configured by
 Peeker (using the QUERIES variable). This benchmark works by starting a Kafka cluster and
-populating topics using the snapshot information (and TOPIC_FILTER) contained with the data
+populating topics using the snapshot information (and TOPIC_FILTER) contained with the snapshot
 directory. The benchmark then starts Materialized a set number of times, measuring how long it
 takes for Materialized to achieve the desired final view state.
 
@@ -35,26 +36,26 @@ Help:
 
 Options:
 
-    -c|--cleanup            Shutdown services and remove volumes at the end of the test
-    -d|--data-directory     Directory that contains the chbench state snapshot
-    -q|--queries            Peeker queries to configure (individual query or group name)
-    -s|--setup              Intialize the Kafka cluster with data from topic snapshots
-    -t|--topic-filter       Only restore topics that match the supplied filter (GLOB syntax)
-    -w|--workers            Number of Materialize worker threads to configure
+    -c|--cleanup                Shutdown services and remove volumes at the end of the test
+    -d|--snapshot-directory     Directory that contains the chbench state snapshot
+    -q|--queries                Peeker queries to configure (individual query or group name)
+    -s|--setup                  Intialize the Kafka cluster with snapshot from topic snapshots
+    -t|--topic-filter           Only restore topics that match the supplied filter (GLOB syntax)
+    -w|--workers                Number of Materialize worker threads to configure
 "
     exit "$1"
 }
 
 parse_args() {
     local arg
-    while [[ $# -gt 0 ]]; do
+    while [[ $# -gt 1 ]]; do
         arg="$1" && shift
         case "$arg" in
             -c|--cleanup)
                 cleanup="yes"
                 ;;
-            -d|--data-directory)
-                data_dir="${1:?--data-directory requires an argument}" && shift
+            -d|--snapshot-directory)
+                snapshot_dir="${1:?--snapshot-directory requires an argument}" && shift
                 ;;
             -h|--help) usage 0;;
             -n|--num-measurements)
@@ -78,20 +79,23 @@ parse_args() {
                 ;;
         esac
     done
+    snapshot_id="${1:?--SNAPSHOT_ID is required}" && shift
 }
 
 main() {
 
     parse_args "$@"
 
-    if [[ ! -d "${data_dir}" ]]; then
-        echo "ERROR: ${data_dir} is not a directory or does not exist"
+    local snapshot
+    snapshot="${snapshot_dir}/${snapshot_id}"
+    if [[ ! -d "${snapshot}" ]]; then
+        echo "ERROR: ${snapshot} is not a directory or does not exist"
         exit 1
     fi
 
     export KAFKA_TOPIC_FILTER="${topic_filter}"
     export MZ_THREADS="${workers}"
-    export MZ_TOPIC_SNAPSHOTS="${data_dir}"
+    export MZ_CHBENCH_SNAPSHOT="${snapshot}"
     export PEEKER_QUERIES="${peeker_queries}"
 
     if [[ "${setup}" = "yes" ]]; then
