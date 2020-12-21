@@ -95,7 +95,7 @@ pub struct State {
     kafka_admin_opts: rdkafka::admin::AdminOptions,
     kafka_config: ClientConfig,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
-    kafka_topics: HashMap<String, i32>,
+    kafka_topics: HashMap<String, usize>,
     aws_region: rusoto_core::Region,
     aws_account: String,
     aws_credentials: AwsCredentials,

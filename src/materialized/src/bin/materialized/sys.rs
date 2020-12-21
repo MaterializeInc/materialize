@@ -37,8 +37,8 @@ pub fn adjust_rlimits() {
 
     #[cfg(target_os = "macos")]
     let hard = {
-        use ore::cast::CastFrom;
         use std::cmp;
+        use std::convert::TryFrom;
         use sysctl::Sysctl;
 
         // On macOS, getrlimit by default reports that the hard limit is
@@ -49,13 +49,14 @@ pub fn adjust_rlimits() {
             .and_then(|ctl| ctl.value())
             .map_err(|e| e.to_string())
             .and_then(|v| match v {
-                sysctl::CtlValue::Int(v) => Ok(Rlim::from_usize(usize::cast_from(v))),
+                sysctl::CtlValue::Int(v) => usize::try_from(v)
+                    .map_err(|_| format!("kern.maxfilesperproc unexpectedly negative: {}", v)),
                 o => Err(format!("unexpected sysctl value type: {:?}", o)),
             });
         match res {
             Ok(v) => {
                 trace!("sysctl kern.maxfilesperproc hard limit: {}", v);
-                cmp::min(v, hard)
+                cmp::min(Rlim::from_usize(v), hard)
             }
             Err(e) => {
                 trace!("error while reading sysctl: {}", e);
