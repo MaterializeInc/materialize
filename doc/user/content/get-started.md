@@ -117,7 +117,7 @@ To get started, though, we'll begin with a simple version that doesn't require c
     GROUP BY lhs.key;
     ```
 
-Of course, these are trivial examples, but hope begin to illustrate some of Materialize's potential.
+Of course, these are trivial examples, but hopefully begin to illustrate some of Materialize's potential.
 
 ## Create a real-time stream
 
