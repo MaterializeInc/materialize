@@ -18,7 +18,7 @@ use std::time::SystemTime;
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{GlobalId, ScalarExpr};
-use repr::RelationDesc;
+use repr::{RelationDesc, ScalarType};
 use sql_parser::ast::Expr;
 use uuid::Uuid;
 
@@ -103,7 +103,14 @@ pub trait Catalog: fmt::Debug {
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem;
 
     /// Reports whether the specified type exists in the catalog.
-    fn type_exists(&self, name: &FullName) -> bool;
+    fn item_exists(&self, name: &FullName) -> bool;
+
+    /// Returns a lossy `ScalarType` associated with `id` if one exists.
+    ///
+    /// For example `pg_catalog.numeric` returns `ScalarType::Decimal(0,0)`,
+    /// meaning that its precision and scale need to be associated with values
+    /// from elsewhere.
+    fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType>;
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
@@ -323,8 +330,12 @@ impl Catalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn type_exists(&self, _: &FullName) -> bool {
+    fn item_exists(&self, _: &FullName) -> bool {
         false
+    }
+
+    fn try_get_lossy_scalar_type_by_id(&self, _: &GlobalId) -> Option<ScalarType> {
+        None
     }
 
     fn config(&self) -> &CatalogConfig {

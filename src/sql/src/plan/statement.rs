@@ -971,7 +971,7 @@ fn handle_create_type(
             Some(SqlOption::Value {
                 value: Value::String(val),
                 ..
-            }) => ObjectName(vec![Ident::new(val)]),
+            }) => ObjectName::unqualified(&val),
             Some(SqlOption::ObjectName { object_name, .. }) => object_name,
             Some(_) => bail!("{} must be a string or identifier", key),
             None => bail!("{} parameter required", key),
@@ -990,8 +990,8 @@ fn handle_create_type(
     }
 
     let name = scx.allocate_name(normalize::object_name(name)?);
-    if scx.catalog.type_exists(&name) {
-        bail!("type \"{}\" already exists", name.to_string());
+    if scx.catalog.item_exists(&name) {
+        bail!("catalog item \"{}\" already exists", name.to_string());
     }
 
     let inner = match as_type {
@@ -1544,7 +1544,7 @@ fn handle_create_table(
     let mut defaults = Vec::with_capacity(columns.len());
 
     for c in columns {
-        let ty = scalar_type_from_sql(&c.data_type)?;
+        let ty = scalar_type_from_sql(scx, &c.data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
         for option in &c.options {
@@ -1932,7 +1932,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_default_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
-        self.resolve_schema(ObjectName(vec![Ident::new("public")]))
+        self.resolve_schema(ObjectName::unqualified("public"))
     }
 
     pub fn resolve_database(&self, name: ObjectName) -> Result<&dyn CatalogDatabase, PlanError> {

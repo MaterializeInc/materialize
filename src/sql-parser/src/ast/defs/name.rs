@@ -97,6 +97,14 @@ impl_display!(Ident);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ObjectName(pub Vec<Ident>);
 
+impl ObjectName {
+    /// Creates an `ObjectName` with a single [`Ident`], i.e. it appears as
+    /// "unqualified".
+    pub fn unqualified(n: &str) -> ObjectName {
+        ObjectName(vec![Ident::new(n)])
+    }
+}
+
 impl AstDisplay for ObjectName {
     fn fmt(&self, f: &mut AstFormatter) {
         display::separated(&self.0, ".").fmt(f);

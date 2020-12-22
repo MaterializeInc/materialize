@@ -89,7 +89,7 @@ impl<'a> FuncRewriter<'a> {
 
     fn plan_agg(name: &'static str, expr: Expr, filter: Option<Box<Expr>>, distinct: bool) -> Expr {
         Expr::Function(Function {
-            name: ObjectName(vec![name.into()]),
+            name: ObjectName::unqualified(name),
             args: FunctionArgs::Args(vec![expr]),
             filter,
             over: None,

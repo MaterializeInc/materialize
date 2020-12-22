@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use build_info::BuildInfo;
 
 /// Configures a catalog.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Config<'a> {
     /// The path to the catalog on disk.
     pub path: &'a Path,
