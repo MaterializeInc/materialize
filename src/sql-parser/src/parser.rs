@@ -133,16 +133,23 @@ enum Precedence {
     Zero,
     Or,
     And,
-    UnaryNot,
+    PrefixNot,
     Is,
     Cmp,
     Like,
     Other,
-    Plus,
-    Times,
-    UnaryOp,
-    DoubleColon,
-    Subscript,
+    PlusMinus,
+    MultiplyDivide,
+    PostfixCollateAt,
+    PrefixPlusMinus,
+    PostfixSubscriptCast,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+enum SetPrecedence {
+    Zero,
+    UnionExcept,
+    Intersect,
 }
 
 impl<'a> Parser<'a> {
@@ -318,7 +325,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
             Token::Keyword(INTERVAL) => self.parse_literal_interval(),
             Token::Keyword(NOT) => Ok(Expr::Not {
-                expr: Box::new(self.parse_subexpr(Precedence::UnaryNot)?),
+                expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
             Token::Keyword(ROW) => self.parse_row_expr(),
             Token::Keyword(TRIM) => self.parse_trim_expr(),
@@ -332,7 +339,7 @@ impl<'a> Parser<'a> {
             Token::Ident(id) => self.parse_qualified_identifier(Ident::new(id)),
             Token::Op(op) if op == "+" || op == "-" => Ok(Expr::Op {
                 op,
-                expr1: Box::new(self.parse_subexpr(Precedence::UnaryOp)?),
+                expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                 expr2: None,
             }),
             Token::Number(_) | Token::String(_) | Token::HexString(_) => {
@@ -348,14 +355,7 @@ impl<'a> Parser<'a> {
             unexpected => self.expected(self.peek_prev_pos(), "an expression", Some(unexpected)),
         }?;
 
-        if self.parse_keyword(COLLATE) {
-            Ok(Expr::Collate {
-                expr: Box::new(expr),
-                collation: self.parse_object_name()?,
-            })
-        } else {
-            Ok(expr)
-        }
+        Ok(expr)
     }
 
     /// Parses an expression that appears in parentheses, like `(1 + 1)` or
@@ -459,7 +459,7 @@ impl<'a> Parser<'a> {
                     {
                         let query = SetExpr::Query(Box::new(query));
                         let ctes = vec![];
-                        let body = parser.parse_query_body_seeded(Precedence::Zero, query)?;
+                        let body = parser.parse_query_body_seeded(SetPrecedence::Zero, query)?;
                         Ok(Either::Query(parser.parse_query_tail(ctes, body)?))
                     }
 
@@ -901,6 +901,20 @@ impl<'a> Parser<'a> {
                     left: Box::new(expr),
                     right: Box::new(self.parse_subexpr(precedence)?),
                 }),
+                AT => {
+                    self.expect_keywords(&[TIME, ZONE])?;
+                    Ok(Expr::Function(Function {
+                        name: ObjectName(vec!["timezone".into()]),
+                        args: FunctionArgs::Args(vec![self.parse_subexpr(precedence)?, expr]),
+                        filter: None,
+                        over: None,
+                        distinct: false,
+                    }))
+                }
+                COLLATE => Ok(Expr::Collate {
+                    expr: Box::new(expr),
+                    collation: self.parse_object_name()?,
+                }),
                 // Can only happen if `get_next_precedence` got out of sync with this function
                 _ => panic!("No infix parser for token {:?}", tok),
             }
@@ -1051,14 +1065,16 @@ impl<'a> Parser<'a> {
                 Token::Keyword(LIKE) => Precedence::Like,
                 Token::Op(s) => match s.as_str() {
                     "<" | "<=" | "<>" | "!=" | ">" | ">=" => Precedence::Cmp,
-                    "+" | "-" => Precedence::Plus,
-                    "/" | "%" => Precedence::Times,
+                    "+" | "-" => Precedence::PlusMinus,
+                    "/" | "%" => Precedence::MultiplyDivide,
                     _ => Precedence::Other,
                 },
                 Token::Eq => Precedence::Cmp,
-                Token::Star => Precedence::Times,
-                Token::DoubleColon => Precedence::DoubleColon,
-                Token::LBracket | Token::Dot => Precedence::Subscript,
+                Token::Star => Precedence::MultiplyDivide,
+                Token::Keyword(COLLATE) | Token::Keyword(AT) => Precedence::PostfixCollateAt,
+                Token::DoubleColon | Token::LBracket | Token::Dot => {
+                    Precedence::PostfixSubscriptCast
+                }
                 _ => Precedence::Zero,
             }
         } else {
@@ -2534,7 +2550,7 @@ impl<'a> Parser<'a> {
                 vec![]
             };
 
-            let body = parser.parse_query_body(Precedence::Zero)?;
+            let body = parser.parse_query_body(SetPrecedence::Zero)?;
 
             parser.parse_query_tail(ctes, body)
         })
@@ -2668,7 +2684,7 @@ impl<'a> Parser<'a> {
     ///   subquery ::= query_body [ order_by_limit ]
     ///   set_operation ::= query_body { 'UNION' | 'EXCEPT' | 'INTERSECT' } [ 'ALL' ] query_body
     /// ```
-    fn parse_query_body(&mut self, precedence: Precedence) -> Result<SetExpr, ParserError> {
+    fn parse_query_body(&mut self, precedence: SetPrecedence) -> Result<SetExpr, ParserError> {
         // We parse the expression using a Pratt parser, as in `parse_expr()`.
         // Start by parsing a restricted SELECT or a `(subquery)`:
         let expr = if self.parse_keyword(SELECT) {
@@ -2693,7 +2709,7 @@ impl<'a> Parser<'a> {
 
     fn parse_query_body_seeded(
         &mut self,
-        precedence: Precedence,
+        precedence: SetPrecedence,
         mut expr: SetExpr,
     ) -> Result<SetExpr, ParserError> {
         loop {
@@ -2702,9 +2718,9 @@ impl<'a> Parser<'a> {
             let op = self.parse_set_operator(&next_token);
             let next_precedence = match op {
                 // UNION and EXCEPT have the same binding power and evaluate left-to-right
-                Some(SetOperator::Union) | Some(SetOperator::Except) => Precedence::Plus,
+                Some(SetOperator::Union) | Some(SetOperator::Except) => SetPrecedence::UnionExcept,
                 // INTERSECT has higher precedence than UNION/EXCEPT
-                Some(SetOperator::Intersect) => Precedence::Times,
+                Some(SetOperator::Intersect) => SetPrecedence::Intersect,
                 // Unexpected token or EOF => stop parsing the query body
                 None => break,
             };
