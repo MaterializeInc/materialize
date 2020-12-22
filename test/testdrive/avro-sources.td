@@ -106,6 +106,25 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}", "c": "False", "d": "FileNotFound", "e": {"nested_data_1": {"n1_a": 43, "n1_b":{"nested_data_2": {"n2_a": 44, "n2_b": -1}}}}, "f": {"nested_data_2": {"n2_a": 45, "n2_b": -2}}}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"boolean": false}}}
 {"before": null, "after": {"row": {"a": -1, "b": 7, "json": "[1, 2, 3]", "c": "FileNotFound", "d": "True", "e": null, "f": null}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
+# We should refuse to create a source with invalid WITH options
+! CREATE MATERIALIZED SOURCE invalid_with_option
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (
+      badoption = true,
+      deduplication = 'full_in_range',
+      deduplication_pad_start = '2020-09-13 10:00:00',
+      deduplication_start = '2020-09-13 12:26:00',
+      deduplication_end = '2020-09-13 13:00:00'
+  )
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+unexpected parameters for CREATE SOURCE: badoption
+
+> SHOW SOURCES
+name
+----
+
+
 # Create a source using an inline schema.
 
 > CREATE MATERIALIZED SOURCE data_schema_inline
@@ -418,8 +437,7 @@ a b
 5 0
 8 0
 
-
-! CREATE SOURCE recurisve
+! CREATE SOURCE recursive
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'ignored'
   FORMAT AVRO USING SCHEMA '{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}'
 validating avro value schema: Recursively defined type in schema: .a

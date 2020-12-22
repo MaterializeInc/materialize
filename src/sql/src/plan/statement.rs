@@ -554,7 +554,7 @@ fn handle_alter_index_options(
 
 fn kafka_sink_builder(
     format: Option<Format>,
-    with_options: Vec<SqlOption>,
+    with_options: &mut HashMap<String, Value>,
     broker: String,
     topic_prefix: String,
     desc: RelationDesc,
@@ -577,7 +577,6 @@ fn kafka_sink_builder(
 
     let broker_addrs = broker.parse()?;
 
-    let mut with_options = normalize::options(&with_options);
     let include_consistency = match with_options.remove("consistency") {
         Some(Value::Boolean(b)) => b,
         None => false,
@@ -631,16 +630,11 @@ fn kafka_sink_builder(
 
 fn avro_ocf_sink_builder(
     format: Option<Format>,
-    with_options: Vec<SqlOption>,
     path: String,
     file_name_suffix: String,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     if format.is_some() {
         bail!("avro ocf sinks cannot specify a format");
-    }
-
-    if !with_options.is_empty() {
-        bail!("avro ocf sinks do not support WITH options");
     }
 
     let path = PathBuf::from(path);
@@ -682,6 +676,8 @@ fn handle_create_sink(
         scx.catalog.config().nonce
     );
 
+    let mut with_options = normalize::options(&with_options);
+
     let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
@@ -717,7 +713,7 @@ fn handle_create_sink(
             };
             kafka_sink_builder(
                 format,
-                with_options,
+                &mut with_options,
                 broker,
                 topic,
                 desc.clone(),
@@ -726,8 +722,15 @@ fn handle_create_sink(
             )?
         }
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
-        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, with_options, path, suffix)?,
+        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
     };
+
+    if !with_options.is_empty() {
+        bail!(
+            "unexpected parameters for CREATE SINK: {}",
+            with_options.keys().join(",")
+        )
+    }
 
     Ok(Plan::CreateSink {
         name,
@@ -1499,6 +1502,14 @@ fn handle_create_source(
         },
         desc,
     };
+
+    if !with_options.is_empty() {
+        bail!(
+            "unexpected parameters for CREATE SOURCE: {}",
+            with_options.keys().join(",")
+        )
+    }
+
     Ok(Plan::CreateSource {
         name,
         source,
