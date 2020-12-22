@@ -1891,6 +1891,12 @@ SELECT '{1}'::float4 list || '{2}'::float8 list
 query error element_type must be of class type, but received pg_catalog.pg_enum which is of class view
 CREATE TYPE tbl_list AS LIST (element_type=pg_enum)
 
+query error CREATE TYPE ... AS LIST option "element_type" cannot accept type modifier on numeric, you must use the default type
+CREATE TYPE typ_mod_list AS LIST (element_type=numeric(38,0))
+
+query error CREATE TYPE ... AS LIST option "element_type" can only use named data types, but found unnamed data type int4 list. Use CREATE TYPE to create a named type first
+CREATE TYPE unnamed_element_list AS LIST (element_type=int4 list)
+
 statement ok
 CREATE TYPE int4_list_c AS LIST (element_type = int4);
 
@@ -1922,16 +1928,16 @@ SELECT '{{1,2}}'::int4_list_list_c::text;
 ----
 {{1,2}}
 
-query error unknown catalog item 'bool list'
+query error unknown catalog item bool list
 CREATE TYPE nested_list AS LIST (element_type = 'bool list')
 
-query error unknown catalog item 'list'
-CREATE TYPE nested_list AS LIST (element_type = 'list')
+query error unknown catalog item list
+CREATE TYPE nested_list AS LIST (element_type = list)
 
 # 🔬🔬 Check each valid non-array element type
 
 statement ok
-CREATE TYPE bool_list_c AS LIST (element_type='bool');
+CREATE TYPE bool_list_c AS LIST (element_type=bool);
 
 query T
 SELECT '{true}'::bool_list_c::text
@@ -1939,7 +1945,7 @@ SELECT '{true}'::bool_list_c::text
 {t}
 
 statement ok
-CREATE TYPE int8_list_c AS LIST (element_type='int8');
+CREATE TYPE int8_list_c AS LIST (element_type=int8);
 
 query T
 SELECT '{1,2}'::int8_list_c::text
@@ -1952,7 +1958,7 @@ SELECT '{1,2}'::int4_list_c::text
 {1,2}
 
 statement ok
-CREATE TYPE text_list_c AS LIST (element_type='text');
+CREATE TYPE text_list_c AS LIST (element_type=text);
 
 query T
 SELECT '{a,b}'::text_list_c::text
@@ -1960,7 +1966,7 @@ SELECT '{a,b}'::text_list_c::text
 {a,b}
 
 statement ok
-CREATE TYPE float4_list_c AS LIST (element_type='float4');
+CREATE TYPE float4_list_c AS LIST (element_type=float4);
 
 query T
 SELECT '{1.2,2.3}'::float4_list_c::text
@@ -1968,7 +1974,7 @@ SELECT '{1.2,2.3}'::float4_list_c::text
 {1.2,2.3}
 
 statement ok
-CREATE TYPE float8_list_c AS LIST (element_type='float8');
+CREATE TYPE float8_list_c AS LIST (element_type=float8);
 
 query T
 SELECT '{1.2,2.3}'::float8_list_c::text
@@ -1976,7 +1982,7 @@ SELECT '{1.2,2.3}'::float8_list_c::text
 {1.2,2.3}
 
 statement ok
-CREATE TYPE date_list_c AS LIST (element_type='date');
+CREATE TYPE date_list_c AS LIST (element_type=date);
 
 query T
 SELECT '{2001-01-01}'::date_list_c::text
@@ -1984,7 +1990,7 @@ SELECT '{2001-01-01}'::date_list_c::text
 {2001-01-01}
 
 statement ok
-CREATE TYPE time_list_c AS LIST (element_type='time');
+CREATE TYPE time_list_c AS LIST (element_type=time);
 
 query T
 SELECT '{12:34:56}'::time_list_c::text
@@ -1992,7 +1998,7 @@ SELECT '{12:34:56}'::time_list_c::text
 {12:34:56}
 
 statement ok
-CREATE TYPE timestamp_list_c AS LIST (element_type='timestamp');
+CREATE TYPE timestamp_list_c AS LIST (element_type=timestamp);
 
 query T
 SELECT '{2001-01-01 12:34:56}'::timestamp_list_c::text
@@ -2000,7 +2006,7 @@ SELECT '{2001-01-01 12:34:56}'::timestamp_list_c::text
 {"2001-01-01 12:34:56"}
 
 statement ok
-CREATE TYPE timestamptz_list_c AS LIST (element_type='timestamptz');
+CREATE TYPE timestamptz_list_c AS LIST (element_type=timestamptz);
 
 query T
 SELECT '{2001-01-01 12:34:56}'::timestamptz_list_c::text
@@ -2008,7 +2014,7 @@ SELECT '{2001-01-01 12:34:56}'::timestamptz_list_c::text
 {"2001-01-01 12:34:56+00"}
 
 statement ok
-CREATE TYPE interval_list_c AS LIST (element_type='interval');
+CREATE TYPE interval_list_c AS LIST (element_type=interval);
 
 query T
 SELECT '{1y 2d 3h 4m}'::interval_list_c::text
@@ -2016,7 +2022,7 @@ SELECT '{1y 2d 3h 4m}'::interval_list_c::text
 {"1 year 2 days 03:04:00"}
 
 statement ok
-CREATE TYPE numeric_list_c AS LIST (element_type='numeric');
+CREATE TYPE numeric_list_c AS LIST (element_type=numeric);
 
 query T
 SELECT '{1.23,2.34}'::numeric_list_c::text
@@ -2024,7 +2030,7 @@ SELECT '{1.23,2.34}'::numeric_list_c::text
 {1,2}
 
 statement ok
-CREATE TYPE jsonb_list_c AS LIST (element_type='jsonb');
+CREATE TYPE jsonb_list_c AS LIST (element_type=jsonb);
 
 query T
 SELECT '{\{\"1\":2\}}'::jsonb_list_c::text;
@@ -2034,7 +2040,7 @@ SELECT '{\{\"1\":2\}}'::jsonb_list_c::text;
 # 🔬🔬 Check custom type name resolution
 
 statement ok
-CREATE TYPE bool AS LIST (element_type='int4')
+CREATE TYPE bool AS LIST (element_type=int4)
 
 query error invalid input syntax for bool: "\{1,2\}"
 SELECT '{1,2}'::bool;
@@ -2043,6 +2049,19 @@ query T
 SELECT '{1,2}'::public.bool::text;
 ----
 {1,2}
+
+# 🔬🔬 Check subtype resolution
+
+# Supports qualified subtypes
+statement ok
+CREATE TYPE qualified_int4_list AS LIST (element_type=pg_catalog.int4)
+
+statement ok
+CREATE TYPE qualified_qualified_int4_list AS LIST (element_type=public.qualified_int4_list)
+
+# Supports type aliases
+statement ok
+CREATE TYPE int_list AS MAP (key_type=pg_catalog.text, value_type=int)
 
 # 🔬🔬 Built-in operations
 

@@ -1690,13 +1690,25 @@ impl<'a> Parser<'a> {
             MAP => CreateTypeAs::Map,
             _ => unreachable!(),
         };
-        let with_options = self.parse_options()?;
+
+        self.expect_token(&Token::LParen)?;
+        let with_options = self.parse_comma_separated(Parser::parse_data_type_option)?;
+        self.expect_token(&Token::RParen)?;
 
         Ok(Statement::CreateType(CreateTypeStatement {
             name,
             as_type,
             with_options,
         }))
+    }
+
+    fn parse_data_type_option(&mut self) -> Result<SqlOption, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_token(&Token::Eq)?;
+        Ok(SqlOption::DataType {
+            name,
+            data_type: self.parse_data_type()?,
+        })
     }
 
     fn parse_if_exists(&mut self) -> Result<bool, ParserError> {
