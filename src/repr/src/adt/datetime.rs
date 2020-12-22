@@ -1662,8 +1662,12 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
 fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<Timezone, String> {
     use TimeStrToken::*;
     let all_formats = [
+        vec![Plus, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
+        vec![Dash, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
         vec![Plus, Num(0, 1), Colon, Num(0, 1)],
         vec![Dash, Num(0, 1), Colon, Num(0, 1)],
+        vec![Plus, Num(0, 1), Num(0, 1), Num(0, 1)],
+        vec![Dash, Num(0, 1), Num(0, 1), Num(0, 1)],
         vec![Plus, Num(0, 1), Num(0, 1)],
         vec![Dash, Num(0, 1), Num(0, 1)],
         vec![Plus, Num(0, 1)],
@@ -1675,6 +1679,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
     let mut is_positive = true;
     let mut hour_offset: Option<i64> = None;
     let mut minute_offset: Option<i64> = None;
+    let mut second_offset: Option<i64> = None;
 
     for format in all_formats.iter() {
         let actual = tokens.iter();
@@ -1691,23 +1696,21 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                 }
                 (Num(val, _), Num(_, _)) => {
                     let val = *val;
-                    match (hour_offset, minute_offset) {
-                        (None, None) => {
-                            if val <= 24 {
-                                hour_offset = Some(val as i64);
+                    match (hour_offset, minute_offset, second_offset) {
+                        (None, None, None) => {
+                            // Postgres allows timezones in the range -15:59:59..15:59:59
+                            if val <= 15 {
+                                hour_offset = Some(val);
                             } else {
-                                // We can return an error here because in all the
-                                // formats with numbers we require the first number
-                                // to be an hour and we require it to be <= 24
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone hour invalid {}",
                                     value, val
                                 ));
                             }
                         }
-                        (Some(_), None) => {
-                            if val <= 60 {
-                                minute_offset = Some(val as i64);
+                        (Some(_), None, None) => {
+                            if val < 60 {
+                                minute_offset = Some(val);
                             } else {
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone minute invalid {}",
@@ -1715,15 +1718,25 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                                 ));
                             }
                         }
-                        // We've already seen an hour and a minute so we should
+                        (Some(_), Some(_), None) => {
+                            if val < 60 {
+                                second_offset = Some(val);
+                            } else {
+                                return Err(format!(
+                                    "Invalid timezone string ({}): timezone second invalid {}",
+                                    value, val
+                                ));
+                            }
+                        }
+                        // We've already seen an hour a minute and a second so we should
                         // never see another number
-                        (Some(_), Some(_)) => {
+                        (Some(_), Some(_), Some(_)) => {
                             return Err(format!(
                                 "Invalid timezone string ({}): invalid value {} at token index {}",
                                 value, val, i
                             ))
                         }
-                        (None, Some(_)) => unreachable!("parsed a minute before an hour!"),
+                        _ => unreachable!("parsed a minute before an hour!"),
                     }
                 }
                 (Zulu, Zulu) => return Ok(Default::default()),
@@ -1744,6 +1757,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                     is_positive = true;
                     hour_offset = None;
                     minute_offset = None;
+                    second_offset = None;
                     break;
                 }
             }
@@ -1755,6 +1769,10 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
 
             if let Some(minute_offset) = minute_offset {
                 tz_offset_second += minute_offset * 60;
+            }
+
+            if let Some(second_offset) = second_offset {
+                tz_offset_second += second_offset;
             }
 
             let offset = if is_positive {
@@ -3203,12 +3221,14 @@ mod test {
             ("+0000001:000000", F(FixedOffset::east(3600))),
             ("+0000000:000001", F(FixedOffset::east(60))),
             ("+0000001:000001", F(FixedOffset::east(3660))),
+            ("+0000001:000001:000001", F(FixedOffset::east(3661))),
             ("+4:00", F(FixedOffset::east(14400))),
             ("-4:00", F(FixedOffset::west(14400))),
             ("+2:30", F(FixedOffset::east(9000))),
             ("-5:15", F(FixedOffset::west(18900))),
             ("+0:20", F(FixedOffset::east(1200))),
             ("-0:20", F(FixedOffset::west(1200))),
+            ("+0:0:20", F(FixedOffset::east(20))),
             ("+5", F(FixedOffset::east(18000))),
             ("-5", F(FixedOffset::west(18000))),
             ("+05", F(FixedOffset::east(18000))),
@@ -3222,6 +3242,7 @@ mod test {
             ("+15", F(FixedOffset::east(54000))),
             ("-15", F(FixedOffset::west(54000))),
             ("+1515", F(FixedOffset::east(54900))),
+            ("+15:15:15", F(FixedOffset::east(54915))),
             ("+015", F(FixedOffset::east(900))),
             ("-015", F(FixedOffset::west(900))),
             ("+0015", F(FixedOffset::east(900))),
@@ -3252,8 +3273,8 @@ mod test {
 
         let failure_test_cases = [
             "+25:00", "+120:00", "+0:61", "+0:500", " 12:30", "+-12:30", "+2525", "+2561",
-            "+255900", "+25", "+5::30", "+5:30:", "+5:30:16", "+5:", "++5:00", "--5:00", " UTC",
-            "a", "zzz", "ZZZ", "ZZ Top", " +", " -", " ", "1", "12", "1234",
+            "+255900", "+25", "+5::30", "+5:30:", "+5:", "++5:00", "--5:00", " UTC", "a", "zzz",
+            "ZZZ", "ZZ Top", " +", " -", " ", "1", "12", "1234", "+16", "-17", "-14:60", "1:30:60",
         ];
 
         for test in failure_test_cases.iter() {
