@@ -29,6 +29,18 @@ goofus,gallant
 > CREATE MATERIALIZED VIEW v3 AS
   SELECT a || b AS c FROM src
 
+# We should refuse to create a sink with invalid WITH options
+
+! CREATE SINK invalid_with_option FROM src
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
+  WITH (concurrency=true, badoption=true)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+unexpected parameters for CREATE SINK: badoption
+
+> SHOW SINKS
+name
+----
+
 # We should refuse to create a sink with an invalid schema registry URL.
 # We use the Kafka address as the invalid schema registry address, as it is
 # known to immediately produce an error. Previous attempts used

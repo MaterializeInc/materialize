@@ -554,7 +554,7 @@ fn handle_alter_index_options(
 
 fn kafka_sink_builder(
     format: Option<Format>,
-    with_options: Vec<SqlOption>,
+    with_options: &mut HashMap<String, Value>,
     broker: String,
     topic_prefix: String,
     desc: RelationDesc,
@@ -577,7 +577,6 @@ fn kafka_sink_builder(
 
     let broker_addrs = broker.parse()?;
 
-    let mut with_options = normalize::options(&with_options);
     let include_consistency = match with_options.remove("consistency") {
         Some(Value::Boolean(b)) => b,
         None => false,
@@ -607,11 +606,11 @@ fn kafka_sink_builder(
         None
     };
 
-    let config_options = kafka_util::extract_config(&with_options)?;
+    let config_options = kafka_util::extract_config(with_options)?;
     let ccsr_config = kafka_util::generate_ccsr_client_config(
         schema_registry_url.clone(),
         &config_options,
-        &ccsr_with_options,
+        ccsr_with_options,
     )?;
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
@@ -631,16 +630,11 @@ fn kafka_sink_builder(
 
 fn avro_ocf_sink_builder(
     format: Option<Format>,
-    with_options: Vec<SqlOption>,
     path: String,
     file_name_suffix: String,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     if format.is_some() {
         bail!("avro ocf sinks cannot specify a format");
-    }
-
-    if !with_options.is_empty() {
-        bail!("avro ocf sinks do not support WITH options");
     }
 
     let path = PathBuf::from(path);
@@ -682,6 +676,8 @@ fn handle_create_sink(
         scx.catalog.config().nonce
     );
 
+    let mut with_options = normalize::options(&with_options);
+
     let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
@@ -717,7 +713,7 @@ fn handle_create_sink(
             };
             kafka_sink_builder(
                 format,
-                with_options,
+                &mut with_options,
                 broker,
                 topic,
                 desc.clone(),
@@ -726,8 +722,15 @@ fn handle_create_sink(
             )?
         }
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
-        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, with_options, path, suffix)?,
+        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
     };
+
+    if !with_options.is_empty() {
+        bail!(
+            "unexpected parameters for CREATE SINK: {}",
+            with_options.keys().join(",")
+        )
+    }
 
     Ok(Plan::CreateSink {
         name,
@@ -1079,11 +1082,11 @@ fn handle_create_source(
                     } => {
                         let url: Url = url.parse()?;
                         let kafka_options =
-                            kafka_util::extract_config(&normalize::options(with_options))?;
+                            kafka_util::extract_config(&mut normalize::options(with_options))?;
                         let ccsr_config = kafka_util::generate_ccsr_client_config(
                             url,
                             &kafka_options,
-                            &normalize::options(ccsr_options),
+                            normalize::options(ccsr_options),
                         )?;
 
                         if let Some(seed) = seed {
@@ -1161,7 +1164,7 @@ fn handle_create_source(
 
     let (external_connector, mut encoding) = match connector {
         Connector::Kafka { broker, topic, .. } => {
-            let config_options = kafka_util::extract_config(&with_options)?;
+            let config_options = kafka_util::extract_config(&mut with_options)?;
 
             consistency = match with_options.remove("consistency") {
                 None => Consistency::RealTime,
@@ -1239,7 +1242,12 @@ fn handle_create_source(
 
             let region: Region = match arn.region {
                 Some(region) => match region.parse() {
-                    Ok(region) => region,
+                    Ok(region) => {
+                        // ignore the endpoint option if we're pointing at a
+                        // valid, non-custom AWS region
+                        with_options.remove("endpoint");
+                        region
+                    }
                     Err(e) => {
                         // Region's fromstr doesn't support parsing custom regions.
                         // If a Kinesis stream's ARN indicates it exists in a custom
@@ -1499,6 +1507,14 @@ fn handle_create_source(
         },
         desc,
     };
+
+    if !with_options.is_empty() {
+        bail!(
+            "unexpected parameters for CREATE SOURCE: {}",
+            with_options.keys().join(",")
+        )
+    }
+
     Ok(Plan::CreateSource {
         name,
         source,
