@@ -31,5 +31,4 @@ uuid = "0.8"
 
 [dev-dependencies]
 criterion = "0.3"
-rand = "0.7.3"
-rand_chacha = "0.2.2"
+rand = "0.8.0"
