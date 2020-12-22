@@ -1592,13 +1592,13 @@ impl DebeziumDeduplicationState {
                             if let Some(upstream_time_millis) = upstream_time_millis {
                                 if upstream_time_millis < range.pad_start {
                                     if *started_padding {
-                                        warn!("went back to before padding start, after entering padding\
+                                        warn!("went back to before padding start, after entering padding \
                                                source={}:{} message_time={} messages_processed={}",
                                               debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
                                               self.messages_processed);
                                     }
                                     if *started {
-                                        warn!("went back to before padding start, after entering full dedupe\
+                                        warn!("went back to before padding start, after entering full dedupe \
                                                source={}:{} message_time={} messages_processed={}",
                                               debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
                                               self.messages_processed);
@@ -1611,7 +1611,7 @@ impl DebeziumDeduplicationState {
                                     // in the padding time range
                                     *started_padding = true;
                                     if *started {
-                                        warn!("went back to before padding start, after entering full dedupe\
+                                        warn!("went back to before padding start, after entering full dedupe \
                                                source={}:{} message_time={} messages_processed={}",
                                               debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
                                               self.messages_processed);
