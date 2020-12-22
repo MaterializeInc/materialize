@@ -72,7 +72,7 @@ Field | Value | Description
 `sasl_kerberos_keytab` | `text` | The absolute path to your keytab.
 `sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket.
 `sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0.
-`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required for any SASL authentication (`sasl_plaintext`, `scram-sha-256`, or `scram-sha-512`.
+`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required for any SASL authentication (`sasl_plaintext`, `scram-sha-256`, or `scram-sha-512`).
 `sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`.
 `sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanism is `'GSSAPI'`.
 
