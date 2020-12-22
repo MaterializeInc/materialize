@@ -72,7 +72,7 @@ SELECT TIMESTAMPTZ '2007-02-01 00:00:00+5:30:16';
 statement error timezone interval must not contain months or years
 SELECT timezone(INTERVAL '+11'MONTH, TIME '18:53:49')
 
-statement error invalid input syntax for timestamptz: Invalid timezone string \(\+16:60\): timezone hour out of range 16
+statement error invalid input syntax for timestamptz: Invalid timezone string \(\+16:60\): timezone hour invalid 16
 SELECT TIMESTAMPTZ '2020-01-01 00:00:00+16:60'
 
 # TODO: Postgres returns 2020-03-08 07:00:00+00 for both 02:00:00 and 03:00:00, chrono-tz refuses.
