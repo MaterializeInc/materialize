@@ -20,7 +20,8 @@
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    ColumnDef, Connector, Envelope, Expr, Format, Ident, ObjectName, Query, TableConstraint, Value,
+    ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, ObjectName, Query,
+    TableConstraint, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -1166,6 +1167,10 @@ pub enum SqlOption {
         name: Ident,
         object_name: ObjectName,
     },
+    DataType {
+        name: Ident,
+        data_type: DataType,
+    },
 }
 
 impl SqlOption {
@@ -1173,6 +1178,7 @@ impl SqlOption {
         match self {
             SqlOption::Value { name, .. } => name,
             SqlOption::ObjectName { name, .. } => name,
+            SqlOption::DataType { name, .. } => name,
         }
     }
 }
@@ -1189,6 +1195,11 @@ impl AstDisplay for SqlOption {
                 f.write_node(name);
                 f.write_str(" = ");
                 f.write_node(object_name);
+            }
+            SqlOption::DataType { name, data_type } => {
+                f.write_node(name);
+                f.write_str(" = ");
+                f.write_node(data_type);
             }
         }
     }
