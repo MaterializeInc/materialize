@@ -89,7 +89,25 @@ impl Config {
     }
 }
 
-fn extract(
+fn remove_and_validate(
+    input: &mut HashMap<String, Value>,
+    configs: &[Config],
+) -> Result<HashMap<String, String>, anyhow::Error> {
+    let mut out = HashMap::new();
+    for config in configs {
+        let value = match input.remove(config.name) {
+            Some(v) => match config.validate_val(&v) {
+                Ok(v) => v,
+                Err(e) => bail!("Invalid WITH option {}={}: {}", config.name, v, e),
+            },
+            None => continue,
+        };
+        out.insert(config.get_key(), value);
+    }
+    Ok(out)
+}
+
+fn get_and_validate(
     input: &HashMap<String, Value>,
     configs: &[Config],
 ) -> Result<HashMap<String, String>, anyhow::Error> {
@@ -117,9 +135,9 @@ fn extract(
 /// - If any of the values in `with_options` are not
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
-    with_options: &HashMap<String, Value>,
+    with_options: &mut HashMap<String, Value>,
 ) -> Result<HashMap<String, String>, anyhow::Error> {
-    extract(
+    remove_and_validate(
         with_options,
         &[
             Config::string("client_id"),
@@ -283,7 +301,7 @@ pub fn generate_ccsr_client_config(
         ),
     }
 
-    let mut ccsr_options = extract(
+    let mut ccsr_options = get_and_validate(
         ccsr_options,
         &[Config::string("username"), Config::string("password")],
     )?;
