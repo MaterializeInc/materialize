@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.34"
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 comm = { path = "../comm" }
 expr = { path = "../expr" }
 fallible-iterator = "0.2"

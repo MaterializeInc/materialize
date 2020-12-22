@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.34"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 log = "0.4.11"

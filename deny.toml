@@ -4,20 +4,26 @@ skip = [
     # Do not add to this list without good reason! Duplicate dependencies slow
     # down compilation and bloat the binary.
 
-    # Waiting for approximately the entire Rust ecosystem to upgrade to
-    # v1.0.0.
+    # Waiting for clap to upgrade to v0.12.
+    { name = "ansi_term", version = "0.11.0" },
+
+    # Waiting for approximately the entire Rust ecosystem to upgrade to v1.0.
     { name = "cfg-if", version = "0.1.0" },
 
     # Waiting on mio 0.7: https://github.com/tokio-rs/tokio/issues/1190.
     { name = "miow", version = "0.2.1" },
     { name = "winapi", version = "0.2.8" },
 
-    # Waiting on chrono to migrate to time v0.2.
-    { name = "time", version = "0.1.42" },
-
-    # Waiting on Rusoto to upgrade to pin-project v1.0.
+    # Waiting on Tokio v0.3 ecosystem.
+    { name = "crypto-mac", version = "0.9.1" },
+    { name = "hmac", version = "0.9.0" },
+    { name = "pin-project-lite", version = "0.1.4" },
     { name = "pin-project", version = "0.4.22" },
     { name = "pin-project-internal", version = "0.4.22" },
+    { name = "rustc_version", version = "0.2.3" },
+    { name = "semver", version = "0.9.0" },
+    { name = "semver-parser", version = "0.7.0" },
+    { name = "serde_urlencoded", version = "0.6.1" },
 
     # Waiting on at least tempfile, phf, postgres, and uuid to upgrade to rand
     # v0.8.

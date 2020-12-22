@@ -47,7 +47,7 @@ rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features =
 repr = { path = "../repr" }
 reqwest = { version = "0.10.8", features = ["json"] }
 rlimit = "0.5.3"
-semver = "0.9"
+semver = "0.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 shell-words = "1.0"
@@ -59,12 +59,14 @@ tempfile = "3.1"
 tokio = { version = "0.2", features = ["sync"] }
 tokio-openssl = "0.4.0"
 tracing = "0.1.21"
-tracing-subscriber = "0.2.7"
+# TODO(benesch): we can use the default features here once tracing-subscriber
+# does not enable chrono's "oldtime" feature.
+tracing-subscriber = { version = "0.2.7", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
 url = "2"
 
 [dev-dependencies]
 assert_cmd = "1.0.2"
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 datadriven = "0.4"
 fallible-iterator = "0.2.0"
 itertools = "0.9"

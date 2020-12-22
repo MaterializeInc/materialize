@@ -34,9 +34,9 @@ rand = "0.8.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
 regex = "1.4.1"
 repr = { path = "../repr" }
-rusoto_core = "0.45.0"
-rusoto_credential = "0.45.0"
-rusoto_kinesis = "0.45.0"
+mz_rusoto_core = "0.46.0"
+mz_rusoto_credential = "0.46.0"
+mz_rusoto_kinesis = "0.46.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.60"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }

@@ -8,11 +8,11 @@ publish = false
 [dependencies]
 aho-corasick = "0.7.15"
 anyhow = "1.0"
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 csv = "1.1"
 encoding = "0.2"
 enum-iterator = "0.6.0"
-hmac = "0.8.1"
+hmac = "0.10.0"
 itertools = "0.9"
 md-5 = "0.9"
 num_enum = "0.5.1"
