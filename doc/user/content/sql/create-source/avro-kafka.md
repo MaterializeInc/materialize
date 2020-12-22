@@ -107,7 +107,7 @@ This creates a source that...
   `localhost:9092`.
 - Is append-only.
 
-### Connecting to a Kafka broker using SASL PLAIN authentication
+### Connecting to a Kafka broker using SASL authentication
 
 ```sql
 CREATE MATERIALIZED SOURCE data_v1

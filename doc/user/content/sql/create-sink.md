@@ -53,7 +53,7 @@ Field | Value type | Description
 #### SSL `WITH` options
 
 Use the following options to connect Materialize to an SSL-encrypted Kafka
-cluster.
+cluster. For more detail, see [SSL-encrypted Kafka details](/sql/create-source/avro-kafka/#ssl-encrypted-kafka-details).
 
 Field | Value | Description
 ------|-------|------------
@@ -64,18 +64,20 @@ Field | Value | Description
 
 #### Kerberos `WITH` options
 
-Use the following options to connect Materialize to a Kerberized Kafka
-cluster.
+Use the following options to connect Materialize using SASL.
+
+For more detail, see [Kerberized Kafka details](/sql/create-source/avro-kafka/#kerberized-kafka-details).
 
 Field | Value | Description
 ------|-------|------------
-`sasl_kerberos_keytab` | `text` | The absolute path to your keytab.
-`sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket.
-`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0.
-`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required for `sasl_plaintext`.
-`sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`.
-`sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanism is `'GSSAPI'`.
-
+`sasl_mechanism` | `text` | The authentication method used for SASL connections. Required if `security_protocol` is `sasl_plain` or `sasl_ssl`. Supported mechanisms are `gssapi`, `plain`, `scram-sha-256`, `scram-sha-512`, `oauthbearer`.
+`sasl_username` | `text` | Your SASL username. Required if `sasl_mechanism` is `plain`, `scram-sha-256`, or `scram-sha-512`.
+`sasl_password` | `text` | Your SASL password. Required if `sasl_mechanism` is `plain`, `scram-sha-256`, or `scram-sha-512`.
+`sasl_kerberos_keytab` | `text` | The absolute path to your keytab. Required if `sasl_mechanism` is `gssapi`.
+`sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanism` is `gssapi`.
+`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanism` is `gssapi`.
+`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required if `sasl_mechanism` is `gssapi`.
+`sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanism` is `gssapi`.
 
 ### `AS OF`
 
