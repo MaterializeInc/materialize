@@ -30,7 +30,7 @@ ore = { path = "../ore" }
 pdqselect = "0.1.0"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prometheus.git" }
-rand = "0.7.3"
+rand = "0.8.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
 regex = "1.4.1"
 repr = { path = "../repr" }

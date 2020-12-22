@@ -43,7 +43,7 @@ use repr::{
     Timestamp,
 };
 
-use crate::catalog::CatalogItemType;
+use crate::catalog::{Catalog, CatalogItemType};
 use crate::names::PartialName;
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -56,7 +56,6 @@ use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
-use crate::plan::Catalog;
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
@@ -1878,7 +1877,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
         // Generalized functions, operators, and casts.
         Expr::Op { op, expr1, expr2 } => plan_op(ecx, op, expr1, expr2.as_deref())?.into(),
         Expr::Cast { expr, data_type } => {
-            let to_scalar_type = scalar_type_from_sql(data_type)?;
+            let to_scalar_type = scalar_type_from_sql(ecx.qcx.scx, data_type)?;
             let expr = match &**expr {
                 // Special case a direct cast of an ARRAY or LIST expression so
                 // we can pass in the target type as a type hint. This is
@@ -2581,76 +2580,120 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
     equivalences
 }
 
-pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::Error> {
-    // `DataType`s that get translated into the same `ScalarType` have different
-    // functionality within symbiosis. Because of the relationship with
-    // symbiosis, this function should stay in sync with
-    // symbiosis::push_column.catalog.
+pub fn scalar_type_from_sql(
+    scx: &StatementContext,
+    data_type: &DataType,
+) -> Result<ScalarType, anyhow::Error> {
     Ok(match data_type {
-        DataType::Array(elem_type) => ScalarType::Array(Box::new(scalar_type_from_sql(elem_type)?)),
-        // Differentiated from `DataType::Other("text")` by impact within symbiosis.
-        DataType::Char(_) | DataType::Varchar(_) => ScalarType::String,
-        DataType::Decimal(precision, scale) => {
-            let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
-            let scale = scale.unwrap_or(0);
-            if precision > MAX_DECIMAL_PRECISION.into() {
-                bail!(
-                    "decimal precision {} exceeds maximum precision {}",
-                    precision,
-                    MAX_DECIMAL_PRECISION
-                );
-            }
-            if scale > precision {
-                bail!("decimal scale {} exceeds precision {}", scale, precision);
-            }
-            ScalarType::Decimal(precision as u8, scale as u8)
+        DataType::Array(elem_type) => {
+            ScalarType::Array(Box::new(scalar_type_from_sql(scx, &elem_type)?))
         }
-        DataType::Float(Some(p)) if *p < 25 => ScalarType::Float32,
-        DataType::Float(p) => {
-            if let Some(p) = p {
-                if *p > 53 {
-                    bail!("precision for type float must be less than 54 bits")
-                }
-            }
-            ScalarType::Float64
+        DataType::List(elem_type) => {
+            ScalarType::List(Box::new(scalar_type_from_sql(scx, &elem_type)?))
         }
-        DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
         DataType::Map {
             key_type,
             value_type,
         } => {
-            match scalar_type_from_sql(&key_type)? {
+            match scalar_type_from_sql(scx, &key_type)? {
                 ScalarType::String => {}
                 other => bail!("map key type must be text, got {}", other),
-            };
+            }
             ScalarType::Map {
-                value_type: Box::new(scalar_type_from_sql(value_type)?),
+                value_type: Box::new(scalar_type_from_sql(scx, &value_type)?),
             }
         }
-        DataType::Other(n) => match n.as_str() {
-            "bool" | "boolean" => ScalarType::Bool,
-            "bytea" | "bytes" => ScalarType::Bytes,
-            "date" => ScalarType::Date,
-            "float4" | "real" => ScalarType::Float32,
-            "float8" => ScalarType::Float64,
-            "interval" => ScalarType::Interval,
-            // Differentiated from one another by impact within symbiosis.
-            "int" | "integer" | "int4" | "smallint" => ScalarType::Int32,
-            "bigint" | "int8" => ScalarType::Int64,
-            "json" | "jsonb" => ScalarType::Jsonb,
-            "oid" => ScalarType::Oid,
-            "uuid" => ScalarType::Uuid,
-            "string" | "text" => ScalarType::String,
-            "time" => ScalarType::Time,
-            "timestamp" => ScalarType::Timestamp,
-            "timestamptz" => ScalarType::TimestampTz,
-            "timetz" => bail!(
-                "TIMETZ is not supported \
-            https://wiki.postgresql.org/wiki/Don%27t_Do_This#Don.27t_use_timetz"
-            ),
-            _ => bail!("type \"{}\" does not exist", n),
-        },
+        DataType::Other { name, typ_mod } => {
+            // Rewrite some unqualified aliases to the name we know they should
+            // use in the catalog, i.e. canonicalize the catalog name.
+            let canonical_name = match name.to_string().as_str() {
+                "char" | "varchar" => ObjectName::unqualified("text"),
+                "json" => ObjectName::unqualified("jsonb"),
+                "smallint" => ObjectName::unqualified("int4"),
+                _ => name.clone(),
+            };
+            let canonical_name = normalize::object_name(canonical_name)?;
+            let item = match scx.catalog.resolve_item(&canonical_name) {
+                Ok(i) => i,
+                Err(_) => bail!("type \"{}\" does not exist", name),
+            };
+            match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
+                Some(t) => match t {
+                    ScalarType::Decimal(..) => {
+                        let (precision, scale) = unwrap_numeric_typ_mod(typ_mod)?;
+                        ScalarType::Decimal(precision, scale)
+                    }
+                    ScalarType::String => {
+                        match name.to_string().as_str() {
+                            n @ "char" | n @ "varchar" => {
+                                validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
+                            }
+                            _ => {}
+                        }
+                        ScalarType::String
+                    }
+                    t => {
+                        validate_typ_mod(&name.to_string(), &typ_mod, &[])?;
+                        t
+                    }
+                },
+                None => bail!("type \"{}\" does not exist", name),
+            }
+        }
     })
+}
+
+/// Returns the first two values provided as typ_mods as `u8`, which are
+/// appropriate values to associate with `ScalarType::Decimal`'s values,
+/// precision and scale.
+///
+/// Note that this function assumes you have already determined that
+/// `data_type.name` should resolve to `ScalarType::Decimal`.
+pub fn unwrap_numeric_typ_mod(typ_mod: &[u64]) -> Result<(u8, u8), anyhow::Error> {
+    let max_precision = u64::from(MAX_DECIMAL_PRECISION);
+    validate_typ_mod(
+        "numeric",
+        &typ_mod,
+        &[("precision", 1, max_precision), ("scale", 0, max_precision)],
+    )?;
+
+    // Poor man's VecDeque
+    let (precision, scale) = match typ_mod.len() {
+        0 => (MAX_DECIMAL_PRECISION, 0),
+        1 => (typ_mod[0] as u8, 0),
+        2 => (typ_mod[0] as u8, typ_mod[1] as u8),
+        _ => unreachable!(),
+    };
+
+    if scale > precision {
+        bail!("numeric scale {} exceeds precision {}", scale, precision);
+    }
+
+    Ok((precision, scale))
+}
+
+fn validate_typ_mod(
+    name: &str,
+    typ_mod: &[u64],
+    val_ranges: &[(&str, u64, u64)],
+) -> Result<(), anyhow::Error> {
+    if typ_mod.len() > val_ranges.len() {
+        bail!("invalid {} type modifier", name)
+    }
+
+    for (v, range) in typ_mod.iter().zip(val_ranges.iter()) {
+        if v < &range.1 || v > &range.2 {
+            bail!(
+                "{} for type {} must be within [{}-{}], have {}",
+                range.0,
+                name,
+                range.1,
+                range.2,
+                v,
+            )
+        }
+    }
+    Ok(())
 }
 
 pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Error> {

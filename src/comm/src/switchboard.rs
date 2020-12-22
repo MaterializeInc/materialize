@@ -78,7 +78,7 @@ impl Switchboard<UnixStream> {
     pub fn local() -> Result<Switchboard<UnixStream>, io::Error> {
         let mut rng = rand::thread_rng();
         let suffix: String = (0..6)
-            .map(|_| rng.sample(rand::distributions::Alphanumeric))
+            .map(|_| char::from(rng.sample(rand::distributions::Alphanumeric)))
             .collect();
         let mut path = std::env::temp_dir();
         path.push(format!("comm.switchboard.{}", suffix));

@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::RelationDesc;
+use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::Expr;
 use sql::catalog::CatalogError as SqlCatalogError;
@@ -382,12 +382,53 @@ impl CatalogEntry {
     }
 }
 
+const CATALOG_CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), Error>] = &[
+    // Reparses and rewrites all catalog items, which was necessary
+    // because we began qualifying type names.
+    //
+    // Introduced for v0.6.1
+    |catalog: &mut Catalog| {
+        let mut storage = catalog.storage();
+        let items = storage.load_items()?;
+        let tx = storage.transaction()?;
+        for (id, name, def) in items {
+            let item = match catalog.deserialize_item(def) {
+                Ok(item) => item,
+                Err(e) => {
+                    return Err(Error::new(ErrorKind::Corruption {
+                        detail: format!("failed to deserialize item {} ({}): {}", id, name, e),
+                    }))
+                }
+            };
+            let serialized_item = catalog.serialize_item(&item);
+            tx.update_item(id, &name.item, &serialized_item)?;
+        }
+        tx.commit()?;
+        Ok(())
+    },
+    // Add new migrations here.
+    //
+    // Migrations should be preceded with a comment of the following form:
+    //
+    //     > Short summary of migration's purpose.
+    //     >
+    //     > Introduced in <VERSION>.
+    //     >
+    //     > Optional additional commentary about safety or approach.
+    //
+    // Please include @benesch on any code reviews that add or edit migrations.
+    // Migrations must preserve backwards compatibility with all past releases
+    // of materialized. Migrations can be edited up until they ship in a
+    // release, after which they must never be removed, only patched by future
+    // migrations.
+];
+
 impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
     ///
     /// Returns the catalog and a list of events that describe the initial state
     /// of the catalog.
-    pub fn open(config: Config) -> Result<(Catalog, Vec<Event>), Error> {
+    pub fn open(config: &Config) -> Result<(Catalog, Vec<Event>), Error> {
         let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
 
         let mut catalog = Catalog {
@@ -403,7 +444,7 @@ impl Catalog {
                 nonce: rand::random(),
                 experimental_mode,
                 cluster_id,
-                cache_directory: config.cache_directory,
+                cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
             },
         };
@@ -623,7 +664,19 @@ impl Catalog {
             events.push(catalog.insert_item(id, oid, name, item));
         }
 
-        Ok((catalog, events))
+        let catalog_content_version = catalog.storage().get_catalog_content_version()?;
+
+        if CATALOG_CONTENT_MIGRATIONS.len() > catalog_content_version {
+            CATALOG_CONTENT_MIGRATIONS[catalog_content_version](&mut catalog)?;
+            catalog
+                .storage()
+                .set_catalog_content_version(catalog_content_version + 1)?;
+            // Reopen catalog with new contents to ensure on-disk and in-memory
+            // state remain synchronized.
+            Catalog::open(config)
+        } else {
+            Ok((catalog, events))
+        }
     }
 
     /// Opens the catalog at `path` with parameters set appropriately for debug
@@ -633,7 +686,7 @@ impl Catalog {
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
     pub fn open_debug(path: &Path) -> Result<Catalog, anyhow::Error> {
-        let (catalog, _) = Self::open(Config {
+        let (catalog, _) = Self::open(&Config {
             path,
             enable_logging: true,
             experimental_mode: None,
@@ -1804,8 +1857,14 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn type_exists(&self, name: &FullName) -> bool {
+    fn item_exists(&self, name: &FullName) -> bool {
         self.catalog.try_get(name, self.conn_id).is_some()
+    }
+
+    fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType> {
+        let entry = self.catalog.get_by_id(id);
+        let t = pgrepr::Type::from_oid(entry.oid())?;
+        Some(t.to_scalar_type_lossy())
     }
 
     fn config(&self) -> &sql::catalog::CatalogConfig {

@@ -23,7 +23,7 @@ ordered-float = { version = "2.0.0", features = ["serde"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-rand = "0.7"
+rand = "0.8"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
 tokio = "0.2"

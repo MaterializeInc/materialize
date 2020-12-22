@@ -354,3 +354,26 @@ query T
 SELECT 10.5::decimal(38, 3) = 10.50::decimal(20,1)
 ----
 true
+
+# Invalid type mods
+
+query error numeric scale 2 exceeds precision 1
+SELECT '0.2'::decimal(1, 2);
+
+query error precision for type numeric must be within \[1-38\], have 50
+SELECT '0.2'::decimal(50);
+
+query error precision for type numeric must be within \[1-38\], have 0
+SELECT '0.2'::decimal(0);
+
+query error precision for type numeric must be within \[1-38\], have 50
+SELECT '0.2'::decimal(50, 0);
+
+query error precision for type numeric must be within \[1-38\], have 0
+SELECT '0.2'::decimal(0, 0);
+
+query error scale for type numeric must be within \[0-38\], have 50
+SELECT '0.2'::decimal(1, 50);
+
+query error invalid numeric type modifier
+SELECT '0.2'::decimal(1,1,1)

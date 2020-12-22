@@ -51,3 +51,11 @@ SELECT '2e40'::float8
 
 query error float out of range
 SELECT '2e40'::float8::float4
+
+# Invalid type mods
+
+query error precision for type float must be within ([1-53])
+SELECT 1::float(0);
+
+query error precision for type float must be within ([1-53])
+SELECT 1::float(55);

@@ -217,12 +217,19 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
 
         Statement::CreateTable(CreateTableStatement {
             name,
-            columns: _,
+            columns,
             constraints: _,
             with_options: _,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;
+            let mut normalizer = QueryNormalizer::new(scx);
+            for c in columns {
+                normalizer.visit_column_def_mut(c);
+            }
+            if let Some(err) = normalizer.err {
+                return Err(err);
+            }
             *if_not_exists = false;
         }
 
@@ -300,7 +307,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
                     } => {
                         *option = SqlOption::ObjectName {
                             name: name.clone(),
-                            object_name: resolve_item(&ObjectName(vec![Ident::new(val.clone())]))?,
+                            object_name: resolve_item(&ObjectName::unqualified(&val))?,
                         }
                     }
                     _ => (),

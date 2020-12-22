@@ -44,9 +44,9 @@ fn bench_format_list_nested(c: &mut Criterion) {
     ];
     let list: Vec<Vec<Vec<String>>> = (0..8)
         .map(|_| {
-            (0..rng.gen_range(0, 16))
+            (0..rng.gen_range(0..16))
                 .map(|_| {
-                    (1..rng.gen_range(0, 16))
+                    (1..rng.gen_range(0..16))
                         .map(|_| STRINGS.choose(&mut rng).unwrap())
                         .map(|s| (*s).to_owned())
                         .collect()
