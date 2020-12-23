@@ -1849,3 +1849,8 @@ SELECT LIST[[[1]]] || LIST[2]
 # Literal text cannot be implicitly cast to list
 query error no overload for i32 list || string: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT LIST[1] || '{2}'::text
+
+# 🔬 CREATE TYPE .. AS LIST
+
+query error element_type must be data type
+CREATE TYPE tbl_list AS LIST (element_type=pg_enum)
