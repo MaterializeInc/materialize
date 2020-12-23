@@ -10,7 +10,8 @@
 
 set -euo pipefail
 
-project=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+project=$(pwd)
 
 snapshot_dir="${HOME}/materialize/benchmark_data/chbench"
 
