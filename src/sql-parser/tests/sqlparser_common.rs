@@ -126,6 +126,9 @@ fn op_precedence() -> Result<(), Box<dyn Error>> {
         ("NOT 1 NOT BETWEEN 1 AND 2", "NOT (1 NOT BETWEEN 1 AND 2)"),
         ("NOT a NOT LIKE b", "NOT (a NOT LIKE b)"),
         ("NOT a NOT IN ('a')", "NOT (a NOT IN ('a'))"),
+        ("+ a / b COLLATE coll", "(+a) / (b COLLATE coll)"),
+        ("- ts AT TIME ZONE 'tz'", "(-ts) AT TIME ZONE 'tz'"),
+        ("a[b].c::d", "((a[b]).c)::d"),
     ] {
         let left = parser::parse_expr(actual)?;
         let mut right = parser::parse_expr(expected)?;

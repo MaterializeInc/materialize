@@ -10,7 +10,7 @@ anyhow = "1.0.34"
 aws-arn = "0.1.1"
 build-info = { path = "../build-info" }
 ccsr = { path = "../ccsr" }
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 futures = "0.3"
@@ -26,7 +26,7 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 regex = "1.4.1"
 repr = { path = "../repr" }
 reqwest = { version = "0.10.8" }
-rusoto_core = "0.45.0"
+mz_rusoto_core = "0.46.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sql-parser = { path = "../sql-parser" }
