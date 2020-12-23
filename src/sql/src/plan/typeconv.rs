@@ -295,7 +295,9 @@ lazy_static! {
                 let ty = from_type.clone();
                 Some(|e: ScalarExpr| e.call_unary(CastListToString { ty }))
             }),
-            (List, List) => Assignment: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+            // (List, List) is typically only available with CastContext::Assignment,
+            // except for special cases which are passed through in plan_hypothetical_cast.
+            (List, List) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let from_el_type = from_type.unwrap_list_element_type();
                 let to_el_type = to_type.unwrap_list_element_type();
@@ -564,6 +566,17 @@ fn plan_hypothetical_cast(
     from: &ScalarType,
     to: &ScalarType,
 ) -> Option<::expr::ScalarExpr> {
+    // The only implicitly allowed hypothetical casts are between `Decimal`s,
+    // which is necessary e.g. to make `numeric(38,0) list` and `numeric(38,1)`
+    // implicitly interoperable.
+    if let CastContext::Implicit = ccx {
+        if !matches!(
+            (to, from),
+            (ScalarType::Decimal(..), ScalarType::Decimal(..)),
+        ) {
+            return None;
+        }
+    }
     // Reconstruct an expression context where the expression is evaluated on
     // the "first column" of some imaginary row.
     let mut scx = ecx.qcx.scx.clone();

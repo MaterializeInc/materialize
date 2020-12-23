@@ -395,11 +395,19 @@ impl ParamList {
         let mut set_or_check_constrained_type = |typ: &ScalarType| {
             match constrained_type {
                 None => constrained_type = Some(typ.clone()),
-                Some(ref t) => {
-                    if typ != t {
-                        return Err(());
+                Some(ref t) => match (t, typ) {
+                    (ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2)) => {
+                        constrained_type = Some(ScalarType::Decimal(
+                            std::cmp::max(*p1, *p2),
+                            std::cmp::max(*s1, *s2),
+                        ));
                     }
-                }
+                    (t, typ) => {
+                        if typ != t {
+                            return Err(());
+                        }
+                    }
+                },
             }
             Ok(())
         };
