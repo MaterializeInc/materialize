@@ -15,7 +15,7 @@ log = "0.4.11"
 phf_shared = "0.8"
 smallvec = "1.5"
 tokio = { version = "0.2", features = ["io-util", "rt-threaded", "tcp", "time"] }
-tracing-subscriber = "0.2.7"
+tracing-subscriber = { version = "0.2.7", default-features = false, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 crossbeam-utils = "0.7.2"

@@ -32,7 +32,7 @@ impl SyncAction for SleepAction {
 
     fn redo(&self, _: &mut State) -> Result<(), String> {
         let mut rng = rand::thread_rng();
-        let sleep = rng.gen_range(Duration::from_secs(0), self.time);
+        let sleep = rng.gen_range(Duration::from_secs(0)..self.time);
         println!("Sleeping for {:?}", sleep);
         thread::sleep(sleep);
         Ok(())

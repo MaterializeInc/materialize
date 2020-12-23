@@ -21,6 +21,7 @@ from materialize import ui
 
 BIN_CARGO_TOML = "src/materialized/Cargo.toml"
 LICENSE = "LICENSE"
+USER_DOC_CONFIG = "doc/user/config.toml"
 
 say = ui.speaker("")
 
@@ -32,7 +33,18 @@ say = ui.speaker("")
 )
 @click.option("-c", "--checkout", default=None, help="Commit or branch to check out")
 @click.option("--tag/--no-tag", default=True, help="")
-def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -> None:
+@click.option(
+    "--affect-remote/--no-affect-remote",
+    default=True,
+    help="Whether or not to interact with origin at all",
+)
+def main(
+    version: str,
+    checkout: Optional[str],
+    create_branch: str,
+    tag: bool,
+    affect_remote: bool,
+) -> None:
     """Update documents for a release and create tags
 
     If both `-b` and `-c` are specified, the checkout happens before the branch creation,
@@ -58,14 +70,14 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
 
     version = version.lstrip("v")
     the_tag = f"v{version}"
-    confirm_version_is_next(version)
+    confirm_version_is_next(version, affect_remote)
 
     if checkout is not None:
         git.checkout(checkout)
     if create_branch is not None:
         git.create_branch(create_branch)
 
-    confirm_on_latest_rc()
+    confirm_on_latest_rc(affect_remote)
 
     change_line(BIN_CARGO_TOML, "version", f'version = "{version}"')
     change_line(
@@ -87,11 +99,20 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
         git.tag_annotated(the_tag)
     else:
         git.commit_all_changed(f"Prepare next phase of development: {the_tag}")
+        latest_tag = get_latest_tag(fetch=False)
+        # we have made an actual release
+        if latest_tag.prerelease is None and click.confirm(
+            f"Update doc/user/config.toml marking v{latest_tag} as released"
+        ):
+            update_versions_list(latest_tag)
+            git.commit_all_changed(f"Update released versions to include v{latest_tag}")
 
     matching = git.first_remote_matching("MaterializeInc/materialize")
     if tag:
         if matching is not None:
-            if ui.confirm(f"\nWould you like me to run: git push {matching} {the_tag}"):
+            if affect_remote and ui.confirm(
+                f"\nWould you like me to run: git push {matching} {the_tag}"
+            ):
                 spawn.runv(["git", "push", matching, the_tag])
         else:
             say("")
@@ -102,6 +123,23 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
         branch = git.rev_parse("HEAD", abbrev=True)
         say("")
         say(f"Create a PR with your branch: '{branch}'")
+
+
+def update_versions_list(released_version: semver.VersionInfo) -> None:
+    """Update the doc config with the passed-in version"""
+    today = date.today().strftime("%d %B %Y")
+    toml_line = f'  {{ name = "v{released_version}", date = "{today}" }},\n'
+    with open(USER_DOC_CONFIG) as fh:
+        docs = fh.readlines()
+    wrote_line = False
+    with open(USER_DOC_CONFIG, "w") as fh:
+        for line in docs:
+            fh.write(line)
+            if line == "versions = [\n":
+                fh.write(toml_line)
+                wrote_line = True
+    if not wrote_line:
+        raise errors.MzRuntimeError("Couldn't determine where to insert new version")
 
 
 def change_line(fname: str, line_start: str, replacement: str) -> None:
@@ -131,10 +169,9 @@ def four_years_hence() -> str:
     return future.strftime("%B %d, %Y")
 
 
-def confirm_version_is_next(version: str) -> None:
+def confirm_version_is_next(version: str, affect_remote: bool) -> None:
     """Check if the passed-in tag is the logical next tag"""
-    tags = git.get_version_tags()
-    latest_tag = tags[0]
+    latest_tag = get_latest_tag(affect_remote)
     this_tag = semver.VersionInfo.parse(version)
     if this_tag.minor == latest_tag.minor:
         if (
@@ -176,9 +213,8 @@ def confirm_version_is_next(version: str) -> None:
         )
 
 
-def confirm_on_latest_rc() -> None:
-    tags = git.get_version_tags()
-    latest_tag = tags[0]
+def confirm_on_latest_rc(affect_remote: bool) -> None:
+    latest_tag = get_latest_tag(affect_remote)
     if not git.is_ancestor(f"v{latest_tag}", "HEAD"):
         ancestor_tag = git.describe()
         click.confirm(
@@ -187,6 +223,12 @@ def confirm_on_latest_rc() -> None:
             "Are you sure?",
             abort=True,
         )
+
+
+def get_latest_tag(fetch: bool) -> semver.VersionInfo:
+    """Get the most recent tag in this repo"""
+    tags = git.get_version_tags(fetch=fetch)
+    return tags[0]
 
 
 if __name__ == "__main__":

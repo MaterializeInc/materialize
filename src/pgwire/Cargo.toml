@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.34"
 byteorder = "1.3"
 bytes = "0.5"
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 comm = { path = "../comm" }
 coord = { path = "../coord" }
 dataflow-types = { path = "../dataflow-types" }
@@ -23,7 +23,7 @@ ordered-float = { version = "2.0.0", features = ["serde"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-rand = "0.7"
+rand = "0.8"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
 tokio = "0.2"

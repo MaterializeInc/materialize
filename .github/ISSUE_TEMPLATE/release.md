@@ -167,14 +167,19 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   ```shell
   $ tag=v<VERSION>
-  $ bin/mkrelease --checkout ${tag}-rc1 $tag
+  $ bin/mkrelease --checkout ${tag}-rcN $tag
   git push origin $tag
   ```
-- [ ] Incorporate this tag into `main`'s history as well:
+- [ ] Incorporate this tag into `main`'s history, and update the user doc config to mark this as
+  released:
 
-  ```
-  next=v<NEXT_VERSION>-dev
-  bin/mkrelease --no-tag -b continue-$next $next
+  ```console
+  $ next=v<NEXT_VERSION>-dev
+  $ bin/mkrelease --no-tag -b continue-$next $next
+  ... snip ...
+  Update doc/user/config.toml with 0.6.1 [y/N]: y
+  ...
+  Create a PR with your branch: 'continue-$next'
   ```
 
   - [ ] Open a PR with that branch, and land it. Using [gh] from the terminal: `gh pr create
@@ -236,7 +241,8 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   - [ ] Ensure that the [release notes] are up to date, including the current version.
 
-  - [ ] Add the version to the website's list of versions in [`doc/user/config.toml`].
+  - [ ] Ensure that [`doc/user/config.toml`] has the correct version, as updated in the "Final
+    Release / create git tag" step
 
   - [ ] Ensure that all members of the release-notes team have signed-off on this issue.
 

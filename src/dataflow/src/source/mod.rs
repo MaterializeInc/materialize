@@ -510,8 +510,8 @@ impl ConsistencyInfo {
                 // If someone resets their system clock to be too far in the past, this could cause
                 // Materialize to block and not give control to other operators. We thus give up
                 // on timestamping this message
-                error!("The new timestamp is more than 1 second behind the last assigned timestamp. To\
-                avoid unnecessary blocking, Materialize will not attempt to downgrade the capability. Please\
+                error!("The new timestamp is more than 1 second behind the last assigned timestamp. To \
+                avoid unnecessary blocking, Materialize will not attempt to downgrade the capability. Please \
                 consider resetting your system time.");
                 return None;
             }

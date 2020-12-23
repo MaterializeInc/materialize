@@ -139,6 +139,13 @@ impl<T: AstDisplay> AstDisplay for Box<T> {
     }
 }
 
+// u64 used directly to represent, e.g., type modifiers
+impl AstDisplay for u64 {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str(self);
+    }
+}
+
 pub struct EscapeSingleQuoteString<'a>(&'a str);
 
 impl<'a> AstDisplay for EscapeSingleQuoteString<'a> {

@@ -23,7 +23,7 @@ use std::fmt;
 use repr::adt::datetime::DateTimeField;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::Ident;
+use crate::ast::ObjectName;
 
 #[derive(Debug)]
 pub struct ValueError(String);
@@ -179,12 +179,6 @@ mod test {
 pub enum DataType {
     /// Array
     Array(Box<DataType>),
-    /// Fixed-length character type e.g. CHAR(10)
-    Char(Option<u64>),
-    /// Decimal type with optional precision and scale e.g. DECIMAL(10,2)
-    Decimal(Option<u64>, Option<u64>),
-    /// Floating point with optional precision e.g. FLOAT(8)
-    Float(Option<u64>),
     /// List
     List(Box<DataType>),
     /// Map
@@ -192,10 +186,12 @@ pub enum DataType {
         key_type: Box<DataType>,
         value_type: Box<DataType>,
     },
-    /// Types whose names don't accept parameters, e.g. INT
-    Other(Ident),
-    /// Variable-length character type e.g. VARCHAR(10)
-    Varchar(Option<u64>),
+    /// Types who don't embed other types, e.g. INT
+    Other {
+        name: ObjectName,
+        /// Typ modifiers appended to the type name, e.g. `numeric(38,0)`.
+        typ_mod: Vec<u64>,
+    },
 }
 
 impl AstDisplay for DataType {
@@ -205,19 +201,6 @@ impl AstDisplay for DataType {
                 f.write_node(&ty);
                 f.write_str("[]");
             }
-            DataType::Char(size) => format_type_with_optional_length(f, "char", size),
-            DataType::Decimal(precision, scale) => {
-                if let Some(scale) = scale {
-                    f.write_str("numeric(");
-                    f.write_str(precision.unwrap());
-                    f.write_str(",");
-                    f.write_str(scale);
-                    f.write_str(")");
-                } else {
-                    format_type_with_optional_length(f, "numeric", precision)
-                }
-            }
-            DataType::Float(size) => format_type_with_optional_length(f, "float", size),
             DataType::List(ty) => {
                 f.write_node(&ty);
                 f.write_str(" list");
@@ -232,27 +215,15 @@ impl AstDisplay for DataType {
                 f.write_node(&value_type);
                 f.write_str(")");
             }
-            DataType::Other(n) => match n.as_str() {
-                "bytes" => f.write_str("bytea"),
-                "string" => f.write_str("text"),
-                n => f.write_str(n),
-            },
-            DataType::Varchar(size) => {
-                format_type_with_optional_length(f, "character varying", size)
+            DataType::Other { name, typ_mod } => {
+                f.write_node(name);
+                if typ_mod.len() > 0 {
+                    f.write_str("(");
+                    f.write_node(&display::comma_separated(typ_mod));
+                    f.write_str(")");
+                }
             }
         }
     }
 }
-
-fn format_type_with_optional_length(
-    f: &mut AstFormatter,
-    sql_type: &'static str,
-    len: &Option<u64>,
-) {
-    f.write_str(sql_type);
-    if let Some(len) = len {
-        f.write_str("(");
-        f.write_str(len);
-        f.write_str(")");
-    }
-}
+impl_display!(DataType);

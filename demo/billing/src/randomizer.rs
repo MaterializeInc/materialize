@@ -43,7 +43,7 @@ fn protobuf_timestamp(time: DateTime<Utc>) -> Timestamp {
 pub fn random_batch(rng: &mut impl Rng, state: &mut RecordState) -> Batch {
     let id = Uuid::new_v4();
 
-    let dur_val = rng.gen_range(15, 1_000);
+    let dur_val = rng.gen_range(15..1_000);
     let dur = chrono::Duration::seconds(dur_val);
     let interval_start_time = state.last_time.clone();
     let interval_start = protobuf_timestamp(state.last_time);
@@ -52,7 +52,7 @@ pub fn random_batch(rng: &mut impl Rng, state: &mut RecordState) -> Batch {
 
     let mut records = RepeatedField::<Record>::new();
 
-    for _ in 0..rng.gen_range(1, 50) {
+    for _ in 0..rng.gen_range(1..50) {
         records.push(random_record(rng, interval_start_time, dur_val));
     }
 
@@ -66,13 +66,13 @@ pub fn random_batch(rng: &mut impl Rng, state: &mut RecordState) -> Batch {
 }
 
 fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> Record {
-    let start_offset = rng.gen_range(0, max_secs - 1);
+    let start_offset = rng.gen_range(0..max_secs - 1);
     let interval_start = start_at
         .checked_add_signed(chrono::Duration::seconds(start_offset))
         .unwrap();
     let interval_end = interval_start
         .checked_add_signed(chrono::Duration::seconds(
-            rng.gen_range(start_offset, max_secs),
+            rng.gen_range(start_offset..max_secs),
         ))
         .unwrap();
 
@@ -109,8 +109,8 @@ impl Randomizer for ResourceInfo {
         resource_info.set_cpu_num(*POSSIBLE_CPUS.choose(rng).unwrap());
         resource_info.set_memory_gb(*POSSIBLE_MEM.choose(rng).unwrap());
         resource_info.set_disk_gb(*POSSIBLE_DISK.choose(rng).unwrap());
-        resource_info.set_client_id(rng.gen_range(1, NUM_CLIENTS as i32));
-        resource_info.set_vm_id(rng.gen_range(1000, 2000));
+        resource_info.set_client_id(rng.gen_range(1..NUM_CLIENTS as i32));
+        resource_info.set_vm_id(rng.gen_range(1000..2000));
 
         resource_info
     }
