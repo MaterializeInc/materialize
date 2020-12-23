@@ -385,6 +385,9 @@ impl ScalarExpr {
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
                     }
                 } else if *func == BinaryFunc::TimezoneTimestamp && expr1.is_literal() {
+                    // If the timezone argument is a literal, and we're applying the function on many rows at the same
+                    // time we really don't want to parse it again and again, so we parse it once and embed it into the
+                    // UnaryFunc enum. The memory footprint of Timezone is small (8 bytes).
                     let tz = expr1.as_literal_str().unwrap();
                     *e = match parse_timezone(tz) {
                         Ok(tz) => ScalarExpr::CallUnary {

@@ -29,7 +29,7 @@ use std::error::Error;
 use std::fmt;
 
 use chrono::offset::{Offset, TimeZone};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use ore::lex::LexBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -291,19 +291,24 @@ where
     Nestable::MayNeedEscaping
 }
 
-/// Parses a `DateTime<Utc>` from `s`.
+/// Parses a `DateTime<Utc>` from `s`. See [expr::scalar::func::timezone_timestamp] for timezone anomaly considerations.
 pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
     parse_timestamp_string(s)
         .and_then(|(date, time, timezone)| {
             use datetime::Timezone::*;
-            let dt = date.and_time(time);
+            let mut dt = date.and_time(time);
             let offset = match timezone {
                 FixedOffset(offset) => offset,
-                Tz(tz) => tz
-                    .offset_from_local_datetime(&dt)
-                    .earliest()
-                    .ok_or_else(|| "invalid timezone conversion".to_owned())?
-                    .fix(),
+                Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
+                    Some(offset) => offset.fix(),
+                    None => {
+                        dt += Duration::hours(1);
+                        tz.offset_from_local_datetime(&dt)
+                            .latest()
+                            .ok_or_else(|| "invalid timezone conversion".to_owned())?
+                            .fix()
+                    }
+                },
             };
             Ok(DateTime::from_utc(dt - offset, Utc))
         })
