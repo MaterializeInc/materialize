@@ -431,3 +431,137 @@ query T
 SELECT '{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'hello'::text -> 'world'::text
 ----
 nested
+
+# 🔬 CREATE TYPE .. AS MAP
+
+statement ok
+CREATE TYPE int4_map AS MAP (key_type=text, value_type=int4);
+
+query T
+SELECT '{a=>1,b=>2}'::int4_map::text;
+----
+{a=>1,b=>2}
+
+query T
+SELECT pg_typeof(NULL::int4_map);
+----
+map
+
+# 🔬🔬 Check each valid value type
+
+statement ok
+CREATE TYPE bool_map_c AS MAP (key_type=text, value_type='bool');
+
+query T
+SELECT '{a=>true}'::bool_map_c::text
+----
+{a=>t}
+
+statement ok
+CREATE TYPE int8_map_c AS MAP (key_type=text, value_type='int8');
+
+query T
+SELECT '{a=>1}'::int8_map_c::text
+----
+{a=>1}
+
+statement ok
+CREATE TYPE int4_map_c AS MAP (key_type=text, value_type='int4');
+
+query T
+SELECT '{a=>1}'::int4_map_c::text
+----
+{a=>1}
+
+statement ok
+CREATE TYPE text_map_c AS MAP (key_type=text, value_type='text');
+
+query T
+SELECT '{a=>a}'::text_map_c::text
+----
+{a=>a}
+
+statement ok
+CREATE TYPE float4_map_c AS MAP (key_type=text, value_type='float4');
+
+query T
+SELECT '{a=>1.2}'::float4_map_c::text
+----
+{a=>1.2}
+
+statement ok
+CREATE TYPE float8_map_c AS MAP (key_type=text, value_type='float8');
+
+query T
+SELECT '{a=>1.2}'::float8_map_c::text
+----
+{a=>1.2}
+
+statement ok
+CREATE TYPE date_map_c AS MAP (key_type=text, value_type='date');
+
+query T
+SELECT '{a=>2001-01-01}'::date_map_c::text
+----
+{a=>2001-01-01}
+
+statement ok
+CREATE TYPE time_map_c AS MAP (key_type=text, value_type='time');
+
+query T
+SELECT '{a=>12:34:56}'::time_map_c::text
+----
+{a=>12:34:56}
+
+statement ok
+CREATE TYPE timestamp_map_c AS MAP (key_type=text, value_type='timestamp');
+
+query T
+SELECT '{a=>2001-01-01 12:34:56}'::timestamp_map_c::text
+----
+{a=>"2001-01-01 12:34:56"}
+
+statement ok
+CREATE TYPE timestamptz_map_c AS MAP (key_type=text, value_type='timestamptz');
+
+query T
+SELECT '{a=>2001-01-01 12:34:56}'::timestamptz_map_c::text
+----
+{a=>"2001-01-01 12:34:56+00"}
+
+statement ok
+CREATE TYPE interval_map_c AS MAP (key_type=text, value_type='interval');
+
+query T
+SELECT '{a=>1y 2d 3h 4m}'::interval_map_c::text
+----
+{a=>"1 year 2 days 03:04:00"}
+
+statement ok
+CREATE TYPE numeric_map_c AS MAP (key_type=text, value_type='numeric');
+
+query T
+SELECT '{a=>1.23}'::numeric_map_c::text
+----
+{a=>1}
+
+statement ok
+CREATE TYPE jsonb_map_c AS MAP (key_type=text, value_type='jsonb');
+
+query T
+SELECT '{a=>\{\"1\":2\}}'::jsonb_map_c::text;
+----
+{a=>"{\"1\":2.0}"}
+
+# 🔬🔬 Check custom type name resolution
+
+statement ok
+CREATE TYPE bool AS MAP (key_type=text, value_type='int4')
+
+query error invalid input syntax for bool: "\{a=>1\}"
+SELECT '{a=>1}'::bool;
+
+query T
+SELECT '{a=>1}'::public.bool::text;
+----
+{a=>1}

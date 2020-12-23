@@ -391,6 +391,13 @@ impl ParamList {
     /// Returns `Some` if the constraints were successfully resolved, or `None`
     /// otherwise.
     fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
+        // TODO(sploiselle): support custom types
+        if typs.iter().any(|t| match t {
+            Some(t) => t.is_custom_type(),
+            None => false,
+        }) {
+            return None;
+        }
         // Determines if types have the same [`ScalarBaseType`], and if complex
         // types' elements do, as well. This function's primary use is allowing
         // matches between `ScalarType::Decimal` values with different scales,

@@ -1826,8 +1826,43 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
 
     fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType> {
         let entry = self.catalog.get_by_id(id);
-        let t = pgrepr::Type::from_oid(entry.oid())?;
-        Some(t.to_scalar_type_lossy())
+        let t = match entry.item() {
+            CatalogItem::Type(t) => t,
+            _ => return None,
+        };
+
+        Some(match t.inner {
+            TypeInner::Array { element_id } => {
+                let element_type = self
+                    .try_get_lossy_scalar_type_by_id(&element_id)
+                    .expect("array's element_id refers to a valid type");
+                ScalarType::Array(Box::new(element_type))
+            }
+            TypeInner::Base => pgrepr::Type::from_oid(entry.oid())?.to_scalar_type_lossy(),
+            TypeInner::List { element_id } => {
+                let element_type = self
+                    .try_get_lossy_scalar_type_by_id(&element_id)
+                    .expect("list's element_id refers to a valid type");
+                ScalarType::List {
+                    element_type: Box::new(element_type),
+                    custom_oid: Some(entry.oid),
+                }
+            }
+            TypeInner::Map { key_id, value_id } => {
+                let key_type = self
+                    .try_get_lossy_scalar_type_by_id(&key_id)
+                    .expect("map's key_id refers to a valid type");
+                assert!(matches!(key_type, ScalarType::String));
+                let value_type = Box::new(
+                    self.try_get_lossy_scalar_type_by_id(&value_id)
+                        .expect("map's value_id refers to a valid type"),
+                );
+                ScalarType::Map {
+                    value_type,
+                    custom_oid: Some(entry.oid),
+                }
+            }
+        })
     }
 
     fn config(&self) -> &sql::catalog::CatalogConfig {

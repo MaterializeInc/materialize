@@ -341,6 +341,11 @@ fn get_cast(
         return Some(Box::new(|expr| expr));
     }
 
+    // TODO(sploiselle): support casts between custom types
+    if from.is_custom_type() && to.is_custom_type() {
+        return None;
+    }
+
     let imp = VALID_CASTS.get(&(from.into(), to.into()))?;
     let template = match (ccx, imp.context) {
         (Explicit, Implicit) | (Explicit, Assignment) | (Explicit, Explicit) => Some(&imp.template),

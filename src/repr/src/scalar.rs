@@ -803,6 +803,20 @@ impl<'a> ScalarType {
     pub fn is_vec(&self) -> bool {
         matches!(self, ScalarType::List{..} | ScalarType::Array(_))
     }
+    pub fn is_custom_type(&self) -> bool {
+        use ScalarType::*;
+        match self {
+            List {
+                element_type: t,
+                custom_oid,
+            }
+            | Map {
+                value_type: t,
+                custom_oid,
+            } => custom_oid.is_some() || t.is_custom_type(),
+            _ => false,
+        }
+    }
 }
 
 // TODO(benesch): the implementations of PartialEq and Hash for ScalarType can
