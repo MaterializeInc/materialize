@@ -1841,12 +1841,15 @@ where
     }
 }
 
-pub(crate) fn parse_timezone<'a>(tz: &'a str) -> Result<Timezone, EvalError> {
+/// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
+pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
     tz.parse()
         .map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
 }
 
-fn timezone_time<'a>(tz: Timezone, t: NaiveTime) -> Datum<'a> {
+/// Converts the time `t`, which is assumed to be in UTC, to the timezone `tz`.
+/// For example, `EST` and `17:39:14` would return `12:39:14`.
+fn timezone_time(tz: Timezone, t: NaiveTime) -> Datum<'static> {
     let offset = match tz {
         Timezone::FixedOffset(offset) => offset,
         Timezone::Tz(tz) => tz.offset_from_utc_datetime(&Utc::now().naive_utc()).fix(),
@@ -1854,19 +1857,33 @@ fn timezone_time<'a>(tz: Timezone, t: NaiveTime) -> Datum<'a> {
     (t + offset).into()
 }
 
-fn timezone_timestamp<'a>(tz: Timezone, dt: NaiveDateTime) -> Result<Datum<'a>, EvalError> {
+/// Converts the timestamp `dt`, which is assumed to be in the time of the timezone `tz` to a timestamptz in UTC.
+/// This operation is fallible because certain timestamps at timezones that observe DST are simply impossible or
+/// ambiguous. In case of ambiguity (when a hour repeats) we will prefer the latest variant, and when an hour is
+/// impossible, we will attempt to fix it by advancing it. For example, `EST` and `2020-11-11T12:39:14` would return
+/// `2020-11-11T17:39:14Z`. A DST observing timezone like `America/New_York` would cause the following DST anomalies:
+/// `2020-11-01T00:59:59` -> `2020-11-01T04:59:59Z` and `2020-11-01T01:00:00` -> `2020-11-01T06:00:00Z`
+/// `2020-03-08T02:59:59` -> `2020-03-08T07:59:59Z` and `2020-03-08T03:00:00` -> `2020-03-08T07:00:00Z`
+fn timezone_timestamp(tz: Timezone, mut dt: NaiveDateTime) -> Result<Datum<'static>, EvalError> {
     let offset = match tz {
         Timezone::FixedOffset(offset) => offset,
-        Timezone::Tz(tz) => tz
-            .offset_from_local_datetime(&dt)
-            .earliest()
-            .ok_or(EvalError::InvalidTimezoneConversion)?
-            .fix(),
+        Timezone::Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
+            Some(offset) => offset.fix(),
+            None => {
+                dt += Duration::hours(1);
+                tz.offset_from_local_datetime(&dt)
+                    .latest()
+                    .ok_or(EvalError::InvalidTimezoneConversion)?
+                    .fix()
+            }
+        },
     };
     Ok(DateTime::from_utc(dt - offset, Utc).into())
 }
 
-fn timezone_timestamptz<'a>(tz: Timezone, utc: DateTime<Utc>) -> Datum<'a> {
+/// Converts the UTC timestamptz `utc` to the local timestamp of the timezone `tz`.
+/// For example, `EST` and `2020-11-11T17:39:14Z` would return `2020-11-11T12:39:14`.
+fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> Datum<'static> {
     let offset = match tz {
         Timezone::FixedOffset(offset) => offset,
         Timezone::Tz(tz) => tz.offset_from_utc_datetime(&utc.naive_utc()).fix(),
@@ -1874,7 +1891,10 @@ fn timezone_timestamptz<'a>(tz: Timezone, utc: DateTime<Utc>) -> Datum<'a> {
     (utc.naive_utc() + offset).into()
 }
 
-fn timezone_interval_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+/// Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed
+/// to represent. The interval is not allowed to hold months, but there are no limits on the amount of seconds.
+/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
+fn timezone_interval_time(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
     let interval = a.unwrap_interval();
     if interval.months != 0 {
         Err(EvalError::InvalidTimezoneInterval)
@@ -1886,7 +1906,10 @@ fn timezone_interval_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, E
     }
 }
 
-fn timezone_interval_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+/// Converts the timestamp datum `b`, which is assumed to be in the time of the timezone datum `a` to a timestamptz
+/// in UTC. The interval is not allowed to hold months, but there are no limits on the amount of seconds.
+/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
+fn timezone_interval_timestamp(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
     let interval = a.unwrap_interval();
     if interval.months != 0 {
         Err(EvalError::InvalidTimezoneInterval)
@@ -1895,7 +1918,10 @@ fn timezone_interval_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'
     }
 }
 
-fn timezone_interval_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+/// Converts the UTC timestamptz datum `b`, to the local timestamp of the timezone datum `a`.
+/// The interval is not allowed to hold months, but there are no limits on the amount of seconds.
+/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
+fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
     let interval = a.unwrap_interval();
     if interval.months != 0 {
         Err(EvalError::InvalidTimezoneInterval)

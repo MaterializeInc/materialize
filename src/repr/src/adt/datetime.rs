@@ -283,13 +283,15 @@ impl DateTimeFieldValue {
 }
 
 /// Parsed timezone.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Timezone {
     #[serde(with = "fixed_offset_serde")]
     FixedOffset(FixedOffset),
     Tz(Tz),
 }
 
+// We need to implement Serialize and Deserialize traits to include Timezone in the UnaryFunc enum.
+// FixedOffset doesn't implement these, even with the "serde" feature enabled.
 mod fixed_offset_serde {
     use super::*;
     use serde::{de::Error, Deserializer, Serializer};
@@ -316,6 +318,9 @@ impl PartialOrd for Timezone {
     }
 }
 
+// We need to implement Ord and PartialOrd to include Timezone in the UnaryFunc enum. Neither FixedOffset nor Tz
+// implement these so we do a simple ordinal comparison (FixedOffset variant < Tz variant), and break ties using
+// i32/str comparisons respectively.
 impl Ord for Timezone {
     fn cmp(&self, other: &Self) -> Ordering {
         use Timezone::*;
@@ -334,18 +339,12 @@ impl Default for Timezone {
     }
 }
 
-impl fmt::Debug for Timezone {
+impl fmt::Display for Timezone {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Timezone::FixedOffset(offset) => offset.fmt(f),
             Timezone::Tz(tz) => tz.fmt(f),
         }
-    }
-}
-
-impl fmt::Display for Timezone {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
     }
 }
 

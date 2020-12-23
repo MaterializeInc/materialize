@@ -75,12 +75,22 @@ SELECT timezone(INTERVAL '+11'MONTH, TIME '18:53:49')
 statement error invalid input syntax for timestamptz: Invalid timezone string \(\+16:60\): timezone hour invalid 16
 SELECT TIMESTAMPTZ '2020-01-01 00:00:00+16:60'
 
-# TODO: Postgres returns 2020-03-08 07:00:00+00 for both 02:00:00 and 03:00:00, chrono-tz refuses.
-statement error invalid input syntax for timestamptz: invalid timezone conversion
-SELECT TIMESTAMPTZ '2020-03-08 02:00:00 America/New_York'
-
-# TODO: Postgres has this discontinuity at 2020-11-01 01:00:00, 1 hour earlier than chrono-tz. Use latest()?
 query T
-SELECT TIMESTAMPTZ '2020-11-01 02:00:00 America/New_York' - TIMESTAMPTZ '2020-11-01 01:59:59 America/New_York'
+SELECT TIMESTAMPTZ '2020-03-08 02:59:59 America/New_York'
 ----
-01:00:01
+2020-03-08 07:59:59+00
+
+query T
+SELECT TIMESTAMPTZ '2020-03-08 03:00:00 America/New_York'
+----
+2020-03-08 07:00:00+00
+
+query T
+SELECT TIMESTAMPTZ '2020-11-01 00:59:59 America/New_York'
+----
+2020-11-01 04:59:59+00
+
+query T
+SELECT TIMESTAMPTZ '2020-11-01 01:00:00 America/New_York'
+----
+2020-11-01 06:00:00+00
