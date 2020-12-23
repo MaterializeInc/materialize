@@ -113,7 +113,7 @@ This creates a source that...
 CREATE MATERIALIZED SOURCE data_v1
 FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'top-secret' WITH (
     security_protocol = 'SASL_SSL',
-    sasl_mechanisms = 'PLAIN',
+    sasl_mechanism = 'PLAIN',
     sasl_username = '<BROKER_USERNAME>',
     sasl_password = '<BROKER_PASSWORD>',
 )
