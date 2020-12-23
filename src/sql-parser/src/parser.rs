@@ -893,16 +893,6 @@ impl<'a> Parser<'a> {
                         )
                     }
                 }
-                AT => {
-                    self.expect_keywords(&[TIME, ZONE])?;
-                    Ok(Expr::Function(Function {
-                        name: ObjectName(vec!["timezone".into()]),
-                        args: FunctionArgs::Args(vec![self.parse_subexpr(precedence)?, expr]),
-                        filter: None,
-                        over: None,
-                        distinct: false,
-                    }))
-                }
                 AND => Ok(Expr::And {
                     left: Box::new(expr),
                     right: Box::new(self.parse_subexpr(precedence)?),
@@ -1073,7 +1063,6 @@ impl<'a> Parser<'a> {
                 Token::Keyword(IN) => Precedence::Like,
                 Token::Keyword(BETWEEN) => Precedence::Like,
                 Token::Keyword(LIKE) => Precedence::Like,
-                Token::Keyword(AT) => Precedence::Like,
                 Token::Op(s) => match s.as_str() {
                     "<" | "<=" | "<>" | "!=" | ">" | ">=" => Precedence::Cmp,
                     "+" | "-" => Precedence::PlusMinus,
