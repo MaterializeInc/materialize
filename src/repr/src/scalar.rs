@@ -791,6 +791,34 @@ impl<'a> ScalarType {
     pub fn is_vec(&self) -> bool {
         matches!(self, ScalarType::List(_) | ScalarType::Array(_))
     }
+
+    /// Returns a commmon form of `self` and `other` using the "greatest common"
+    /// `ScalarType::Decimal`, or `None` if one does not exist.
+    ///
+    /// This computation includes complex types such as lists whose element
+    /// types are `ScalarType::Decimal`.
+    pub fn find_greatest_common_decimal(&self, other: &ScalarType) -> Option<ScalarType> {
+        match (self, other) {
+            (ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2)) => Some(
+                ScalarType::Decimal(std::cmp::max(*p1, *p2), std::cmp::max(*s1, *s2)),
+            ),
+            (ScalarType::Array(l), ScalarType::Array(r)) => {
+                let common = l.find_greatest_common_decimal(r)?;
+                Some(ScalarType::Array(Box::new(common)))
+            }
+            (ScalarType::List(l), ScalarType::List(r)) => {
+                let common = l.find_greatest_common_decimal(r)?;
+                Some(ScalarType::List(Box::new(common)))
+            }
+            (ScalarType::Map { value_type: l }, ScalarType::Map { value_type: r }) => {
+                let common = l.find_greatest_common_decimal(r)?;
+                Some(ScalarType::Map {
+                    value_type: Box::new(common),
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 // TODO(benesch): the implementations of PartialEq and Hash for ScalarType can

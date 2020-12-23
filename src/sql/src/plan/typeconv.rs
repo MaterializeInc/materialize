@@ -295,7 +295,7 @@ lazy_static! {
                 let ty = from_type.clone();
                 Some(|e: ScalarExpr| e.call_unary(CastListToString { ty }))
             }),
-            (List, List) => Assignment: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+            (List, List) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let from_el_type = from_type.unwrap_list_element_type();
                 let to_el_type = to_type.unwrap_list_element_type();
