@@ -506,8 +506,8 @@ impl MapFilterProject {
     /// The `shuffle` argument remaps expected column identifiers to new locations,
     /// with the expectation that `shuffle` describes all input columns, and so the
     /// intermediate results will be able to start at position `shuffle.len()`.
-    pub fn permute(self, mut shuffle: HashMap<usize, usize>) -> Self {
-        let new_input_arity = shuffle.len();
+    pub fn permute(&mut self, shuffle: &HashMap<usize, usize>, new_input_arity: usize) {
+        let mut shuffle = shuffle.clone();
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
         for index in 0..map.len() {
             // Intermediate columns are just shifted.
@@ -522,7 +522,7 @@ impl MapFilterProject {
         for proj in project.iter_mut() {
             *proj = shuffle[proj];
         }
-        Self::new(new_input_arity)
+        *self = Self::new(new_input_arity)
             .map(map)
             .filter(filter)
             .project(project)
