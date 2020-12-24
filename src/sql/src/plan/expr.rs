@@ -187,7 +187,12 @@ impl CoercibleScalarExpr {
         let expr = typeconv::plan_coerce(ecx, self, ty)?;
         let expr_ty = ecx.scalar_type(&expr);
         if ty != &expr_ty {
-            bail!("{} must have type {}, not type {}", ecx.name, ty, expr_ty);
+            bail!(
+                "{} must have type {}, not type {}",
+                ecx.name,
+                ecx.get_scalar_type_name(ty),
+                ecx.get_scalar_type_name(&expr_ty),
+            );
         }
         Ok(expr)
     }

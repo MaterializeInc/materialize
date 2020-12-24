@@ -297,14 +297,14 @@ CREATE TABLE y (
   a INT AS (3) VIRTUAL
 )
 
-statement error expected computed column expression to have type int, but .* has type string
+statement error expected computed column expression to have type int, but .* has type text
 CREATE TABLE y (
   a INT AS ('not an integer!'::STRING) STORED
 )
 
 # We utilize the types from other columns.
 
-statement error expected computed column expression to have type int, but 'a' has type string
+statement error expected computed column expression to have type int, but 'a' has type text
 CREATE TABLE y (
   a STRING,
   b INT AS (a) STORED

@@ -370,7 +370,7 @@ where
 pub fn parse_decimal(s: &str) -> Result<Decimal, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::new("decimal", s).with_details(e))
+        .map_err(|e| ParseError::new("numeric", s).with_details(e))
 }
 
 pub fn format_decimal<F>(buf: &mut F, d: &Decimal) -> Nestable

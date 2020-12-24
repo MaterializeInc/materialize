@@ -365,7 +365,10 @@ pub fn eval_as_of<'a>(
         ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
         ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
         ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
-        _ => bail!("can't use {} as a timestamp for AS OF", ex.typ(desc.typ())),
+        _ => bail!(
+            "can't use {} as a timestamp for AS OF",
+            scx.get_column_type_name(&ex.typ(desc.typ()))
+        ),
     })
 }
 
@@ -597,8 +600,8 @@ fn plan_set_expr(
                     bail!(
                         "{} types {} and {} cannot be matched",
                         op,
-                        left_col_type.scalar_type,
-                        right_col_type.scalar_type
+                        qcx.get_scalar_type_name(&left_col_type.scalar_type),
+                        qcx.get_scalar_type_name(&right_col_type.scalar_type)
                     );
                 }
             }
@@ -1524,7 +1527,7 @@ fn expand_select_item<'a>(
             let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
             let fields = match ecx.scalar_type(&expr) {
                 ScalarType::Record { fields, .. } => fields,
-                ty => bail!("type {} is not composite", ty),
+                ty => bail!("type {} is not composite", ecx.get_scalar_type_name(&ty)),
             };
             let items = fields
                 .iter()
@@ -1970,11 +1973,15 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 }
                 ty => bail!(
                     "column notation applied to type {}, which is not a composite type",
-                    ty
+                    ecx.get_scalar_type_name(&ty)
                 ),
             };
             match i {
-                None => bail!("field {} not found in data type {}", field, ty),
+                None => bail!(
+                    "field {} not found in data type {}",
+                    field,
+                    ecx.get_scalar_type_name(&ty)
+                ),
                 Some(i) => expr.call_unary(UnaryFunc::RecordGet(i)).into(),
             }
         }
@@ -1985,7 +1992,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             let func = match &ty {
                 ScalarType::List { .. } => BinaryFunc::ListIndex,
                 ScalarType::Array(_) => BinaryFunc::ArrayIndex,
-                ty => bail!("cannot subscript type {}", ty),
+                ty => bail!("cannot subscript type {}", ecx.get_scalar_type_name(&ty)),
             };
 
             expr.call_binary(
@@ -2024,7 +2031,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                         )
                     }
                 }
-                ty => bail!("cannot subscript type {}", ty),
+                ty => bail!("cannot subscript type {}", ecx.get_scalar_type_name(&ty)),
             };
 
             let mut exprs = vec![expr];
@@ -2090,8 +2097,8 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                     if element_type != **array_type {
                         bail!(
                             "cannot evaluate ANY for element type {} and array type {}",
-                            element_type,
-                            array_type
+                            ecx.get_scalar_type_name(&element_type),
+                            ecx.get_scalar_type_name(array_type),
                         )
                     }
                 }
@@ -2620,7 +2627,11 @@ pub fn scalar_type_from_sql(
         } => {
             match scalar_type_from_sql(scx, &key_type)? {
                 ScalarType::String => {}
-                other => bail!("map key type must be text, got {}", other),
+                other => bail!(
+                    "map key type must be {}, got {}",
+                    scx.get_scalar_type_name(&ScalarType::String),
+                    scx.get_scalar_type_name(&other)
+                ),
             }
             ScalarType::Map {
                 value_type: Box::new(scalar_type_from_sql(scx, &value_type)?),
@@ -2948,6 +2959,10 @@ impl<'a> QueryContext<'a> {
 
         Ok((expr, scope))
     }
+
+    pub fn get_scalar_type_name(&self, typ: &ScalarType) -> String {
+        self.scx.get_scalar_type_name(typ)
+    }
 }
 
 /// A bundle of unrelated things that we need for planning `Expr`s.
@@ -3008,5 +3023,9 @@ impl<'a> ExprContext<'a> {
 
     pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {
         &self.qcx.scx.param_types
+    }
+
+    pub fn get_scalar_type_name(&self, typ: &ScalarType) -> String {
+        self.qcx.scx.get_scalar_type_name(typ)
     }
 }

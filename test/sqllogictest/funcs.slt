@@ -619,7 +619,7 @@ SELECT array_upper(NULL::text[], 1)
 ----
 NULL
 
-query error Cannot call function array_upper\(unknown, i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function array_upper\(unknown, int4\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT array_upper(NULL, 1)
 
 query T

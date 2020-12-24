@@ -26,7 +26,7 @@ use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::Expr;
-use sql::catalog::CatalogError as SqlCatalogError;
+use sql::catalog::{Catalog as SqlCatalog, CatalogError as SqlCatalogError};
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
@@ -79,6 +79,7 @@ pub const FIRST_USER_OID: u32 = 20_000;
 pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
+    by_oid: HashMap<u32, GlobalId>,
     indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
@@ -395,6 +396,7 @@ impl Catalog {
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
             by_id: BTreeMap::new(),
+            by_oid: HashMap::new(),
             indexes: HashMap::new(),
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
@@ -921,6 +923,7 @@ impl Catalog {
             .expect("catalog out of sync");
         let schema_id = schema.id;
         schema.items.insert(entry.name.item.clone(), entry.id);
+        self.by_oid.insert(oid, entry.id);
         self.by_id.insert(entry.id, entry);
 
         Event::CreatedItem {
@@ -1750,7 +1753,7 @@ impl From<PlanContext> for SerializedPlanContext {
     }
 }
 
-impl sql::catalog::Catalog for ConnCatalog<'_> {
+impl SqlCatalog for ConnCatalog<'_> {
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
         if include_system_schemas {
             self.search_path.to_vec()
@@ -1818,6 +1821,11 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
 
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn sql::catalog::CatalogItem {
         self.catalog.get_by_id(id)
+    }
+
+    fn get_item_by_oid(&self, oid: &u32) -> &dyn sql::catalog::CatalogItem {
+        let id = self.catalog.by_oid[oid];
+        self.catalog.get_by_id(&id)
     }
 
     fn item_exists(&self, name: &FullName) -> bool {

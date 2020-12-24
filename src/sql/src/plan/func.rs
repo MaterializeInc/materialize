@@ -809,7 +809,7 @@ where
         let types: Vec<_> = types
             .into_iter()
             .map(|ty| match ty {
-                Some(ty) => ty.to_string(),
+                Some(ty) => ecx.get_scalar_type_name(&ty),
                 None => "unknown".to_string(),
             })
             .collect();
@@ -1121,7 +1121,7 @@ fn coerce_args_to_types(
                     bail!(
                         "could not constrain polymorphic type because {} used in \
                         position that does not accept arrays or lists",
-                        ty
+                        ecx.get_scalar_type_name(&ty)
                     )
                 }
                 do_convert(arg, &ty)?
@@ -1390,8 +1390,8 @@ lazy_static! {
                 params!(Any) => Operation::new(|ecx, spec, exprs, params| {
                     // pg_typeof reports the type *before* coercion.
                     let name = match ecx.scalar_type(&exprs[0]) {
-                        None => "unknown",
-                        Some(ty) => pgrepr::Type::from(&ty).name(),
+                        None => "unknown".to_string(),
+                        Some(ty) => ecx.get_scalar_type_name(&ty),
                     };
 
                     // For consistency with other functions, verify that
@@ -1403,7 +1403,7 @@ lazy_static! {
                     // regtype, when we support that type. Document the function
                     // at that point. For now, it's useful enough to have this
                     // halfway version that returns a string.
-                    Ok(ScalarExpr::literal(Datum::String(name), ScalarType::String))
+                    Ok(ScalarExpr::literal(Datum::String(&name), ScalarType::String))
                 })
             },
             "regexp_match" => Scalar {

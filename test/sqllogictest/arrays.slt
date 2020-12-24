@@ -51,12 +51,12 @@ SELECT 1 = ANY(ARRAY[2])
 ----
 false
 
-query error ANY operand array must have type i32\[\], not type string\[\]
+query error ANY operand array must have type int4\[\], not type text\[\]
 SELECT 1 = ANY(ARRAY['1', '2'])
 ----
 true
 
-query error ANY operand array must have type i32\[\], not type string\[\]
+query error ANY operand array must have type int4\[\], not type text\[\]
 SELECT 1 = ANY(ARRAY['hi'::text])
 
 query error invalid input syntax for int4: invalid digit found in string: "hi"
@@ -147,7 +147,7 @@ SELECT ARRAY[1, 2, 3][1.5 + 1.5]
 3
 
 # Error different than Cockroach.
-query error cannot subscript type string
+query error cannot subscript type text
 SELECT ARRAY['a', 'b', 'c'][4][2]
 
 # This differs from Cockroach, but matches Postgres.

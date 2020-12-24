@@ -874,7 +874,7 @@ CREATE TABLE a (b STRING[])
 statement ok
 INSERT INTO a VALUES (ARRAY['foo'])
 
-statement error value type collatedstring{en}\[\] doesn't match type string\[\] of column "b"
+statement error value type collatedstring{en}\[\] doesn't match type text\[\] of column "b"
 INSERT INTO a VALUES (ARRAY['foo' COLLATE en])
 
 statement ok
