@@ -84,6 +84,7 @@ pub struct Catalog {
     temporary_schemas: HashMap<u32, Schema>,
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
+    oid_to_id: HashMap<u32, GlobalId>,
     config: sql::catalog::CatalogConfig,
 }
 
@@ -400,6 +401,7 @@ impl Catalog {
             temporary_schemas: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
+            oid_to_id: HashMap::new(),
             config: sql::catalog::CatalogConfig {
                 startup_time: SystemTime::now(),
                 nonce: rand::random(),
@@ -792,6 +794,10 @@ impl Catalog {
         &self.by_id[id]
     }
 
+    pub fn oid_to_id(&self, oid: &u32) -> &GlobalId {
+        &self.oid_to_id[oid]
+    }
+
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
     pub fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
@@ -921,6 +927,7 @@ impl Catalog {
             .expect("catalog out of sync");
         let schema_id = schema.id;
         schema.items.insert(entry.name.item.clone(), entry.id);
+        self.oid_to_id.insert(oid, entry.id.clone());
         self.by_id.insert(entry.id, entry);
 
         Event::CreatedItem {
@@ -1817,6 +1824,11 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
     }
 
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn sql::catalog::CatalogItem {
+        self.catalog.get_by_id(id)
+    }
+
+    fn get_item_by_oid(&self, oid: &u32) -> &dyn sql::catalog::CatalogItem {
+        let id = self.catalog.oid_to_id(oid);
         self.catalog.get_by_id(id)
     }
 

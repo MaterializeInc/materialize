@@ -35,4 +35,4 @@ int4
 query T
 SELECT pg_typeof(1.0)
 ----
-numeric
+numeric(38,1)

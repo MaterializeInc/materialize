@@ -97,7 +97,7 @@ d
 > SHOW DATABASES WHERE (name = (SELECT min(name) FROM mz_databases))
 d
 ! SHOW DATABASES WHERE 7
-WHERE clause must have type bool, not type i32
+WHERE clause must have type bool, not type int4
 
 # Creating a database with a name that already exists should fail.
 ! CREATE DATABASE d

@@ -49,7 +49,7 @@ SELECT ('{  c  =>3, a=>     2, a => 1 }'::map[text=>int])::text
 ----
 {a=>1,c=>3}
 
-query error map key type must be text, got i32
+query error map key type must be text, got int4
 SELECT '{1=>true}'::map[int=>bool]
 
 query T
@@ -126,7 +126,7 @@ SELECT ('{hello=>{world=>nested}}'::map[text=>map[text=>text]])::text
 ----
 {hello=>{world=>nested}}
 
-query error map key type must be text, got i32
+query error map key type must be text, got int4
 SELECT '{hello=>{1=>false}}'::map[text=>map[int=>bool]]
 
 query T
@@ -176,7 +176,7 @@ SELECT '{hello=>{world=>false}}'::map[text=>map[text=>bool]] -> 'hello'::text ? 
 true
 
 ## ?&
-query error string literal does not support casting from string to string\[\]
+query error string literal does not support casting from text to text\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& 'a'
 
 query error arguments cannot be implicitly cast to any implementation's parameters
@@ -234,7 +234,7 @@ SELECT '{hello=>{world=>1293}}'::map[text=>map[text=>smallint]] -> 'hello'::text
 false
 
 ## ?|
-query error string literal does not support casting from string to string\[\]
+query error string literal does not support casting from text to text\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| 'a'
 
 query error arguments cannot be implicitly cast to any implementation's parameters
@@ -451,7 +451,7 @@ SELECT '{a=>1,b=>2}'::int4_map::text;
 query T
 SELECT pg_typeof(NULL::int4_map);
 ----
-map
+materialize.public.int4_map
 
 # 🔬🔬 Check each valid value type
 

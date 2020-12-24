@@ -102,6 +102,11 @@ pub trait Catalog: fmt::Debug {
     /// Panics if `id` does not specify a valid item.
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem;
 
+    /// Gets an item by its OID.
+    ///
+    /// Panics if `oid` does not specify a valid item.
+    fn get_item_by_oid(&self, oid: &u32) -> &dyn CatalogItem;
+
     /// Reports whether the specified type exists in the catalog.
     fn item_exists(&self, name: &FullName) -> bool;
 
@@ -327,6 +332,10 @@ impl Catalog for DummyCatalog {
     }
 
     fn get_item_by_id(&self, _: &GlobalId) -> &dyn CatalogItem {
+        unimplemented!();
+    }
+
+    fn get_item_by_oid(&self, _: &u32) -> &dyn CatalogItem {
         unimplemented!();
     }
 

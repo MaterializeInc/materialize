@@ -141,7 +141,7 @@ impl Value {
                     .collect();
                 Some(Value::Map(entries))
             }
-            _ => panic!("can't serialize {}::{}", datum, typ),
+            _ => panic!("can't serialize {}::{:?}", datum, typ),
         }
     }
 
