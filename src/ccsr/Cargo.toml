@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 futures = "0.3"
 native-tls = "0.2.6"
-openssl = { version = "0.10.31", features = ["vendored"] }
+openssl = { version = "0.10.32", features = ["vendored"] }
 reqwest = { version = "0.10.8", features = ["blocking", "json", "native-tls-vendored"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.60"
