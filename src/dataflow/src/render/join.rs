@@ -23,7 +23,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
 use expr::{MapFilterProject, RelationExpr, ScalarExpr};
-use repr::{Datum, Row, RowArena, RowPacker};
+use repr::{Row, RowArena, RowPacker};
 
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
