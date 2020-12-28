@@ -236,7 +236,7 @@ where
                                         closure.apply(&mut unpacked, &temp_storage).transpose()
                                     }
                                 });
-                                region_errs.push(errs.map(|e| DataflowError::from(e)));
+                                region_errs.push(errs.map(DataflowError::from));
 
                                 // We track the input relations as they are added to the join so we can figure out
                                 // which expressions have been bound.
@@ -312,6 +312,8 @@ where
                                 mfp.permute(&column_map, column_map.len());
                                 // TODO(mcsherry): this could have been done in the previous `lookup`,
                                 // but that seems like a fair bit of code complexity at the moment.
+                                // TODO(mcsherry): at the least, this *should* just be permutation,
+                                // which we could determine cannot error.
                                 let (oks, errs) =
                                 update_stream.flat_map_fallible({
                                     let mut row_packer = repr::RowPacker::new();
@@ -319,7 +321,7 @@ where
                                         // TODO(mcsherry): re-use an allocation for unpacking.
                                         let mut unpacked = row.unpack();
                                         let temp_storage = RowArena::new();
-                                        mfp.evaluate(&mut unpacked, &temp_storage, &mut row_packer).map_err(|e| DataflowError::from(e)).transpose()
+                                        mfp.evaluate(&mut unpacked, &temp_storage, &mut row_packer).map_err(DataflowError::from).transpose()
                                     }
                                 });
 
@@ -535,14 +537,14 @@ where
 /// as there is a relationship between the borrowed lifetime of the closed-over
 /// state and the arguments it takes when invoked. It was not clear how to do
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
-struct MyClosure {
+pub struct MyClosure {
     ready_equivalences: Vec<Vec<ScalarExpr>>,
     before: MapFilterProject,
 }
 
 impl MyClosure {
     /// Applies per-row filtering and logic.
-    fn apply<'a>(
+    pub fn apply<'a>(
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
@@ -568,7 +570,7 @@ impl MyClosure {
     /// include reference to any columns added by the application of
     /// this logic, which might result from partial application of
     /// the `MapFilterProject` instance.
-    fn build(
+    pub fn build(
         columns: &mut HashMap<usize, usize>,
         equivalences: &mut Vec<Vec<ScalarExpr>>,
         mfp: &mut MapFilterProject,
@@ -615,8 +617,8 @@ impl MyClosure {
 
         // Next, partition `mfp` into `before` and `after`, the former of which can be
         // applied now.
-        let (before, after) =
-            std::mem::replace(mfp, MapFilterProject::new(mfp.input_arity)).partition(columns, columns.len());
+        let (before, after) = std::mem::replace(mfp, MapFilterProject::new(mfp.input_arity))
+            .partition(columns, columns.len());
         *mfp = after;
 
         // While it is top of mind, add any new columns to `columns` and increase `input_arity`.
