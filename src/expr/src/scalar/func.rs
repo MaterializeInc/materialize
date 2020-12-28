@@ -14,7 +14,10 @@ use std::fmt;
 use std::iter;
 use std::str;
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{
+    DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
+    Utc,
+};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
 use hmac::{Hmac, Mac, NewMac};
@@ -29,7 +32,7 @@ use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
 use repr::adt::array::ArrayDimension;
-use repr::adt::datetime::DateTimeUnits;
+use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
@@ -1838,6 +1841,95 @@ where
     }
 }
 
+/// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
+pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
+    tz.parse()
+        .map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
+}
+
+/// Converts the time `t`, which is assumed to be in UTC, to the timezone `tz`.
+/// For example, `EST` and `17:39:14` would return `12:39:14`.
+fn timezone_time(tz: Timezone, t: NaiveTime) -> Datum<'static> {
+    let offset = match tz {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&Utc::now().naive_utc()).fix(),
+    };
+    (t + offset).into()
+}
+
+/// Converts the timestamp `dt`, which is assumed to be in the time of the timezone `tz` to a timestamptz in UTC.
+/// This operation is fallible because certain timestamps at timezones that observe DST are simply impossible or
+/// ambiguous. In case of ambiguity (when a hour repeats) we will prefer the latest variant, and when an hour is
+/// impossible, we will attempt to fix it by advancing it. For example, `EST` and `2020-11-11T12:39:14` would return
+/// `2020-11-11T17:39:14Z`. A DST observing timezone like `America/New_York` would cause the following DST anomalies:
+/// `2020-11-01T00:59:59` -> `2020-11-01T04:59:59Z` and `2020-11-01T01:00:00` -> `2020-11-01T06:00:00Z`
+/// `2020-03-08T02:59:59` -> `2020-03-08T07:59:59Z` and `2020-03-08T03:00:00` -> `2020-03-08T07:00:00Z`
+fn timezone_timestamp(tz: Timezone, mut dt: NaiveDateTime) -> Result<Datum<'static>, EvalError> {
+    let offset = match tz {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
+            Some(offset) => offset.fix(),
+            None => {
+                dt += Duration::hours(1);
+                tz.offset_from_local_datetime(&dt)
+                    .latest()
+                    .ok_or(EvalError::InvalidTimezoneConversion)?
+                    .fix()
+            }
+        },
+    };
+    Ok(DateTime::from_utc(dt - offset, Utc).into())
+}
+
+/// Converts the UTC timestamptz `utc` to the local timestamp of the timezone `tz`.
+/// For example, `EST` and `2020-11-11T17:39:14Z` would return `2020-11-11T12:39:14`.
+fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> Datum<'static> {
+    let offset = match tz {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&utc.naive_utc()).fix(),
+    };
+    (utc.naive_utc() + offset).into()
+}
+
+/// Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed
+/// to represent. The interval is not allowed to hold months, but there are no limits on the amount of seconds.
+/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
+fn timezone_interval_time(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
+    let interval = a.unwrap_interval();
+    if interval.months != 0 {
+        Err(EvalError::InvalidTimezoneInterval)
+    } else {
+        Ok(b.unwrap_time()
+            .overflowing_add_signed(interval.duration_as_chrono())
+            .0
+            .into())
+    }
+}
+
+/// Converts the timestamp datum `b`, which is assumed to be in the time of the timezone datum `a` to a timestamptz
+/// in UTC. The interval is not allowed to hold months, but there are no limits on the amount of seconds.
+/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
+fn timezone_interval_timestamp(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
+    let interval = a.unwrap_interval();
+    if interval.months != 0 {
+        Err(EvalError::InvalidTimezoneInterval)
+    } else {
+        Ok(DateTime::from_utc(b.unwrap_timestamp() - interval.duration_as_chrono(), Utc).into())
+    }
+}
+
+/// Converts the UTC timestamptz datum `b`, to the local timestamp of the timezone datum `a`.
+/// The interval is not allowed to hold months, but there are no limits on the amount of seconds.
+/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
+fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
+    let interval = a.unwrap_interval();
+    if interval.months != 0 {
+        Err(EvalError::InvalidTimezoneInterval)
+    } else {
+        Ok((b.unwrap_timestamptz().naive_utc() + interval.duration_as_chrono()).into())
+    }
+}
+
 fn to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
     let f = a.unwrap_float64();
     if !f.is_finite() {
@@ -1969,6 +2061,12 @@ pub enum BinaryFunc {
     DatePartTimestampTz,
     DateTruncTimestamp,
     DateTruncTimestampTz,
+    TimezoneTimestamp,
+    TimezoneTimestampTz,
+    TimezoneTime,
+    TimezoneIntervalTimestamp,
+    TimezoneIntervalTimestampTz,
+    TimezoneIntervalTime,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
     TextConcat,
@@ -2094,6 +2192,21 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestampTz => {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz()))
             }
+            BinaryFunc::TimezoneTimestamp => {
+                eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
+                    .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp())))
+            }
+            BinaryFunc::TimezoneTimestampTz => {
+                eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
+                    .map(|tz| timezone_timestamptz(tz, b.unwrap_timestamptz())))
+            }
+            BinaryFunc::TimezoneTime => {
+                eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
+                    .map(|tz| timezone_time(tz, b.unwrap_time())))
+            }
+            BinaryFunc::TimezoneIntervalTimestamp => eager!(timezone_interval_timestamp),
+            BinaryFunc::TimezoneIntervalTimestampTz => eager!(timezone_interval_timestamptz),
+            BinaryFunc::TimezoneIntervalTime => eager!(timezone_interval_time),
             BinaryFunc::CastFloat32ToDecimal => eager!(cast_float32_to_decimal),
             BinaryFunc::CastFloat64ToDecimal => eager!(cast_float64_to_decimal),
             BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),
@@ -2236,11 +2349,21 @@ impl BinaryFunc {
                 ScalarType::Timestamp.nullable(true)
             }
 
+            TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
+                ScalarType::Timestamp.nullable(in_nullable)
+            }
+
             DatePartInterval | DatePartTimestamp | DatePartTimestampTz => {
                 ScalarType::Float64.nullable(true)
             }
 
             DateTruncTimestampTz => ScalarType::TimestampTz.nullable(true),
+
+            TimezoneTimestamp | TimezoneIntervalTimestamp => {
+                ScalarType::TimestampTz.nullable(in_nullable)
+            }
+
+            TimezoneTime | TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
 
             SubTime => ScalarType::Interval.nullable(true),
 
@@ -2446,6 +2569,12 @@ impl BinaryFunc {
             | DatePartTimestampTz
             | DateTruncTimestamp
             | DateTruncTimestampTz
+            | TimezoneTimestamp
+            | TimezoneTimestampTz
+            | TimezoneTime
+            | TimezoneIntervalTimestamp
+            | TimezoneIntervalTimestampTz
+            | TimezoneIntervalTime
             | CastFloat32ToDecimal
             | CastFloat64ToDecimal
             | RoundDecimal(_)
@@ -2528,6 +2657,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DatePartTimestampTz => f.write_str("date_parttstz"),
             BinaryFunc::DateTruncTimestamp => f.write_str("date_truncts"),
             BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
+            BinaryFunc::TimezoneTimestamp => f.write_str("timezonets"),
+            BinaryFunc::TimezoneTimestampTz => f.write_str("timezonetstz"),
+            BinaryFunc::TimezoneTime => f.write_str("timezonet"),
+            BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
+            BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
+            BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::TextConcat => f.write_str("||"),
@@ -2697,6 +2832,9 @@ pub enum UnaryFunc {
     DatePartTimestampTz(DateTimeUnits),
     DateTruncTimestamp(DateTimeUnits),
     DateTruncTimestampTz(DateTimeUnits),
+    TimezoneTimestamp(Timezone),
+    TimezoneTimestampTz(Timezone),
+    TimezoneTime(Timezone),
     ToTimestamp,
     JsonbArrayLength,
     JsonbTypeof,
@@ -2850,6 +2988,11 @@ impl UnaryFunc {
             UnaryFunc::DateTruncTimestampTz(units) => {
                 date_trunc_inner(*units, a.unwrap_timestamptz())
             }
+            UnaryFunc::TimezoneTimestamp(tz) => timezone_timestamp(*tz, a.unwrap_timestamp()),
+            UnaryFunc::TimezoneTimestampTz(tz) => {
+                Ok(timezone_timestamptz(*tz, a.unwrap_timestamptz()))
+            }
+            UnaryFunc::TimezoneTime(tz) => Ok(timezone_time(*tz, a.unwrap_time())),
             UnaryFunc::ToTimestamp => Ok(to_timestamp(a)),
             UnaryFunc::JsonbArrayLength => Ok(jsonb_array_length(a)),
             UnaryFunc::JsonbTypeof => Ok(jsonb_typeof(a)),
@@ -2942,13 +3085,13 @@ impl UnaryFunc {
 
             CastTimestampToDate | CastTimestampTzToDate => ScalarType::Date.nullable(in_nullable),
 
-            CastIntervalToTime => ScalarType::Time.nullable(in_nullable),
+            CastIntervalToTime | TimezoneTime(_) => ScalarType::Time.nullable(in_nullable),
 
-            CastDateToTimestamp | CastTimestampTzToTimestamp => {
+            CastDateToTimestamp | CastTimestampTzToTimestamp | TimezoneTimestampTz(_) => {
                 ScalarType::Timestamp.nullable(in_nullable)
             }
 
-            CastDateToTimestampTz | CastTimestampToTimestampTz => {
+            CastDateToTimestampTz | CastTimestampToTimestampTz | TimezoneTimestamp(_) => {
                 ScalarType::TimestampTz.nullable(in_nullable)
             }
 
@@ -3154,6 +3297,9 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::DatePartTimestampTz(units) => write!(f, "date_part_{}_tstz", units),
             UnaryFunc::DateTruncTimestamp(units) => write!(f, "date_trunc_{}_ts", units),
             UnaryFunc::DateTruncTimestampTz(units) => write!(f, "date_trunc_{}_tstz", units),
+            UnaryFunc::TimezoneTimestamp(tz) => write!(f, "timezone_{}_ts", tz),
+            UnaryFunc::TimezoneTimestampTz(tz) => write!(f, "timezone_{}_tstz", tz),
+            UnaryFunc::TimezoneTime(tz) => write!(f, "timezone_{}_t", tz),
             UnaryFunc::ToTimestamp => f.write_str("tots"),
             UnaryFunc::JsonbArrayLength => f.write_str("jsonb_array_length"),
             UnaryFunc::JsonbTypeof => f.write_str("jsonb_typeof"),
