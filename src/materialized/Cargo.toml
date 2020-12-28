@@ -14,7 +14,7 @@ license = "proprietary"
 anyhow = "1.0.34"
 askama = { version = "0.10.5", features = ["serde-json"] }
 async-trait = "0.1.42"
-backtrace = { version = "0.3.54" }
+backtrace = { version = "0.3.55" }
 build-info = { path = "../build-info" }
 cfg-if = "1.0.0"
 comm = { path = "../comm" }
