@@ -9,7 +9,7 @@ publish = false
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 env_logger = "0.8.2"
 getopts = "0.2"
-hyper = "0.13"
+hyper = "0.14"
 lazy_static = "1.4"
 log = "0.4.11"
 mz-process-collector = { path = "../mz-process-collector" }
