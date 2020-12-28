@@ -35,10 +35,12 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::catalog::error::{Error, ErrorKind};
+use crate::catalog::migrate::CONTENT_MIGRATIONS;
 use crate::session::Session;
 
 mod config;
 mod error;
+mod migrate;
 
 pub mod builtin;
 pub mod storage;
@@ -382,47 +384,6 @@ impl CatalogEntry {
     }
 }
 
-const CATALOG_CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), Error>] = &[
-    // Reparses and rewrites all catalog items, which was necessary
-    // because we began qualifying type names.
-    //
-    // Introduced for v0.6.1
-    |catalog: &mut Catalog| {
-        let mut storage = catalog.storage();
-        let items = storage.load_items()?;
-        let tx = storage.transaction()?;
-        for (id, name, def) in items {
-            let item = match catalog.deserialize_item(def) {
-                Ok(item) => item,
-                Err(e) => {
-                    return Err(Error::new(ErrorKind::Corruption {
-                        detail: format!("failed to deserialize item {} ({}): {}", id, name, e),
-                    }))
-                }
-            };
-            let serialized_item = catalog.serialize_item(&item);
-            tx.update_item(id, &name.item, &serialized_item)?;
-        }
-        tx.commit()?;
-        Ok(())
-    },
-    // Add new migrations here.
-    //
-    // Migrations should be preceded with a comment of the following form:
-    //
-    //     > Short summary of migration's purpose.
-    //     >
-    //     > Introduced in <VERSION>.
-    //     >
-    //     > Optional additional commentary about safety or approach.
-    //
-    // Please include @benesch on any code reviews that add or edit migrations.
-    // Migrations must preserve backwards compatibility with all past releases
-    // of materialized. Migrations can be edited up until they ship in a
-    // release, after which they must never be removed, only patched by future
-    // migrations.
-];
-
 impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
     ///
@@ -637,6 +598,21 @@ impl Catalog {
             }
         }
 
+        let mut catalog_content_version = catalog.storage().get_catalog_content_version()?;
+
+        while CONTENT_MIGRATIONS.len() > catalog_content_version {
+            if let Err(e) = CONTENT_MIGRATIONS[catalog_content_version](&mut catalog) {
+                return Err(Error::new(ErrorKind::FailedMigration {
+                    last_version: catalog_content_version,
+                    cause: e.to_string(),
+                }));
+            }
+            catalog_content_version += 1;
+            catalog
+                .storage()
+                .set_catalog_content_version(catalog_content_version)?;
+        }
+
         let items = catalog.storage().load_items()?;
         for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
@@ -663,20 +639,7 @@ impl Catalog {
             let oid = catalog.allocate_oid()?;
             events.push(catalog.insert_item(id, oid, name, item));
         }
-
-        let catalog_content_version = catalog.storage().get_catalog_content_version()?;
-
-        if CATALOG_CONTENT_MIGRATIONS.len() > catalog_content_version {
-            CATALOG_CONTENT_MIGRATIONS[catalog_content_version](&mut catalog)?;
-            catalog
-                .storage()
-                .set_catalog_content_version(catalog_content_version + 1)?;
-            // Reopen catalog with new contents to ensure on-disk and in-memory
-            // state remain synchronized.
-            Catalog::open(config)
-        } else {
-            Ok((catalog, events))
-        }
+        Ok((catalog, events))
     }
 
     /// Opens the catalog at `path` with parameters set appropriately for debug
