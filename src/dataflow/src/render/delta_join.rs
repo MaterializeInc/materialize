@@ -19,6 +19,7 @@ use repr::{Datum, Row, RowArena, RowPacker, Timestamp};
 
 use super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
+use crate::render::datum_vec::DatumVec;
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
@@ -229,11 +230,12 @@ where
 
                                 // Apply what `closure` we are able to, and record any errors.
                                 let (mut update_stream, errs) = update_stream.flat_map_fallible({
+                                    let mut datums = DatumVec::new();
                                     move |row| {
-                                        // TODO(mcsherry): re-use allocation for unpacking.
-                                        let mut unpacked = row.unpack();
                                         let temp_storage = RowArena::new();
-                                        closure.apply(&mut unpacked, &temp_storage).transpose()
+                                        let mut datums_local = datums.borrow_with(&row);
+                                        // TODO(mcsherry): re-use `row` allocation.
+                                        closure.apply(&mut datums_local, &temp_storage).transpose()
                                     }
                                 });
                                 region_errs.push(errs.map(DataflowError::from));
@@ -273,8 +275,6 @@ where
                                         equivalence.retain(|expr| !next_key_rebased.contains(expr));
                                     }
                                     equivalences.retain(|e| e.len() > 1);
-
-                                    // TODO(mcsherry): Investigate demanded columns as in DifferentialLinear join.
 
                                     // Update our map of the sources of each column in the update stream.
                                     for column in input_mapper.global_columns(*other) {
@@ -316,12 +316,14 @@ where
                                 // which we could determine cannot error.
                                 let (oks, errs) =
                                 update_stream.flat_map_fallible({
+                                    // Reuseable allocation for unpacking.
+                                    let mut datums = DatumVec::new();
                                     let mut row_packer = repr::RowPacker::new();
                                     move |row| {
-                                        // TODO(mcsherry): re-use an allocation for unpacking.
-                                        let mut unpacked = row.unpack();
                                         let temp_storage = RowArena::new();
-                                        mfp.evaluate(&mut unpacked, &temp_storage, &mut row_packer).map_err(DataflowError::from).transpose()
+                                        let mut datums_local = datums.borrow_with(&row);
+                                        // TODO(mcsherry): re-use `row` allocation.
+                                        mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer).map_err(DataflowError::from).transpose()
                                     }
                                 });
 
@@ -371,18 +373,27 @@ where
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {
-    let (updates, errs) = updates.map_fallible(move |row| {
-        // TODO(mcsherry): re-use allocation for unpacking.
-        let datums = row.unpack();
-        let temp_storage = RowArena::new();
-        // TODO(mcsherry): re-use row packer.
-        // TODO(mcsherry): re-use row allocation.
-        let row_key = Row::try_pack(prev_key.iter().map(|e| e.eval(&datums, &temp_storage)))?;
-        Ok((row, row_key))
+    let (updates, errs) = updates.map_fallible({
+        // Reuseable allocation for unpacking.
+        let mut datums = DatumVec::new();
+        move |row| {
+            let temp_storage = RowArena::new();
+            let datums_local = datums.borrow_with(&row);
+            // TODO(mcsherry): re-use row packer.
+            let row_key = Row::try_pack(
+                prev_key
+                    .iter()
+                    .map(|e| e.eval(&datums_local, &temp_storage)),
+            )?;
+            // Explicit drop to release borrow on `row` so that it can be returned.
+            drop(datums_local);
+            Ok((row, row_key))
+        }
     });
 
     use differential_dataflow::AsCollection;
     use timely::dataflow::operators::OkErr;
+
     let (oks, errs2) = dogsdogsdogs::operators::lookup_map(
         &updates,
         trace,
@@ -393,14 +404,15 @@ where
         },
         // TODO(mcsherry): consider `RefOrMut` in `lookup` interface to allow re-use.
         move |(prev_row, _prev_row_key), diff1, next_row, diff2| {
-            // Output selector must produce (d_out, r_out) for each match.
-            // TODO(mcsherry): re-use an allocation for unpacking.
+            // TODO(mcsherry): Re-use allocation for unpacking. Requires that this be
+            // a `FnMut` rather than a `Fn`.
             let mut datums = Vec::new();
             datums.extend(prev_row.iter());
             datums.extend(next_row.iter());
             let temp_storage = RowArena::new();
             // Return the result
-            (closure.apply(&mut datums, &temp_storage), diff1 * diff2)
+            let result = (closure.apply(&mut datums, &temp_storage), diff1 * diff2);
+            result
         },
         // Three default values, for decoding keys into.
         Row::pack::<_, Datum>(None),

@@ -27,6 +27,7 @@ use repr::{Datum, Row, RowArena};
 
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
+use crate::render::datum_vec::DatumVec;
 use crate::render::delta_join::MyClosure;
 
 impl<G, T> Context<G, RelationExpr, Row, T>
@@ -89,12 +90,14 @@ where
                 // directly on the starting collection.
                 // If there is only one input, we are done joining, so run filters
                 let (j, es) = joined.flat_map_fallible({
+                    // Reuseable allocation for unpacking.
+                    let mut datums = DatumVec::new();
                     move |row| {
-                        // TODO(mcsherry): re-use allocation for unpacking.
-                        let mut unpacked = row.unpack();
                         let temp_storage = RowArena::new();
+                        let mut datums_local = datums.borrow_with(&row);
+                        // TODO(mcsherry): re-use `row` allocation.
                         closure
-                            .apply(&mut unpacked, &temp_storage)
+                            .apply(&mut datums_local, &temp_storage)
                             .map_err(DataflowError::from)
                             .transpose()
                     }
@@ -164,14 +167,19 @@ where
                         // joins of previous inputs.
                         // We exploit the demand information to restrict `prev` to
                         // its demanded columns.
-
                         let (prev_keyed, es) = joined.map_fallible({
+                            // Reuseable allocation for unpacking.
+                            let mut datums = DatumVec::new();
                             move |row| {
-                                let datums = row.unpack();
                                 let temp_storage = RowArena::new();
+                                let datums_local = datums.borrow_with(&row);
                                 let key = Row::try_pack(
-                                    prev_keys.iter().map(|e| e.eval(&datums, &temp_storage)),
+                                    prev_keys
+                                        .iter()
+                                        .map(|e| e.eval(&datums_local, &temp_storage)),
                                 )?;
+                                // Explicit drop here to allow `row` to be returned.
+                                drop(datums_local);
                                 // TODO(mcsherry): We could remove any columns used only for `key`.
                                 // This cannot be done any earlier, for example in a prior closure,
                                 // because we need the columns for key production.
@@ -205,12 +213,14 @@ where
             // TODO(mcsherry): at the least, this *should* just be permutation,
             // which we could determine cannot error.
             let (oks, errs2) = joined.flat_map_fallible({
+                // Reuseable allocation for unpacking.
+                let mut datums = DatumVec::new();
                 let mut row_packer = repr::RowPacker::new();
                 move |row| {
-                    // TODO(mcsherry): re-use an allocation for unpacking.
-                    let mut unpacked = row.unpack();
                     let temp_storage = RowArena::new();
-                    mfp.evaluate(&mut unpacked, &temp_storage, &mut row_packer)
+                    let mut datums_local = datums.borrow_with(&row);
+                    // TODO(mcsherry): re-use `row` allocation.
+                    mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer)
                         .map_err(DataflowError::from)
                         .transpose()
                 }
@@ -287,17 +297,18 @@ where
         use differential_dataflow::AsCollection;
         use timely::dataflow::operators::OkErr;
 
+        // Reuseable allocation for unpacking.
+        let mut datums = DatumVec::new();
         // let mut row_packer = repr::RowPacker::new();
         let (oks, err) = prev_keyed
             .join_core(&next_input, move |_keys, old, new| {
-                // TODO(mcsherry): re-use allocation for unpacking.
-                let mut datums = Vec::new();
-                datums.extend(old.iter());
-                datums.extend(new.iter());
-
                 let temp_storage = RowArena::new();
+                let mut datums_local = datums.borrow();
+                datums_local.extend(old.iter());
+                datums_local.extend(new.iter());
+
                 closure
-                    .apply(&mut datums, &temp_storage)
+                    .apply(&mut datums_local, &temp_storage)
                     .map_err(DataflowError::from)
                     .transpose()
             })
