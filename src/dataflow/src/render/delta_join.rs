@@ -231,11 +231,12 @@ where
                                 // Apply what `closure` we are able to, and record any errors.
                                 let (mut update_stream, errs) = update_stream.flat_map_fallible({
                                     let mut datums = DatumVec::new();
+                                    let mut row_packer = RowPacker::new();
                                     move |row| {
                                         let temp_storage = RowArena::new();
                                         let mut datums_local = datums.borrow_with(&row);
                                         // TODO(mcsherry): re-use `row` allocation.
-                                        closure.apply(&mut datums_local, &temp_storage).transpose()
+                                        closure.apply(&mut datums_local, &temp_storage, &mut row_packer).transpose()
                                     }
                                 });
                                 region_errs.push(errs.map(DataflowError::from));
@@ -376,15 +377,17 @@ where
     let (updates, errs) = updates.map_fallible({
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
+        let mut row_packer = RowPacker::new();
         move |row| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
-            // TODO(mcsherry): re-use row packer.
-            let row_key = Row::try_pack(
+            row_packer.clear();
+            row_packer.try_extend(
                 prev_key
                     .iter()
                     .map(|e| e.eval(&datums_local, &temp_storage)),
             )?;
+            let row_key = row_packer.finish_and_reuse();
             // Explicit drop to release borrow on `row` so that it can be returned.
             drop(datums_local);
             Ok((row, row_key))
@@ -394,25 +397,25 @@ where
     use differential_dataflow::AsCollection;
     use timely::dataflow::operators::OkErr;
 
+    let mut datums = DatumVec::new();
+    let mut row_packer = RowPacker::new();
     let (oks, errs2) = dogsdogsdogs::operators::lookup_map(
         &updates,
         trace,
         move |(_row, row_key), key| {
             // Prefix key selector must populate `key` with key from prefix `row`.
-            // TODO(mcsherry): investigate `clone_into`.
-            *key = row_key.clone();
+            key.clone_from(&row_key);
         },
         // TODO(mcsherry): consider `RefOrMut` in `lookup` interface to allow re-use.
         move |(prev_row, _prev_row_key), diff1, next_row, diff2| {
-            // TODO(mcsherry): Re-use allocation for unpacking. Requires that this be
-            // a `FnMut` rather than a `Fn`.
-            let mut datums = Vec::new();
-            datums.extend(prev_row.iter());
-            datums.extend(next_row.iter());
             let temp_storage = RowArena::new();
-            // Return the result
-            let result = (closure.apply(&mut datums, &temp_storage), diff1 * diff2);
-            result
+            let mut datums_local = datums.borrow();
+            datums_local.extend(prev_row.iter());
+            datums_local.extend(next_row.iter());
+            (
+                closure.apply(&mut datums_local, &temp_storage, &mut row_packer),
+                diff1 * diff2,
+            )
         },
         // Three default values, for decoding keys into.
         Row::pack::<_, Datum>(None),
@@ -560,6 +563,7 @@ impl MyClosure {
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
+        row_packer: &mut RowPacker,
     ) -> Result<Option<Row>, expr::EvalError> {
         for exprs in self.ready_equivalences.iter() {
             // Each list of expressions should be equal to the same value.
@@ -570,9 +574,7 @@ impl MyClosure {
                 }
             }
         }
-        // TODO(mcsherry): re-use an existing row packer.
-        let mut row_packer = RowPacker::new();
-        self.before.evaluate(datums, &temp_storage, &mut row_packer)
+        self.before.evaluate(datums, &temp_storage, row_packer)
     }
 
     /// Construct an instance of the closue from available columns.

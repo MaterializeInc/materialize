@@ -23,7 +23,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
 use expr::{MapFilterProject, RelationExpr, ScalarExpr};
-use repr::{Datum, Row, RowArena};
+use repr::{Datum, Row, RowArena, RowPacker};
 
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
@@ -92,12 +92,13 @@ where
                 let (j, es) = joined.flat_map_fallible({
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();
+                    let mut row_packer = RowPacker::new();
                     move |row| {
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums.borrow_with(&row);
                         // TODO(mcsherry): re-use `row` allocation.
                         closure
-                            .apply(&mut datums_local, &temp_storage)
+                            .apply(&mut datums_local, &temp_storage, &mut row_packer)
                             .map_err(DataflowError::from)
                             .transpose()
                     }
@@ -299,6 +300,7 @@ where
 
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
+        let mut row_packer = RowPacker::new();
         // let mut row_packer = repr::RowPacker::new();
         let (oks, err) = prev_keyed
             .join_core(&next_input, move |_keys, old, new| {
@@ -308,7 +310,7 @@ where
                 datums_local.extend(new.iter());
 
                 closure
-                    .apply(&mut datums_local, &temp_storage)
+                    .apply(&mut datums_local, &temp_storage, &mut row_packer)
                     .map_err(DataflowError::from)
                     .transpose()
             })
