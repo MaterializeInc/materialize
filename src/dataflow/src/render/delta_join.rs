@@ -617,7 +617,7 @@ impl MyClosure {
 
         // Next, partition `mfp` into `before` and `after`, the former of which can be
         // applied now.
-        let (before, after) = std::mem::replace(mfp, MapFilterProject::new(mfp.input_arity))
+        let (mut before, after) = std::mem::replace(mfp, MapFilterProject::new(mfp.input_arity))
             .partition(columns, columns.len());
         *mfp = after;
 
@@ -625,6 +625,29 @@ impl MyClosure {
         let bonus_columns = before.projection.len() - before.input_arity;
         for bonus_column in 0..bonus_columns {
             columns.insert(mfp.input_arity + bonus_column, columns.len());
+        }
+
+        // Before constructing and returning the result, we can remove output columns of `before`
+        // that are not needed in further `equivalences` or by `after` (now `mfp`).
+        let mut demand = Vec::new();
+        demand.extend(mfp.demand());
+        for equivalence in equivalences.iter() {
+            for expr in equivalence.iter() {
+                demand.extend(expr.support());
+            }
+        }
+        demand.sort();
+        demand.dedup();
+        // We only want to remove columns that are presented as outputs (i.e. can be found as in
+        // `columns`). Other columns have yet to be introduced, and we shouldn't have any opinion
+        // about them yet.
+        demand.retain(|column| columns.contains_key(column));
+        // Project `before` output columns using current locations of demanded columns.
+        before = before.project(demand.iter().map(|column| columns[column]));
+        // Update `columns` to reflect location of retained columns.
+        columns.clear();
+        for (index, column) in demand.iter().enumerate() {
+            columns.insert(*column, index);
         }
 
         // Cons up an instance of the closue with the closed-over state.
