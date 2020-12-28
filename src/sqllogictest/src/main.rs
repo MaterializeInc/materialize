@@ -25,6 +25,7 @@ recursively for sqllogictest files."#;
 #[tokio::main]
 async fn main() {
     ore::panic::set_abort_on_panic();
+    ore::test::init_logging_default("warn");
 
     let args: Vec<_> = env::args().collect();
     let mut opts = Options::new();
