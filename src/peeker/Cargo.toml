@@ -20,4 +20,4 @@ prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", de
 regex = "1.4.1"
 serde = { version = "1.0.118", features = ["derive"] }
 tokio = { version = "0.2.22", features = ["rt-threaded"] }
-toml = "0.5.7"
+toml = "0.5.8"
