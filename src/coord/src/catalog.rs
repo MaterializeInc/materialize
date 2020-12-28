@@ -382,25 +382,92 @@ impl CatalogEntry {
     }
 }
 
-const CATALOG_CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), Error>] = &[
-    // Reparses and rewrites all catalog items, which was necessary
-    // because we began qualifying type names.
+const CATALOG_CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] = &[
+    // Rewrites all built-in type references to have `pg_catalog` qualification;
+    // this is necessary to support resolving all type names to the catalog.
+    //
+    // The approach is to prepend `pg_catalog` to all `DataType::Other` names
+    // that only contain a single element. We do this in the AST and without
+    // replanning the `CREATE` statement because the catalog still contains no
+    // items at this point, e.g. attempting to plan any item with a dependency
+    // will fail.
     //
     // Introduced for v0.6.1
     |catalog: &mut Catalog| {
+        use sql_parser::ast::{
+            visit_mut::VisitMut, CreateTableStatement, CreateViewStatement, DataType, Ident,
+            ObjectName, Statement,
+        };
+
+        struct TypeNormalizer {
+            err: Option<Error>,
+        }
+
+        impl<'ast> VisitMut<'ast> for TypeNormalizer {
+            fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType) {
+                if let DataType::Other { name, .. } = data_type {
+                    if name.0.len() == 1 {
+                        *name = ObjectName(vec![Ident::new(PG_CATALOG_SCHEMA), name.0.remove(0)]);
+                    }
+                }
+            }
+        }
+
         let mut storage = catalog.storage();
         let items = storage.load_items()?;
         let tx = storage.transaction()?;
+
         for (id, name, def) in items {
-            let item = match catalog.deserialize_item(def) {
-                Ok(item) => item,
-                Err(e) => {
-                    return Err(Error::new(ErrorKind::Corruption {
-                        detail: format!("failed to deserialize item {} ({}): {}", id, name, e),
-                    }))
+            let SerializedCatalogItem::V1 {
+                create_sql,
+                eval_env,
+            } = serde_json::from_slice(&def)?;
+
+            let mut stmt = sql::parse::parse(&create_sql)?.into_element();
+            match &mut stmt {
+                Statement::CreateTable(CreateTableStatement {
+                    name: _,
+                    columns,
+                    constraints: _,
+                    with_options: _,
+                    if_not_exists: _,
+                }) => {
+                    let mut normalizer = TypeNormalizer { err: None };
+                    for c in columns {
+                        normalizer.visit_column_def_mut(c);
+                    }
+                    if let Some(err) = normalizer.err {
+                        return Err(err.into());
+                    }
                 }
+
+                Statement::CreateView(CreateViewStatement {
+                    name: _,
+                    columns: _,
+                    query,
+                    temporary: _,
+                    materialized: _,
+                    if_exists: _,
+                    with_options: _,
+                }) => {
+                    let mut normalizer = TypeNormalizer { err: None };
+                    normalizer.visit_query_mut(query);
+                    if let Some(err) = normalizer.err {
+                        return Err(err.into());
+                    }
+                }
+                // Only tables and views contain references to types; other
+                // objects don't need to be rewritten.
+                _ => continue,
+            }
+
+            let serialized_item = SerializedCatalogItem::V1 {
+                create_sql: stmt.to_ast_string(),
+                eval_env,
             };
-            let serialized_item = catalog.serialize_item(&item);
+
+            let serialized_item =
+                serde_json::to_vec(&serialized_item).expect("catalog serialization cannot fail");
             tx.update_item(id, &name.item, &serialized_item)?;
         }
         tx.commit()?;
@@ -637,6 +704,21 @@ impl Catalog {
             }
         }
 
+        let mut catalog_content_version = catalog.storage().get_catalog_content_version()?;
+
+        while CATALOG_CONTENT_MIGRATIONS.len() > catalog_content_version {
+            if let Err(e) = CATALOG_CONTENT_MIGRATIONS[catalog_content_version](&mut catalog) {
+                return Err(Error::new(ErrorKind::FailedMigration {
+                    last_version: catalog_content_version,
+                    cause: e.to_string(),
+                }));
+            }
+            catalog_content_version += 1;
+            catalog
+                .storage()
+                .set_catalog_content_version(catalog_content_version)?;
+        }
+
         let items = catalog.storage().load_items()?;
         for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
@@ -663,20 +745,7 @@ impl Catalog {
             let oid = catalog.allocate_oid()?;
             events.push(catalog.insert_item(id, oid, name, item));
         }
-
-        let catalog_content_version = catalog.storage().get_catalog_content_version()?;
-
-        if CATALOG_CONTENT_MIGRATIONS.len() > catalog_content_version {
-            CATALOG_CONTENT_MIGRATIONS[catalog_content_version](&mut catalog)?;
-            catalog
-                .storage()
-                .set_catalog_content_version(catalog_content_version + 1)?;
-            // Reopen catalog with new contents to ensure on-disk and in-memory
-            // state remain synchronized.
-            Catalog::open(config)
-        } else {
-            Ok((catalog, events))
-        }
+        Ok((catalog, events))
     }
 
     /// Opens the catalog at `path` with parameters set appropriately for debug
