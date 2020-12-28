@@ -71,7 +71,7 @@ where
             }
             // We maintain a private copy of `map_filter_project`, which we will
             // digest as we produce the join.
-            let mut mfp = map_filter_project.clone();
+            let mut mfp = map_filter_project;
 
             // This collection will evolve as we join in more inputs.
             // TODO(mcsherry): this clashes with the subsequent arrangement-based input.
@@ -319,7 +319,7 @@ where
                 // TODO(mcsherry): consider `ok_err()` for `Collection`.
                 match x {
                     Ok(x) => Ok((x, t, d)),
-                    Err(x) => Err((DataflowError::from(x), t, d)),
+                    Err(x) => Err((x, t, d)),
                 }
             });
 
