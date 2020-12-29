@@ -23,8 +23,8 @@ use rusoto_core::Region;
 use url::Url;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
-    DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
+    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, AwsConnectInfo, Consistency,
+    CsvEncoding, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
     KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding,
     RegexEncoding, SinkConnectorBuilder, SourceConnector,
 };
@@ -1269,30 +1269,9 @@ fn handle_create_source(
                 None => bail!("Provided ARN does not include an AWS region"),
             };
 
-            // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
-            // https://github.com/materializeinc/materialize/issues/1991
-            let access_key_id = match with_options.remove("access_key_id") {
-                Some(Value::String(access_key_id)) => Some(access_key_id),
-                Some(_) => bail!("access_key_id must be a string"),
-                _ => None,
-            };
-            let secret_access_key = match with_options.remove("secret_access_key") {
-                Some(Value::String(secret_access_key)) => Some(secret_access_key),
-                Some(_) => bail!("secret_access_key must be a string"),
-                _ => None,
-            };
-            let token = match with_options.remove("token") {
-                Some(Value::String(token)) => Some(token),
-                Some(_) => bail!("token must be a string"),
-                _ => None,
-            };
-
             let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                 stream_name,
-                region,
-                access_key_id,
-                secret_access_key,
-                token,
+                aws_info: aws_connect_info(&mut with_options, Some(region))?,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
@@ -2094,3 +2073,30 @@ with_options! { struct TailOptions {
 with_options! { struct FetchOptions {
     timeout: Interval,
 } }
+
+fn aws_connect_info(
+    options: &mut HashMap<String, Value>,
+    region: Option<Region>,
+) -> anyhow::Result<AwsConnectInfo> {
+    // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
+    // https://github.com/materializeinc/materialize/issues/1991
+    let mut extract = |key| match options.remove(key) {
+        Some(Value::String(key)) => Ok(Some(key)),
+        Some(_) => bail!("{} must be a string", key),
+        _ => Ok(None),
+    };
+    let region = match region {
+        Some(region) => region,
+        None => extract("region")?
+            .map(|r| r.parse())
+            .transpose()?
+            // TODO: do we want to have a default region?
+            .ok_or_else(|| anyhow::anyhow!("region is required"))?,
+    };
+    Ok(AwsConnectInfo {
+        region,
+        access_key_id: extract("access_key_id")?,
+        secret_access_key: extract("secret_access_key")?,
+        token: extract("token")?,
+    })
+}

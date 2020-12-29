@@ -614,16 +614,21 @@ pub struct KafkaSourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnector {
     pub stream_name: String,
-    pub region: Region,
-    pub access_key_id: Option<String>,
-    pub secret_access_key: Option<String>,
-    pub token: Option<String>,
+    pub aws_info: AwsConnectInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FileSourceConnector {
     pub path: PathBuf,
     pub tail: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AwsConnectInfo {
+    pub region: Region,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    pub token: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
