@@ -813,7 +813,7 @@ pub async fn run_string(
     let mut outcomes = Outcomes::default();
     let mut state = Runner::start().await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
-    println!("==> {}", source);
+    println!("[{}] ==> {}", Utc::now(), source);
     for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
@@ -839,7 +839,7 @@ pub async fn run_string(
                 // record panics, you can tell which record caused it.
                 print_record(&record);
             }
-            println!("{}", util::indent(&outcome.to_string(), 4));
+            println!("[{}] {}", Utc::now(), util::indent(&outcome.to_string(), 4));
             println!("{}", util::indent("----", 4));
         }
 
