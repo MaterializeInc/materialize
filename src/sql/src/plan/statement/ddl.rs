@@ -49,6 +49,7 @@ use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
 use crate::plan::query::QueryLifetime;
+use crate::plan::statement::with_options::aws_connect_info;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     self, plan_utils, query, AlterIndexLogicalCompactionWindow, Index, LogicalCompactionWindow,
@@ -428,30 +429,9 @@ pub fn plan_create_source(
                 None => bail!("Provided ARN does not include an AWS region"),
             };
 
-            // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
-            // https://github.com/materializeinc/materialize/issues/1991
-            let access_key_id = match with_options.remove("access_key_id") {
-                Some(Value::String(access_key_id)) => Some(access_key_id),
-                Some(_) => bail!("access_key_id must be a string"),
-                _ => None,
-            };
-            let secret_access_key = match with_options.remove("secret_access_key") {
-                Some(Value::String(secret_access_key)) => Some(secret_access_key),
-                Some(_) => bail!("secret_access_key must be a string"),
-                _ => None,
-            };
-            let token = match with_options.remove("token") {
-                Some(Value::String(token)) => Some(token),
-                Some(_) => bail!("token must be a string"),
-                _ => None,
-            };
-
             let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                 stream_name,
-                region,
-                access_key_id,
-                secret_access_key,
-                token,
+                aws_info: aws_connect_info(&mut with_options, Some(region))?,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
