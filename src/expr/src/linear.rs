@@ -491,6 +491,9 @@ impl MapFilterProject {
     /// `self.permute` this instance.
     pub fn demand(&self) -> HashSet<usize> {
         let mut demanded = HashSet::new();
+        for (_index, pred) in self.predicates.iter() {
+            demanded.extend(pred.support());
+        }
         demanded.extend(self.projection.iter().cloned());
         for index in (0..self.expressions.len()).rev() {
             if demanded.contains(&(self.input_arity + index)) {
@@ -506,7 +509,12 @@ impl MapFilterProject {
     /// The `shuffle` argument remaps expected column identifiers to new locations,
     /// with the expectation that `shuffle` describes all input columns, and so the
     /// intermediate results will be able to start at position `shuffle.len()`.
+    ///
+    /// The supplied `shuffle` may not list columns that are not "demanded" by the
+    /// instance, and so we should ensure that `self` is optimized to not reference
+    /// columns that are not demanded.
     pub fn permute(&mut self, shuffle: &HashMap<usize, usize>, new_input_arity: usize) {
+        self.remove_undemanded();
         let mut shuffle = shuffle.clone();
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
         for index in 0..map.len() {
@@ -532,5 +540,52 @@ impl MapFilterProject {
     pub fn optimize(&mut self) {
         // This should probably resemble existing scalar cse.
         unimplemented!()
+    }
+
+    /// Removes unused expressions from `self.expressions`.
+    ///
+    /// Expressions are "used" if they are relied upon by any output columns
+    /// or any predicates, even transitively. Any expressions that are not
+    /// relied upon in this way can be discarded.
+    fn remove_undemanded(&mut self) {
+        // Determine the demanded expressions to remove irrelevant ones.
+        let mut demand = std::collections::HashSet::new();
+        for (_index, pred) in self.predicates.iter() {
+            demand.extend(pred.support());
+        }
+        demand.extend(self.projection.iter().cloned());
+        for index in (0..self.expressions.len()).rev() {
+            if demand.contains(&(self.input_arity + index)) {
+                demand.extend(self.expressions[index].support());
+            }
+        }
+
+        // Expressions that are not demanded can be removed, and all
+        // remaining indexes updated.
+        let mut remap = HashMap::new();
+        for index in 0..self.input_arity {
+            remap.insert(index, index);
+        }
+        // Retain demanded expressions, and record their new locations.
+        let mut index = self.input_arity;
+        self.expressions.retain(|_expr| {
+            let demanded = demand.contains(&index);
+            if demanded {
+                remap.insert(index, remap.len());
+            }
+            index += 1;
+            demanded
+        });
+        // Update column identifiers.
+        for expr in self.expressions.iter_mut() {
+            expr.permute_map(&remap);
+        }
+        for (_pos, pred) in self.predicates.iter_mut() {
+            // NB: leaving `_pos` for now.
+            pred.permute_map(&remap);
+        }
+        for proj in self.projection.iter_mut() {
+            *proj = remap[proj];
+        }
     }
 }

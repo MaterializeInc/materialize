@@ -524,13 +524,14 @@ impl MyClosure {
         // applied now.
         let (mut before, after) = std::mem::replace(mfp, MapFilterProject::new(mfp.input_arity))
             .partition(columns, columns.len());
-        *mfp = after;
 
         // While it is top of mind, add any new columns to `columns` and increase `input_arity`.
         let bonus_columns = before.projection.len() - before.input_arity;
         for bonus_column in 0..bonus_columns {
             columns.insert(mfp.input_arity + bonus_column, columns.len());
         }
+
+        *mfp = after;
 
         // Before constructing and returning the result, we can remove output columns of `before`
         // that are not needed in further `equivalences` or by `after` (now `mfp`).

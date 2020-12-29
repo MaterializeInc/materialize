@@ -23,7 +23,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
 use expr::{MapFilterProject, RelationExpr, ScalarExpr};
-use repr::{Row, RowArena, RowPacker};
+use repr::{Datum, Row, RowArena, RowPacker};
 
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
@@ -46,13 +46,36 @@ where
         if let RelationExpr::Join {
             inputs,
             equivalences,
-            demand: _,
+            demand,
             implementation: expr::JoinImplementation::Differential((start, start_arr), order),
         } = relation_expr
         {
             let input_mapper = expr::JoinInputMapper::new(inputs);
-            let map_filter_project = MapFilterProject::new(input_mapper.total_columns())
+            let output_arity = input_mapper.total_columns();
+
+            // Determine dummy columns for un-demanded outputs, and a projection.
+            let (dummies, demand_projection) = if let Some(demand) = demand {
+                let mut dummies = Vec::new();
+                let mut demand_projection = Vec::new();
+                for (column, typ) in relation_expr.typ().column_types.into_iter().enumerate() {
+                    if demand.contains(&column) {
+                        demand_projection.push(column);
+                    } else {
+                        demand_projection.push(output_arity + dummies.len());
+                        dummies.push(ScalarExpr::literal_ok(Datum::Dummy, typ));
+                    }
+                }
+                (dummies, demand_projection)
+            } else {
+                (Vec::new(), (0..output_arity).collect::<Vec<_>>())
+            };
+
+            let map_filter_project = MapFilterProject::new(output_arity)
+                .map(dummies)
+                .project(demand_projection)
                 .filter(predicates.iter().cloned());
+
+            assert_eq!(map_filter_project.projection.len(), output_arity);
 
             // Other than the stream of updates, our loop-carried state are these
             // three variables: `column_map`, `equivalences`, and `mfp`, which
@@ -75,12 +98,16 @@ where
 
             // This collection will evolve as we join in more inputs.
             // TODO(mcsherry): this clashes with the subsequent arrangement-based input.
+            // TODO(mcsherry): determine and apply closure here in `flat_map_ref` form.
+            // TODO(mcsherry): If we plan to use an arrangement, should one exist, then
+            // this is wasteful as it instantiates all rows which are then dropped.
             let (mut joined, mut errs) = self.collection(&inputs[*start]).unwrap();
 
             // NOTE(mcsherry): ideally this code is rarely/never relevant, as the associated logic
             // could be pushed down to the input and perhaps beyond. I'm not certain under what
             // circumstance we should just delete it, though.
-            if start_arr.is_none() || inputs.len() == 1 {
+            let use_leading_arrangement = start_arr.is_some() && inputs.len() > 1;
+            if !use_leading_arrangement {
                 // At this point we are able to construct a per-row closure that can be applied once
                 // we have the first wave of columns in place. We will not apply it quite yet, because
                 // we have three code paths that might produce data and it is complicated.
@@ -150,15 +177,19 @@ where
                 // it can be applied immediately in the `lookup` operator.
                 let closure = MyClosure::build(&mut column_map, &mut equivalences, &mut mfp);
 
-                // When joining the first input, check to see if there is a
-                // convenient ready-made arrangement
-                let (j, es) = match (input_index, self.arrangement(&inputs[*start], &prev_keys)) {
-                    (0, Some(ArrangementFlavor::Local(oks, es))) => {
+                // When joining the first input, check to see if we are meant to use an existing
+                // arrangement.
+                let (j, es) = match (
+                    input_index,
+                    use_leading_arrangement,
+                    self.arrangement(&inputs[*start], &prev_keys),
+                ) {
+                    (0, true, Some(ArrangementFlavor::Local(oks, es))) => {
                         let (j, next_es) =
                             self.differential_join(oks, &inputs[*input], &next_keys[..], closure);
                         (j, es.as_collection(|k, _v| k.clone()).concat(&next_es))
                     }
-                    (0, Some(ArrangementFlavor::Trace(_gid, oks, es))) => {
+                    (0, true, Some(ArrangementFlavor::Trace(_gid, oks, es))) => {
                         let (j, next_es) =
                             self.differential_join(oks, &inputs[*input], &next_keys[..], closure);
                         (j, es.as_collection(|k, _v| k.clone()).concat(&next_es))
