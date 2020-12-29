@@ -11,6 +11,7 @@ use std::env;
 use std::fs::File;
 use std::process;
 
+use chrono::Utc;
 use getopts::Options;
 use walkdir::WalkDir;
 
@@ -25,6 +26,7 @@ recursively for sqllogictest files."#;
 #[tokio::main]
 async fn main() {
     ore::panic::set_abort_on_panic();
+    ore::test::init_logging_default("warn");
 
     let args: Vec<_> = env::args().collect();
     let mut opts = Options::new();
@@ -100,7 +102,11 @@ async fn main() {
                         match runner::run_file(entry.path(), verbosity).await {
                             Ok(o) => {
                                 if o.any_failed() || verbosity >= 1 {
-                                    println!("{}", util::indent(&o.to_string(), 4));
+                                    println!(
+                                        "[{}] {}",
+                                        Utc::now(),
+                                        util::indent(&o.to_string(), 4)
+                                    );
                                 }
                                 outcomes += o;
                             }
@@ -123,7 +129,7 @@ async fn main() {
         process::exit(1);
     }
 
-    println!("{}", outcomes);
+    println!("[{}] {}", Utc::now(), outcomes);
 
     if let Some(json_summary_file) = json_summary_file {
         match serde_json::to_writer(json_summary_file, &outcomes.as_json()) {
