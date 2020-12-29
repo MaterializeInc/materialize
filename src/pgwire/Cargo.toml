@@ -7,26 +7,26 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.34"
-byteorder = "1.3"
-bytes = "0.5"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+byteorder = "1.3.0"
+bytes = "0.5.0"
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 comm = { path = "../comm" }
 coord = { path = "../coord" }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
-futures = "0.3"
-itertools = "0.9"
+futures = "0.3.0"
+itertools = "0.9.0"
 lazy_static = "1.4.0"
 log = "0.4.11"
 openssl = { version = "0.10.32", features = ["vendored"] }
 ordered-float = { version = "2.0.0", features = ["serde"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
+postgres = "0.17.5"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-rand = "0.8"
+rand = "0.8.0"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
-tokio = "0.2"
+tokio = "0.2.0"
 tokio-openssl = "0.4.0"
-tokio-util = { version = "0.3", features = ["codec"] }
-postgres = "0.17.5"
+tokio-util = { version = "0.3.0", features = ["codec"] }

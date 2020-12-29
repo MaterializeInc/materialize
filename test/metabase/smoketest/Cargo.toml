@@ -7,9 +7,9 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.34"
-metabase = { path = "../../../src/metabase"}
-itertools = "0.9"
+itertools = "0.9.0"
 log = "0.4.11"
+metabase = { path = "../../../src/metabase" }
 ore = { path = "../../../src/ore" }
-tokio = "0.2"
+tokio = "0.2.0"
 tokio-postgres = "0.5.5"

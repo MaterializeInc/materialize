@@ -2,19 +2,35 @@
 name = "materialized"
 description = "Streaming SQL materialized views."
 version = "0.6.1-dev"
-edition = "2018"
-publish = false
-build = "build/main.rs"
-default-run = "materialized"
-# required for cargo-deb
 authors = ["Materialize, Inc."]
 license = "proprietary"
+edition = "2018"
+publish = false
+default-run = "materialized"
+build = "build/main.rs"
+
+[package.metadata.deb]
+assets = [
+    ["../../misc/dist/materialized.service", "lib/systemd/system/", "644"],
+    ["target/release/materialized", "usr/bin/", "755"],
+]
+conflicts = "materialized"
+depends = "$auto"
+maintainer-scripts = "misc/dist/deb-scripts"
+
+[package.metadata.deb.variants.materialized]
+conflicts = "materialized-unstable"
+name = "materialized"
+
+[package.metadata.deb.variants.materialized-unstable]
+conflicts = "materialized"
+name = "materialized-unstable"
 
 [dependencies]
 anyhow = "1.0.34"
 askama = { version = "0.10.5", features = ["serde-json"] }
 async-trait = "0.1.42"
-backtrace = { version = "0.3.55" }
+backtrace = "0.3.55"
 build-info = { path = "../build-info" }
 cfg-if = "1.0.0"
 comm = { path = "../comm" }
@@ -22,61 +38,69 @@ compile-time-run = "0.2.11"
 coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
-futures = "0.3"
-getopts = "0.2"
-hex = "0.4"
+futures = "0.3.0"
+getopts = "0.2.0"
+hex = "0.4.0"
 hyper = "0.13.9"
 include_dir = "0.6.0"
-itertools = "0.9"
+itertools = "0.9.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
 log = "0.4.11"
 mz-process-collector = { path = "../mz-process-collector" }
-num_cpus = "1.0"
+num_cpus = "1.0.0"
 openssl = { version = "0.10.32", features = ["vendored"] }
 openssl-sys = { version = "0.9.59", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.1"
 parse_duration = "2.1.0"
-postgres_array = "0.10.0"
-postgres-openssl = "0.3.0"
 pgwire = { path = "../pgwire" }
+postgres-openssl = "0.3.0"
+postgres_array = "0.10.0"
 prof = { path = "../prof", features = ["auto-jemalloc"] }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 repr = { path = "../repr" }
 reqwest = { version = "0.10.8", features = ["json"] }
 rlimit = "0.5.3"
-semver = "0.11"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1"
-shell-words = "1.0"
+semver = "0.11.0"
+serde = { version = "1.0.0", features = ["derive"] }
+serde_json = "1.0.0"
+shell-words = "1.0.0"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
 sysctl = "0.4.0"
 sysinfo = "0.15.3"
-tempfile = "3.1"
-tokio = { version = "0.2", features = ["sync"] }
+tempfile = "3.1.0"
+tokio = { version = "0.2.0", features = ["sync"] }
 tokio-openssl = "0.4.0"
 tracing = "0.1.21"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
 tracing-subscriber = { version = "0.2.7", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
-url = "2"
+url = "2.0.0"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# According to jemalloc developers, `background_threads` should always be
+# enabled, except in "esoteric" situations that don't apply to Materialize
+# (Namely: if the application relies on new threads not being created for whatever reason)
+#
+# See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
+jemallocator = { version = "0.3.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
 assert_cmd = "1.0.2"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-datadriven = "0.4"
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+datadriven = "0.4.0"
 fallible-iterator = "0.2.0"
-itertools = "0.9"
+itertools = "0.9.0"
 pgrepr = { path = "../pgrepr" }
 pgtest = { path = "../pgtest" }
-postgres = { version = "0.17", features = ["with-chrono-0_4"] }
+postgres = { version = "0.17.0", features = ["with-chrono-0_4"] }
 predicates = "1.0.5"
 repr = { path = "../repr" }
 reqwest = { version = "0.10.8", features = ["blocking"] }
-serde_json = "1"
+serde_json = "1.0.0"
 tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
@@ -97,28 +121,3 @@ walkdir = "2.3.1"
 # WARNING: For development use only! When enabled, may allow unrestricted read
 # access to the file system.
 dev-web = []
-
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-# According to jemalloc developers, `background_threads` should always be
-# enabled, except in "esoteric" situations that don't apply to Materialize
-# (Namely: if the application relies on new threads not being created for whatever reason)
-#
-# See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-jemallocator = { version = "0.3", features = ["profiling", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
-
-[package.metadata.deb]
-depends = "$auto"
-conflicts = "materialized"
-assets = [
-    ["../../misc/dist/materialized.service", "lib/systemd/system/", "644"],
-    ["target/release/materialized", "usr/bin/", "755"]
-]
-maintainer-scripts = "misc/dist/deb-scripts"
-
-[package.metadata.deb.variants.materialized]
-name = "materialized"
-conflicts = "materialized-unstable"
-
-[package.metadata.deb.variants.materialized-unstable]
-name = "materialized-unstable"
-conflicts = "materialized"

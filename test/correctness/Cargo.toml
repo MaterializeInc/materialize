@@ -10,17 +10,17 @@ name = "test-correctness"
 path = "checker.rs"
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 env_logger = "0.8.2"
-futures = "0.3"
-getopts = "0.2"
-hyper = "0.13"
-lazy_static = "1.4"
+futures = "0.3.0"
+getopts = "0.2.0"
+hyper = "0.13.0"
+lazy_static = "1.4.0"
 log = "0.4.11"
 mz-process-collector = { path = "../../src/mz-process-collector" }
 ore = { path = "../../src/ore" }
 pgrepr = { path = "../../src/pgrepr" }
-postgres = "0.17"
+postgres = "0.17.0"
 postgres-types = "0.1.1"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.4.1"

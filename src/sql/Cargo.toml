@@ -10,27 +10,27 @@ anyhow = "1.0.34"
 aws-arn = "0.1.1"
 build-info = { path = "../build-info" }
 ccsr = { path = "../ccsr" }
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
-futures = "0.3"
+futures = "0.3.0"
 interchange = { path = "../interchange" }
-itertools = "0.9"
+itertools = "0.9.0"
 lazy_static = "1.4.0"
 log = "0.4.11"
 mz-avro = { path = "../avro", features = ["snappy"] }
+mz_rusoto_core = "0.46.0"
 ore = { path = "../ore" }
 parse_duration = "2.1.0"
 pgrepr = { path = "../pgrepr" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
 regex = "1.4.1"
 repr = { path = "../repr" }
-reqwest = { version = "0.10.8" }
-mz_rusoto_core = "0.46.0"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+reqwest = "0.10.8"
+serde = { version = "1.0.0", features = ["derive"] }
+serde_json = "1.0.0"
 sql-parser = { path = "../sql-parser" }
 tokio = { version = "0.2.22", features = ["fs"] }
 unicase = "2.6.0"
 url = "2.2.0"
-uuid = { version = "0.8", features = ["serde", "v4"] }
+uuid = { version = "0.8.0", features = ["serde", "v4"] }

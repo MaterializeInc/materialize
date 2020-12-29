@@ -2,28 +2,28 @@
 name = "sql-parser"
 description = "The lexer and parser for Materialize's SQL dialect."
 version = "0.1.0"
+exclude = ["tests/testdata"]
 edition = "2018"
 publish = false
-exclude = ["tests/testdata"]
 
 [dependencies]
+itertools = "0.9.0"
 lazy_static = "1.4.0"
 log = "0.4.11"
-itertools = "0.9"
-phf = { version = "0.8", features = ["unicase"] }
 ore = { path = "../ore" }
+phf = { version = "0.8.0", features = ["unicase"] }
 repr = { path = "../repr" }
-unicase = "2.4"
 stacker = "0.1.12"
+unicase = "2.4.0"
 
 [dev-dependencies]
 datadriven = "0.4.0"
-matches = "0.1"
+matches = "0.1.0"
 unicode-width = "0.1.8"
 
 [build-dependencies]
 anyhow = "1.0.34"
 ore = { path = "../ore" }
-phf_codegen = "0.8"
-unicase = "2.4"
+phf_codegen = "0.8.0"
+unicase = "2.4.0"
 walkabout = { path = "../walkabout" }

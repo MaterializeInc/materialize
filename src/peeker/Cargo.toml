@@ -6,11 +6,11 @@ edition = "2018"
 publish = false
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 env_logger = "0.8.2"
-getopts = "0.2"
-hyper = "0.13"
-lazy_static = "1.4"
+getopts = "0.2.0"
+hyper = "0.13.0"
+lazy_static = "1.4.0"
 log = "0.4.11"
 mz-process-collector = { path = "../mz-process-collector" }
 ore = { path = "../ore" }
