@@ -506,7 +506,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sql",
- "sql-parser",
  "symbiosis",
  "tempfile",
  "timely",

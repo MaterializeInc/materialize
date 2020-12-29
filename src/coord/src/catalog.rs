@@ -25,7 +25,11 @@ use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
-use sql::ast::Expr;
+use sql::ast::visit_mut::VisitMut;
+use sql::ast::{
+    CreateIndexStatement, CreateTableStatement, CreateViewStatement, DataType, Expr, Ident,
+    ObjectName, Statement,
+};
 use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
@@ -394,14 +398,7 @@ const CATALOG_CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error
     //
     // Introduced for v0.6.1
     |catalog: &mut Catalog| {
-        use sql_parser::ast::{
-            visit_mut::VisitMut, CreateTableStatement, CreateViewStatement, DataType, Ident,
-            ObjectName, Statement,
-        };
-
-        struct TypeNormalizer {
-            err: Option<Error>,
-        }
+        struct TypeNormalizer;
 
         impl<'ast> VisitMut<'ast> for TypeNormalizer {
             fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType) {
@@ -432,12 +429,8 @@ const CATALOG_CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error
                     with_options: _,
                     if_not_exists: _,
                 }) => {
-                    let mut normalizer = TypeNormalizer { err: None };
                     for c in columns {
-                        normalizer.visit_column_def_mut(c);
-                    }
-                    if let Some(err) = normalizer.err {
-                        return Err(err.into());
+                        TypeNormalizer.visit_column_def_mut(c);
                     }
                 }
 
@@ -449,16 +442,26 @@ const CATALOG_CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error
                     materialized: _,
                     if_exists: _,
                     with_options: _,
+                }) => TypeNormalizer.visit_query_mut(query),
+
+                Statement::CreateIndex(CreateIndexStatement {
+                    name: _,
+                    on_name: _,
+                    key_parts,
+                    if_not_exists: _,
                 }) => {
-                    let mut normalizer = TypeNormalizer { err: None };
-                    normalizer.visit_query_mut(query);
-                    if let Some(err) = normalizer.err {
-                        return Err(err.into());
+                    if let Some(key_parts) = key_parts {
+                        for key_part in key_parts {
+                            TypeNormalizer.visit_expr_mut(key_part);
+                        }
                     }
                 }
-                // Only tables and views contain references to types; other
-                // objects don't need to be rewritten.
-                _ => continue,
+
+                // At the time the migration was written, sinks and sources
+                // could not contain references to types.
+                Statement::CreateSource(_) | Statement::CreateSink(_) => continue,
+
+                _ => bail!("catalog item contained inappropriate statement: {}", stmt),
             }
 
             let serialized_item = SerializedCatalogItem::V1 {
