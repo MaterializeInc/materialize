@@ -88,6 +88,11 @@ async fn run() -> Result<(), Error> {
         "validate the on-disk state of the materialized catalog",
         "PATH",
     );
+    opts.optflag(
+        "",
+        "no-reset",
+        "don't reset materialized state before executing testdrive script",
+    );
     opts.optflag("h", "help", "show this usage information");
 
     let usage_details = opts.usage("usage: testdrive [options] FILE");
@@ -178,6 +183,9 @@ async fn run() -> Result<(), Error> {
     }
     if let Some(path) = opts.opt_str("validate-catalog") {
         config.materialized_catalog_path = Some(path.into());
+    }
+    if opts.opt_present("no-reset") {
+        config.reset_materialized = false;
     }
 
     if opts.free.is_empty() {
