@@ -99,7 +99,7 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
             }
 
             let serialized_item = SerializedCatalogItem::V1 {
-                create_sql: stmt.to_ast_string(),
+                create_sql: stmt.to_ast_string_stable(),
                 eval_env,
             };
 
