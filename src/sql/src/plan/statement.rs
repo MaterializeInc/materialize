@@ -2078,8 +2078,6 @@ fn aws_connect_info(
     options: &mut HashMap<String, Value>,
     region: Option<Region>,
 ) -> anyhow::Result<AwsConnectInfo> {
-    // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
-    // https://github.com/materializeinc/materialize/issues/1991
     let mut extract = |key| match options.remove(key) {
         Some(Value::String(key)) => Ok(Some(key)),
         Some(_) => bail!("{} must be a string", key),
