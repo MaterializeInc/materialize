@@ -7,9 +7,9 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.34"
-log = "0.4"
+log = "0.4.0"
 mz_rusoto_core = "0.46.0"
 mz_rusoto_credential = "0.46.0"
 mz_rusoto_kinesis = "0.46.0"
 mz_rusoto_sts = "0.46.0"
-tokio = "0.2"
+tokio = "0.2.0"

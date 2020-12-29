@@ -7,16 +7,16 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.34"
-chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
+chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 log = "0.4.11"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
-tokio = "0.2"
-tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4", "with-serde_json-1"] }
 repr = { path = "../repr" }
-serde_json = "1.0"
+serde_json = "1.0.0"
 sql = { path = "../sql" }
-uuid = "0.8"
-whoami = "1.0"
+tokio = "0.2.0"
+tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4", "with-serde_json-1"] }
+uuid = "0.8.0"
+whoami = "1.0.0"

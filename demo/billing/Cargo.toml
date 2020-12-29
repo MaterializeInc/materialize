@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.34"
 bytes = "0.5.6"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 csv = "1.1.5"
 env_logger = "0.8.2"
 futures = "0.3.8"
@@ -18,14 +18,14 @@ log = "0.4.11"
 ore = { path = "../../src/ore" }
 parse_duration = "2.1.0"
 postgres-types = "0.1.1"
-protobuf = "2.17"
+protobuf = "2.17.0"
 rand = "0.8.0"
 rand_distr = "0.4.0"
 structopt = "0.3.21"
 test-util = { path = "../../test/test-util" }
 tokio = { version = "0.2.22", features = ["full"] }
 tokio-postgres = "0.5.5"
-uuid = { version = "0.8", features = ["v4"] }
+uuid = { version = "0.8.0", features = ["v4"] }
 
 [build-dependencies]
 protoc = { path = "../../src/protoc" }
