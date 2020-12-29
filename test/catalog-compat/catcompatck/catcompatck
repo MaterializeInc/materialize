@@ -22,24 +22,6 @@ run_sql() {
     psql -h localhost -p 6875 materialize -c "\pset footer off" -c "$1" "$@"
 }
 
-sloppy_diff() {
-    diff -ub <(echo "$1") <(echo "$2")
-}
-
-expect_sql() {
-    local actual expected
-    expected=$(cat)
-    for _ in {1..10}; do
-        actual=$(run_sql "$1" 2>&1) || true
-        sloppy_diff "$expected" "$actual" > /dev/null && return 0
-        echo "sql query did not match expected results; trying again in 1s..." >&2
-        sleep 1
-    done
-    echo "timed out waiting for expected results" >&2
-    echo "query: $1"
-    sloppy_diff "$expected" "$actual"
-}
-
 launch_materialized() {
     "materialized-$1" -w1 "$@" &
     materialized_pid=$?
@@ -47,12 +29,17 @@ launch_materialized() {
     run_sql "SELECT 1" > /dev/null
 }
 
+kill_materialized() {
+  kill "$materialized_pid"
+  wait 2> /dev/null
+}
+
 wait-for-it --timeout=30 kafka:9092
 
-say "launching materialized-golden"
-launch_materialized golden
+say "launching materialized-golden010"
+launch_materialized golden010
 
-say "building golden catalog"
+say "building golden010 catalog"
 testdrive --kafka-addr kafka:9092 <<'EOF'
 $ set schema={
     "type": "record",
@@ -89,43 +76,54 @@ $ kafka-ingest format=avro topic=real-time schema=${schema} timestamp=1
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 
-> CREATE MATERIALIZED VIEW real_time AS SELECT * FROM real_time_src
+> CREATE MATERIALIZED VIEW real_time AS
+  SELECT *, concat(a::text, CAST(b AS text)) AS c
+  FROM real_time_src
+
+> CREATE INDEX real_time_idx ON real_time (a::text)
 
 > SELECT * FROM real_time
-a  b
-----
-1  1
-2  1
-3  1
-1  2
-
-> CREATE MATERIALIZED VIEW real_time_str AS SELECT CAST(a AS text) FROM real_time_src
-
-> SELECT * FROM real_time_str
-a
-----
-1
-2
-3
-1
-
+a  b  c
+--------
+1  1  11
+2  1  21
+3  1  31
+1  2  12
 EOF
 
-say "killing materialized-golden"
-kill "$materialized_pid"
-wait 2> /dev/null
+say "killing materialized-golden010"
+kill_materialized
+
+say "launching materialized-golden060"
+launch_materialized golden060
+
+say "adding golden060 features to golden010 catalog"
+testdrive --no-reset <<'EOF'
+> CREATE TABLE t (a int, b text DEFAULT 'def')
+> INSERT INTO t (a) VALUES (42)
+> SELECT * FROM t
+42  def
+EOF
+
+say "killing materialized-golden060"
+kill_materialized
 
 say "launching materialized-edge with golden catalog"
 launch_materialized edge --log-file=stderr
 
 say "validating edge state"
-# Can't presently use another testdrive script here, as booting testdrive will
-# first blow away any existing state.
-expect_sql "SELECT * FROM real_time" <<EOF
- a | b
----+---
- 1 | 1
- 1 | 2
- 2 | 1
- 3 | 1
+testdrive --no-reset <<EOF
+> SELECT * FROM real_time
+a  b  c
+--------
+1  1  11
+2  1  21
+3  1  31
+1  2  12
+
+# NOTE(benesch): if/when tables persist their input data, we won't need to
+# reinsert data here.
+> INSERT INTO t (a) VALUES (42)
+> SELECT * FROM t
+42  def
 EOF

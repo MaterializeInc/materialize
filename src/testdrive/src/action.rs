@@ -53,6 +53,7 @@ pub struct Config {
     pub aws_credentials: AwsCredentials,
     pub materialized_pgconfig: tokio_postgres::Config,
     pub materialized_catalog_path: Option<PathBuf>,
+    pub reset_materialized: bool,
 }
 
 impl Default for Config {
@@ -78,6 +79,7 @@ impl Default for Config {
                 tokio_postgres::Config::new().host("localhost").port(6875),
             ),
             materialized_catalog_path: None,
+            reset_materialized: true,
         }
     }
 }
@@ -105,21 +107,19 @@ pub struct State {
 
 impl State {
     pub async fn reset_materialized(&mut self) -> Result<(), Error> {
-        for message in self
+        for row in self
             .pgclient
-            .simple_query("SHOW DATABASES")
+            .query("SHOW DATABASES", &[])
             .await
             .err_ctx("resetting materialized state: SHOW DATABASES".into())?
         {
-            if let tokio_postgres::SimpleQueryMessage::Row(row) = message {
-                let name = row.get(0).expect("database name is not nullable");
-                let query = format!("DROP DATABASE {}", name);
-                sql::print_query(&query);
-                self.pgclient.batch_execute(&query).await.err_ctx(format!(
-                    "resetting materialized state: DROP DATABASE {}",
-                    name,
-                ))?;
-            }
+            let db_name: String = row.get(0);
+            let query = format!("DROP DATABASE {}", db_name);
+            sql::print_query(&query);
+            self.pgclient.batch_execute(&query).await.err_ctx(format!(
+                "resetting materialized state: DROP DATABASE {}",
+                db_name,
+            ))?;
         }
         self.pgclient
             .batch_execute("CREATE DATABASE materialize")

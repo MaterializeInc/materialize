@@ -81,7 +81,9 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
         println!("Run {} ...", execution_count);
         cmds_exec = cmds.clone();
         let (mut state, state_cleanup) = action::create_state(config).await?;
-        state.reset_materialized().await?;
+        if config.reset_materialized {
+            state.reset_materialized().await?;
+        }
         // The `tokio::spawn` allows using `block_in_place` to run sync code within
         // the spawned task. The spawn will one day not be necessary.
         // See: https://github.com/tokio-rs/tokio/issues/1838.
