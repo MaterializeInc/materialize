@@ -1,36 +1,38 @@
 [package]
 name = "mz-avro"
-version = "0.6.5"
-authors = ["Brennan Vincent <brennan@materialize.io>", "Jessica Laughlin <jessica@materialize.io>"]
 description = "Library for working with Apache Avro in Rust"
+version = "0.6.5"
+authors = [
+    "Brennan Vincent <brennan@materialize.io>",
+    "Jessica Laughlin <jessica@materialize.io>",
+]
 license = "Apache-2.0"
-readme = "README.md"
 repository = "https://github.com/MaterializeInc/materialize"
 edition = "2018"
 autobenches = false
-
-[features]
-snappy = ["byteorder", "crc", "snap"]
 
 [dependencies]
 anyhow = "1.0.34"
 avro-derive = { path = "../avro-derive" }
 byteorder = { version = "1.0.0", optional = true }
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 crc = { version = "1.3.0", optional = true }
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-digest = "0.9"
+digest = "0.9.0"
 enum-kinds = "0.5.0"
-itertools = "0.9"
-flate2 = "1.0"
+flate2 = "1.0.0"
+itertools = "0.9.0"
 log = "0.4.11"
 rand = "0.8.0"
-regex = "1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+regex = "1.0.0"
+serde = { version = "1.0.0", features = ["derive"] }
+serde_json = "1.0.0"
 sha2 = "0.9.2"
-snap = { version = "1", optional = true }
-uuid = "0.8"
+snap = { version = "1.0.0", optional = true }
+uuid = "0.8.0"
 
 [dev-dependencies]
-md-5 = "0.9"
-lazy_static = "^1.1"
+lazy_static = "1.1.0"
+md-5 = "0.9.0"
+
+[features]
+snappy = ["byteorder", "crc", "snap"]

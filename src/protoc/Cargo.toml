@@ -5,16 +5,14 @@ version = "0.1.0"
 edition = "2018"
 publish = false
 
-[lib]
-
 [[bin]]
 name = "protoc"
 path = "bin/protoc.rs"
 
 [dependencies]
 anyhow = "1.0.34"
-getopts = "0.2"
-protobuf = "2.17"
-protobuf-codegen = "2.17"
-protobuf-codegen-pure = "2.17"
+getopts = "0.2.0"
+protobuf = "2.17.0"
+protobuf-codegen = "2.17.0"
+protobuf-codegen-pure = "2.17.0"
 tempfile = "3.1.0"
