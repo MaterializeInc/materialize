@@ -803,6 +803,7 @@ impl<'a> ScalarType {
     pub fn is_vec(&self) -> bool {
         matches!(self, ScalarType::List{..} | ScalarType::Array(_))
     }
+
     pub fn is_custom_type(&self) -> bool {
         use ScalarType::*;
         match self {
