@@ -21,7 +21,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
-use repr::{ColumnName, Datum, RelationType, ScalarType};
+use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
 use sql_parser::ast::{Expr, ObjectName};
 
 use super::expr::{
@@ -391,13 +391,65 @@ impl ParamList {
     /// Returns `Some` if the constraints were successfully resolved, or `None`
     /// otherwise.
     fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
+        // Determines if types have the same [`ScalarBaseType`], and if complex
+        // types' elements do, as well. This function's primary use is allowing
+        // matches between `ScalarType::Decimal` values with different scales,
+        // and doing so for complex objects that embed them, as well.
+        fn complex_base_eq(l: &ScalarType, r: &ScalarType) -> bool {
+            match (l, r) {
+                (ScalarType::Array(l), ScalarType::Array(r))
+                | (ScalarType::List(l), ScalarType::List(r))
+                | (ScalarType::Map { value_type: l }, ScalarType::Map { value_type: r }) => {
+                    complex_base_eq(l, r)
+                }
+                (l, r) => ScalarBaseType::from(l) == ScalarBaseType::from(r),
+            }
+        }
+        // Returns a commmon form of `self` and `other` using the "greatest
+        // common" `ScalarType::Decimal`, or `None` if one does not exist.
+        //
+        // This computation includes complex types such as lists whose element
+        // types are `ScalarType::Decimal`.
+        //
+        // This is necesssary because in PostgreSQL, the numeric type does not
+        // preserve scale information, so polymorphic type resolution will
+        // always treat two numeric types as equivalent. To match this behavior
+        // in Materialize, we special-case equality here so that we can consider
+        // decimals with different scales to be equivalent and resolve the
+        // polymorphic constraint to the decimal type with the larger scale.
+        fn find_greatest_common_decimal(l: &ScalarType, r: &ScalarType) -> Option<ScalarType> {
+            match (l, r) {
+                (ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2)) => Some(
+                    ScalarType::Decimal(std::cmp::max(*p1, *p2), std::cmp::max(*s1, *s2)),
+                ),
+                (ScalarType::Array(l), ScalarType::Array(r)) => {
+                    let common = find_greatest_common_decimal(l, r)?;
+                    Some(ScalarType::Array(Box::new(common)))
+                }
+                (ScalarType::List(l), ScalarType::List(r)) => {
+                    let common = find_greatest_common_decimal(l, r)?;
+                    Some(ScalarType::List(Box::new(common)))
+                }
+                (ScalarType::Map { value_type: l }, ScalarType::Map { value_type: r }) => {
+                    let common = find_greatest_common_decimal(l, r)?;
+                    Some(ScalarType::Map {
+                        value_type: Box::new(common),
+                    })
+                }
+                _ => None,
+            }
+        }
+
         let mut constrained_type: Option<ScalarType> = None;
         let mut set_or_check_constrained_type = |typ: &ScalarType| {
             match constrained_type {
                 None => constrained_type = Some(typ.clone()),
-                Some(ref t) => {
-                    if typ != t {
+                Some(ref mut t) => {
+                    if !complex_base_eq(t, typ) {
                         return Err(());
+                    }
+                    if let Some(d) = find_greatest_common_decimal(t, typ) {
+                        *t = d;
                     }
                 }
             }

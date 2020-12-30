@@ -1703,12 +1703,29 @@ SELECT (LIST[1] || '{2}')::text
 ----
 {1,2}
 
+# Differently scaled decimals are implicitly castable to one another
+query T
+SELECT ('{1.2}'::numeric(38,5) list || '{2.3}'::numeric(38,0) list)::text;
+----
+{1.20000,2.00000}
+
+# ...including on multiple dimensions
+query T
+SELECT ('{{1.2}}'::numeric(38,5) list list || '{{2.3}}'::numeric(38,0) list list)::text;
+----
+{{1.20000},{2.00000}}
+
 # 🔬🔬🔬 list + element
 
 query T
 SELECT (LIST[1, 2] || 3)::text
 ----
 {1,2,3}
+
+query T
+SELECT ('{1.2}'::numeric(38,5) list || '2.3'::numeric(38,0))::text;
+----
+{1.20000,2.00000}
 
 # 🔬🔬🔬 element + list
 
@@ -1717,6 +1734,11 @@ SELECT (1 || LIST[2, 3])::text
 ----
 {1,2,3}
 
+query T
+SELECT ('1.2'::numeric(38,5) || '{2.3}'::numeric(38,0) list)::text;
+----
+{1.20000,2.00000}
+
 # 🔬🔬🔬 list list + list (list + element)
 
 query T
@@ -1724,12 +1746,22 @@ SELECT (LIST[[1], [2]] || LIST[3])::text
 ----
 {{1},{2},{3}}
 
+query T
+SELECT ('{{1.2}}'::numeric(38,5) list list || '{2.3}'::numeric(38,0) list)::text;
+----
+{{1.20000},{2.00000}}
+
 # 🔬🔬🔬 list + list list (element + list)
 
 query T
 SELECT (LIST[1] || LIST[[2], [3]])::text
 ----
 {{1},{2},{3}}
+
+query T
+SELECT ('{1.2}'::numeric(38,5) list || '{{2.3}}'::numeric(38,0) list list)::text;
+----
+{{1.20000},{2.00000}}
 
 # 🔬🔬🔬 NULL elements
 
@@ -1849,3 +1881,7 @@ SELECT LIST[[[1]]] || LIST[2]
 # Literal text cannot be implicitly cast to list
 query error no overload for i32 list || string: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT LIST[1] || '{2}'::text
+
+# Two lists containing implicitly castable element types are not implicitly castable to one another
+query error no overload for f32 list || f64 list: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT '{1}'::float4 list || '{2}'::float8 list
