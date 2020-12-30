@@ -49,8 +49,7 @@ To engage with our community support team:
     very seriously and usually provide an initial response within one business
     day.
 
-  * Start discussions or ask questions on our [Slack
-    workspace](https://join.slack.com/t/materializecommunity/shared_invite/zt-fpfvczj5-efOE_8qvM4fWpHSvMxpKbA).
+  * Start discussions or ask questions on our [Slack workspace](https://materialize.com/s/chat).
 
 We do not investigate issues with unsupported versions of Materialize. If you
 are using an unsupported version, please check that the issue reproduces on a
