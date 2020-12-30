@@ -1892,33 +1892,33 @@ query error element_type must be of class type, but received pg_catalog.pg_enum 
 CREATE TYPE tbl_list AS LIST (element_type=pg_enum)
 
 statement ok
-CREATE TYPE int_list_c AS LIST (element_type = int4);
+CREATE TYPE int4_list_c AS LIST (element_type = int4);
 
 query T
-SELECT '{1,2}'::int_list_c::text;
+SELECT '{1,2}'::int4_list_c::text;
 ----
 {1,2}
 
 query T
-SELECT oid FROM pg_type WHERE typname = 'int_list_c';
+SELECT oid FROM pg_type WHERE typname = 'int4_list_c';
 ----
 20055
 
 query T
-SELECT '{{1,2}}'::int_list_c list::text
+SELECT '{{1,2}}'::int4_list_c list::text
 ----
 {{1,2}}
 
 query T
-SELECT pg_typeof(NULL::int_list_c);
+SELECT pg_typeof(NULL::int4_list_c);
 ----
 list
 
 statement ok
-CREATE TYPE int_list_list_c AS LIST (element_type = int_list_c);
+CREATE TYPE int4_list_list_c AS LIST (element_type = int4_list_c);
 
 query T
-SELECT '{{1,2}}'::int_list_list_c::text;
+SELECT '{{1,2}}'::int4_list_list_c::text;
 ----
 {{1,2}}
 
@@ -1945,9 +1945,6 @@ query T
 SELECT '{1,2}'::int8_list_c::text
 ----
 {1,2}
-
-statement ok
-CREATE TYPE int4_list_c AS LIST (element_type='int4');
 
 query T
 SELECT '{1,2}'::int4_list_c::text
@@ -2046,3 +2043,148 @@ query T
 SELECT '{1,2}'::public.bool::text;
 ----
 {1,2}
+
+# 🔬🔬 Built-in operations
+
+query T
+SELECT ('{1}'::int4_list_c || 2)::text;
+----
+{1,2}
+
+query T
+SELECT (1 || '{2}'::int4_list_c)::text;
+----
+{1,2}
+
+# 🔬 Explicit casts w/ custom types
+
+query T
+SELECT ('{1.2,2.3}'::numeric_list_c)::text;
+----
+{1,2}
+
+query T
+SELECT ('{1.2,2.3}'::numeric_list_c::numeric(38,5) list)::text;
+----
+{1.00000,2.00000}
+
+query T
+SELECT ('{1.2,2.3}'::numeric(38,5) list::numeric_list_c)::text;
+----
+{1,2}
+
+# 🔬 Implicit casts between custom types
+
+# 🔬🔬 1-D casts
+
+statement ok
+CREATE TYPE int4_list AS LIST (element_type = int4)
+
+statement ok
+CREATE TYPE int4_list_too AS LIST (element_type = int4)
+
+query T
+SELECT ('{1}'::int4_list || '{2}'::int list)::text;
+----
+{1,2}
+
+query error
+SELECT '{1}'::int4_list || '{2}'::int4_list_too;
+
+# Anonymous type cast to custom type, which is not interoperable with a
+# different custom type
+query error
+SELECT '{1}'::int4_list || '{2}'::int list || '{3}'::int4_list_too
+
+query T
+SELECT ('{1}'::int4_list_too || '{2}'::int4_list::int4_list_too)::text;
+----
+{1,2}
+
+query T
+SELECT ('{1}'::int4_list_too || '{2}'::int4_list::int list)::text;
+----
+{1,2}
+
+query T
+SELECT ('{1}'::int4_list || 2)::text;
+----
+{1,2}
+
+# 🔬🔬 2-D casts
+
+statement ok
+CREATE TYPE int4_list_list AS LIST (element_type = int4_list)
+
+statement ok
+CREATE TYPE int4_list_list_too AS LIST (element_type = int4_list_too)
+
+# Custom type interoperable with anonymous type
+query T
+SELECT ('{{1}}'::int4_list_list || '{{2}}'::int list list)::text;
+----
+{{1},{2}}
+
+# Other custom types cast to same custom type
+query T
+SELECT ('{{1}}'::int4_list_list_too || '{{2}}'::int4_list_list::int4_list_list_too)::text;
+----
+{{1},{2}}
+
+# Other custom type cast to anonymous type
+query T
+SELECT ('{{1}}'::int4_list_list_too || '{{2}}'::int4_list_list::int list list)::text;
+----
+{{1},{2}}
+
+# Different custom types
+query error
+SELECT '{{1}}'::int4_list_list || '{{2}}'::int4_list_list_too;
+
+# Different custom types as element types
+query error
+SELECT '{{1}}'::int4_list list || '{{2}}'::int4_list_list_too list;
+
+# Custom element type
+query T
+SELECT ('{{1}}'::int4_list_list || '{2}'::int4_list)::text;
+----
+{{1},{2}}
+
+# Anonymous element type
+query T
+SELECT ('{{1}}'::int4_list_list || '{2}'::int4 list)::text;
+----
+{{1},{2}}
+
+# Non-matching element type
+query error
+SELECT '{{1}}'::int4_list_list || '{2}'::int4_list_too;
+
+query error
+SELECT '{1}'::int4_list_too || '{{2}}'::int4_list_list
+
+# Element types match, but "head" type does not
+query error
+SELECT '{{1}}'::int4_list_list || '{{2}}'::int4_list list
+
+query error
+SELECT '{{1}}'::int4_list list || '{{2}}'::int4_list_list
+
+# Custom element type w/ anonymous complex type
+query T
+SELECT ('{{1}}'::int4_list list || '{{2}}'::int4_list list)::text
+----
+{{1},{2}}
+
+# Custom element exactly matches
+query T
+SELECT ('{{1}}'::int4_list list || '{2}'::int4_list)::text
+----
+{{1},{2}}
+
+# Custom element + anonymous element
+query T
+SELECT ('{{1}}'::int4_list list || '{2}'::int4 list)::text
+----
+{{1},{2}}
