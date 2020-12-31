@@ -101,7 +101,7 @@ impl TypeCategory {
             | ScalarType::Int64
             | ScalarType::Oid => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
-            ScalarType::List(..) => Self::List,
+            ScalarType::List { .. } => Self::List,
             ScalarType::String => Self::String,
             ScalarType::Record { .. } => Self::Pseudo,
             ScalarType::Map { .. } => Self::Pseudo,
@@ -391,6 +391,13 @@ impl ParamList {
     /// Returns `Some` if the constraints were successfully resolved, or `None`
     /// otherwise.
     fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
+        // TODO(sploiselle): support custom types
+        if typs.iter().any(|t| match t {
+            Some(t) => t.is_custom_type(),
+            None => false,
+        }) {
+            return None;
+        }
         // Determines if types have the same [`ScalarBaseType`], and if complex
         // types' elements do, as well. This function's primary use is allowing
         // matches between `ScalarType::Decimal` values with different scales,
@@ -398,8 +405,15 @@ impl ParamList {
         fn complex_base_eq(l: &ScalarType, r: &ScalarType) -> bool {
             match (l, r) {
                 (ScalarType::Array(l), ScalarType::Array(r))
-                | (ScalarType::List(l), ScalarType::List(r))
-                | (ScalarType::Map { value_type: l }, ScalarType::Map { value_type: r }) => {
+                | (
+                    ScalarType::List {
+                        element_type: l, ..
+                    },
+                    ScalarType::List {
+                        element_type: r, ..
+                    },
+                )
+                | (ScalarType::Map { value_type: l, .. }, ScalarType::Map { value_type: r, .. }) => {
                     complex_base_eq(l, r)
                 }
                 (l, r) => ScalarBaseType::from(l) == ScalarBaseType::from(r),
@@ -426,14 +440,25 @@ impl ParamList {
                     let common = find_greatest_common_decimal(l, r)?;
                     Some(ScalarType::Array(Box::new(common)))
                 }
-                (ScalarType::List(l), ScalarType::List(r)) => {
+                (
+                    ScalarType::List {
+                        element_type: l, ..
+                    },
+                    ScalarType::List {
+                        element_type: r, ..
+                    },
+                ) => {
                     let common = find_greatest_common_decimal(l, r)?;
-                    Some(ScalarType::List(Box::new(common)))
+                    Some(ScalarType::List {
+                        element_type: Box::new(common),
+                        custom_oid: None,
+                    })
                 }
-                (ScalarType::Map { value_type: l }, ScalarType::Map { value_type: r }) => {
+                (ScalarType::Map { value_type: l, .. }, ScalarType::Map { value_type: r, .. }) => {
                     let common = find_greatest_common_decimal(l, r)?;
                     Some(ScalarType::Map {
                         value_type: Box::new(common),
+                        custom_oid: None,
                     })
                 }
                 _ => None,
@@ -460,11 +485,19 @@ impl ParamList {
         for (i, typ) in typs.iter().enumerate() {
             let param = &self[i];
             match (param, typ) {
-                (ParamType::ListAny, Some(ScalarType::List(typ)))
+                (
+                    ParamType::ListAny,
+                    Some(ScalarType::List {
+                        element_type: typ, ..
+                    }),
+                )
                 | (ParamType::ArrayAny, Some(ScalarType::Array(typ)))
-                | (ParamType::MapAny, Some(ScalarType::Map { value_type: typ })) => {
-                    set_or_check_constrained_type(typ).ok()?
-                }
+                | (
+                    ParamType::MapAny,
+                    Some(ScalarType::Map {
+                        value_type: typ, ..
+                    }),
+                ) => set_or_check_constrained_type(typ).ok()?,
                 (ParamType::ListElementAny, Some(typ)) | (ParamType::NonVecAny, Some(typ)) => {
                     set_or_check_constrained_type(typ).ok()?
                 }
@@ -546,7 +579,7 @@ impl ParamType {
 
         match self {
             ArrayAny => matches!(t, Array(..)),
-            ListAny => matches!(t, List(..)),
+            ListAny => matches!(t, List{..}),
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
@@ -931,12 +964,16 @@ fn coerce_args_to_types(
                 do_convert(arg, &ty)?
             }
             ParamType::ListAny => {
-                let ty = ScalarType::List(Box::new(get_constrained_ty()));
+                let ty = ScalarType::List {
+                    element_type: Box::new(get_constrained_ty()),
+                    custom_oid: None,
+                };
                 do_convert(arg, &ty)?
             }
             ParamType::MapAny => {
                 let ty = ScalarType::Map {
                     value_type: Box::new(get_constrained_ty()),
+                    custom_oid: None,
                 };
                 do_convert(arg, &ty)?
             }

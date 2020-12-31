@@ -75,3 +75,17 @@ CREATE TYPE custom AS LIST (element_type=_text)
 CREATE TYPE custom AS LIST ( element_type = _text )
 =>
 CreateType(CreateTypeStatement { name: ObjectName([Ident("custom")]), as_type: List, with_options: [ObjectName { name: Ident("element_type"), object_name: ObjectName([Ident("_text")]) }] })
+
+parse-statement
+CREATE TYPE schema.t2 AS LIST (element_type=schema.t1)
+----
+CREATE TYPE schema.t2 AS LIST ( element_type = schema.t1 )
+=>
+CreateType(CreateTypeStatement { name: ObjectName([Ident("schema"), Ident("t2")]), as_type: List, with_options: [ObjectName { name: Ident("element_type"), object_name: ObjectName([Ident("schema"), Ident("t1")]) }] })
+
+parse-statement
+CREATE TYPE db2.schema2.t2 AS LIST (element_type=db1.schema1.t1)
+----
+CREATE TYPE db2.schema2.t2 AS LIST ( element_type = db1.schema1.t1 )
+=>
+CreateType(CreateTypeStatement { name: ObjectName([Ident("db2"), Ident("schema2"), Ident("t2")]), as_type: List, with_options: [ObjectName { name: Ident("element_type"), object_name: ObjectName([Ident("db1"), Ident("schema1"), Ident("t1")]) }] })

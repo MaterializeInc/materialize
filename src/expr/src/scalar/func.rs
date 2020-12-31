@@ -380,7 +380,7 @@ fn cast_string_to_list<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let parsed_datums = strconv::parse_list(
         a.unwrap_str(),
-        matches!(list_typ.unwrap_list_element_type(), ScalarType::List(..)),
+        matches!(list_typ.unwrap_list_element_type(), ScalarType::List{..}),
         || Datum::Null,
         |elem_text| {
             let elem_text = match elem_text {
@@ -3768,14 +3768,14 @@ where
                 }
             },
         ),
-        List(elem_type) => strconv::format_list(buf, &d.unwrap_list(), |buf, d| {
+        List { element_type, .. } => strconv::format_list(buf, &d.unwrap_list(), |buf, d| {
             if d.is_null() {
                 buf.write_null()
             } else {
-                stringify_datum(buf.nonnull_buffer(), d, elem_type)
+                stringify_datum(buf.nonnull_buffer(), d, element_type)
             }
         }),
-        Map { value_type } => strconv::format_map(buf, &d.unwrap_map(), |buf, d| {
+        Map { value_type, .. } => strconv::format_map(buf, &d.unwrap_map(), |buf, d| {
             if d.is_null() {
                 buf.write_null()
             } else {
@@ -4204,7 +4204,11 @@ impl VariadicFunc {
                     input_types.iter().all(|t| t.scalar_type == *elem_type),
                     "Args to ListCreate should have types that are compatible with the elem_type"
                 );
-                ScalarType::List(Box::new(elem_type.clone())).nullable(false)
+                ScalarType::List {
+                    element_type: Box::new(elem_type.clone()),
+                    custom_oid: None,
+                }
+                .nullable(false)
             }
             ListSlice { .. } => input_types[0].scalar_type.clone().nullable(true),
             RecordCreate { field_names } => ScalarType::Record {
