@@ -981,8 +981,21 @@ fn handle_create_type(
         };
         let item = scx
             .catalog
-            .resolve_item(&normalize::object_name(item_name)?)?;
-        ids.push(item.id());
+            .resolve_item(&normalize::object_name(item_name.clone())?)?;
+        let item_id = item.id();
+        if scx
+            .catalog
+            .try_get_lossy_scalar_type_by_id(&item_id)
+            .is_none()
+        {
+            bail!(
+                "{} must be of class type, but received {} which is of class {}",
+                key,
+                item.name(),
+                item.item_type()
+            );
+        }
+        ids.push(item_id);
     }
 
     if !with_options.is_empty() {
@@ -1003,13 +1016,12 @@ fn handle_create_type(
         },
         CreateTypeAs::Map => {
             let key_id = ids.remove(0);
-            // TODO(sean): As part of
-            // https://github.com/MaterializeInc/materialize/issues/4953 we
-            // should be able to resolve IDs to `ScalarType`s, so this shouldn't
-            // rely on external knowledge that this OID is text's.
-            if scx.catalog.get_item_by_id(&key_id).oid() != 25 {
-                bail!("key_type must be text")
-            };
+            match scx.catalog.try_get_lossy_scalar_type_by_id(&key_id) {
+                Some(ScalarType::String) => {}
+                Some(t) => bail!("key_type must be text, got {}", t),
+                None => unreachable!("already guaranteed id correlates to a type"),
+            }
+
             TypeInner::Map {
                 key_id,
                 value_id: ids.remove(0),

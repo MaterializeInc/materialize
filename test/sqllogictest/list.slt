@@ -1888,6 +1888,9 @@ SELECT '{1}'::float4 list || '{2}'::float8 list
 
 # 🔬 CREATE TYPE .. AS LIST
 
+query error element_type must be of class type, but received pg_catalog.pg_enum which is of class view
+CREATE TYPE tbl_list AS LIST (element_type=pg_enum)
+
 statement ok
 CREATE TYPE int_list_c AS LIST (element_type = int4);
 

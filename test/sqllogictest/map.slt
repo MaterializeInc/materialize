@@ -27,6 +27,12 @@ CREATE TYPE custom AS MAP (value_type='bool')
 query error unknown catalog item 'customthing'
 CREATE TYPE custom AS MAP (key_type=text, value_type='bool', extra_type=customthing)
 
+query error key_type must be of class type, but received pg_catalog.pg_enum which is of class view
+CREATE TYPE tbl_map AS MAP (key_type=pg_enum, value_type=text)
+
+query error value_type must be of class type, but received pg_catalog.pg_enum which is of class view
+CREATE TYPE tbl_map AS MAP (key_type=text, value_type=pg_enum)
+
 query error CREATE TYPE not yet supported
 CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
 
