@@ -2813,6 +2813,9 @@ pub enum UnaryFunc {
     CastMapToString {
         ty: ScalarType,
     },
+    CastInPlace {
+        return_ty: ScalarType,
+    },
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -2958,6 +2961,7 @@ impl UnaryFunc {
             UnaryFunc::CastList1ToList2 { cast_expr, .. } => {
                 cast_list1_to_list2(a, &*cast_expr, temp_storage)
             }
+            UnaryFunc::CastInPlace { .. } => Ok(a),
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
             UnaryFunc::CeilDecimal(scale) => Ok(ceil_decimal(a, *scale)),
@@ -3110,7 +3114,8 @@ impl UnaryFunc {
 
             CastList1ToList2 { return_ty, .. }
             | CastStringToList { return_ty, .. }
-            | CastStringToMap { return_ty, .. } => (return_ty.clone()).nullable(false),
+            | CastStringToMap { return_ty, .. }
+            | CastInPlace { return_ty } => (return_ty.clone()).nullable(false),
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),
@@ -3275,6 +3280,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastListToString { .. } => f.write_str("listtostr"),
             UnaryFunc::CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             UnaryFunc::CastMapToString { .. } => f.write_str("maptostr"),
+            UnaryFunc::CastInPlace { .. } => f.write_str("castinplace"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
