@@ -79,7 +79,7 @@ fn bench_filter_unpacked(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) 
 }
 
 fn bench_filter_packed(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) {
-    let filter = Row::pack(&[filter]);
+    let filter = Row::pack_slice(&[filter]);
     let rows = rows.into_iter().map(Row::pack).collect::<Vec<_>>();
     b.iter_with_setup(
         || rows.clone(),

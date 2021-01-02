@@ -273,7 +273,7 @@ impl Params {
     /// Returns a `Params` with no parameters.
     pub fn empty() -> Params {
         Params {
-            datums: Row::pack(&[]),
+            datums: Row::pack_slice(&[]),
             types: vec![],
         }
     }

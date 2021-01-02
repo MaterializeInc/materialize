@@ -75,7 +75,7 @@ impl ScalarExpr {
     }
 
     pub fn literal(res: Result<Datum, EvalError>, typ: ColumnType) -> Self {
-        let row = res.map(|datum| Row::pack(&[datum]));
+        let row = res.map(|datum| Row::pack_slice(&[datum]));
         ScalarExpr::Literal(row, typ)
     }
 
