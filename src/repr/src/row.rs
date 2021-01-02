@@ -590,15 +590,13 @@ impl Row {
     /// This method has the advantage over `pack` that it can determine the required
     /// allocation before packing the elements, ensuring only one allocation and no
     /// redundant copies required.
-    ///
-    /// TODO: This could also be done for cloneable iterators, though we would need to be
-    /// very careful to avoid using it when iterators are either expensive or have
-    /// side effects.
     pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
         let needed = slice.iter().map(|d| datum_size(d)).sum();
-        let mut packer = RowPacker::with_capacity(needed);
-        packer.extend(slice.iter());
-        packer.finish()
+        let mut bytes = Vec::with_capacity(needed);
+        for datum in slice.iter() {
+            push_datum(&mut bytes, *datum);
+        }
+        Row::new(bytes)
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
