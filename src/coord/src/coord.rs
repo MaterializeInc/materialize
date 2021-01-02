@@ -1222,7 +1222,7 @@ where
         self.update_catalog_view(
             index_id,
             iter::once((
-                Row::pack(update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()),
+                Row::pack_slice(&update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()[..]),
                 diff,
             )),
         )

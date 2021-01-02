@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{any::Any, cell::RefCell, collections::VecDeque, iter, rc::Rc, time::Duration};
+use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use anyhow::anyhow;
 use differential_dataflow::{capture::YieldingIter, hashable::Hashable};
@@ -147,7 +147,11 @@ pub trait DecoderState {
 }
 
 fn pack_with_line_no(datum: Datum, line_no: Option<i64>) -> Row {
-    Row::pack(iter::once(datum).chain(line_no.map(Datum::from)))
+    if let Some(line_no) = line_no {
+        Row::pack_slice(&[datum, Datum::from(line_no)])
+    } else {
+        Row::pack_slice(&[datum])
+    }
 }
 
 fn bytes_to_datum(bytes: &[u8]) -> Datum {

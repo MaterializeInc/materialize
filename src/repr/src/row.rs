@@ -594,7 +594,7 @@ impl Row {
     /// TODO: This could also be done for cloneable iterators, though we would need to be
     /// very careful to avoid using it when iterators are either expensive or have
     /// side effects.
-    pub fn pack_slice<'a, I, D>(slice: &[Datum<'a>]) -> Row {
+    pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
         let needed = slice.iter().map(|d| datum_size(d)).sum();
         let mut packer = RowPacker::with_capacity(needed);
         packer.extend(slice.iter());
