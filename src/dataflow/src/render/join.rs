@@ -39,7 +39,7 @@ where
     pub fn render_join(
         &mut self,
         relation_expr: &RelationExpr,
-        predicates: &[ScalarExpr],
+        map_filter_project: MapFilterProject,
         // TODO(frank): use this argument to create a region surrounding the join.
         _scope: &mut G,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
@@ -70,12 +70,14 @@ where
                 (Vec::new(), (0..output_arity).collect::<Vec<_>>())
             };
 
+            let (map, filter, project) = map_filter_project.as_map_filter_project();
+
             let map_filter_project = MapFilterProject::new(output_arity)
                 .map(dummies)
                 .project(demand_projection)
-                .filter(predicates.iter().cloned());
-
-            assert_eq!(map_filter_project.projection.len(), output_arity);
+                .map(map)
+                .filter(filter)
+                .project(project);
 
             // Other than the stream of updates, our loop-carried state are these
             // three variables: `column_map`, `equivalences`, and `mfp`, which

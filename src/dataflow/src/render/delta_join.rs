@@ -32,7 +32,7 @@ where
     pub fn render_delta_join<F>(
         &mut self,
         relation_expr: &RelationExpr,
-        predicates: &[ScalarExpr],
+        map_filter_project: MapFilterProject,
         scope: &mut G,
         worker_index: usize,
         subtract: F,
@@ -71,7 +71,6 @@ where
                         let mut delta_queries = Vec::new();
 
                         let input_mapper = JoinInputMapper::new(inputs);
-                        let map_filter_project = MapFilterProject::new(input_mapper.total_columns()).filter(predicates.iter().cloned());
 
                         // First let's prepare the input arrangements we will need.
                         // This reduces redundant imports, and simplifies the dataflow structure.
