@@ -516,8 +516,26 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::TimestampTz(_) => 1 + size_of::<DateTime<Utc>>(),
         Datum::Interval(_) => 1 + size_of::<i32>() + size_of::<i128>(),
         Datum::Decimal(_) => 1 + size_of::<Significand>(),
-        Datum::Bytes(bytes) => 1 + size_of::<usize>() + bytes.len(),
-        Datum::String(string) => 1 + size_of::<usize>() + string.as_bytes().len(),
+        Datum::Bytes(bytes) => {
+            // We use a variable length representation of slice length.
+            let bytes_for_length = match bytes.len() {
+                0..=255 => 1,
+                256..=65535 => 2,
+                65536..=4294967295 => 4,
+                _ => 8,
+            };
+            1 + bytes_for_length + bytes.len()
+        }
+        Datum::String(string) => {
+            // We use a variable length representation of slice length.
+            let bytes_for_length = match string.len() {
+                0..=255 => 1,
+                256..=65535 => 2,
+                65536..=4294967295 => 4,
+                _ => 8,
+            };
+            1 + bytes_for_length + string.len()
+        }
         Datum::Uuid(_) => 1 + size_of::<Uuid>(),
         Datum::Array(array) => {
             1 + size_of::<u8>() + array.dims.data.len() + array.elements.data.len()
@@ -1463,7 +1481,7 @@ mod tests {
             Datum::JsonNull,
         ];
         for value in values_of_interest {
-            if !datum_size(&value) == Row::pack(Some(value)).data.len() {
+            if datum_size(&value) != Row::pack(Some(value)).data.len() {
                 panic!("Disparity in claimed size for {:?}", value);
             }
         }
