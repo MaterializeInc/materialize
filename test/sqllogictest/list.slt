@@ -1912,7 +1912,7 @@ SELECT '{{1,2}}'::int4_list_c list::text
 query T
 SELECT pg_typeof(NULL::int4_list_c);
 ----
-materialize.public.int_list_c
+int4_list_c
 
 statement ok
 CREATE TYPE int4_list_list_c AS LIST (element_type = int4_list_c);

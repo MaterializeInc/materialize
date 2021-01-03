@@ -632,7 +632,7 @@ SELECT upper('ALREADYUP')
 ----
 ALREADYUP
 
-query error Cannot call function upper\(decimal\(38, 1\)\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function upper\(numeric\(38,1\)\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT upper(2.2)
 
 query T

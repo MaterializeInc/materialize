@@ -451,7 +451,7 @@ SELECT '{a=>1,b=>2}'::int4_map::text;
 query T
 SELECT pg_typeof(NULL::int4_map);
 ----
-materialize.public.int4_map
+int4_map
 
 # 🔬🔬 Check each valid value type
 
