@@ -1880,6 +1880,57 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
     fn config(&self) -> &sql::catalog::CatalogConfig {
         &self.catalog.config
     }
+
+    fn minimal_qualification(&self, full_name: &FullName) -> PartialName {
+        let database = match &full_name.database {
+            DatabaseSpecifier::Ambient => None,
+            DatabaseSpecifier::Name(n) => {
+                if *n == self.database {
+                    None
+                } else {
+                    Some(n.clone())
+                }
+            }
+        };
+
+        let schema = if self
+            .search_path
+            .iter()
+            .any(|p| p == &full_name.schema.as_str())
+        {
+            // If `full_name.schema` is findable in the `search_path`, find
+            // first reference to `item`.
+            let mut schema = None;
+            for search_schema in self.search_path {
+                let partial_name = PartialName {
+                    database: database.clone(),
+                    schema: Some(search_schema.to_string()),
+                    item: full_name.item.clone(),
+                };
+                // If first reference to `item` in `search_path` is not
+                // `full_name`, the `PartialName` must be schema qualified.
+                if let Ok(item) = self.resolve_item(&partial_name) {
+                    if item.name() != full_name {
+                        schema = Some(full_name.schema.clone());
+                    }
+                    break;
+                }
+            }
+            schema
+        } else {
+            // If `search_path` does not contain `full_name.schema`, the
+            // `PartialName` must contain it.
+            Some(full_name.schema.clone())
+        };
+
+        let res = PartialName {
+            database,
+            schema,
+            item: full_name.item.clone(),
+        };
+        assert!(self.resolve_item(&res).unwrap().name() == full_name);
+        res
+    }
 }
 
 impl sql::catalog::CatalogDatabase for Database {

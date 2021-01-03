@@ -11,10 +11,10 @@
 
 //! Catalog abstraction layer.
 
-use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
 use std::time::SystemTime;
+use std::{error::Error, unimplemented};
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{GlobalId, ScalarExpr};
@@ -119,6 +119,9 @@ pub trait Catalog: fmt::Debug {
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
+
+    /// Determines the minimal qualification required to address the named item.
+    fn minimal_qualification(&self, full_name: &FullName) -> PartialName;
 }
 
 /// Configuration associated with a catalog.
@@ -349,5 +352,9 @@ impl Catalog for DummyCatalog {
 
     fn config(&self) -> &CatalogConfig {
         &DUMMY_CONFIG
+    }
+
+    fn minimal_qualification(&self, _full_name: &FullName) -> PartialName {
+        unimplemented!()
     }
 }
