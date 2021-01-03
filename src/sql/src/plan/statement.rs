@@ -2024,12 +2024,10 @@ impl<'a> StatementContext<'a> {
 
         match typ {
             Array(t) => format!("{}[]", self.get_scalar_type_name(t)),
-            Decimal(p, s) => format!("numeric({},{})", p, s),
-            List { custom_oid, .. } | Map { custom_oid, .. } if custom_oid.is_some() => self
-                .catalog
-                .get_item_by_oid(&custom_oid.unwrap())
-                .name()
-                .to_string(),
+            List { custom_oid, .. } | Map { custom_oid, .. } if custom_oid.is_some() => {
+                let full_name = self.catalog.get_item_by_oid(&custom_oid.unwrap()).name();
+                self.catalog.minimal_qualification(full_name).to_string()
+            }
             List { element_type, .. } => {
                 format!("{} list", self.get_scalar_type_name(element_type))
             }
@@ -2047,7 +2045,18 @@ impl<'a> StatementContext<'a> {
                     .map(|f| format!("{}: {}", f.0, self.get_column_type_name(&f.1)))
                     .join(",")
             ),
-            ty => pgrepr::Type::from(ty).name().to_string(),
+            ty => {
+                let full_name = self
+                    .catalog
+                    .get_item_by_oid(&pgrepr::Type::from(ty).oid())
+                    .name();
+                let res = self.catalog.minimal_qualification(full_name).to_string();
+                if let ScalarType::Decimal(p, s) = typ {
+                    format!("{}({},{})", res, p, s)
+                } else {
+                    res
+                }
+            }
         }
     }
 

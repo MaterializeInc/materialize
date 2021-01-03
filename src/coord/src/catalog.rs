@@ -1753,6 +1753,12 @@ impl From<PlanContext> for SerializedPlanContext {
     }
 }
 
+impl ConnCatalog<'_> {
+    fn resolve_item_name(&self, name: &PartialName) -> Result<&FullName, SqlCatalogError> {
+        self.resolve_item(name).map(|entry| entry.name())
+    }
+}
+
 impl SqlCatalog for ConnCatalog<'_> {
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
         if include_system_schemas {
@@ -1875,6 +1881,41 @@ impl SqlCatalog for ConnCatalog<'_> {
 
     fn config(&self) -> &sql::catalog::CatalogConfig {
         &self.catalog.config
+    }
+
+    fn minimal_qualification(&self, full_name: &FullName) -> PartialName {
+        let database = match &full_name.database {
+            DatabaseSpecifier::Ambient => None,
+            DatabaseSpecifier::Name(n) => {
+                if *n == self.database {
+                    None
+                } else {
+                    Some(n.clone())
+                }
+            }
+        };
+
+        let schema = if database.is_none()
+            && self.resolve_item_name(&PartialName {
+                database: None,
+                schema: None,
+                item: full_name.item.clone(),
+            }) == Ok(full_name)
+        {
+            None
+        } else {
+            // If `search_path` does not contain `full_name.schema`, the
+            // `PartialName` must contain it.
+            Some(full_name.schema.clone())
+        };
+
+        let res = PartialName {
+            database,
+            schema,
+            item: full_name.item.clone(),
+        };
+        assert_eq!(self.resolve_item_name(&res), Ok(full_name));
+        res
     }
 }
 
