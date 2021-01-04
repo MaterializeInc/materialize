@@ -9,7 +9,7 @@
 
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::convert;
 use std::fs::File;
 use std::io::Read;
@@ -90,10 +90,10 @@ impl Config {
 }
 
 fn extract(
-    input: &mut HashMap<String, Value>,
+    input: &mut BTreeMap<String, Value>,
     configs: &[Config],
-) -> Result<HashMap<String, String>, anyhow::Error> {
-    let mut out = HashMap::new();
+) -> Result<BTreeMap<String, String>, anyhow::Error> {
+    let mut out = BTreeMap::new();
     for config in configs {
         let value = match input.remove(config.name) {
             Some(v) => match config.validate_val(&v) {
@@ -118,8 +118,8 @@ fn extract(
 /// - If any of the values in `with_options` are not
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
-    with_options: &mut HashMap<String, Value>,
-) -> Result<HashMap<String, String>, anyhow::Error> {
+    with_options: &mut BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, String>, anyhow::Error> {
     extract(
         with_options,
         &[
@@ -167,7 +167,7 @@ pub fn extract_config(
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
 ///   For example, when using Kerberos auth, and the named principal does not
 ///   exist.
-pub fn test_config(options: &HashMap<String, String>) -> Result<(), anyhow::Error> {
+pub fn test_config(options: &BTreeMap<String, String>) -> Result<(), anyhow::Error> {
     let mut config = rdkafka::ClientConfig::new();
     for (k, v) in options {
         config.set(k, v);
@@ -251,8 +251,8 @@ impl rdkafka::client::ClientContext for RDKafkaErrCheckContext {
 // `extract_security_config()`. Currently only supports SSL auth.
 pub fn generate_ccsr_client_config(
     csr_url: Url,
-    kafka_options: &HashMap<String, String>,
-    mut ccsr_options: HashMap<String, Value>,
+    kafka_options: &BTreeMap<String, String>,
+    mut ccsr_options: BTreeMap<String, Value>,
 ) -> Result<ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = ccsr::ClientConfig::new(csr_url);
 

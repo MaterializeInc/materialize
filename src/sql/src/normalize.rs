@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
@@ -47,7 +47,7 @@ pub fn object_name(mut name: ObjectName) -> Result<PartialName, PlanError> {
     Ok(out)
 }
 
-pub fn options(options: &[SqlOption]) -> HashMap<String, Value> {
+pub fn options(options: &[SqlOption]) -> BTreeMap<String, Value> {
     options
         .iter()
         .map(|o| match o {
@@ -60,7 +60,7 @@ pub fn options(options: &[SqlOption]) -> HashMap<String, Value> {
         .collect()
 }
 
-pub fn option_objects(options: &[SqlOption]) -> HashMap<String, SqlOption> {
+pub fn option_objects(options: &[SqlOption]) -> BTreeMap<String, SqlOption> {
     options
         .iter()
         .map(|o| (ident(o.name().clone()), o.clone()))
