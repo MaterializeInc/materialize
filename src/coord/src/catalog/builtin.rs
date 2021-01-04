@@ -938,7 +938,6 @@ FROM mz_catalog.mz_schemas",
     needs_logs: false,
 };
 
-// TODO(jldlaughlin): add other fields - https://www.postgresql.org/docs/12/catalog-pg-class.html
 pub const PG_CLASS: BuiltinView = BuiltinView {
     name: "pg_class",
     schema: PG_CATALOG_SCHEMA,
@@ -1004,13 +1003,16 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     name: "pg_attribute",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_attribute AS SELECT
-    oid as attrelid,
+    mz_objects.oid as attrelid,
     mz_columns.name as attname,
-    NULL::pg_catalog.oid AS atttypid,
+    mz_types.oid AS atttypid,
     position as attnum,
+    -1::pg_catalog.int4 as atttypmod,
     NOT nullable as attnotnull,
     FALSE as attisdropped
-FROM mz_catalog.mz_tables JOIN mz_catalog.mz_columns ON mz_tables.id = mz_columns.id",
+FROM mz_catalog.mz_objects
+JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
+JOIN mz_catalog.mz_types ON mz_columns.type = mz_types.name",
     id: GlobalId::System(4020),
     needs_logs: false,
 };
