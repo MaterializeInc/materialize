@@ -38,8 +38,8 @@ use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
     AvroOcfEncoding, Consistency, DataEncoding, Envelope, ExternalSourceConnector,
-    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector,
-    TimestampSourceUpdate,
+    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector,
+    SourceConnector, TimestampSourceUpdate,
 };
 use expr::{PartitionId, SourceInstanceId};
 use ore::collections::CollectionExt;
@@ -134,6 +134,7 @@ enum RtTimestampConnector {
     File(RtFileConnector),
     Ocf(RtFileConnector),
     Kinesis(RtKinesisConnector),
+    S3(RtS3Connector),
 }
 
 enum ByoTimestampConnector {
@@ -141,6 +142,7 @@ enum ByoTimestampConnector {
     File(ByoFileConnector<Vec<u8>, anyhow::Error>),
     Ocf(ByoFileConnector<Value, anyhow::Error>),
     Kinesis(ByoKinesisConnector),
+    // S3 is not supported
 }
 
 // List of possible encoding types
@@ -286,6 +288,9 @@ struct ByoKinesisConnector {}
 
 /// Data consumer stub for File source with RT consistency
 struct RtFileConnector {}
+
+/// Data consumer stub for S3 source with RT consistency
+struct RtS3Connector {}
 
 /// Data consumer stub for File source with BYO consistency
 struct ByoFileConnector<Out, Err> {
@@ -1062,6 +1067,12 @@ impl Timestamper {
                 .map(|connector| RtTimestampConsumer {
                     connector: RtTimestampConnector::Kinesis(connector),
                 }),
+            ExternalSourceConnector::S3(s3c) => {
+                self.create_rt_s3_connector(id, s3c)
+                    .map(|connector| RtTimestampConsumer {
+                        connector: RtTimestampConnector::S3(connector),
+                    })
+            }
         }
     }
 
@@ -1199,6 +1210,14 @@ impl Timestamper {
         Some(RtFileConnector {})
     }
 
+    fn create_rt_s3_connector(
+        &self,
+        _id: SourceInstanceId,
+        _fc: S3SourceConnector,
+    ) -> Option<RtS3Connector> {
+        Some(RtS3Connector {})
+    }
+
     fn create_byo_ocf_connector(
         &self,
         _id: SourceInstanceId,
@@ -1286,6 +1305,7 @@ impl Timestamper {
                     None => None,
                 }
             }
+            ExternalSourceConnector::S3(_) => None, // BYO is not supported for s3 sources
         }
     }
 

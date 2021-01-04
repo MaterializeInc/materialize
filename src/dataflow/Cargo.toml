@@ -19,6 +19,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 futures = "0.3.9"
+globset = "0.4.0"
 inotify = "0.9.2"
 interchange = { path = "../interchange" }
 itertools = "0.9.0"
@@ -37,6 +38,7 @@ repr = { path = "../repr" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
+rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.0", features = ["derive"] }
 serde_json = "1.0.60"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
