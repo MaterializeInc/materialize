@@ -218,7 +218,7 @@ Field | Use
 ------|-----
 _id_ | The transaction id this record refers to.
 _status_ | Either `BEGIN` or `END`. Materialize sends a record with `BEGIN` the first time it writes a data message for `id`, and it sends a `END` record after it has written all data messages for `id`.
-_event&lowbar;count_ | This field null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
+_event&lowbar;count_ | This field is null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
 
 ##### Consistency information details
 - Materialize writes consistency output to a different topic per sink.

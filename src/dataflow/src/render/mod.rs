@@ -696,10 +696,10 @@ where
         // here to determine which case we are in to avoid this call.
         let collection = collection.consolidate();
 
-        let sink_shutdown = match sink.connector.clone() {
+        match sink.connector.clone() {
             SinkConnector::Kafka(c) => {
-                let button = sink::kafka(&collection.inner, sink_id, c, sink.from.1.clone());
-                Some(button)
+                let token = sink::kafka(&collection.inner, sink_id, c, sink.from.1.clone());
+                needed_sink_tokens.push(token);
             }
             SinkConnector::Tail(c) => {
                 // Map by sink_id is not needed for correctness, but will spread the work
@@ -711,17 +711,11 @@ where
                     .arrange_by_key()
                     .stream;
                 sink::tail(stream, sink_id, c);
-                None
             }
             SinkConnector::AvroOcf(c) => {
                 sink::avro_ocf(&collection.inner, sink_id, c, sink.from.1.clone());
-                None
             }
         };
-
-        if let Some(sink_token) = sink_shutdown {
-            needed_sink_tokens.push(sink_token.press_on_drop());
-        }
 
         let tokens = Rc::new((
             needed_sink_tokens,
