@@ -66,7 +66,7 @@ Field | Value | Description
 
 Use the following options to connect Materialize using SASL.
 
-For more detail, see [SSL-encrypted Kafka details](sql/create-source/avro-kafka/#ssl-encrypted-kafka-details).
+For more detail, see [Connecting to a Kafka Broker with SSL Authentication](sql/create-source/avro-kafka/#connecting-to-a-kafka-broker-with-ssl-authentication).
 
 Field | Value | Description
 ------|-------|------------
