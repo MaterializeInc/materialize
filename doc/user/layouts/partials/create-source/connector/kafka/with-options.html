@@ -1,7 +1,7 @@
 `client_id` | `text` | Use the supplied value as the Kafka client identifier.
 `group_id_prefix` | `text` | Use the specified prefix in the consumer group ID. The resulting `group.id` looks like `<group_id_prefix>materialize-X-Y`, where `X` and `Y` are values that allow multiple concurrent Kafka consumers from the same topic.
 `cache` | `bool` | Cache data from this source to local files. Requires [experimental mode](/cli/#experimental-mode).
-`security_protocol` | `text` | Use either [`ssl`](#ssl-with-options) or [`sasl_plaintext` (Kerberos)](#kerberos-with-options) to connect to the Kafka cluster.
+`security_protocol` | `text` | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberized-kafka-details), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `statistics_interval_ms` | `int` | `librdkafka` statistics emit interval in `ms`. Accepts values [0, 86400000]. The granularity is 1000ms. A value of 0 disables statistics.
 `ignore_source_keys` | `bool` | Default: `false`. If `true`, do not perform optimizations assuming uniqueness of primary keys in schemas.
 `timestamp_frequency_ms`| `int` | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently timestamps advance in the system. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.

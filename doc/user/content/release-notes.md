@@ -466,7 +466,7 @@ Wrap your release notes at the 80 character mark.
   features that require experimental mode will be marked as such in their
   documentation.
 
-- Support [SASL PLAIN authentication for Kafka sources](/sql/create-source/avro-kafka/#connecting-to-a-kafka-broker-using-sasl-plain-authentication).
+- Support [SASL PLAIN authentication for Kafka sources](/sql/create-source/avro-kafka/#connecting-to-a-kafka-broker-using-sasl-authentication).
   Notably, this allows Materialize to connect to Kafka clusters hosted by
   Confluent Cloud.
 
