@@ -300,7 +300,7 @@ where
                     log.variant.desc().typ().keys.iter().enumerate().flat_map(
                         move |(index, key)| {
                             key.iter().map(move |k| {
-                                let row = Row::pack(&[
+                                let row = Row::pack_slice(&[
                                     Datum::String(log_id),
                                     Datum::Int64(*k as i64),
                                     Datum::Int64(index as i64),
@@ -323,7 +323,7 @@ where
                                 .id
                                 .to_string();
                             pairs.into_iter().map(move |(c, p)| {
-                                let row = Row::pack(&[
+                                let row = Row::pack_slice(&[
                                     Datum::String(&log_id),
                                     Datum::Int64(c as i64),
                                     Datum::String(&parent_id),
@@ -931,7 +931,7 @@ where
         self.update_catalog_view(
             MZ_DATABASES.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::Int64(database_id),
                     Datum::Int32(oid as i32),
                     Datum::String(&name),
@@ -953,7 +953,7 @@ where
         self.update_catalog_view(
             MZ_SCHEMAS.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::Int64(schema_id),
                     Datum::Int32(oid as i32),
                     match database_id {
@@ -978,7 +978,7 @@ where
             self.update_catalog_view(
                 MZ_COLUMNS.id,
                 iter::once((
-                    Row::pack(&[
+                    Row::pack_slice(&[
                         Datum::String(&global_id.to_string()),
                         Datum::String(
                             &column_name
@@ -1045,7 +1045,7 @@ where
         self.update_catalog_view(
             MZ_INDEXES.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::String(name),
@@ -1075,7 +1075,7 @@ where
             self.update_catalog_view(
                 MZ_INDEX_COLUMNS.id,
                 iter::once((
-                    Row::pack(&[
+                    Row::pack_slice(&[
                         Datum::String(&global_id.to_string()),
                         Datum::Int64(seq_in_index),
                         field_number,
@@ -1100,7 +1100,7 @@ where
         self.update_catalog_view(
             MZ_TABLES.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
@@ -1123,7 +1123,7 @@ where
         self.update_catalog_view(
             MZ_SOURCES.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
@@ -1146,7 +1146,7 @@ where
         self.update_catalog_view(
             MZ_VIEWS.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
@@ -1169,7 +1169,7 @@ where
         self.update_catalog_view(
             MZ_SINKS.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
@@ -1193,7 +1193,7 @@ where
         self.update_catalog_view(
             MZ_TYPES.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
@@ -1222,7 +1222,7 @@ where
         self.update_catalog_view(
             index_id,
             iter::once((
-                Row::pack(update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()),
+                Row::pack_slice(&update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()[..]),
                 diff,
             )),
         )
@@ -1900,7 +1900,7 @@ where
         name: String,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let variable = session.vars().get(&name)?;
-        let row = Row::pack(&[Datum::String(&variable.value())]);
+        let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
 
@@ -2327,7 +2327,7 @@ where
                 explanation.to_string()
             }
         };
-        let rows = vec![Row::pack(&[Datum::from(&*explanation_string)])];
+        let rows = vec![Row::pack_slice(&[Datum::from(&*explanation_string)])];
         Ok(send_immediate_rows(rows))
     }
 
@@ -2655,7 +2655,7 @@ where
                             .await;
                             match connector {
                                 SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                                    let row = Row::pack(&[
+                                    let row = Row::pack_slice(&[
                                         Datum::String(entry.id().to_string().as_str()),
                                         Datum::String(topic.as_str()),
                                     ]);
@@ -2666,7 +2666,7 @@ where
                                     .await;
                                 }
                                 SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                                    let row = Row::pack(&[
+                                    let row = Row::pack_slice(&[
                                         Datum::String(entry.id().to_string().as_str()),
                                         Datum::Bytes(&path.clone().into_os_string().into_vec()),
                                     ]);
@@ -2842,7 +2842,7 @@ where
         for (id, sink) in &dataflow.sink_exports {
             match &sink.connector {
                 SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                    let row = Row::pack(&[
+                    let row = Row::pack_slice(&[
                         Datum::String(&id.to_string()),
                         Datum::String(topic.as_str()),
                     ]);
@@ -2850,7 +2850,7 @@ where
                         .await;
                 }
                 SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                    let row = Row::pack(&[
+                    let row = Row::pack_slice(&[
                         Datum::String(&id.to_string()),
                         Datum::Bytes(&path.clone().into_os_string().into_vec()),
                     ]);

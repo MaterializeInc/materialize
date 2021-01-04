@@ -44,10 +44,11 @@ use fmt::Debug;
 /// We avoid the need for the second set of padding by not providing mutable access to the `Datum`. Instead, `Row` is append-only.
 ///
 /// A `Row` can be built from a collection of `Datum`s using `Row::pack`, but it often more efficient to use and re-use a `RowPacker` which can avoid unneccesary allocations.
+/// The `Row::pack_slice` method pre-determines the necessary allocation, and is also appropriate.
 ///
 /// ```
 /// # use repr::{Row, Datum};
-/// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
+/// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// assert_eq!(row.unpack(), vec![Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)])
 /// ```
 ///
@@ -55,14 +56,14 @@ use fmt::Debug;
 ///
 /// ```
 /// # use repr::{Row, Datum};
-/// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
+/// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// assert_eq!(row.iter().nth(1).unwrap(), Datum::Int32(1));
 /// ```
 ///
 /// If you want random access to the `Datum`s in a `Row`, use `Row::unpack` to create a `Vec<Datum>`
 /// ```
 /// # use repr::{Row, Datum};
-/// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
+/// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// let datums = row.unpack();
 /// assert_eq!(datums[1], Datum::Int32(1));
 /// ```
@@ -589,15 +590,13 @@ impl Row {
     /// This method has the advantage over `pack` that it can determine the required
     /// allocation before packing the elements, ensuring only one allocation and no
     /// redundant copies required.
-    ///
-    /// TODO: This could also be done for cloneable iterators, though we would need to be
-    /// very careful to avoid using it when iterators are either expensive or have
-    /// side effects.
-    pub fn pack_slice<'a, I, D>(slice: &[Datum<'a>]) -> Row {
+    pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
         let needed = slice.iter().map(|d| datum_size(d)).sum();
-        let mut packer = RowPacker::with_capacity(needed);
-        packer.extend(slice.iter());
-        packer.finish()
+        let mut bytes = Vec::with_capacity(needed);
+        for datum in slice.iter() {
+            push_datum(&mut bytes, *datum);
+        }
+        Row::new(bytes)
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
@@ -1298,7 +1297,7 @@ mod tests {
 
         // Pack a previously-constructed `Datum::Array` and verify that it
         // unpacks correctly.
-        let row = Row::pack(&[Datum::Array(arr1)]);
+        let row = Row::pack_slice(&[Datum::Array(arr1)]);
         let arr2 = row.unpack_first().unwrap_array();
         assert_eq!(arr1, arr2);
     }
@@ -1481,7 +1480,7 @@ mod tests {
             Datum::JsonNull,
         ];
         for value in values_of_interest {
-            if datum_size(&value) != Row::pack(Some(value)).data.len() {
+            if datum_size(&value) != Row::pack_slice(&[value]).data.len() {
                 panic!("Disparity in claimed size for {:?}", value);
             }
         }
