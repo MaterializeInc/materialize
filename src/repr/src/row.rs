@@ -580,7 +580,6 @@ impl Row {
         Ok(packer.finish())
     }
 
-    // TODO(justin): find a better place to put this.
     /// Creates a new row from supplied bytes.
     ///
     /// # Safety
@@ -602,7 +601,9 @@ impl Row {
         for datum in slice.iter() {
             push_datum(&mut bytes, *datum);
         }
-        Row::new(bytes)
+        // Unsafety justified in that `push_datum` to initially empty `Vec` is the
+        // same machinery we use internally, and should produce well-formed bytes.
+        unsafe { Row::new(bytes) }
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
