@@ -44,6 +44,6 @@ options](#kerberos-with-options).
 
 - Materialize currently only supports:
   - `GSSAPI` as the `sasl_mechanisms`
-  - `SASL_PLAINTEXT` as the `security_protocol`
+  - `sasl_plaintext`, `scram-sha-256`, or `scram-sha-512`  as the `security_protocol`
 - Materialize does _not_ support Kerberos authentication for Confluent Schema
   Registries.

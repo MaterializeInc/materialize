@@ -9,7 +9,7 @@
 
 //! Statement purification.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use anyhow::{bail, Context};
 use tokio::io::AsyncBufReadExt;
@@ -39,7 +39,7 @@ pub async fn purify(mut stmt: Statement) -> Result<Statement, anyhow::Error> {
     }) = &mut stmt
     {
         let mut with_options_map = normalize::options(with_options);
-        let mut config_options = HashMap::new();
+        let mut config_options = BTreeMap::new();
 
         let mut file = None;
         match connector {
@@ -88,7 +88,7 @@ async fn purify_format(
     connector: &mut Connector,
     col_names: &mut Vec<Ident>,
     file: Option<tokio::fs::File>,
-    connector_options: &HashMap<String, String>,
+    connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
     match format {
         Some(Format::Avro(schema)) => match schema {
