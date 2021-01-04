@@ -461,10 +461,15 @@ pub fn plan_create_source(
             scx.require_experimental_mode("S3 Sources")?;
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
                 bucket: bucket.clone(),
-                pattern: GlobBuilder::new(pattern)
-                    .literal_separator(true)
-                    .backslash_escape(true)
-                    .build()?,
+                pattern: pattern
+                    .as_ref()
+                    .map(|p| {
+                        GlobBuilder::new(p)
+                            .literal_separator(true)
+                            .backslash_escape(true)
+                            .build()
+                    })
+                    .transpose()?,
                 aws_info: aws_connect_info(&mut with_options, None)?,
             });
             let encoding = get_encoding(format)?;

@@ -234,7 +234,7 @@ pub enum Connector {
     S3 {
         bucket: String,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
-        pattern: String,
+        pattern: Option<String>,
     },
 }
 
@@ -272,9 +272,12 @@ impl AstDisplay for Connector {
             Connector::S3 { bucket, pattern } => {
                 f.write_str("S3 BUCKET '");
                 f.write_str(&display::escape_single_quote_string(bucket));
-                f.write_str("' OBJECTS FROM SCAN MATCHING '");
-                f.write_str(&display::escape_single_quote_string(pattern));
-                f.write_str("'");
+                f.write_str("' OBJECTS FROM SCAN");
+                if let Some(pattern) = pattern {
+                    f.write_str(" MATCHING '");
+                    f.write_str(&display::escape_single_quote_string(pattern));
+                    f.write_str("'");
+                }
             }
         }
     }

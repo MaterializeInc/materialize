@@ -640,7 +640,7 @@ pub struct FileSourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct S3SourceConnector {
     pub bucket: String,
-    pub pattern: Glob,
+    pub pattern: Option<Glob>,
     pub aws_info: AwsConnectInfo,
 }
 
