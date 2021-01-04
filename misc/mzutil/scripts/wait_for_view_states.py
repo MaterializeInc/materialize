@@ -40,8 +40,10 @@ def view_names(
         for row in cursor:
             yield row[0]
 
+
 class ViewNotReady(Exception):
     pass
+
 
 def view_contents(
     cursor: psycopg2.extensions.cursor, view: str, timestamp: int
@@ -87,7 +89,8 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
 
     # Create a dictionary mapping view names (as calculated from the filename) to expected contents
     view_snapshots = {
-        p.stem: p.read_text().strip() for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
+        p.stem: p.read_text().strip()
+        for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
     }
 
     # Create a dictionary mapping view names to source name and offset
@@ -135,9 +138,13 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
                     views_to_remove.append(view)
                     expected = view_snapshots[view]
                     if contents == expected:
-                        print(f"PASSED: {time_taken:>6.1f}s: {view} (result={contents})")
+                        print(
+                            f"PASSED: {time_taken:>6.1f}s: {view} (result={contents})"
+                        )
                     else:
-                        print(f"FAILED: {time_taken:>6.1f}s: {view} ({contents} != {expected})")
+                        print(
+                            f"FAILED: {time_taken:>6.1f}s: {view} ({contents} != {expected})"
+                        )
 
             for view in views_to_remove:
                 pending_views.remove(view)
