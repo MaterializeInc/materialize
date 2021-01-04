@@ -125,7 +125,9 @@ fn run() -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "log-file",
-        "where materialized will write logs (default <data directory>/materialized.log)",
+        "where materialized will write logs, \
+         can be either a file or the special value 'stderr' \
+         (default <data directory>/materialized.log)",
         "PATH",
     );
 
