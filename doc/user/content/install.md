@@ -7,7 +7,7 @@ weight: 2
 
 {{< promo >}}
 
-[Want to connect with Materialize? Join our growing community on Slack! →](https://join.slack.com/t/materializecommunity/shared_invite/zt-fpfvczj5-efOE_8qvM4fWpHSvMxpKbA)
+[Want to connect with Materialize? Join our growing community on Slack! →](https://materialize.com/s/chat)
 
 {{< /promo >}}
 

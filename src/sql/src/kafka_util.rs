@@ -90,12 +90,12 @@ impl Config {
 }
 
 fn extract(
-    input: &HashMap<String, Value>,
+    input: &mut HashMap<String, Value>,
     configs: &[Config],
 ) -> Result<HashMap<String, String>, anyhow::Error> {
     let mut out = HashMap::new();
     for config in configs {
-        let value = match input.get(config.name) {
+        let value = match input.remove(config.name) {
             Some(v) => match config.validate_val(&v) {
                 Ok(v) => v,
                 Err(e) => bail!("Invalid WITH option {}={}: {}", config.name, v, e),
@@ -107,8 +107,9 @@ fn extract(
     Ok(out)
 }
 
-/// Parse the `with_options` from a `CREATE SOURCE` statement to determine
-/// user-supplied config options, e.g. security options.
+/// Parse the `with_options` from a `CREATE SOURCE` or `CREATE SINK`
+/// statement to determine user-supplied config options, e.g. security
+/// options.
 ///
 /// # Errors
 ///
@@ -117,7 +118,7 @@ fn extract(
 /// - If any of the values in `with_options` are not
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
-    with_options: &HashMap<String, Value>,
+    with_options: &mut HashMap<String, Value>,
 ) -> Result<HashMap<String, String>, anyhow::Error> {
     extract(
         with_options,
@@ -251,7 +252,7 @@ impl rdkafka::client::ClientContext for RDKafkaErrCheckContext {
 pub fn generate_ccsr_client_config(
     csr_url: Url,
     kafka_options: &HashMap<String, String>,
-    ccsr_options: &HashMap<String, Value>,
+    mut ccsr_options: HashMap<String, Value>,
 ) -> Result<ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = ccsr::ClientConfig::new(csr_url);
 
@@ -284,7 +285,7 @@ pub fn generate_ccsr_client_config(
     }
 
     let mut ccsr_options = extract(
-        ccsr_options,
+        &mut ccsr_options,
         &[Config::string("username"), Config::string("password")],
     )?;
     if let Some(username) = ccsr_options.remove("username") {

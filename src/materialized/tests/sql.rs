@@ -329,16 +329,21 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
 
     // Make a new cursor. Try to fetch more rows from it than exist. Verify that
     // we got all the rows we expect and also waited for at least the timeout
-    // duration.
+    // duration. Cursor may take a moment to be ready, so do it in a loop.
     client.batch_execute("DECLARE c CURSOR FOR TAIL t")?;
-    let before = Instant::now();
-    let rows = client.query("FETCH 4 c WITH (TIMEOUT = '1s')", &[])?;
-    let duration = before.elapsed();
-    assert_eq!(rows.len(), expected.len());
-    assert!(duration >= Duration::from_secs(1));
-    assert!(duration < Duration::from_secs(10));
-    for i in 0..expected.len() {
-        assert_eq!(rows[i].get::<_, i64>(2), expected[i])
+    loop {
+        let before = Instant::now();
+        let rows = client.query("FETCH 4 c WITH (TIMEOUT = '1s')", &[])?;
+        let duration = before.elapsed();
+        if rows.len() != 0 {
+            assert_eq!(rows.len(), expected.len());
+            assert!(duration >= Duration::from_secs(1));
+            assert!(duration < Duration::from_secs(10));
+            for i in 0..expected.len() {
+                assert_eq!(rows[i].get::<_, i64>(2), expected[i])
+            }
+            break;
+        }
     }
 
     // Another fetch should return nothing.

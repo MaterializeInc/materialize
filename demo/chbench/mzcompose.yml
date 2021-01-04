@@ -26,6 +26,17 @@ x-port-mappings:
 
 version: '3.7'
 services:
+  aws-cli:
+    image: amazon/aws-cli
+    environment:
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+    volumes:
+      - type: bind
+        source: ${MZ_CHBENCH_SNAPSHOT}
+        target: /snapshot
   materialized:
     mzbuild: materialized
     ports:
@@ -178,13 +189,13 @@ services:
     mzbuild: mzutil
     volumes:
       - type: bind
-        source: ${MZ_TOPIC_SNAPSHOTS}
+        source: ${MZ_CHBENCH_SNAPSHOT}
         target: /snapshot
   kafka-util:
     mzbuild: kafka-util
     volumes:
       - type: bind
-        source: ${MZ_TOPIC_SNAPSHOTS}
+        source: ${MZ_CHBENCH_SNAPSHOT}
         target: /snapshot
 
   # Metabase
@@ -421,6 +432,12 @@ mzworkflows:
     - step: ensure-stays-up
       container: dashboard
       seconds: 1
+
+  download-snapshot:
+    steps:
+      - step: run
+        service: aws-cli
+        command: s3 sync ${MZ_CHBENCH_BUCKET:-s3://mzi-dev-benchmark-data/chbench}/${MZ_CHBENCH_SNAP_ID} /snapshot
 
   load-test:
     steps:

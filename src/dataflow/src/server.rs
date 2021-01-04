@@ -772,8 +772,8 @@ where
                             if let TimestampSourceUpdate::RealTime(partition_count) = update {
                                 assert!(
                                     *current_partition_count <= partition_count,
-                                    "The number of partititions\
-                            for source {} decreased from {} to {}",
+                                    "The number of partitions \
+                                     for source {} decreased from {} to {}",
                                     id,
                                     partition_count,
                                     current_partition_count

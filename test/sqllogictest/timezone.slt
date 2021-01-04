@@ -23,3 +23,74 @@ SET TimeZone = 'uTc'
 
 statement error parameter TimeZone can only be set to UTC
 SET TIME ZONE bad
+
+query T
+SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE TEXT 'America/New_York'
+----
+2020-12-21 23:53:49+00
+
+query T
+SELECT TIMESTAMPTZ '2020-12-21 18:53:49 America/New_York'
+----
+2020-12-21 23:53:49+00
+
+query T
+SELECT timezone(TEXT 'America/New_York', TIMESTAMP '2020-12-21 18:53:49')
+----
+2020-12-21 23:53:49+00
+
+query T
+SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE TEXT 'America/New_York'
+----
+2020-12-21 23:53:49+00
+
+query T
+SELECT TIMESTAMPTZ '2020-12-21 18:53:49 America/New_York'
+----
+2020-12-21 23:53:49+00
+
+query T
+SELECT timezone(TEXT 'America/New_York', TIMESTAMP '2020-12-21 18:53:49')
+----
+2020-12-21 23:53:49+00
+
+query T
+SELECT timezone(INTERVAL '+11'HOUR, TIME '18:53:49')::time
+----
+05:53:49
+
+query T
+SELECT TIMESTAMPTZ '2020-12-21 18:53:49 Pacific/Auckland' AT TIME ZONE TEXT 'Turkey'
+----
+2020-12-21 08:53:49
+
+query T
+SELECT TIMESTAMPTZ '2007-02-01 00:00:00+5:30:16';
+----
+2007-01-31 18:29:44+00
+
+statement error timezone interval must not contain months or years
+SELECT timezone(INTERVAL '+11'MONTH, TIME '18:53:49')
+
+statement error invalid input syntax for timestamptz: Invalid timezone string \(\+16:60\): timezone hour invalid 16
+SELECT TIMESTAMPTZ '2020-01-01 00:00:00+16:60'
+
+query T
+SELECT TIMESTAMPTZ '2020-03-08 02:59:59 America/New_York'
+----
+2020-03-08 07:59:59+00
+
+query T
+SELECT TIMESTAMPTZ '2020-03-08 03:00:00 America/New_York'
+----
+2020-03-08 07:00:00+00
+
+query T
+SELECT TIMESTAMPTZ '2020-11-01 00:59:59 America/New_York'
+----
+2020-11-01 04:59:59+00
+
+query T
+SELECT TIMESTAMPTZ '2020-11-01 01:00:00 America/New_York'
+----
+2020-11-01 06:00:00+00

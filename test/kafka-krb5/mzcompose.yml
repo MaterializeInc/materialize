@@ -58,6 +58,26 @@ services:
         -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
         -Djava.security.krb5.conf=/etc/krb5.conf
 
+  schema-registry:
+    image: confluentinc/cp-schema-registry:latest
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: SASL_PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_KAFKASTORE_SASL_KERBEROS_SERVICE_NAME: kafka
+      SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_OPTS: >-
+        -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
+        -Djava.security.krb5.conf=/etc/krb5.conf
+      SCHEMA_REGISTRY_OPTS: >-
+        -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
+        -Djava.security.krb5.conf=/etc/krb5.conf
+    volumes:
+      - secrets:/var/lib/secret
+      - ./kdc/krb5.conf:/etc/krb5.conf
+      - ./sasl.jaas.config:/etc/kafka/sasl.jaas.config
+    depends_on: [kafka, zookeeper, kdc]
+
   materialized:
     mzbuild: materialized
     command: --logging-granularity=10ms -w1
@@ -73,12 +93,14 @@ services:
       - >-
         wait-for-it --timeout=30 materialized:6875 &&
         wait-for-it --timeout=30 kafka:9092 &&
+        wait-for-it --timeout=30 schema-registry:8081 &&
         testdrive
         --kafka-addr=kafka:9092
         --kafka-option=security.protocol=SASL_PLAINTEXT
         --kafka-option=sasl.kerberos.keytab=/share/secrets/testdrive.key
         --kafka-option=sasl.kerberos.service.name=kafka
         --kafka-option=sasl.kerberos.principal=testdrive@CI.MATERIALIZE.IO
+        --schema-registry-url=http://schema-registry:8081
         --materialized-url=postgres://ignored@materialized:6875
         $$*
       - bash
@@ -89,7 +111,7 @@ services:
       - ./kdc/krb5.conf:/etc/krb5.conf
     propagate-uid-gid: true
     init: true
-    depends_on: [kdc, kafka, zookeeper, materialized]
+    depends_on: [kdc, kafka, zookeeper, materialized, schema-registry]
 
 volumes:
   secrets:

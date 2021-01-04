@@ -136,39 +136,32 @@ query I colnames
 ?column?
 2
 
-# TODO(benesch): fix parsing.
-#
-# query I colnames
-# SELECT ((SELECT 2) UNION SELECT 2)
-# ?column?
-# ----
-# 2
-#
-# query I colnames
-# SELECT (((SELECT 2)) UNION SELECT 2);
-# ?column?
-# ----
-# 2
+query I colnames
+SELECT ((SELECT 2) UNION SELECT 2)
+----
+?column?
+2
 
-# TODO(benesch): array support.
-#
-# SELECT (SELECT ARRAY[1,2,3])[1];
-#  array
-# -------
-#      1
-# (1 row)
-#
-# SELECT ((SELECT ARRAY[1,2,3]))[2];
-#  array
-# -------
-#      2
-# (1 row)
-#
-# SELECT (((SELECT ARRAY[1,2,3])))[3];
-#  array
-# -------
-#      3
-# (1 row)
+query I colnames
+SELECT (((SELECT 2)) UNION SELECT 2);
+----
+?column?
+2
+
+query I
+SELECT (SELECT ARRAY[1,2,3])[1];
+----
+1
+
+query I
+SELECT ((SELECT ARRAY[1,2,3]))[2];
+----
+2
+
+query I
+SELECT (((SELECT ARRAY[1,2,3])))[3];
+----
+3
 
 # Set up some simple test tables
 statement ok
@@ -337,37 +330,33 @@ true
 # Test cases to catch unpleasant interactions between IN-join processing
 # and subquery pullup.
 
-# query I colnames
-# select count(*) from
-#   (select 1 from tenk1 a
-#    where unique1 IN (select hundred from tenk1 b)) ss
-# ----
-# count
-# 100
-#
-# select count(distinct ss.ten) from
-#   (select ten from tenk1 a
-#    where unique1 IN (select hundred from tenk1 b)) ss;
-#  count
-# -------
-#     10
-# (1 row)
-#
-# select count(*) from
-#   (select 1 from tenk1 a
-#    where unique1 IN (select distinct hundred from tenk1 b)) ss;
-#  count
-# -------
-#    100
-# (1 row)
-#
-# select count(distinct ss.ten) from
-#   (select ten from tenk1 a
-#    where unique1 IN (select distinct hundred from tenk1 b)) ss;
-#  count
-# -------
-#     10
-# (1 row)
+query I
+select count(*) from
+  (select 1 from tenk1 a
+   where unique1 IN (select hundred from tenk1 b)) ss
+----
+100
+
+query I
+select count(distinct ss.ten) from
+  (select ten from tenk1 a
+   where unique1 IN (select hundred from tenk1 b)) ss;
+----
+10
+
+query I
+select count(*) from
+  (select 1 from tenk1 a
+   where unique1 IN (select distinct hundred from tenk1 b)) ss;
+----
+100
+
+query I
+select count(distinct ss.ten) from
+  (select ten from tenk1 a
+   where unique1 IN (select distinct hundred from tenk1 b)) ss;
+----
+10
 
 # Test cases to check for overenthusiastic optimization of
 # "IN (SELECT DISTINCT ...)" and related cases.  Per example from
@@ -411,12 +400,12 @@ id
 # These cases do not
 #
 # TODO(benesch): DISTINCT ON not supported.
-# query I colnames
-# SELECT * FROM foo WHERE id IN
-#     (SELECT id2 FROM (SELECT DISTINCT ON (id2) id1, id2 FROM bar) AS s)
-# ----
-# id
-# 1
+query I colnames
+SELECT * FROM foo WHERE id IN
+    (SELECT id2 FROM (SELECT DISTINCT ON (id2) id1, id2 FROM bar) AS s)
+----
+id
+1
 
 query I colnames
 SELECT * FROM foo WHERE id IN
@@ -592,25 +581,22 @@ select view_a from view_a
 view_a
 (42)
 
-# TODO(benesch): broken scoping here.
-#
-# query T colnames
-# select (select view_a) from view_a
-# ----
-# view_a
-# (42)
-#
-# query T colnames
-# select (select (select view_a)) from view_a
-# ----
-# view_a
-# (42)
-#
-# query T colnames
-# select (select (a.*)::text) from view_a a
-# ----
-# a
-# (42)
+query T colnames
+select (select view_a) from view_a
+----
+view_a
+(42)
+
+query T colnames
+select (select (select view_a)) from view_a
+----
+view_a
+(42)
+
+query T
+select (select (a.*)::text) from view_a a
+----
+(42)
 
 # Check that whole-row Vars reading the result of a subselect don't include
 #  any junk columns therein
@@ -624,18 +610,16 @@ q
 (123456)
 (2147483647)
 
-# TODO(benesch): CTEs.
-#
-# with q as (select max(f1) from int4_tbl group by f1 order by f1)
-#   select q from q;
-#        q
-# ---------------
-#  (-2147483647)
-#  (-123456)
-#  (0)
-#  (123456)
-#  (2147483647)
-# (5 rows)
+
+query T rowsort
+with q as (select max(f1) from int4_tbl group by f1 order by f1)
+  select q from q;
+----
+(-2147483647)
+(-123456)
+(0)
+(123456)
+(2147483647)
 
 # Test case for sublinks pushed down into subselects via join alias expansion
 query I colnames
@@ -679,7 +663,7 @@ where a.thousand = b.thousand
 ----
 thousand
 
-# TODO(benesch): LATERAL joins.
+# TODO: random
 #
 # query I colnames
 # select sum(ss.tst::int) from
@@ -691,19 +675,19 @@ thousand
 # ----
 # sum
 # 100
-#
-# # Test rescan of a SetOp node
-# query I colnames
-# select count(*) from
-#   onek o cross join lateral (
-#     select * from onek i1 where i1.unique1 = o.unique1
-#     except
-#     select * from onek i2 where i2.unique1 = o.unique2
-#   ) ss
-# where o.ten = 1
-# ----
-# count
-# 100
+
+# Test rescan of a SetOp node
+query I colnames
+select count(*) from
+  onek o cross join lateral (
+    select * from onek i1 where i1.unique1 = o.unique1
+    except
+    select * from onek i2 where i2.unique1 = o.unique2
+  ) ss
+where o.ten = 1
+----
+count
+100
 
 # TODO(benesch): WITH RECURSIVE.
 #
@@ -750,35 +734,32 @@ select exists(select * from nocolumns)
 exists
 false
 
-# TODO(benesch): LATERAL joins.
-#
 # Check behavior with a SubPlan in VALUES (bug #14924)
-# query I colnames, rowsort
-# select val.x
-#   from generate_series(1,10) as s(i),
-#   lateral (
-#     values ((select s.i + 1)), (s.i + 101)
-#   ) as val(x)
-# where s.i < 10 and (select val.x) < 110
-# ----
-# x
-# 2
-# 102
-# 3
-# 103
-# 4
-# 104
-# 5
-# 105
-# 6
-# 106
-# 7
-# 107
-# 8
-# 108
-# 9
-# 109
-# 10
+query I rowsort
+select val.x
+  from generate_series(1,10) as s(i),
+  lateral (
+    values ((select s.i + 1)), (s.i + 101)
+  ) as val(x)
+where s.i < 10 and (select val.x) < 110
+----
+2
+102
+3
+103
+4
+104
+5
+105
+6
+106
+7
+107
+8
+108
+9
+109
+10
 
 # another variant of that (bug #16213)
 query T colnames,rowsort
@@ -827,11 +808,11 @@ q
 (4,5,6)
 (4,5,6)
 
-# TODO(benesch): LATERAL joins.
+# TODO: random.
 #
-# # Check for sane handling of a lateral reference in a subquery's quals
-# # (most of the complication here is to prevent the test case from being
-# # flattened too much)
+# Check for sane handling of a lateral reference in a subquery's quals
+# (most of the complication here is to prevent the test case from being
+# flattened too much)
 # query III colnames
 # select * from
 #     int4_tbl i4,

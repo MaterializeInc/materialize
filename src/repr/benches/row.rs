@@ -7,11 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::Ordering;
+
 use chrono::NaiveDate;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use repr::{Datum, Row};
-use std::cmp::Ordering;
 
 fn bench_sort_datums(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     b.iter_with_setup(|| rows.clone(), |mut rows| rows.sort())
@@ -77,7 +79,7 @@ fn bench_filter_unpacked(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) 
 }
 
 fn bench_filter_packed(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) {
-    let filter = Row::pack(&[filter]);
+    let filter = Row::pack_slice(&[filter]);
     let rows = rows.into_iter().map(Row::pack).collect::<Vec<_>>();
     b.iter_with_setup(
         || rows.clone(),
@@ -89,8 +91,8 @@ fn bench_pack_pack(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     b.iter(|| rows.iter().map(Row::pack).collect::<Vec<_>>())
 }
 
-fn seeded_rng() -> rand_chacha::ChaChaRng {
-    rand::SeedableRng::from_seed([
+fn seeded_rng() -> StdRng {
+    SeedableRng::from_seed([
         224, 38, 155, 23, 190, 65, 147, 224, 136, 172, 167, 36, 125, 199, 232, 59, 191, 4, 243,
         175, 114, 47, 213, 46, 85, 226, 227, 35, 238, 119, 237, 21,
     ])
@@ -189,8 +191,8 @@ fn bench_filter(c: &mut Criterion) {
     let mut rng = seeded_rng();
     let mut random_date = || {
         NaiveDate::from_isoywd(
-            rng.gen_range(2000, 2020),
-            rng.gen_range(1, 52),
+            rng.gen_range(2000..2020),
+            rng.gen_range(1..52),
             chrono::Weekday::Mon,
         )
     };

@@ -53,8 +53,11 @@ impl Action for IngestAction {
             // Generating and using random partition keys allows us to test
             // reading Kinesis records from a variable number of shards that
             // are distributed differently on every run.
-            let random_partition_key: String =
-                thread_rng().sample_iter(&Alphanumeric).take(30).collect();
+            let random_partition_key: String = thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(30)
+                .map(char::from)
+                .collect();
             let put_input = PutRecordInput {
                 data: Bytes::from(row.clone()),
                 explicit_hash_key: None,

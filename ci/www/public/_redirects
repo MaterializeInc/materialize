@@ -16,8 +16,12 @@ http://materialize.com/* https://materialize.com/:splat 301!
 # the "bug" shortlink allows us to embed a bug reporting URL in the
 # materialized binary that can be updated if we ever switch away from GitHub
 # or change how we want bugs to be filed.
+
 /s/bug https://github.com/MaterializeInc/materialize/issues/new?labels=C-bug&template=bug.md
 /s/non-materialized-error https://materialize.com/docs/sql/create-view/#querying-non-materialized-views
+
+# The Slack invitation URL expires every 30 days, so we give it a stable alias.
+/s/chat https://join.slack.com/t/materializecommunity/shared_invite/zt-kn66colt-N8IB2s9T_62u2q8FoN1TdQ
 
 # Forward all paths unknown to Netlify to the marketing site.
 /* https://materializeinc.wpengine.com/:splat 200

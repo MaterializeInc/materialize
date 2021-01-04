@@ -22,7 +22,7 @@ SELECT (LIST[1,2,3])::text
 ----
 {1,2,3}
 
-query error LIST expression does not have uniform type: Int32 vs List\(Int32\)
+query error LIST expression does not have uniform type: Int32 vs List \{ element_type: Int32, custom_oid: None \}
 SELECT LIST[1,LIST[2,3]]
 
 query T
@@ -1703,12 +1703,29 @@ SELECT (LIST[1] || '{2}')::text
 ----
 {1,2}
 
+# Differently scaled decimals are implicitly castable to one another
+query T
+SELECT ('{1.2}'::numeric(38,5) list || '{2.3}'::numeric(38,0) list)::text;
+----
+{1.20000,2.00000}
+
+# ...including on multiple dimensions
+query T
+SELECT ('{{1.2}}'::numeric(38,5) list list || '{{2.3}}'::numeric(38,0) list list)::text;
+----
+{{1.20000},{2.00000}}
+
 # 🔬🔬🔬 list + element
 
 query T
 SELECT (LIST[1, 2] || 3)::text
 ----
 {1,2,3}
+
+query T
+SELECT ('{1.2}'::numeric(38,5) list || '2.3'::numeric(38,0))::text;
+----
+{1.20000,2.00000}
 
 # 🔬🔬🔬 element + list
 
@@ -1717,6 +1734,11 @@ SELECT (1 || LIST[2, 3])::text
 ----
 {1,2,3}
 
+query T
+SELECT ('1.2'::numeric(38,5) || '{2.3}'::numeric(38,0) list)::text;
+----
+{1.20000,2.00000}
+
 # 🔬🔬🔬 list list + list (list + element)
 
 query T
@@ -1724,12 +1746,22 @@ SELECT (LIST[[1], [2]] || LIST[3])::text
 ----
 {{1},{2},{3}}
 
+query T
+SELECT ('{{1.2}}'::numeric(38,5) list list || '{2.3}'::numeric(38,0) list)::text;
+----
+{{1.20000},{2.00000}}
+
 # 🔬🔬🔬 list + list list (element + list)
 
 query T
 SELECT (LIST[1] || LIST[[2], [3]])::text
 ----
 {{1},{2},{3}}
+
+query T
+SELECT ('{1.2}'::numeric(38,5) list || '{{2.3}}'::numeric(38,0) list list)::text;
+----
+{{1.20000},{2.00000}}
 
 # 🔬🔬🔬 NULL elements
 
@@ -1849,3 +1881,168 @@ SELECT LIST[[[1]]] || LIST[2]
 # Literal text cannot be implicitly cast to list
 query error no overload for i32 list || string: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT LIST[1] || '{2}'::text
+
+# Two lists containing implicitly castable element types are not implicitly castable to one another
+query error no overload for f32 list || f64 list: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT '{1}'::float4 list || '{2}'::float8 list
+
+# 🔬 CREATE TYPE .. AS LIST
+
+query error element_type must be of class type, but received pg_catalog.pg_enum which is of class view
+CREATE TYPE tbl_list AS LIST (element_type=pg_enum)
+
+statement ok
+CREATE TYPE int_list_c AS LIST (element_type = int4);
+
+query T
+SELECT '{1,2}'::int_list_c::text;
+----
+{1,2}
+
+query T
+SELECT oid FROM pg_type WHERE typname = 'int_list_c';
+----
+20055
+
+query T
+SELECT '{{1,2}}'::int_list_c list::text
+----
+{{1,2}}
+
+query T
+SELECT pg_typeof(NULL::int_list_c);
+----
+list
+
+statement ok
+CREATE TYPE int_list_list_c AS LIST (element_type = int_list_c);
+
+query T
+SELECT '{{1,2}}'::int_list_list_c::text;
+----
+{{1,2}}
+
+query error unknown catalog item 'bool list'
+CREATE TYPE nested_list AS LIST (element_type = 'bool list')
+
+query error unknown catalog item 'list'
+CREATE TYPE nested_list AS LIST (element_type = 'list')
+
+# 🔬🔬 Check each valid non-array element type
+
+statement ok
+CREATE TYPE bool_list_c AS LIST (element_type='bool');
+
+query T
+SELECT '{true}'::bool_list_c::text
+----
+{t}
+
+statement ok
+CREATE TYPE int8_list_c AS LIST (element_type='int8');
+
+query T
+SELECT '{1,2}'::int8_list_c::text
+----
+{1,2}
+
+statement ok
+CREATE TYPE int4_list_c AS LIST (element_type='int4');
+
+query T
+SELECT '{1,2}'::int4_list_c::text
+----
+{1,2}
+
+statement ok
+CREATE TYPE text_list_c AS LIST (element_type='text');
+
+query T
+SELECT '{a,b}'::text_list_c::text
+----
+{a,b}
+
+statement ok
+CREATE TYPE float4_list_c AS LIST (element_type='float4');
+
+query T
+SELECT '{1.2,2.3}'::float4_list_c::text
+----
+{1.2,2.3}
+
+statement ok
+CREATE TYPE float8_list_c AS LIST (element_type='float8');
+
+query T
+SELECT '{1.2,2.3}'::float8_list_c::text
+----
+{1.2,2.3}
+
+statement ok
+CREATE TYPE date_list_c AS LIST (element_type='date');
+
+query T
+SELECT '{2001-01-01}'::date_list_c::text
+----
+{2001-01-01}
+
+statement ok
+CREATE TYPE time_list_c AS LIST (element_type='time');
+
+query T
+SELECT '{12:34:56}'::time_list_c::text
+----
+{12:34:56}
+
+statement ok
+CREATE TYPE timestamp_list_c AS LIST (element_type='timestamp');
+
+query T
+SELECT '{2001-01-01 12:34:56}'::timestamp_list_c::text
+----
+{"2001-01-01 12:34:56"}
+
+statement ok
+CREATE TYPE timestamptz_list_c AS LIST (element_type='timestamptz');
+
+query T
+SELECT '{2001-01-01 12:34:56}'::timestamptz_list_c::text
+----
+{"2001-01-01 12:34:56+00"}
+
+statement ok
+CREATE TYPE interval_list_c AS LIST (element_type='interval');
+
+query T
+SELECT '{1y 2d 3h 4m}'::interval_list_c::text
+----
+{"1 year 2 days 03:04:00"}
+
+statement ok
+CREATE TYPE numeric_list_c AS LIST (element_type='numeric');
+
+query T
+SELECT '{1.23,2.34}'::numeric_list_c::text
+----
+{1,2}
+
+statement ok
+CREATE TYPE jsonb_list_c AS LIST (element_type='jsonb');
+
+query T
+SELECT '{\{\"1\":2\}}'::jsonb_list_c::text;
+----
+{"{\"1\":2.0}"}
+
+# 🔬🔬 Check custom type name resolution
+
+statement ok
+CREATE TYPE bool AS LIST (element_type='int4')
+
+query error invalid input syntax for bool: "\{1,2\}"
+SELECT '{1,2}'::bool;
+
+query T
+SELECT '{1,2}'::public.bool::text;
+----
+{1,2}

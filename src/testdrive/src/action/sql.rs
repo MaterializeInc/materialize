@@ -20,6 +20,7 @@ use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
 use tokio_postgres::types::{FromSql, Type};
 
+use coord::catalog::Catalog;
 use ore::collections::CollectionExt;
 use ore::retry;
 use pgrepr::{Interval, Jsonb, Numeric};
@@ -137,7 +138,7 @@ impl Action for SqlAction {
                 | Statement::CreateView { .. }
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
-                    let disk_state = coord::dump_catalog(path).map_err(|e| e.to_string())?;
+                    let disk_state = Catalog::open_debug(path).map_err(|e| e.to_string())?.dump();
                     let mem_state = reqwest::get(&format!(
                         "http://{}/internal/catalog",
                         state.materialized_addr,

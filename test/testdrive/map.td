@@ -29,6 +29,10 @@ system
   WHERE name = 'another_custom'
 user
 
+> CREATE SCHEMA test_schema
+
+> CREATE TYPE test_schema.bool AS MAP (key_type=text, value_type='float4')
+
 > SHOW TYPES
 name
 ----
@@ -42,6 +46,11 @@ name             type
 bool             user
 custom           user
 another_custom   user
+
+> SHOW TYPES FROM test_schema
+name
+----
+bool
 
 ! DROP TYPE bool
 cannot drop item pg_catalog.bool because it is required by the database system

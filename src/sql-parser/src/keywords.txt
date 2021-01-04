@@ -31,9 +31,12 @@ Arn
 Array
 As
 Asc
+At
 Avro
 Begin
 Between
+Bigint
+Boolean
 Both
 Broker
 By
@@ -112,6 +115,8 @@ Index
 Indexes
 Inner
 Insert
+Int
+Integer
 Intersect
 Interval
 Into
@@ -146,7 +151,6 @@ No
 None
 Not
 Null
-Numeric
 Objects
 Ocf
 Of
@@ -169,7 +173,9 @@ Protobuf
 Range
 Raw
 Read
+Real
 References
+Regclass
 Regex
 Registry
 Rename
@@ -201,6 +207,7 @@ Sources
 Start
 Stdin
 Stdout
+String
 Table
 Tables
 Tail
@@ -211,7 +218,6 @@ Then
 Ties
 Time
 Timestamp
-TimestampTz
 To
 Topic
 Trailing

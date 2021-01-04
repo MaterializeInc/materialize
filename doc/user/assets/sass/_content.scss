@@ -273,3 +273,30 @@ a {
     }
   }
 }
+
+#helpful {
+  border-top: 1px solid $grey;
+  margin-top: 3rem;
+  max-width: 40%;
+  padding-top: .5rem;
+  text-align: center;
+
+  table {
+    table-layout: fixed;
+    width: 100%;
+  }
+  tr {
+    border-style : hidden;
+  }
+  .helpful-vote {
+    border: 3px solid $purple;
+    color: $purple;
+    display: inline-block;
+    font-weight: bold;
+    padding: .7rem 0;
+    width:100%;
+  }
+  #got-feedback {
+    display: none;
+  }
+}

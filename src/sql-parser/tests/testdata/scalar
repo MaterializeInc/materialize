@@ -83,7 +83,7 @@ Op { op: "!~*", expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo")
 parse-scalar
 a !x 'foo'
 ----
-Op { op: "!", expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other(Ident("x")) }) }
+Op { op: "!", expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other { name: ObjectName([Ident("x")]), typ_mod: [] } }) }
 
 parse-scalar
 a !x
@@ -95,12 +95,12 @@ Op { op: "!", expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("x"
 parse-scalar roundtrip
 id::bigint
 ----
-id::bigint
+id::int8
 
 parse-scalar roundtrip
 CAST(id AS BIGINT)
 ----
-id::bigint
+id::int8
 
 parse-scalar roundtrip
 id::double precision
@@ -347,17 +347,17 @@ SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2")
 parse-scalar
 ARRAY[]::int[]
 ----
-Cast { expr: Array([]), data_type: Array(Other(Ident("int"))) }
+Cast { expr: Array([]), data_type: Array(Other { name: ObjectName([Ident("int4")]), typ_mod: [] }) }
 
 parse-scalar
 ARRAY[]::int[][][][]
 ----
-Cast { expr: Array([]), data_type: Array(Other(Ident("int"))) }
+Cast { expr: Array([]), data_type: Array(Other { name: ObjectName([Ident("int4")]), typ_mod: [] }) }
 
 parse-scalar
 ARRAY[]::int[2][2]
 ----
-Cast { expr: Array([]), data_type: Array(Other(Ident("int"))) }
+Cast { expr: Array([]), data_type: Array(Other { name: ObjectName([Ident("int4")]), typ_mod: [] }) }
 
 parse-scalar
 a -> b

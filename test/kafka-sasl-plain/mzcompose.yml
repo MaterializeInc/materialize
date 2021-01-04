@@ -87,7 +87,6 @@ services:
     depends_on: [zookeeper, test-certs]
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.1
-    ports: [8081:8081]
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_LISTENERS: "https://0.0.0.0:8081"

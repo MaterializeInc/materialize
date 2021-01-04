@@ -119,10 +119,10 @@ impl Value {
                     .collect();
                 Some(Value::Array { dims, elements })
             }
-            (Datum::List(list), ScalarType::List(elem_type)) => {
+            (Datum::List(list), ScalarType::List { element_type, .. }) => {
                 let elements = list
                     .iter()
-                    .map(|elem| Value::from_datum(elem, elem_type))
+                    .map(|elem| Value::from_datum(elem, element_type))
                     .collect();
                 Some(Value::List(elements))
             }
@@ -134,7 +134,7 @@ impl Value {
                     .collect();
                 Some(Value::Record(fields))
             }
-            (Datum::Map(dict), ScalarType::Map { value_type }) => {
+            (Datum::Map(dict), ScalarType::Map { value_type, .. }) => {
                 let entries = dict
                     .iter()
                     .map(|(k, v)| (k.to_owned(), Value::from_datum(v, value_type)))
@@ -185,7 +185,10 @@ impl Value {
                 }));
                 (
                     buf.push_unary_row(packer.finish()),
-                    ScalarType::List(Box::new(elem_type)),
+                    ScalarType::List {
+                        element_type: Box::new(elem_type),
+                        custom_oid: None,
+                    },
                 )
             }
             Value::Map(map) => {
@@ -208,6 +211,7 @@ impl Value {
                     buf.push_unary_row(packer.finish()),
                     ScalarType::Map {
                         value_type: Box::new(elem_type),
+                        custom_oid: None,
                     },
                 )
             }
@@ -471,7 +475,10 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
         Type::Jsonb => ScalarType::Jsonb,
         Type::List(t) => {
             let (_, elem_type) = null_datum(t);
-            ScalarType::List(Box::new(elem_type))
+            ScalarType::List {
+                element_type: Box::new(elem_type),
+                custom_oid: None,
+            }
         }
         Type::Numeric => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
         Type::Oid => ScalarType::Oid,
@@ -501,6 +508,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
             let (_, value_type) = null_datum(value_type);
             ScalarType::Map {
                 value_type: Box::new(value_type),
+                custom_oid: None,
             }
         }
     };

@@ -254,9 +254,9 @@ fn test_parse_timestamptz_errors() {
          (+25:45): timezone hour invalid 25: \"1999-01-01 01:23:34.555 +25:45\"",
     );
     run_test_parse_timestamptz_errors(
-        "1999-01-01 01:23:34.555 +21:61",
+        "1999-01-01 01:23:34.555 +15:61",
         "invalid input syntax for timestamptz: Invalid timezone string \
-         (+21:61): timezone minute invalid 61: \"1999-01-01 01:23:34.555 +21:61\"",
+         (+15:61): timezone minute invalid 61: \"1999-01-01 01:23:34.555 +15:61\"",
     );
     run_test_parse_timestamptz_errors(
         "1999-01-01 01:23:34.555 4",

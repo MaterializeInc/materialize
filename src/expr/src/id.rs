@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{anyhow, Error};
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
+
+use anyhow::{anyhow, Error};
+use serde::{Deserialize, Serialize};
 
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`RelationExpr::Get`](crate::RelationExpr::Get).
@@ -32,7 +33,7 @@ impl fmt::Display for Id {
 }
 
 /// A trait for turning [`GlobalId`]s into human-readable strings.
-pub trait IdHumanizer {
+pub trait IdHumanizer: fmt::Debug {
     /// Attempts to return the a human-readable string for `id`.
     fn humanize_id(&self, id: GlobalId) -> Option<String>;
 }

@@ -62,12 +62,27 @@ Field | Value | Description
 `ssl_key_password` | `text` | Your SSL key's password, if any.
 `ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 
-### AS OF
+#### Kerberos `WITH` options
+
+Use the following options to connect Materialize to a Kerberized Kafka
+cluster.
+
+Field | Value | Description
+------|-------|------------
+`sasl_kerberos_keytab` | `text` | The absolute path to your keytab.
+`sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket.
+`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0.
+`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required for `sasl_plaintext`.
+`sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`.
+`sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanism is `'GSSAPI'`.
+
+
+### `AS OF`
 
 `AS OF` is the specific point in time to start emitting all events for a given `SINK`. If you don't
 use `AS OF`, Materialize will pick a timestamp itself.
 
-### WITH SNAPSHOT or WITHOUT SNAPSHOT
+### `WITH SNAPSHOT` or `WITHOUT SNAPSHOT`
 
 By default, each `SINK` is created with a `SNAPSHOT` which contains the results of the query at its `AS OF` timestamp.
 Any further updates to these results are produced at the time when they occur. To only see results after the
@@ -203,7 +218,7 @@ Field | Use
 ------|-----
 _id_ | The transaction id this record refers to.
 _status_ | Either `BEGIN` or `END`. Materialize sends a record with `BEGIN` the first time it writes a data message for `id`, and it sends a `END` record after it has written all data messages for `id`.
-_event&lowbar;count_ | This field null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
+_event&lowbar;count_ | This field is null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
 
 ##### Consistency information details
 - Materialize writes consistency output to a different topic per sink.

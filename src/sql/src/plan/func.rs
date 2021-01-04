@@ -21,8 +21,8 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
-use repr::{ColumnName, Datum, RelationType, ScalarType};
-use sql_parser::ast::{Expr, Ident, ObjectName};
+use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
+use sql_parser::ast::{Expr, ObjectName};
 
 use super::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
@@ -101,7 +101,7 @@ impl TypeCategory {
             | ScalarType::Int64
             | ScalarType::Oid => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
-            ScalarType::List(..) => Self::List,
+            ScalarType::List { .. } => Self::List,
             ScalarType::String => Self::String,
             ScalarType::Record { .. } => Self::Pseudo,
             ScalarType::Map { .. } => Self::Pseudo,
@@ -391,13 +391,90 @@ impl ParamList {
     /// Returns `Some` if the constraints were successfully resolved, or `None`
     /// otherwise.
     fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
+        // TODO(sploiselle): support custom types
+        if typs.iter().any(|t| match t {
+            Some(t) => t.is_custom_type(),
+            None => false,
+        }) {
+            return None;
+        }
+        // Determines if types have the same [`ScalarBaseType`], and if complex
+        // types' elements do, as well. This function's primary use is allowing
+        // matches between `ScalarType::Decimal` values with different scales,
+        // and doing so for complex objects that embed them, as well.
+        fn complex_base_eq(l: &ScalarType, r: &ScalarType) -> bool {
+            match (l, r) {
+                (ScalarType::Array(l), ScalarType::Array(r))
+                | (
+                    ScalarType::List {
+                        element_type: l, ..
+                    },
+                    ScalarType::List {
+                        element_type: r, ..
+                    },
+                )
+                | (ScalarType::Map { value_type: l, .. }, ScalarType::Map { value_type: r, .. }) => {
+                    complex_base_eq(l, r)
+                }
+                (l, r) => ScalarBaseType::from(l) == ScalarBaseType::from(r),
+            }
+        }
+        // Returns a commmon form of `self` and `other` using the "greatest
+        // common" `ScalarType::Decimal`, or `None` if one does not exist.
+        //
+        // This computation includes complex types such as lists whose element
+        // types are `ScalarType::Decimal`.
+        //
+        // This is necesssary because in PostgreSQL, the numeric type does not
+        // preserve scale information, so polymorphic type resolution will
+        // always treat two numeric types as equivalent. To match this behavior
+        // in Materialize, we special-case equality here so that we can consider
+        // decimals with different scales to be equivalent and resolve the
+        // polymorphic constraint to the decimal type with the larger scale.
+        fn find_greatest_common_decimal(l: &ScalarType, r: &ScalarType) -> Option<ScalarType> {
+            match (l, r) {
+                (ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2)) => Some(
+                    ScalarType::Decimal(std::cmp::max(*p1, *p2), std::cmp::max(*s1, *s2)),
+                ),
+                (ScalarType::Array(l), ScalarType::Array(r)) => {
+                    let common = find_greatest_common_decimal(l, r)?;
+                    Some(ScalarType::Array(Box::new(common)))
+                }
+                (
+                    ScalarType::List {
+                        element_type: l, ..
+                    },
+                    ScalarType::List {
+                        element_type: r, ..
+                    },
+                ) => {
+                    let common = find_greatest_common_decimal(l, r)?;
+                    Some(ScalarType::List {
+                        element_type: Box::new(common),
+                        custom_oid: None,
+                    })
+                }
+                (ScalarType::Map { value_type: l, .. }, ScalarType::Map { value_type: r, .. }) => {
+                    let common = find_greatest_common_decimal(l, r)?;
+                    Some(ScalarType::Map {
+                        value_type: Box::new(common),
+                        custom_oid: None,
+                    })
+                }
+                _ => None,
+            }
+        }
+
         let mut constrained_type: Option<ScalarType> = None;
         let mut set_or_check_constrained_type = |typ: &ScalarType| {
             match constrained_type {
                 None => constrained_type = Some(typ.clone()),
-                Some(ref t) => {
-                    if typ != t {
+                Some(ref mut t) => {
+                    if !complex_base_eq(t, typ) {
                         return Err(());
+                    }
+                    if let Some(d) = find_greatest_common_decimal(t, typ) {
+                        *t = d;
                     }
                 }
             }
@@ -408,11 +485,19 @@ impl ParamList {
         for (i, typ) in typs.iter().enumerate() {
             let param = &self[i];
             match (param, typ) {
-                (ParamType::ListAny, Some(ScalarType::List(typ)))
+                (
+                    ParamType::ListAny,
+                    Some(ScalarType::List {
+                        element_type: typ, ..
+                    }),
+                )
                 | (ParamType::ArrayAny, Some(ScalarType::Array(typ)))
-                | (ParamType::MapAny, Some(ScalarType::Map { value_type: typ })) => {
-                    set_or_check_constrained_type(typ).ok()?
-                }
+                | (
+                    ParamType::MapAny,
+                    Some(ScalarType::Map {
+                        value_type: typ, ..
+                    }),
+                ) => set_or_check_constrained_type(typ).ok()?,
                 (ParamType::ListElementAny, Some(typ)) | (ParamType::NonVecAny, Some(typ)) => {
                     set_or_check_constrained_type(typ).ok()?
                 }
@@ -494,7 +579,7 @@ impl ParamType {
 
         match self {
             ArrayAny => matches!(t, Array(..)),
-            ListAny => matches!(t, List(..)),
+            ListAny => matches!(t, List{..}),
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
@@ -879,12 +964,16 @@ fn coerce_args_to_types(
                 do_convert(arg, &ty)?
             }
             ParamType::ListAny => {
-                let ty = ScalarType::List(Box::new(get_constrained_ty()));
+                let ty = ScalarType::List {
+                    element_type: Box::new(get_constrained_ty()),
+                    custom_oid: None,
+                };
                 do_convert(arg, &ty)?
             }
             ParamType::MapAny => {
                 let ty = ScalarType::Map {
                     value_type: Box::new(get_constrained_ty()),
+                    custom_oid: None,
                 };
                 do_convert(arg, &ty)?
             }
@@ -1220,6 +1309,14 @@ lazy_static! {
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 })
             },
+            "timezone" => Scalar {
+                params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp,
+                params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz,
+                params!(String, Time) => BinaryFunc::TimezoneTime,
+                params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp,
+                params!(Interval, TimestampTz) => BinaryFunc::TimezoneIntervalTimestampTz,
+                params!(Interval, Time) => BinaryFunc::TimezoneIntervalTime
+            },
             "to_char" => Scalar {
                 params!(Timestamp, String) => BinaryFunc::ToCharTimestamp,
                 params!(TimestampTz, String) => BinaryFunc::ToCharTimestampTz
@@ -1399,7 +1496,7 @@ lazy_static! {
                         Some(id) => id,
                         None => bail!("source passed to internal_read_cached_data must be literal string"),
                     };
-                    let item = ecx.qcx.scx.resolve_item(ObjectName(vec![Ident::new(source.clone())]))?;
+                    let item = ecx.qcx.scx.resolve_item(ObjectName::unqualified(&source))?;
                     match item.item_type() {
                         CatalogItemType::Source => {},
                         _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, item.item_type()),
@@ -1718,6 +1815,10 @@ lazy_static! {
                 params!(Int64, Int64) => MulInt64,
                 params!(Float32, Float32) => MulFloat32,
                 params!(Float64, Float64) => MulFloat64,
+                params!(Interval, Float64) => MulInterval,
+                params!(Float64, Interval) => {
+                    Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, MulInterval)))
+                },
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     use std::cmp::*;
                     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
@@ -1733,6 +1834,7 @@ lazy_static! {
                 params!(Int64, Int64) => DivInt64,
                 params!(Float32, Float32) => DivFloat32,
                 params!(Float64, Float64) => DivFloat64,
+                params!(Interval, Float64) => DivInterval,
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     use std::cmp::*;
                     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
