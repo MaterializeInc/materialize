@@ -796,30 +796,40 @@ impl Runner {
     }
 }
 
-fn print_record(record: &Record) {
+pub trait WriteFmt {
+    fn write_fmt(&self, fmt: fmt::Arguments<'_>);
+}
+
+pub struct RunConfig<'a> {
+    pub verbosity: usize,
+    pub stdout: &'a dyn WriteFmt,
+    pub stderr: &'a dyn WriteFmt,
+}
+
+fn print_record(config: &RunConfig<'_>, record: &Record) {
     match record {
         Record::Statement { sql, .. } | Record::Query { sql, .. } => {
-            println!("{}", crate::util::indent(sql, 4))
+            writeln!(config.stdout, "{}", crate::util::indent(sql, 4))
         }
         _ => (),
     }
 }
 
 pub async fn run_string(
+    config: &RunConfig<'_>,
     source: &str,
     input: &str,
-    verbosity: usize,
 ) -> Result<Outcomes, anyhow::Error> {
     let mut outcomes = Outcomes::default();
     let mut state = Runner::start().await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
-    println!("[{}] ==> {}", Utc::now(), source);
+    writeln!(config.stdout, "==> {}", source);
     for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
-        if verbosity >= 2 {
-            print_record(&record);
+        if config.verbosity >= 2 {
+            print_record(config, &record);
         }
 
         let outcome = state
@@ -829,18 +839,18 @@ pub async fn run_string(
             .unwrap();
 
         // Print failures in verbose mode.
-        if verbosity >= 1 && !outcome.success() {
-            if verbosity < 2 {
+        if config.verbosity >= 1 && !outcome.success() {
+            if config.verbosity < 2 {
                 // If `verbosity >= 2`, we'll already have printed the record,
                 // so don't print it again. Yes, this is an ugly bit of logic.
                 // Please don't try to consolidate it with the `print_record`
                 // call above, as it's important to have a mode in which records
                 // are printed before they are run, so that if running the
                 // record panics, you can tell which record caused it.
-                print_record(&record);
+                print_record(config, &record);
             }
-            println!("[{}] {}", Utc::now(), util::indent(&outcome.to_string(), 4));
-            println!("{}", util::indent("----", 4));
+            writeln!(config.stdout, "{}", util::indent(&outcome.to_string(), 4));
+            writeln!(config.stdout, "{}", util::indent("----", 4));
         }
 
         outcomes.0[outcome.code()] += 1;
@@ -852,19 +862,19 @@ pub async fn run_string(
     Ok(outcomes)
 }
 
-pub async fn run_file(filename: &Path, verbosity: usize) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_file(config: &RunConfig<'_>, filename: &Path) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
-    run_string(&format!("{}", filename.display()), &input, verbosity).await
+    run_string(config, &format!("{}", filename.display()), &input).await
 }
 
-pub async fn run_stdin(verbosity: usize) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_stdin(config: &RunConfig<'_>) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     std::io::stdin().lock().read_to_string(&mut input)?;
-    run_string("<stdin>", &input, verbosity).await
+    run_string(config, "<stdin>", &input).await
 }
 
-pub async fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyhow::Error> {
+pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(), anyhow::Error> {
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
     let mut input = String::new();
@@ -874,7 +884,7 @@ pub async fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyh
 
     let mut state = Runner::start().await?;
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
-    println!("==> {}", filename.display());
+    writeln!(config.stdout, "==> {}", filename.display());
     for record in parser.parse_records()? {
         let record = record;
         let outcome = state.run_record(&record).await?;
