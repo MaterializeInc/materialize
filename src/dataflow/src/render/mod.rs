@@ -788,7 +788,7 @@ where
                                     }
                                     timely::communication::message::RefOrMut::Mut(r) => {
                                         row_packer.finish_into(r);
-                                        std::mem::replace(r, Row::new(Vec::new()))
+                                        std::mem::take(r)
                                     }
                                 })
                             })

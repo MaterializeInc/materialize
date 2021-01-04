@@ -73,7 +73,7 @@ use fmt::Debug;
 /// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
 /// It is best to re-use a `RowPacker` across multiple `Row` creation calls, as this
 /// avoids the allocations involved in `RowPacker::new()`.
-#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
     data: SmallVec<[u8; 16]>,
 }
@@ -580,8 +580,13 @@ impl Row {
         Ok(packer.finish())
     }
 
-    // TODO(justin): find a better place to put this.
-    pub fn new(data: Vec<u8>) -> Self {
+    /// Creates a new row from supplied bytes.
+    ///
+    /// # Safety
+    ///
+    /// This method relies on `data` being an appropriate row encoding, and can
+    /// result in unsafety if this is not the case.
+    pub unsafe fn new(data: Vec<u8>) -> Self {
         Row { data: data.into() }
     }
 
@@ -596,7 +601,9 @@ impl Row {
         for datum in slice.iter() {
             push_datum(&mut bytes, *datum);
         }
-        Row::new(bytes)
+        // Unsafety justified in that `push_datum` to initially empty `Vec` is the
+        // same machinery we use internally, and should produce well-formed bytes.
+        unsafe { Row::new(bytes) }
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
