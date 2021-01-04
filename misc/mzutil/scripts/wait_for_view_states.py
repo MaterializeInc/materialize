@@ -111,28 +111,33 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
         while pending_views:
             views_to_remove = []
+            time_taken = time.time() - start_time
             for view in pending_views:
                 with conn.cursor() as cursor:
 
+                    # Determine if the source is at the desired offset and identify the
+                    # mz_logical_timestamp associated with the offset
                     desired_offset = source_offsets[view]["offset"]
                     source_name = source_offsets[view]["topic"]
                     timestamp = source_at_offset(cursor, source_name, desired_offset)
                     if not timestamp:
                         continue
 
+                    # Get the contents of the view at the desired timestamp, where an empty result
+                    # implies that the desired timestamp is not yet incorporated into the view
                     try:
-                        expected = view_snapshots[view]
-                        count = view_contents(cursor, view, timestamp)
-                        if not count:
+                        contents = view_contents(cursor, view, timestamp)
+                        if not contents:
                             continue
-                        time_taken = time.time() - start_time
-                        views_to_remove.append(view)
-                        if count == expected:
-                            print(f"PASSED: {time_taken:>6.1f}s: {view} (result={count})")
-                        else:
-                            print(f"FAILED: {time_taken:>6.1f}s: {view} ({count} != {expected})")
                     except ViewNotReady:
-                        pass
+                        continue
+
+                    views_to_remove.append(view)
+                    expected = view_snapshots[view]
+                    if contents == expected:
+                        print(f"PASSED: {time_taken:>6.1f}s: {view} (result={contents})")
+                    else:
+                        print(f"FAILED: {time_taken:>6.1f}s: {view} ({contents} != {expected})")
 
             for view in views_to_remove:
                 pending_views.remove(view)
