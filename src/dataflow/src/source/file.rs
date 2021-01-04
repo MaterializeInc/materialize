@@ -134,7 +134,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         name: String,
         source_id: SourceInstanceId,
         active: bool,
-        _: usize,
+        worker_id: usize,
         _: usize,
         logger: Option<Logger>,
         consumer_activator: SyncActivator,
@@ -143,7 +143,8 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         _: DataEncoding,
     ) -> Result<FileSourceInfo<Vec<u8>>, anyhow::Error> {
         let receiver = match connector {
-            ExternalSourceConnector::File(fc) => {
+            ExternalSourceConnector::File(fc) if active => {
+                log::debug!("creating FileSourceInfo worker_id={}", worker_id);
                 let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000);
                 let tail = if fc.tail {
@@ -154,6 +155,11 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
                 std::thread::spawn(move || {
                     read_file_task(fc.path, tx, Some(consumer_activator), tail, ctor);
                 });
+                rx
+            }
+            ExternalSourceConnector::File(_) => {
+                log::trace!("creating stub FileSourceInfo worker_id={}", worker_id);
+                let (_tx, rx) = std::sync::mpsc::sync_channel(0);
                 rx
             }
             _ => panic!(
@@ -303,6 +309,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
     Err: Into<anyhow::Error>,
 {
+    log::trace!("reading file {}", path.display());
     let file = match std::fs::File::open(&path).with_context(|| {
         format!(
             "file source: unable to open file at path {}",
@@ -451,7 +458,9 @@ fn send_records<I, Out, Err>(
     I: IntoIterator<Item = Result<Out, Err>>,
     Err: Into<anyhow::Error>,
 {
+    let mut records = 0;
     for record in iter {
+        records += 1;
         let record = record.map_err(Into::into);
         // TODO: each call to `send` allocates and performs some
         // atomic work; we could aim to batch up transmissions.
@@ -466,4 +475,5 @@ fn send_records<I, Out, Err>(
             activator.activate().expect("activation failed");
         }
     }
+    log::trace!("sent {} records to reader", records);
 }
