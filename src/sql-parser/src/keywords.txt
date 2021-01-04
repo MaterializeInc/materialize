@@ -39,6 +39,7 @@ Bigint
 Boolean
 Both
 Broker
+Bucket
 By
 Bytes
 Cascade
@@ -139,6 +140,7 @@ Limit
 List
 Local
 Map
+Matching
 Materialize
 Materialized
 Message
@@ -188,6 +190,8 @@ Right
 Rollback
 Row
 Rows
+S3
+Scan
 Schema
 Schemas
 Second
