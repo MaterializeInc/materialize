@@ -16,9 +16,10 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::{anyhow, Error};
 use globset::GlobMatcher;
-use rusoto_s3::{GetObjectRequest, S3};
+use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, Object, S3Client, S3};
 use timely::scheduling::{Activator, SyncActivator};
 use tokio::io::AsyncReadExt;
+use tokio::time::{delay_for, Duration};
 
 use dataflow_types::{
     AwsConnectInfo, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
@@ -98,11 +99,11 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             log::debug!("reading bucket={} worker={}", s3_conn.bucket, worker_id);
             let (tx, rx) = std::sync::mpsc::sync_channel(10000);
             let bucket = s3_conn.bucket.clone();
-            let pattern = s3_conn.objects_pattern.clone();
+            let glob = s3_conn.objects_pattern.clone();
             let aws_info = s3_conn.aws_info;
             tokio::spawn(read_bucket_task(
                 bucket,
-                pattern.compile_matcher(),
+                glob.compile_matcher(),
                 aws_info,
                 tx,
                 Some(consumer_activator),
@@ -156,17 +157,97 @@ async fn read_bucket_task(
         }
     };
 
+    let prefix: String = find_prefix(glob.glob().glob());
+
+    let mut continuation_token = None;
+    let mut allowed_errors = 10;
+
+    loop {
+        let response = client
+            .list_objects_v2(ListObjectsV2Request {
+                bucket: bucket.clone(),
+                prefix: Some(prefix.clone()),
+                continuation_token: continuation_token.clone(),
+                ..Default::default()
+            })
+            .await;
+
+        match response {
+            Ok(response) => {
+                allowed_errors = 10;
+
+                download_all(
+                    &glob,
+                    response.contents,
+                    &tx,
+                    activator.as_ref(),
+                    &client,
+                    bucket.clone(),
+                )
+                .await;
+
+                if response.next_continuation_token.is_none() {
+                    break;
+                }
+                continuation_token = response.next_continuation_token;
+            }
+            Err(e) => {
+                log::error!(
+                    "unable to list bucket {}: {} ({} retries remaining)",
+                    bucket,
+                    e,
+                    allowed_errors
+                );
+                allowed_errors -= 1;
+                if allowed_errors == 0 {
+                    break;
+                }
+
+                delay_for(Duration::from_secs(1)).await;
+            }
+        }
+    }
+}
+
+async fn download_all(
+    glob: &GlobMatcher,
+    contents: Option<Vec<Object>>,
+    tx: &SyncSender<anyhow::Result<Vec<u8>>>,
+    activator: Option<&SyncActivator>,
+    client: &S3Client,
+    bucket: String,
+) {
+    if let Some(c) = contents {
+        for obj in c {
+            if let Some(key) = obj.key {
+                if glob.is_match(&key) {
+                    download_object(&tx, activator, &client, bucket.clone(), key).await;
+                }
+            } else {
+                log::warn!("object has no key: {:?}", obj);
+            }
+        }
+    }
+}
+
+async fn download_object(
+    tx: &SyncSender<anyhow::Result<Vec<u8>>>,
+    activator: Option<&SyncActivator>,
+    client: &S3Client,
+    bucket: String,
+    key: String,
+) {
     let obj = match client
         .get_object(GetObjectRequest {
             bucket,
-            key: glob.glob().to_string(),
+            key,
             ..Default::default()
         })
         .await
     {
         Ok(obj) => obj,
         Err(e) => {
-            tx.send(Err(anyhow!("Unable to get object {}: {}", glob.glob(), e)))
+            tx.send(Err(anyhow!("Unable to GET object: {}", e)))
                 .unwrap_or_else(|e| log::debug!("unable to send error on stream: {}", e));
             return;
         }
@@ -196,12 +277,12 @@ async fn read_bucket_task(
                 }
             }
             Err(e) => {
-                tx.send(Err(anyhow!("Unable to read object: {} {}", glob.glob(), e)))
+                tx.send(Err(anyhow!("Unable to read object: {}", e)))
                     .unwrap_or_else(|e| log::debug!("unable to send error on stream: {}", e));
             }
         }
     } else {
-        log::info!("get object response had no body: {}", glob.glob());
+        log::warn!("get object response had no body");
     }
 }
 
@@ -318,5 +399,59 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
             log::error!("Internal error: buffer is not empty, overwriting with new message");
         }
         self.buffer = Some(message);
+    }
+}
+
+// Helper utilities
+
+/// Find the unambiguous prefix of a glob
+fn find_prefix(glob: &str) -> String {
+    let mut escaped = false;
+    let mut escaped_filter = false;
+    glob.chars()
+        .take_while(|c| match (c, &escaped) {
+            ('*', false) => false,
+            ('[', false) => false, // a character class is a form of glob
+            ('{', false) => false, // a group class is a form of glob
+            ('\\', false) => {
+                escaped = true;
+                true
+            }
+            (_, false) => true,
+            (_, true) => {
+                escaped = false;
+                true
+            }
+        })
+        .filter(|c| match (c, &escaped_filter) {
+            (_, true) => {
+                escaped_filter = false;
+                true
+            }
+            ('\\', false) => {
+                escaped_filter = true;
+                false
+            }
+            (_, _) => true,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn glob_prefix() {
+        assert_eq!(&find_prefix("foo/**"), "foo/");
+        assert_eq!(&find_prefix("foo/"), "foo/");
+        assert_eq!(&find_prefix(""), "");
+        assert_eq!(&find_prefix("**/*.json"), "");
+        assert_eq!(&find_prefix(r"foo/\*/bar/*.json"), r"foo/*/bar/");
+        assert_eq!(&find_prefix("foo/[*]/**"), "foo/");
+        assert_eq!(&find_prefix("foo/{a,b}"), "foo/");
+        assert_eq!(&find_prefix(r"class/\[*.json"), "class/[");
+        assert_eq!(&find_prefix(r"class/\[ab]/**"), "class/[ab]/");
+        assert_eq!(&find_prefix(r"alt/\{a,b}/**"), "alt/{a,b}/");
     }
 }
