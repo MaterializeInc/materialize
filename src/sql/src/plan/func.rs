@@ -1305,6 +1305,14 @@ lazy_static! {
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
                 })
             },
+            "format_type" => Scalar {
+                params!(Oid, Int32) => sql_op!(
+                    "CASE
+                        WHEN $1 IS NULL THEN NULL
+                        ELSE coalesce((SELECT concat(name, mz_internal.mz_render_typemod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
+                    END"
+                )
+            },
             "hmac" => Scalar {
                 params!(String, String, String) => VariadicFunc::HmacString,
                 params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes
@@ -1799,6 +1807,9 @@ lazy_static! {
             },
             "mz_is_materialized" => Scalar {
                 params!(String) => sql_op!("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1)")
+            },
+            "mz_render_typemod" => Scalar {
+                params!(Oid, Int32) => BinaryFunc::MzRenderTypemod
             }
         }
     };

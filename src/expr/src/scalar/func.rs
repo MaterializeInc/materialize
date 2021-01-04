@@ -31,6 +31,7 @@ use sha2::{Sha224, Sha256, Sha384, Sha512};
 use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
+use pgrepr::Type;
 use repr::adt::array::ArrayDimension;
 use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
@@ -2099,6 +2100,7 @@ pub enum BinaryFunc {
     ElementListConcat,
     DigestString,
     DigestBytes,
+    MzRenderTypemod,
 }
 
 impl BinaryFunc {
@@ -2242,6 +2244,7 @@ impl BinaryFunc {
             BinaryFunc::ElementListConcat => Ok(eager!(element_list_concat, temp_storage)),
             BinaryFunc::DigestString => eager!(digest_string, temp_storage),
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
+            BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
         }
     }
 
@@ -2365,7 +2368,7 @@ impl BinaryFunc {
 
             SubTime => ScalarType::Interval.nullable(true),
 
-            TextConcat => ScalarType::String.nullable(in_nullable),
+            MzRenderTypemod | TextConcat => ScalarType::String.nullable(in_nullable),
 
             JsonbGetInt64 { stringify: true } | JsonbGetString { stringify: true } => {
                 ScalarType::String.nullable(true)
@@ -2583,7 +2586,8 @@ impl BinaryFunc {
             | EncodedBytesCharLength
             | ListLengthMax { .. }
             | DigestString
-            | DigestBytes => false,
+            | DigestBytes
+            | MzRenderTypemod => false,
         }
     }
 }
@@ -2690,6 +2694,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListElementConcat => f.write_str("||"),
             BinaryFunc::ElementListConcat => f.write_str("||"),
             BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
+            BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
         }
     }
 }
@@ -4109,6 +4114,33 @@ fn digest_inner<'a>(
         other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
     };
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+}
+
+fn mz_render_typemod<'a>(
+    oid: Datum<'a>,
+    typmod: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
+    let oid = oid.unwrap_int32();
+    let mut typmod = typmod.unwrap_int32();
+    let typmod_base = 65_536;
+
+    let inner = if matches!(Type::from_oid(oid as u32), Some(Type::Numeric)) && typmod >= 0 {
+        typmod -= 4;
+        if typmod < 0 {
+            temp_storage.push_string(format!("({},{})", 65_535, typmod_base + typmod))
+        } else {
+            temp_storage.push_string(format!(
+                "({},{})",
+                typmod / typmod_base,
+                typmod % typmod_base
+            ))
+        }
+    } else {
+        ""
+    };
+
+    Datum::String(inner)
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
