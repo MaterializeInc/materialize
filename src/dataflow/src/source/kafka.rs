@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::fs;
 use std::path::PathBuf;
@@ -606,7 +606,7 @@ fn create_kafka_config(
     name: &str,
     addrs: &KafkaAddrs,
     group_id_prefix: Option<String>,
-    config_options: &HashMap<String, String>,
+    config_options: &BTreeMap<String, String>,
 ) -> ClientConfig {
     let mut kafka_config = ClientConfig::new();
 

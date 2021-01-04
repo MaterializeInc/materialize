@@ -601,7 +601,7 @@ pub struct KafkaSourceConnector {
     pub topic: String,
     // Represents options specified by user when creating the source, e.g.
     // security settings.
-    pub config_options: HashMap<String, String>,
+    pub config_options: BTreeMap<String, String>,
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
@@ -651,7 +651,7 @@ pub struct KafkaSinkConnector {
     pub fuel: usize,
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
-    pub config_options: HashMap<String, String>,
+    pub config_options: BTreeMap<String, String>,
     pub key_indices: Option<Vec<usize>>,
 }
 
@@ -703,7 +703,7 @@ pub struct KafkaSinkConnectorBuilder {
     pub replication_factor: u32,
     pub fuel: usize,
     pub consistency_value_schema: Option<String>,
-    pub config_options: HashMap<String, String>,
+    pub config_options: BTreeMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
     pub key_indices: Option<Vec<usize>>,
     pub key_schema: Option<String>,

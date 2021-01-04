@@ -554,7 +554,7 @@ fn handle_alter_index_options(
 
 fn kafka_sink_builder(
     format: Option<Format>,
-    with_options: &mut HashMap<String, Value>,
+    with_options: &mut BTreeMap<String, Value>,
     broker: String,
     topic_prefix: String,
     desc: RelationDesc,
@@ -1038,7 +1038,7 @@ fn handle_create_type(
 }
 
 fn extract_timestamp_frequency_option(
-    with_options: &mut HashMap<String, Value>,
+    with_options: &mut BTreeMap<String, Value>,
 ) -> Result<Duration, anyhow::Error> {
     match with_options.remove("timestamp_frequency_ms") {
         None => Ok(Duration::from_secs(1)),
