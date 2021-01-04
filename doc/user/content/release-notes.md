@@ -68,6 +68,13 @@ Wrap your release notes at the 80 character mark.
 
   **Backwards-incompatible change.**
 
+- Validate `WITH` clauses in `CREATE SOURCE` and `CREATE SINK` statements. This
+  is a potentially backwards-incompatible change as previously any invalid
+  `WITH` clauses would be silently ignored. Upgrading materialize in-place
+  on a persisted catalog that has an invalid `WITH` clause will now fail.
+
+  **Backwards-incompatible change.**
+
 {{% version-header v0.6.0 %}}
 
 - Support specifying default values for table columns via the new
@@ -101,13 +108,6 @@ Wrap your release notes at the 80 character mark.
 
 - Avoid panicking if a record in a regex-formatted source fails to decode
   as UTF-8 {{% gh 5008 %}}.
-
-- Validate `WITH` clauses in `CREATE SOURCE` and `CREATE SINK` statements. This
-  is a potentially backwards-incompatible change as previously any invalid
-  `WITH` clauses would be silently ignored. Upgrading materialize in-place
-  on a persisted catalog that has an invalid `WITH` clause will now fail.
-
-  **Backwards-incompatible change.**
 
 {{% version-header v0.5.3 %}}
 
