@@ -135,7 +135,7 @@ use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::{CacheMessage, LocalInput, TimestampDataUpdates, TimestampMetadataUpdates};
 use crate::sink;
-use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
+use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo, S3SourceInfo};
 use crate::source::{SourceConfig, SourceToken};
 use crate::{
     arrangement::manager::{TraceBundle, TraceManager},
@@ -410,6 +410,12 @@ where
                             }
                             ExternalSourceConnector::Kinesis(_) => {
                                 source::create_source::<_, KinesisSourceInfo, _>(
+                                    source_config,
+                                    connector,
+                                )
+                            }
+                            ExternalSourceConnector::S3(_) => {
+                                source::create_source::<_, S3SourceInfo, _>(
                                     source_config,
                                     connector,
                                 )

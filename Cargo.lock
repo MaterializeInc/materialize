@@ -199,6 +199,7 @@ dependencies = [
  "mz_rusoto_core",
  "mz_rusoto_credential",
  "mz_rusoto_kinesis",
+ "mz_rusoto_s3",
  "mz_rusoto_sts",
  "tokio",
 ]
@@ -739,6 +740,7 @@ dependencies = [
  "dogsdogsdogs",
  "expr",
  "futures",
+ "glob",
  "interchange",
  "itertools",
  "kafka-util",
@@ -748,6 +750,7 @@ dependencies = [
  "mz_rusoto_core",
  "mz_rusoto_credential",
  "mz_rusoto_kinesis",
+ "mz_rusoto_s3",
  "notify",
  "ore",
  "pdqselect",
@@ -782,6 +785,7 @@ dependencies = [
  "ccsr",
  "comm",
  "expr",
+ "glob",
  "interchange",
  "kafka-util",
  "log",
@@ -2261,6 +2265,19 @@ dependencies = [
  "mz_rusoto_core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "mz_rusoto_s3"
+version = "0.46.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8aa931a57c2f104161e1c613997dc0883392207e54f41ff242bdafda4791957"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "mz_rusoto_core",
+ "xml-rs",
 ]
 
 [[package]]
@@ -3897,6 +3914,7 @@ dependencies = [
  "dataflow-types",
  "expr",
  "futures",
+ "glob",
  "interchange",
  "itertools",
  "lazy_static",

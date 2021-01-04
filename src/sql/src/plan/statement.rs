@@ -26,7 +26,7 @@ use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, AwsConnectInfo, Consistency,
     CsvEncoding, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
     KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding,
-    RegexEncoding, SinkConnectorBuilder, SourceConnector,
+    RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SourceConnector,
 };
 use expr::{GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -721,8 +721,9 @@ fn handle_create_sink(
                 key_indices,
             )?
         }
-        Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
         Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
+        Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
+        Connector::S3 { .. } => unsupported!("S3 sinks"),
     };
 
     if !with_options.is_empty() {
@@ -1292,6 +1293,18 @@ fn handle_create_source(
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
                 tail,
+            });
+            let encoding = get_encoding(format)?;
+            (connector, encoding)
+        }
+        Connector::S3 {
+            bucket,
+            objects_pattern,
+        } => {
+            let connector = ExternalSourceConnector::S3(S3SourceConnector {
+                bucket: bucket.clone(),
+                objects_pattern: glob::Pattern::new(objects_pattern)?,
+                aws_info: aws_connect_info(&mut with_options, None)?,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)

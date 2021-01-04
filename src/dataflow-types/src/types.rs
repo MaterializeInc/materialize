@@ -505,15 +505,18 @@ pub enum ExternalSourceConnector {
     Kinesis(KinesisSourceConnector),
     File(FileSourceConnector),
     AvroOcf(FileSourceConnector),
+    S3(S3SourceConnector),
 }
 
 impl ExternalSourceConnector {
+    /// Metadata columns reflect how many records we have processed
     pub fn metadata_columns(&self) -> Vec<(ColumnName, ColumnType)> {
         match self {
             Self::Kafka(_) => vec![("mz_offset".into(), ScalarType::Int64.nullable(false))],
             Self::File(_) => vec![("mz_line_no".into(), ScalarType::Int64.nullable(false))],
             Self::Kinesis(_) => vec![("mz_offset".into(), ScalarType::Int64.nullable(false))],
             Self::AvroOcf(_) => vec![("mz_obj_no".into(), ScalarType::Int64.nullable(false))],
+            Self::S3(_) => vec![("mz_record".into(), ScalarType::Int64.nullable(false))],
         }
     }
 
@@ -524,6 +527,7 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::Kinesis(_) => "kinesis",
             ExternalSourceConnector::File(_) => "file",
             ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
+            ExternalSourceConnector::S3(_) => "s3",
         }
     }
 
@@ -621,6 +625,34 @@ pub struct KinesisSourceConnector {
 pub struct FileSourceConnector {
     pub path: PathBuf,
     pub tail: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct S3SourceConnector {
+    pub bucket: String,
+    /// Used to filter results
+    #[serde(with = "s3_serde_glob")]
+    pub objects_pattern: glob::Pattern,
+
+    /// Information required to make any rusoto AWS connection
+    pub aws_info: AwsConnectInfo,
+}
+
+mod s3_serde_glob {
+    pub(crate) fn serialize<S: serde::Serializer>(
+        pattern: &glob::Pattern,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(pattern.as_str())
+    }
+
+    pub(crate) fn deserialize<'de, D>(d: D) -> Result<glob::Pattern, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::Deserialize;
+        glob::Pattern::new(&String::deserialize(d)?).map_err(|e| serde::de::Error::custom(e))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

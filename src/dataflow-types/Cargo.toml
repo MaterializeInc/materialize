@@ -10,6 +10,7 @@ anyhow = "1.0.34"
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 expr = { path = "../expr" }
+glob = "0.3.0"
 interchange = { path = "../interchange" }
 kafka-util = { path = "../kafka-util" }
 log = "0.4.0"

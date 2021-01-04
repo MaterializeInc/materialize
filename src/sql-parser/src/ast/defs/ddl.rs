@@ -231,6 +231,12 @@ pub enum Connector {
     AvroOcf {
         path: String,
     },
+    /// S3 Objects
+    S3 {
+        bucket: String,
+        /// A glob-like pattern that objects must match
+        objects_pattern: String,
+    },
 }
 
 impl AstDisplay for Connector {
@@ -262,6 +268,16 @@ impl AstDisplay for Connector {
             Connector::AvroOcf { path } => {
                 f.write_str("AVRO OCF '");
                 f.write_node(&display::escape_single_quote_string(path));
+                f.write_str("'");
+            }
+            Connector::S3 {
+                bucket,
+                objects_pattern,
+            } => {
+                f.write_str("S3 BUCKET '");
+                f.write_str(&display::escape_single_quote_string(bucket));
+                f.write_str("' OBJECTS '");
+                f.write_str(&display::escape_single_quote_string(objects_pattern));
                 f.write_str("'");
             }
         }
