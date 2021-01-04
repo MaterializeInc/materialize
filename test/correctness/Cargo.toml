@@ -14,7 +14,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 env_logger = "0.8.2"
 futures = "0.3.0"
 getopts = "0.2.0"
-hyper = "0.13.0"
+hyper = "0.14.2"
 lazy_static = "1.4.0"
 log = "0.4.11"
 mz-process-collector = { path = "../../src/mz-process-collector" }
