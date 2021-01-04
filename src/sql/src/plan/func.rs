@@ -1210,6 +1210,9 @@ lazy_static! {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes,
                 params!(String) => UnaryFunc::ByteLengthString
             },
+            "lower" => Scalar {
+                params!(String) => UnaryFunc::Lower
+            },
             "lpad" => Scalar {
                 params!(String, Int64) => VariadicFunc::PadLeading,
                 params!(String, Int64, String) => VariadicFunc::PadLeading
@@ -1336,6 +1339,9 @@ lazy_static! {
             },
             "to_timestamp" => Scalar {
                 params!(Float64) => UnaryFunc::ToTimestamp
+            },
+            "upper" => Scalar {
+                params!(String) => UnaryFunc::Upper
             },
             "version" => Scalar {
                 params!() => Operation::nullary(|ecx| {

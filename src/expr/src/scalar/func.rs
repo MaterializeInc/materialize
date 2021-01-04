@@ -2200,10 +2200,8 @@ impl BinaryFunc {
                 eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
                     .map(|tz| timezone_timestamptz(tz, b.unwrap_timestamptz())))
             }
-            BinaryFunc::TimezoneTime => {
-                eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
-                    .map(|tz| timezone_time(tz, b.unwrap_time())))
-            }
+            BinaryFunc::TimezoneTime => eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
+                .map(|tz| timezone_time(tz, b.unwrap_time()))),
             BinaryFunc::TimezoneIntervalTimestamp => eager!(timezone_interval_timestamp),
             BinaryFunc::TimezoneIntervalTimestampTz => eager!(timezone_interval_timestamptz),
             BinaryFunc::TimezoneIntervalTime => eager!(timezone_interval_time),
@@ -2851,6 +2849,8 @@ pub enum UnaryFunc {
     TrimTrailingWhitespace,
     RecordGet(usize),
     ListLength,
+    Upper,
+    Lower,
 }
 
 impl UnaryFunc {
@@ -3010,6 +3010,8 @@ impl UnaryFunc {
             UnaryFunc::TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
             UnaryFunc::RecordGet(i) => Ok(record_get(a, *i)),
             UnaryFunc::ListLength => Ok(list_length(a)),
+            UnaryFunc::Upper => Ok(upper(a, temp_storage)),
+            UnaryFunc::Lower => Ok(lower(a, temp_storage)),
         }
     }
 
@@ -3061,7 +3063,9 @@ impl UnaryFunc {
             | CastMapToString { .. }
             | TrimWhitespace
             | TrimLeadingWhitespace
-            | TrimTrailingWhitespace => ScalarType::String.nullable(in_nullable),
+            | TrimTrailingWhitespace
+            | Upper
+            | Lower => ScalarType::String.nullable(in_nullable),
 
             CastFloat64ToFloat32
             | CastInt32ToFloat32
@@ -3319,6 +3323,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),
             UnaryFunc::RecordGet(_) => f.write_str("record_get"),
             UnaryFunc::ListLength => f.write_str("list_length"),
+            UnaryFunc::Upper => f.write_str("upper"),
+            UnaryFunc::Lower => f.write_str("lower"),
         }
     }
 }
@@ -3870,6 +3876,14 @@ fn record_get(a: Datum, i: usize) -> Datum {
 
 fn list_length(a: Datum) -> Datum {
     Datum::Int64(a.unwrap_list().iter().count() as i64)
+}
+
+fn upper<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(a.unwrap_str().to_owned().to_uppercase()))
+}
+
+fn lower<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(a.unwrap_str().to_owned().to_lowercase()))
 }
 
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
