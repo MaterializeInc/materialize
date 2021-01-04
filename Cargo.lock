@@ -234,7 +234,7 @@ name = "billing-demo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "csv",
  "env_logger",
@@ -244,7 +244,7 @@ dependencies = [
  "log",
  "ore",
  "parse_duration",
- "postgres-types",
+ "postgres-types 0.2.0",
  "protobuf",
  "protoc",
  "rand 0.8.0",
@@ -332,6 +332,12 @@ name = "bytes"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e4cec68f03f32e44924783795810fa50a7035d8c8ebe78580ad7e6c703fba38"
+
+[[package]]
+name = "bytes"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad1f8e949d755f9d79112b5bb46938e0ef9d3804a0b16dfab13aafcaa5f0fa72"
 
 [[package]]
 name = "cast"
@@ -448,7 +454,7 @@ dependencies = [
  "assert_cmd",
  "backtrace",
  "bincode",
- "bytes",
+ "bytes 0.5.6",
  "futures",
  "getopts",
  "log",
@@ -507,7 +513,7 @@ dependencies = [
  "mz_rusoto_kinesis",
  "ore",
  "pgrepr",
- "postgres-types",
+ "postgres-types 0.2.0",
  "prometheus",
  "rand 0.8.0",
  "rdkafka",
@@ -1394,7 +1400,7 @@ version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "377038bf3c89d18d6ca1431e7a5027194fbd724ca10592b9487ede5e8e144f42"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "fnv",
  "futures-core",
  "futures-sink",
@@ -1487,7 +1493,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b708cc7f06493459026f53b9a61a7a121a5d1ec6238dee58ea4941132b30156b"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "fnv",
  "itoa",
 ]
@@ -1498,7 +1504,7 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13d5ff830006f7646652e057693569bfe0d51760c0085a071769d142a205111b"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "http",
 ]
 
@@ -1532,7 +1538,7 @@ version = "0.13.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6ad767baac13b44d4529fcf58ba2cd0995e36e7b435bc5b039de6f47e880dbf"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "futures-channel",
  "futures-core",
  "futures-util",
@@ -2209,7 +2215,7 @@ checksum = "e397addcc51086617955d32850793c4eedfb2e99914afcdb5d8593b31629e37a"
 dependencies = [
  "async-trait",
  "base64",
- "bytes",
+ "bytes 0.5.6",
  "crc32fast",
  "futures",
  "http",
@@ -2256,7 +2262,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ffc7ae9f73515f42a99840b1db7baded2f6667cb5c557c3d54c0ba9ccf12cdb7"
 dependencies = [
  "async-trait",
- "bytes",
+ "bytes 0.5.6",
  "futures",
  "mz_rusoto_core",
  "serde",
@@ -2270,7 +2276,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d119214909f946202ad204b6300d11cca9aacd595ed2e77198bee23f9e110c9"
 dependencies = [
  "base64",
- "bytes",
+ "bytes 0.5.6",
  "futures",
  "hex",
  "hmac 0.10.1",
@@ -2295,7 +2301,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39826845b84541f4c55311c9d9ca57c860c66a312810e8ad8a86b52b5fbca669"
 dependencies = [
  "async-trait",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "futures",
  "mz_rusoto_core",
@@ -2582,7 +2588,7 @@ dependencies = [
 name = "ore"
 version = "0.1.0"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "crossbeam-utils",
  "fallible-iterator",
  "futures",
@@ -2719,7 +2725,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aws-util",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "env_logger",
  "futures",
@@ -2741,14 +2747,14 @@ name = "perf-upsert"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "env_logger",
  "futures",
  "futures-channel",
  "hex",
  "log",
- "postgres-types",
+ "postgres-types 0.2.0",
  "rand 0.8.0",
  "rand_distr",
  "structopt",
@@ -2771,11 +2777,11 @@ name = "pgrepr"
 version = "0.1.0"
 dependencies = [
  "byteorder",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "lazy_static",
  "ore",
- "postgres-types",
+ "postgres-types 0.2.0",
  "repr",
  "uuid",
 ]
@@ -2785,12 +2791,12 @@ name = "pgtest"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytes",
+ "bytes 0.5.6",
  "datadriven",
  "fallible-iterator",
  "getopts",
  "postgres",
- "postgres-protocol",
+ "postgres-protocol 0.5.3",
  "serde",
  "serde_json",
 ]
@@ -2801,7 +2807,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "byteorder",
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "comm",
  "coord",
@@ -2946,7 +2952,7 @@ version = "0.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14d864cf6c2eabf1323afe4145ff273aad1898e4f2a3bcb30347715df8624a07"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "fallible-iterator",
  "futures",
  "log",
@@ -2960,7 +2966,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f10ea2d77c744e1846d03b58362679e51c6647acf0e6a65a1f1e5f0d5e99387"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "futures",
  "openssl",
  "tokio",
@@ -2976,7 +2982,7 @@ checksum = "4888a0e36637ab38d76cace88c1476937d617ad015f07f6b669cec11beacc019"
 dependencies = [
  "base64",
  "byteorder",
- "bytes",
+ "bytes 0.5.6",
  "fallible-iterator",
  "hmac 0.9.0",
  "md5",
@@ -2987,17 +2993,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres-protocol"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70e34ad3dc5c56d036b9418185ee97e14b6766d55c8ccf9dc18302ad4e6371d9"
+dependencies = [
+ "base64",
+ "byteorder",
+ "bytes 1.0.0",
+ "fallible-iterator",
+ "hmac 0.10.1",
+ "md5",
+ "memchr",
+ "rand 0.8.0",
+ "sha2",
+ "stringprep",
+]
+
+[[package]]
 name = "postgres-types"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfc08a7d94a80665de4a83942fa8db2fdeaf2f123fc0535e384dc4fff251efae"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "chrono",
  "fallible-iterator",
- "postgres-protocol",
+ "postgres-protocol 0.5.3",
  "serde",
  "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "postgres-types"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5493d9d4613b88b12433aa12890e74e74cd93fdc1e08b7c2aed4768aaae8414c"
+dependencies = [
+ "bytes 1.0.0",
+ "chrono",
+ "fallible-iterator",
+ "postgres-protocol 0.6.0",
  "uuid",
 ]
 
@@ -3007,10 +3044,10 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e45e166dedb061744a082a6009459840c038660382f1b6ab82bf7a4cdfc7e42a"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "fallible-iterator",
- "postgres-protocol",
- "postgres-types",
+ "postgres-protocol 0.5.3",
+ "postgres-types 0.1.3",
 ]
 
 [[package]]
@@ -3473,7 +3510,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0718f81a8e14c4dbb3b34cf23dc6aaf9ab8a0dfec160c534b3dbca1aaa21f47c"
 dependencies = [
  "base64",
- "bytes",
+ "bytes 0.5.6",
  "encoding_rs",
  "futures-core",
  "futures-util",
@@ -3857,7 +3894,7 @@ dependencies = [
  "futures",
  "futures-channel",
  "log",
- "postgres-types",
+ "postgres-types 0.2.0",
  "reqwest",
  "serde",
  "serde_json",
@@ -3955,7 +3992,7 @@ dependencies = [
  "md-5",
  "ore",
  "pgrepr",
- "postgres-protocol",
+ "postgres-protocol 0.5.3",
  "regex",
  "repr",
  "serde_json",
@@ -4243,7 +4280,7 @@ dependencies = [
  "ore",
  "pgrepr",
  "postgres",
- "postgres-types",
+ "postgres-types 0.2.0",
  "prometheus",
  "regex",
  "serde",
@@ -4276,7 +4313,7 @@ dependencies = [
  "atty",
  "aws-util",
  "byteorder",
- "bytes",
+ "bytes 0.5.6",
  "ccsr",
  "chrono",
  "coord",
@@ -4455,7 +4492,7 @@ version = "0.2.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d34ca54d84bf2b5b4d7d31e901a8464f7b60ac145a284fba25ceb801f2ddccd"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "fnv",
  "futures-core",
  "iovec",
@@ -4502,7 +4539,7 @@ checksum = "55a2482c9fe4dd481723cf5c0616f34afc710e55dcda0944e12e7b3316117892"
 dependencies = [
  "async-trait",
  "byteorder",
- "bytes",
+ "bytes 0.5.6",
  "fallible-iterator",
  "futures",
  "log",
@@ -4510,8 +4547,8 @@ dependencies = [
  "percent-encoding",
  "phf",
  "pin-project-lite 0.1.4",
- "postgres-protocol",
- "postgres-types",
+ "postgres-protocol 0.5.3",
+ "postgres-types 0.1.3",
  "tokio",
  "tokio-util",
 ]
@@ -4523,7 +4560,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebdd897b01021779294eb09bb3b52b6e11b0747f9f7e333a84bef532b656de99"
 dependencies = [
  "bincode",
- "bytes",
+ "bytes 0.5.6",
  "derivative",
  "futures",
  "pin-project 0.4.22",
@@ -4546,7 +4583,7 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be8242891f2b6cbef26a2d7e8605133c2c554cd35b3e4948ea892d6d68436499"
 dependencies = [
- "bytes",
+ "bytes 0.5.6",
  "futures-core",
  "futures-sink",
  "log",
