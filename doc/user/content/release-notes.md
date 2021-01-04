@@ -75,6 +75,8 @@ Wrap your release notes at the 80 character mark.
 
   **Backwards-incompatible change.**
 
+- Add `upper` and `lower` to the [string function](/sql/functions#string-func) suite.
+
 {{% version-header v0.6.0 %}}
 
 - Support specifying default values for table columns via the new

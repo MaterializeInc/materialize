@@ -621,3 +621,29 @@ NULL
 
 query error Cannot call function array_upper\(unknown, i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT array_upper(NULL, 1)
+
+query T
+SELECT upper('a1Bd')
+----
+A1BD
+
+query T
+SELECT upper('ALREADYUP')
+----
+ALREADYUP
+
+query error Cannot call function upper\(decimal\(38, 1\)\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT upper(2.2)
+
+query T
+SELECT lower('a1Bd')
+----
+a1bd
+
+query T
+SELECT lower('alreadylow')
+----
+alreadylow
+
+query error Cannot call function lower\(interval\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT lower('1ms'::interval)
