@@ -39,6 +39,7 @@ Bigint
 Boolean
 Both
 Broker
+Bucket
 By
 Bytes
 Cascade
@@ -187,6 +188,7 @@ Right
 Rollback
 Row
 Rows
+S3
 Schema
 Schemas
 Second

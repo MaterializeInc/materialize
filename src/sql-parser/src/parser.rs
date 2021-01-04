@@ -1575,7 +1575,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_connector(&mut self) -> Result<Connector, ParserError> {
-        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO])? {
+        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3])? {
             FILE => {
                 let path = self.parse_literal_string()?;
                 Ok(Connector::File { path })
@@ -1601,6 +1601,17 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(OCF)?;
                 let path = self.parse_literal_string()?;
                 Ok(Connector::AvroOcf { path })
+            }
+            S3 => {
+                // FROM S3 BUCKET '<bucket>' OBJECTS '<pattern>'
+                self.expect_keyword(BUCKET)?;
+                let bucket = self.parse_literal_string()?;
+                self.expect_keyword(OBJECTS)?;
+                let objects_pattern = self.parse_literal_string()?;
+                Ok(Connector::S3 {
+                    bucket,
+                    objects_pattern,
+                })
             }
             _ => unreachable!(),
         }
