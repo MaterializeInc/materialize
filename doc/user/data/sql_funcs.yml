@@ -147,6 +147,9 @@
     description: Number of code points in `s` after encoding
     url: length
 
+  - signature: 'lower(s: str) -> str'
+    description: Convert `s` to lowercase.
+
   - signature: 'lpad(s: str, len: int) -> str'
     description: "Prepend `s` with spaces up to length `len`,
       or right truncate if `len` is less than the length of `s`."
@@ -198,6 +201,9 @@
     description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
       &bull; Side: `BOTH`<br/>
       &bull; `'c'`: `' '` (space)"
+
+  - signature: 'upper(s: str) -> str'
+    description: Convert `s` to uppercase.
 
 - type: Scalar
   description: Scalar functions take a list of scalar expressions
