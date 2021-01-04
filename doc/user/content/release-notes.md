@@ -109,6 +109,8 @@ Wrap your release notes at the 80 character mark.
 - Avoid panicking if a record in a regex-formatted source fails to decode
   as UTF-8 {{% gh 5008 %}}.
 
+- Allow [query hints](/sql/select#query-hints) in `SELECT` statements.
+
 {{% version-header v0.5.3 %}}
 
 - Add support for SQL cursors via the new [`DECLARE`](/sql/declare),
