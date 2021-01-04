@@ -152,7 +152,7 @@ where
                             RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
                             RefOrMut::Mut(row) => {
                                 row_packer.finish_into(row);
-                                std::mem::replace(row, Row::new(vec![]))
+                                std::mem::take(row)
                             }
                         };
                         return Some(Ok((key, row)));

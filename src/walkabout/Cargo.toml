@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.34"
+anyhow = "1.0.37"
 fstrings = "0.2.3"
 ore = { path = "../ore" }
 quote = "1.0.8"

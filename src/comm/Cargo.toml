@@ -23,4 +23,4 @@ uuid = { version = "0.8.0", features = ["serde", "v4"] }
 [dev-dependencies]
 assert_cmd = "1.0.0"
 getopts = "0.2.0"
-predicates = "1.0.5"
+predicates = "1.0.6"

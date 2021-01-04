@@ -68,6 +68,13 @@ Wrap your release notes at the 80 character mark.
 
   **Backwards-incompatible change.**
 
+- Validate `WITH` clauses in `CREATE SOURCE` and `CREATE SINK` statements. This
+  is a potentially backwards-incompatible change as previously any invalid
+  `WITH` clauses would be silently ignored. Upgrading materialize in-place
+  on a persisted catalog that has an invalid `WITH` clause will now fail.
+
+  **Backwards-incompatible change.**
+
 - Add `upper` and `lower` to the [string function](/sql/functions#string-func) suite.
 
 {{% version-header v0.6.0 %}}
