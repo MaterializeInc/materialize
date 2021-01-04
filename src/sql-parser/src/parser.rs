@@ -1611,8 +1611,12 @@ impl<'a> Parser<'a> {
                 // FROM S3 BUCKET '<bucket>' OBJECTS FROM SCAN MATCHING '<pattern>'
                 self.expect_keyword(BUCKET)?;
                 let bucket = self.parse_literal_string()?;
-                self.expect_keywords(&[OBJECTS, FROM, SCAN, MATCHING])?;
-                let pattern = self.parse_literal_string()?;
+                self.expect_keywords(&[OBJECTS, FROM, SCAN])?;
+                let pattern = if self.parse_keyword(MATCHING) {
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
                 Ok(Connector::S3 { bucket, pattern })
             }
             _ => unreachable!(),
