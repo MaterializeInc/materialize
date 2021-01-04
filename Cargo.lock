@@ -825,7 +825,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#4a4f601d455fe1d391b0a09d6600f526bef731a9"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#0c30c936afa2fab2b7b4caa4f34663da985f0ff2"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -881,7 +881,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#4a4f601d455fe1d391b0a09d6600f526bef731a9"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#0c30c936afa2fab2b7b4caa4f34663da985f0ff2"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4394,7 +4394,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6d1cca4c41b10bbcc727572990f68c40d95fa7a5"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f0206b9316ab872ee5aa5079c137c489c42081e5"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4409,12 +4409,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6d1cca4c41b10bbcc727572990f68c40d95fa7a5"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f0206b9316ab872ee5aa5079c137c489c42081e5"
 
 [[package]]
 name = "timely_communication"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6d1cca4c41b10bbcc727572990f68c40d95fa7a5"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f0206b9316ab872ee5aa5079c137c489c42081e5"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4430,7 +4430,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6d1cca4c41b10bbcc727572990f68c40d95fa7a5"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f0206b9316ab872ee5aa5079c137c489c42081e5"
 
 [[package]]
 name = "timely_sort"
