@@ -167,12 +167,19 @@ impl KafkaSink {
 }
 
 enum SendState {
+    // State to write BEGIN consistency record
     Begin,
+    // State to flush pending rows for closed timestamps
     Draining {
+        // row_index points to the current flushing row within the closed timestamp
+        // we're processing
         row_index: usize,
+        // multiple copies of a row may need to be sent if its cardinality is >1
         repeat_counter: usize,
+        // a count of all rows sent, accounting for the repeat counter
         total_sent: i64,
     },
+    // State to write END consistency record
     End(i64),
 }
 
