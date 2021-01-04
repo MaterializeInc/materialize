@@ -33,7 +33,7 @@ goofus,gallant
 
 ! CREATE SINK invalid_with_option FROM src
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
-  WITH (concurrency=true, badoption=true)
+  WITH (badoption=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 unexpected parameters for CREATE SINK: badoption
 
