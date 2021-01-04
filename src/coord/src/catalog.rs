@@ -1829,9 +1829,9 @@ impl SqlCatalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn get_item_by_oid(&self, oid: &u32) -> &dyn sql::catalog::CatalogItem {
-        let id = self.catalog.by_oid[oid];
-        self.catalog.get_by_id(&id)
+    fn try_get_item_by_oid(&self, oid: &u32) -> Option<&dyn sql::catalog::CatalogItem> {
+        let id = self.catalog.by_oid.get(oid)?;
+        Some(self.catalog.get_by_id(id))
     }
 
     fn item_exists(&self, name: &FullName) -> bool {

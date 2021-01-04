@@ -21,7 +21,10 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
-use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
+use repr::{
+    adt::decimal::MAX_DECIMAL_PRECISION, ColumnName, Datum, RelationType, ScalarBaseType,
+    ScalarType,
+};
 use sql_parser::ast::{Expr, ObjectName};
 
 use super::expr::{
@@ -1303,6 +1306,70 @@ lazy_static! {
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
+                })
+            },
+            "format_type" => Scalar {
+                params!(Int64, Int64) => Operation::binary(|ecx, oid, typmod| {
+                    let unknown_type = || {
+                        Ok(ScalarExpr::literal(Datum::String("???"), ScalarType::String))
+                    };
+
+                    let oid = match oid.into_literal_int64() {
+                        None => {
+                            return Ok(ScalarExpr::literal_null(ScalarType::String));
+                        },
+                        Some(oid) => {
+                            if oid < 0 || oid > u32::MAX as i64 {
+                                return unknown_type();
+                            }
+                            oid as u32
+                        },
+                    };
+
+                    let item = match ecx.qcx.scx.catalog.try_get_item_by_oid(&oid) {
+                        Some(item) => item,
+                        None => return unknown_type(),
+                    };
+
+                    let typ = match ecx.qcx.scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
+                        Some(typ) => match typ {
+                            // Decimal is the only type we support that uses typemod.
+                            ScalarType::Decimal(..) => {
+                                let mut typmod = match typmod.into_literal_int64() {
+                                    None | Some(i64::MIN..=-1) => {
+                                        // Equivalent to our decimal default,
+                                        // Decimal(38,0)
+                                        2_490_372
+                                    },
+                                    Some(typmod) => typmod,
+                                };
+                                if typmod < 4 {
+                                    // If typmod < 4, PG returns a value 3 less than
+                                    // its max plus the typmod; we emulate the
+                                    // spirit of that result, though our
+                                    // calculations are different given the limited
+                                    // range of preicison and scale we support.
+                                    ScalarType::Decimal(MAX_DECIMAL_PRECISION, MAX_DECIMAL_PRECISION - 3 + typmod as u8)
+                                } else {
+                                    typmod -= 4;
+                                    // Postgres doesn't clamp these values at
+                                    // their max precision and scale (1000 in
+                                    // PG13) and produces output that is not
+                                    // suitable for input––naively trying to do
+                                    // something more helpful than that because
+                                    // we cannot match their ouput in the first
+                                    // place.
+                                    let p = std::cmp::min(typmod / 65_536, i64::from(MAX_DECIMAL_PRECISION));
+                                    let s = std::cmp::min(typmod % 65_536, i64::from(MAX_DECIMAL_PRECISION));
+                                    ScalarType::Decimal(p as u8, s as u8)
+                                }
+                            }
+                            typ => typ,
+                        },
+                        None => return unknown_type(),
+                    };
+                    let name = ecx.get_scalar_type_name(&typ);
+                    Ok(ScalarExpr::literal(Datum::String(&name), ScalarType::String))
                 })
             },
             "hmac" => Scalar {
