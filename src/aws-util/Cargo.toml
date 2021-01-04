@@ -11,5 +11,6 @@ log = "0.4.13"
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
+rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_sts = { git = "https://github.com/rusoto/rusoto.git" }
 tokio = "1.0.0"

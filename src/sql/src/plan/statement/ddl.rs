@@ -17,13 +17,14 @@ use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
+use globset::GlobBuilder;
 
 use aws_arn::{Resource, ARN};
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
     DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
     KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding,
-    RegexEncoding, SinkConnectorBuilder, SourceConnector,
+    RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SourceConnector,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -452,6 +453,19 @@ pub fn plan_create_source(
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
                 tail,
+            });
+            let encoding = get_encoding(format)?;
+            (connector, encoding)
+        }
+        Connector::S3 { bucket, pattern } => {
+            scx.require_experimental_mode("S3 Sources")?;
+            let connector = ExternalSourceConnector::S3(S3SourceConnector {
+                bucket: bucket.clone(),
+                pattern: GlobBuilder::new(pattern)
+                    .literal_separator(true)
+                    .backslash_escape(true)
+                    .build()?,
+                aws_info: aws_connect_info(&mut with_options, None)?,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
@@ -902,8 +916,9 @@ pub fn plan_create_sink(
                 key_indices,
             )?
         }
-        Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
         Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
+        Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
+        Connector::S3 { .. } => unsupported!("S3 sinks"),
     };
 
     if !with_options.is_empty() {
