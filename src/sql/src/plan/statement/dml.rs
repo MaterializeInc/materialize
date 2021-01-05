@@ -275,7 +275,10 @@ pub fn plan_tail(
                 desc,
             })
         }
-        CatalogItemType::Index | CatalogItemType::Sink | CatalogItemType::Type => bail!(
+        CatalogItemType::Func
+        | CatalogItemType::Index
+        | CatalogItemType::Sink
+        | CatalogItemType::Type => bail!(
             "'{}' cannot be tailed because it is a {}",
             entry.name(),
             entry.item_type(),

@@ -16,8 +16,8 @@ SELECT * FROM VALUES (1)
 query error Expected identifier, found number
 SELECT * FROM VALUES (1), (2)
 
-query error function "noexist" does not exist
+query error function noexist\(\) does not exist
 SELECT noexist()
 
-query error function "noexist" does not exist
+query error function noexist\(\) does not exist
 SELECT * FROM noexist()

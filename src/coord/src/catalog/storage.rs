@@ -92,6 +92,11 @@ const MIGRATIONS: &[&str] = &[
         name TEXT PRIMARY KEY,
         value TEXT
     );",
+    // Makes the mz_internal schema literal so it can store functions.
+    //
+    // Introduced in v0.6.2.
+    "INSERT INTO schemas VALUES
+        (4, NULL, 'mz_internal');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:

@@ -2712,6 +2712,7 @@ where
                             self.report_type_update(*id, *oid, *schema_id, &name.item, ty, 1)
                                 .await;
                         }
+                        CatalogItem::Func(_) => unreachable!("funcs do not yet generate events"),
                     }
                 }
                 catalog::Event::UpdatedItem {
@@ -2773,6 +2774,7 @@ where
                             self.report_type_update(*id, *oid, *schema_id, &to_name.item, &typ, 1)
                                 .await;
                         }
+                        CatalogItem::Func(_) => unreachable!("functions cannot be updated"),
                     }
                 }
                 catalog::Event::DroppedDatabase { id, oid, name } => {
@@ -2901,6 +2903,9 @@ where
                         }
                         CatalogItem::Index(_) => {
                             unreachable!("dropped indexes should be handled by DroppedIndex");
+                        }
+                        CatalogItem::Func(_) => {
+                            unreachable!("functions cannot be dropped")
                         }
                     }
                     if let Ok(desc) = entry.desc() {
