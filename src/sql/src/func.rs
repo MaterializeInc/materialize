@@ -24,17 +24,17 @@ use ore::collections::CollectionExt;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
 use sql_parser::ast::{Expr, ObjectName, Raw};
 
-use super::expr::{
+use crate::catalog::CatalogItemType;
+use crate::names::PartialName;
+use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
     VariadicFunc,
 };
-use super::query::{self, ExprContext, QueryContext, QueryLifetime};
-use super::scope::Scope;
-use super::typeconv::{self, rescale_decimal, CastContext};
-use super::StatementContext;
-use crate::catalog::CatalogItemType;
-use crate::names::PartialName;
+use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
+use crate::plan::scope::Scope;
 use crate::plan::transform_ast;
+use crate::plan::typeconv::{self, rescale_decimal, CastContext};
+use crate::plan::StatementContext;
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
