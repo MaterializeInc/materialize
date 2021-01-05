@@ -24,17 +24,17 @@ use ore::collections::CollectionExt;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
 use sql_parser::ast::{Expr, ObjectName, Raw};
 
-use super::expr::{
+use crate::catalog::CatalogItemType;
+use crate::names::PartialName;
+use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, HirScalarExpr, NullaryFunc, TableFunc,
     UnaryFunc, VariadicFunc,
 };
-use super::query::{self, ExprContext, QueryContext, QueryLifetime};
-use super::scope::Scope;
-use super::typeconv::{self, rescale_decimal, CastContext};
-use super::StatementContext;
-use crate::catalog::CatalogItemType;
-use crate::names::PartialName;
+use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
+use crate::plan::scope::Scope;
 use crate::plan::transform_ast;
+use crate::plan::typeconv::{self, rescale_decimal, CastContext};
+use crate::plan::StatementContext;
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
@@ -1166,7 +1166,7 @@ pub struct TableFuncPlan {
     pub exprs: Vec<HirScalarExpr>,
     pub column_names: Vec<Option<ColumnName>>,
 }
-
+#[derive(Debug)]
 pub enum Func {
     Scalar(Vec<FuncImpl<HirScalarExpr>>),
     Aggregate(Vec<FuncImpl<(HirScalarExpr, AggregateFunc)>>),
@@ -1784,7 +1784,7 @@ lazy_static! {
                 params!(Float64) => Operation::identity(),
                 params!(DecimalAny) => Operation::identity(),
                 params!(Int32) => Operation::unary(|ecx, e| {
-                      super::typeconv::plan_cast(
+                      typeconv::plan_cast(
                           "internal.avg_promotion", ecx, CastContext::Explicit,
                           e, &ScalarType::Decimal(10, 0),
                       )

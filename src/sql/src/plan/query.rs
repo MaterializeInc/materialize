@@ -44,6 +44,7 @@ use repr::{
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
+use crate::func::{self, Func, FuncSpec};
 use crate::names::PartialName;
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -51,7 +52,6 @@ use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder,
     ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, UnaryFunc, VariadicFunc,
 };
-use crate::plan::func::{self, Func, FuncSpec};
 use crate::plan::plan_utils;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
