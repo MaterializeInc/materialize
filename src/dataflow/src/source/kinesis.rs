@@ -358,7 +358,7 @@ async fn create_state(
     ),
     anyhow::Error,
 > {
-    let kinesis_client = aws_util::kinesis::kinesis_client(
+    let kinesis_client = aws_util::kinesis::client(
         c.aws_info.region.clone(),
         c.aws_info.access_key_id.clone(),
         c.aws_info.secret_access_key.clone(),

@@ -471,7 +471,7 @@ pub async fn create_state(
     };
 
     let (aws_region, aws_account, aws_credentials, kinesis_client, kinesis_stream_names) = {
-        let kinesis_client = aws_util::kinesis::kinesis_client(
+        let kinesis_client = aws_util::kinesis::client(
             config.aws_region.clone(),
             Some(config.aws_credentials.aws_access_key_id().to_owned()),
             Some(config.aws_credentials.aws_secret_access_key().to_owned()),

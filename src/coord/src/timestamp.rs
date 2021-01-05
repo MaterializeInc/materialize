@@ -1090,7 +1090,7 @@ impl Timestamper {
         _id: SourceInstanceId,
         kinc: KinesisSourceConnector,
     ) -> Option<RtKinesisConnector> {
-        let (kinesis_client, cached_shard_ids) = match block_on(aws_util::kinesis::kinesis_client(
+        let (kinesis_client, cached_shard_ids) = match block_on(aws_util::kinesis::client(
             kinc.aws_info.region.clone(),
             kinc.aws_info.access_key_id.clone(),
             kinc.aws_info.secret_access_key.clone(),
