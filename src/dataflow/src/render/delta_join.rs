@@ -310,26 +310,36 @@ where
                                 // full evaluation. Before we do this, we need to permute it to refer
                                 // to the correct physical column locations.
                                 mfp.permute(&column_map, column_map.len());
-                                // TODO(mcsherry): this could have been done in the previous `lookup`,
-                                // but that seems like a fair bit of code complexity at the moment.
-                                // TODO(mcsherry): at the least, this *should* just be permutation,
-                                // which we could determine cannot error.
-                                let (oks, errs) =
-                                update_stream.flat_map_fallible({
-                                    // Reuseable allocation for unpacking.
-                                    let mut datums = DatumVec::new();
-                                    let mut row_packer = repr::RowPacker::new();
-                                    move |row| {
-                                        let temp_storage = RowArena::new();
-                                        let mut datums_local = datums.borrow_with(&row);
-                                        // TODO(mcsherry): re-use `row` allocation.
-                                        mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer).map_err(DataflowError::from).transpose()
-                                    }
-                                });
+                                // At this point, `mfp` is very commonly the identity (we have fully
+                                // applied it in the previous closure). However, it may not be the
+                                // identity if it produces duplicate columns (i.e. its `projection`
+                                // member has duplicates). In this case, we aren't currently able to
+                                // optimize it away, as `columns` cannot represent some output column
+                                // being in two locations. There are many ways we could improve this,
+                                // including improving query optimization (we should rarely need to
+                                // produce two copies of the same column) and further improvements
+                                // here (figure out how to apply the projection in the prior closure).
+                                if !mfp.is_identity() {
+                                    // The `mfp` should just be projection at this point. If it is not,
+                                    // something incorrect has happen in prior closure extraction.
+                                    assert!(mfp.expressions.is_empty() && mfp.predicates.is_empty());
+                                    update_stream = update_stream.map({
+                                        // Reuseable allocation for unpacking.
+                                        let mut datums = DatumVec::new();
+                                        let mut row_packer = repr::RowPacker::new();
+                                        move |row| {
+                                            let temp_storage = RowArena::new();
+                                            let mut datums_local = datums.borrow_with(&row);
+                                            // TODO(mcsherry): re-use `row` allocation.
+                                            mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer)
+                                                .expect("projection should not produce errors")
+                                                .expect("projection should always produce output")
+                                        }
+                                    });
+                                }
 
-                                region_errs.push(errs);
                                 inner_errs.push(differential_dataflow::collection::concatenate(region, region_errs).leave());
-                                oks.leave()
+                                update_stream.leave()
                             });
 
                             delta_queries.push(delta_query);
@@ -474,6 +484,11 @@ impl MyClosure {
     /// include reference to any columns added by the application of
     /// this logic, which might result from partial application of
     /// the `MapFilterProject` instance.
+    ///
+    /// If all columns are available for `mfp`, this method works
+    /// extra hard to ensure that the closure contains all the work,
+    /// and `mfp` is left as an identity transform (which can then
+    /// be ignored).
     pub fn build(
         columns: &mut HashMap<usize, usize>,
         equivalences: &mut Vec<Vec<ScalarExpr>>,
@@ -555,7 +570,30 @@ impl MyClosure {
             columns.insert(*column, index);
         }
 
-        // Cons up an instance of the closue with the closed-over state.
+        // If `mfp` is a permutation of the columns present in `columns`, then we can
+        // apply that permutation to `before` and `columns`, so that `mfp` becomes the
+        // identity operation.
+        if mfp.expressions.is_empty()
+            && mfp.predicates.is_empty()
+            && mfp.projection.len() == columns.len()
+            && mfp.projection.iter().all(|col| columns.contains_key(col))
+        {
+            // The projection we want to apply to `before`  comes to us from `mfp` in the
+            // extended output column reckoning.
+            let projection = mfp
+                .projection
+                .iter()
+                .map(|col| columns[col])
+                .collect::<Vec<_>>();
+            before = before.project(projection);
+            // Update the physical locations of each output column.
+            columns.clear();
+            for (index, column) in mfp.projection.iter().enumerate() {
+                columns.insert(*column, index);
+            }
+        }
+
+        // Cons up an instance of the closure with the closed-over state.
         Self {
             ready_equivalences,
             before,

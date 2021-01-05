@@ -242,25 +242,35 @@ where
             // full evaluation. Before we do this, we need to permute it to refer
             // to the correct physical column locations.
             mfp.permute(&column_map, column_map.len());
-            // TODO(mcsherry): this could have been done in the previous `lookup`,
-            // but that seems like a fair bit of code complexity at the moment.
-            // TODO(mcsherry): at the least, this *should* just be permutation,
-            // which we could determine cannot error.
-            let (oks, errs2) = joined.flat_map_fallible({
-                // Reuseable allocation for unpacking.
-                let mut datums = DatumVec::new();
-                let mut row_packer = repr::RowPacker::new();
-                move |row| {
-                    let temp_storage = RowArena::new();
-                    let mut datums_local = datums.borrow_with(&row);
-                    // TODO(mcsherry): re-use `row` allocation.
-                    mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer)
-                        .map_err(DataflowError::from)
-                        .transpose()
-                }
-            });
+            // At this point, `mfp` is very commonly the identity (we have fully
+            // applied it in the previous closure). However, it may not be the
+            // identity if it produces duplicate columns (i.e. its `projection`
+            // member has duplicates). In this case, we aren't currently able to
+            // optimize it away, as `columns` cannot represent some output column
+            // being in two locations. There are many ways we could improve this,
+            // including improving query optimization (we should rarely need to
+            // produce two copies of the same column) and further improvements
+            // here (figure out how to apply the projection in the prior closure).
+            if !mfp.is_identity() {
+                // The `mfp` should just be projection at this point. If it is not,
+                // something incorrect has happen in prior closure extraction.
+                assert!(mfp.expressions.is_empty() && mfp.predicates.is_empty());
+                joined = joined.map({
+                    // Reuseable allocation for unpacking.
+                    let mut datums = DatumVec::new();
+                    let mut row_packer = repr::RowPacker::new();
+                    move |row| {
+                        let temp_storage = RowArena::new();
+                        let mut datums_local = datums.borrow_with(&row);
+                        // TODO(mcsherry): re-use `row` allocation.
+                        mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer)
+                            .expect("projection should not produce errors")
+                            .expect("projection should always produce output")
+                    }
+                });
+            }
 
-            (oks, errs.concat(&errs2))
+            (joined, errs)
         } else {
             panic!("render_join called on invalid expression.")
         }
