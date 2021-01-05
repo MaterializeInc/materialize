@@ -20,10 +20,13 @@ use rusoto_credential::{
 };
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput, Shard};
 
-/// Constructs a KinesisClient from statically provided connection information. If connection
-/// information is not provided, falls back to using credentials gathered by aws::credentials.
+/// Construct a KinesisClient
 ///
-/// The AutoRefreshingProvider caches the underlying provider's AWS credentials,
+/// If static connection information is not provided falls back to using
+/// credentials gathered by rusoto's [`ChainProvider] wrapped in an
+/// [`AutoRefreshingProvider`].
+///
+/// The [`AutoRefreshingProvider`] caches the underlying provider's AWS credentials,
 /// automatically fetching updated credentials if they've expired.
 pub async fn client(
     region: Region,
