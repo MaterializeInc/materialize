@@ -17,6 +17,7 @@ name
 -------
 public
 mz_catalog
+mz_internal
 pg_catalog
 
 # What objects do we have by default?

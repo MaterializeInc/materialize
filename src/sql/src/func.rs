@@ -21,7 +21,6 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
-use ore::str::StrExt;
 use pgrepr::oid;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
 use sql_parser::ast::{Expr, ObjectName, Raw};
@@ -36,7 +35,6 @@ use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, rescale_decimal, CastContext};
-use crate::plan::StatementContext;
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
@@ -1192,7 +1190,7 @@ macro_rules! catalog_name_only {
 
 lazy_static! {
     /// Correlates a built-in function name to its implementations.
-    static ref PG_CATALOG_BUILTINS: HashMap<&'static str, Func> = {
+    pub static ref PG_CATALOG_BUILTINS: HashMap<&'static str, Func> = {
         use ParamType::*;
         use ScalarType::*;
         builtins! {
@@ -1857,7 +1855,7 @@ lazy_static! {
     };
 
 
-    static ref MZ_INTERNAL_BUILTINS: HashMap<&'static str, Func> = {
+    pub static ref MZ_INTERNAL_BUILTINS: HashMap<&'static str, Func> = {
         use ParamType::*;
         use ScalarType::*;
         builtins! {
@@ -1932,41 +1930,6 @@ fn array_to_string(
         func: VariadicFunc::ArrayToString { elem_type },
         exprs,
     })
-}
-
-/// Resolves the name to a set of function implementations.
-///
-/// If the name does not specify a known built-in function, returns an error.
-pub fn resolve_func(
-    scx: &StatementContext,
-    name: &PartialName,
-) -> Result<&'static Func, anyhow::Error> {
-    // NOTE(benesch): In theory, the catalog should be in charge of resolving
-    // function names. In practice, it is much easier to do our own hardcoded
-    // resolution here while all functions are builtins. This decision will
-    // need to be revisited when either:
-    //   * we support configuring the search path from its default, or
-    //   * we support user-defined functions.
-
-    if let Some(database) = &name.database {
-        // If a database name is provided, we need only verify that the
-        // database exists, as presently functions can only exist in ambient
-        // schemas.
-        let _ = scx.catalog.resolve_database(database)?;
-    }
-    let search_path = match name.schema.as_deref() {
-        Some("pg_catalog") => vec![&*PG_CATALOG_BUILTINS],
-        Some("mz_catalog") => vec![&*MZ_CATALOG_BUILTINS],
-        Some("mz_internal") => vec![&*MZ_INTERNAL_BUILTINS],
-        Some(_) => vec![],
-        None => vec![&*MZ_CATALOG_BUILTINS, &*PG_CATALOG_BUILTINS],
-    };
-    for builtins in search_path {
-        if let Some(func) = builtins.get(&*name.item) {
-            return Ok(func);
-        }
-    }
-    bail!("function {} does not exist", name.to_string().quoted())
 }
 
 lazy_static! {
@@ -2411,7 +2374,7 @@ fn rescale_decimals_to_same(
 /// Resolves the operator to a set of function implementations.
 pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], anyhow::Error> {
     match OP_IMPLS.get(op) {
-        Some(Func::Scalar(impls)) => Ok(impls),
+        Some(Func::Scalar(impls)) => Ok(&impls),
         Some(_) => unreachable!("all operators must be scalar functions"),
         // TODO: these require sql arrays
         // JsonContainsAnyFields
