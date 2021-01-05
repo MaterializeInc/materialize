@@ -42,7 +42,6 @@ pub(crate) mod decorrelate;
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
-pub(crate) mod func;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
