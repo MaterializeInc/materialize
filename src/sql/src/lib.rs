@@ -32,6 +32,7 @@ mod kafka_util;
 
 pub mod ast;
 pub mod catalog;
+pub mod func;
 pub mod names;
 pub mod normalize;
 pub mod parse;
