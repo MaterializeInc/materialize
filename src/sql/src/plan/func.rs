@@ -363,7 +363,7 @@ impl ParamList {
     fn validate_arg_len(&self, input_len: usize) -> bool {
         match self {
             Self::Exact(p) => p.len() == input_len,
-            Self::Repeat(p) => input_len % p.len() == 0 && input_len > 0,
+            Self::Repeat(p) => input_len % p.len() == 0,
         }
     }
 
@@ -1243,6 +1243,10 @@ lazy_static! {
             },
             "concat" => Scalar {
                  params!((Any)...) => Operation::variadic(|ecx, cexprs| {
+                    if cexprs.is_empty() {
+                        bail!("No function matches the given name and argument types. \
+                        You might need to add explicit type casts.")
+                    }
                     let mut exprs = vec![];
                     for expr in cexprs {
                         if ecx.scalar_type(&expr) == ScalarType::Bool {
@@ -1309,14 +1313,12 @@ lazy_static! {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
             },
             "jsonb_build_array" => Scalar {
-                params!() => VariadicFunc::JsonbBuildArray,
                 params!((Any)...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
                     func: VariadicFunc::JsonbBuildArray,
                     exprs: exprs.into_iter().map(|e| typeconv::to_jsonb(ecx, e)).collect(),
                 }))
             },
             "jsonb_build_object" => Scalar {
-                params!() => VariadicFunc::JsonbBuildObject,
                 params!((Any, Any)...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
                     func: VariadicFunc::JsonbBuildObject,
                     exprs: exprs.into_iter().tuples().map(|(key, val)| {
