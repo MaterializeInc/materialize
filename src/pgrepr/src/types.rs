@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![forbid(missing_docs)]
+
+use crate::oid;
 use lazy_static::lazy_static;
 use repr::ScalarType;
 
@@ -66,7 +69,7 @@ lazy_static! {
         // PostgreSQL. See the "OID Assignment" section of the PostgreSQL
         // documentation for details:
         // https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
-        16_384,
+        oid::TYPE_LIST_OID,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );
@@ -75,7 +78,7 @@ lazy_static! {
     pub static ref MAP: postgres_types::Type = postgres_types::Type::new(
         "map".to_owned(),
         // OID chosen to follow our "LIST" type.
-        16_385,
+        oid::TYPE_MAP_OID,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );
