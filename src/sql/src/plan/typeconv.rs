@@ -295,7 +295,7 @@ lazy_static! {
                 let ty = from_type.clone();
                 Some(|e: ScalarExpr| e.call_unary(CastListToString { ty }))
             }),
-            (List, List) => Assignment: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+            (List, List) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let from_el_type = from_type.unwrap_list_element_type();
                 let to_el_type = to_type.unwrap_list_element_type();
@@ -337,8 +337,38 @@ fn get_cast(
 ) -> Option<Cast> {
     use CastContext::*;
 
+    // Determines if types are equal irrespective of any custom types.
+    fn structural_equality(l: &ScalarType, r: &ScalarType) -> bool {
+        use ScalarType::*;
+        match (l, r) {
+            (Array(l), Array(r))
+            | (
+                List {
+                    element_type: l, ..
+                },
+                List {
+                    element_type: r, ..
+                },
+            )
+            | (Map { value_type: l, .. }, Map { value_type: r, .. }) => structural_equality(&l, &r),
+            (l, r) => l == r,
+        }
+    }
+
     if from == to {
         return Some(Box::new(|expr| expr));
+    }
+
+    // If types structurally equivalent, we only need to change `from`'s OID.
+    if structural_equality(from, to) {
+        // CastInPlace allowed if going between custom and anonymous or if cast
+        // explicitly requested.
+        if from.is_custom_type() ^ to.is_custom_type() || ccx == CastContext::Explicit {
+            let return_ty = to.clone();
+            return Some(Box::new(move |expr| {
+                expr.call_unary(UnaryFunc::CastInPlace { return_ty })
+            }));
+        }
     }
 
     let imp = VALID_CASTS.get(&(from.into(), to.into()))?;

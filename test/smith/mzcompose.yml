@@ -34,4 +34,4 @@ mzworkflows:
       port: 6875
     - step: run
       service: smith-fuzz
-      command: --query-count=10000
+      command: --query-count=${SMITH_QUERY_COUNT:-100000}

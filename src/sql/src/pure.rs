@@ -9,7 +9,7 @@
 
 //! Statement purification.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use anyhow::{bail, Context};
 use tokio::io::AsyncBufReadExt;
@@ -38,8 +38,8 @@ pub async fn purify(mut stmt: Statement) -> Result<Statement, anyhow::Error> {
         ..
     }) = &mut stmt
     {
-        let with_options_map = normalize::options(with_options);
-        let mut config_options = HashMap::new();
+        let mut with_options_map = normalize::options(with_options);
+        let mut config_options = BTreeMap::new();
 
         let mut file = None;
         match connector {
@@ -49,7 +49,7 @@ pub async fn purify(mut stmt: Statement) -> Result<Statement, anyhow::Error> {
                 }
 
                 // Verify that the provided security options are valid and then test them.
-                config_options = kafka_util::extract_config(&with_options_map)?;
+                config_options = kafka_util::extract_config(&mut with_options_map)?;
                 kafka_util::test_config(&config_options)?;
             }
             Connector::AvroOcf { path, .. } => {
@@ -88,7 +88,7 @@ async fn purify_format(
     connector: &mut Connector,
     col_names: &mut Vec<Ident>,
     file: Option<tokio::fs::File>,
-    connector_options: &HashMap<String, String>,
+    connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
     match format {
         Some(Format::Avro(schema)) => match schema {
@@ -108,7 +108,7 @@ async fn purify_format(
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
                         url,
                         &connector_options,
-                        &normalize::options(ccsr_options),
+                        normalize::options(ccsr_options),
                     )?;
 
                     let Schema {

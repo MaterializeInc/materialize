@@ -44,10 +44,11 @@ use fmt::Debug;
 /// We avoid the need for the second set of padding by not providing mutable access to the `Datum`. Instead, `Row` is append-only.
 ///
 /// A `Row` can be built from a collection of `Datum`s using `Row::pack`, but it often more efficient to use and re-use a `RowPacker` which can avoid unneccesary allocations.
+/// The `Row::pack_slice` method pre-determines the necessary allocation, and is also appropriate.
 ///
 /// ```
 /// # use repr::{Row, Datum};
-/// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
+/// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// assert_eq!(row.unpack(), vec![Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)])
 /// ```
 ///
@@ -55,14 +56,14 @@ use fmt::Debug;
 ///
 /// ```
 /// # use repr::{Row, Datum};
-/// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
+/// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// assert_eq!(row.iter().nth(1).unwrap(), Datum::Int32(1));
 /// ```
 ///
 /// If you want random access to the `Datum`s in a `Row`, use `Row::unpack` to create a `Vec<Datum>`
 /// ```
 /// # use repr::{Row, Datum};
-/// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
+/// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// let datums = row.unpack();
 /// assert_eq!(datums[1], Datum::Int32(1));
 /// ```
@@ -72,7 +73,7 @@ use fmt::Debug;
 /// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
 /// It is best to re-use a `RowPacker` across multiple `Row` creation calls, as this
 /// avoids the allocations involved in `RowPacker::new()`.
-#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
     data: SmallVec<[u8; 16]>,
 }
@@ -516,8 +517,26 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::TimestampTz(_) => 1 + size_of::<DateTime<Utc>>(),
         Datum::Interval(_) => 1 + size_of::<i32>() + size_of::<i128>(),
         Datum::Decimal(_) => 1 + size_of::<Significand>(),
-        Datum::Bytes(bytes) => 1 + size_of::<usize>() + bytes.len(),
-        Datum::String(string) => 1 + size_of::<usize>() + string.as_bytes().len(),
+        Datum::Bytes(bytes) => {
+            // We use a variable length representation of slice length.
+            let bytes_for_length = match bytes.len() {
+                0..=255 => 1,
+                256..=65535 => 2,
+                65536..=4294967295 => 4,
+                _ => 8,
+            };
+            1 + bytes_for_length + bytes.len()
+        }
+        Datum::String(string) => {
+            // We use a variable length representation of slice length.
+            let bytes_for_length = match string.len() {
+                0..=255 => 1,
+                256..=65535 => 2,
+                65536..=4294967295 => 4,
+                _ => 8,
+            };
+            1 + bytes_for_length + string.len()
+        }
         Datum::Uuid(_) => 1 + size_of::<Uuid>(),
         Datum::Array(array) => {
             1 + size_of::<u8>() + array.dims.data.len() + array.elements.data.len()
@@ -561,8 +580,13 @@ impl Row {
         Ok(packer.finish())
     }
 
-    // TODO(justin): find a better place to put this.
-    pub fn new(data: Vec<u8>) -> Self {
+    /// Creates a new row from supplied bytes.
+    ///
+    /// # Safety
+    ///
+    /// This method relies on `data` being an appropriate row encoding, and can
+    /// result in unsafety if this is not the case.
+    pub unsafe fn new(data: Vec<u8>) -> Self {
         Row { data: data.into() }
     }
 
@@ -571,15 +595,15 @@ impl Row {
     /// This method has the advantage over `pack` that it can determine the required
     /// allocation before packing the elements, ensuring only one allocation and no
     /// redundant copies required.
-    ///
-    /// TODO: This could also be done for cloneable iterators, though we would need to be
-    /// very careful to avoid using it when iterators are either expensive or have
-    /// side effects.
-    pub fn pack_slice<'a, I, D>(slice: &[Datum<'a>]) -> Row {
+    pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
         let needed = slice.iter().map(|d| datum_size(d)).sum();
-        let mut packer = RowPacker::with_capacity(needed);
-        packer.extend(slice.iter());
-        packer.finish()
+        let mut bytes = Vec::with_capacity(needed);
+        for datum in slice.iter() {
+            push_datum(&mut bytes, *datum);
+        }
+        // Unsafety justified in that `push_datum` to initially empty `Vec` is the
+        // same machinery we use internally, and should produce well-formed bytes.
+        unsafe { Row::new(bytes) }
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
@@ -1280,7 +1304,7 @@ mod tests {
 
         // Pack a previously-constructed `Datum::Array` and verify that it
         // unpacks correctly.
-        let row = Row::pack(&[Datum::Array(arr1)]);
+        let row = Row::pack_slice(&[Datum::Array(arr1)]);
         let arr2 = row.unpack_first().unwrap_array();
         assert_eq!(arr1, arr2);
     }
@@ -1463,7 +1487,7 @@ mod tests {
             Datum::JsonNull,
         ];
         for value in values_of_interest {
-            if !datum_size(&value) == Row::pack(Some(value)).data.len() {
+            if datum_size(&value) != Row::pack_slice(&[value]).data.len() {
                 panic!("Disparity in claimed size for {:?}", value);
             }
         }

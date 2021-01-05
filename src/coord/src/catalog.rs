@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::RelationDesc;
+use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::Expr;
 use sql::catalog::CatalogError as SqlCatalogError;
@@ -35,10 +35,12 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::catalog::error::{Error, ErrorKind};
+use crate::catalog::migrate::CONTENT_MIGRATIONS;
 use crate::session::Session;
 
 mod config;
 mod error;
+mod migrate;
 
 pub mod builtin;
 pub mod storage;
@@ -387,7 +389,7 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of events that describe the initial state
     /// of the catalog.
-    pub fn open(config: Config) -> Result<(Catalog, Vec<Event>), Error> {
+    pub fn open(config: &Config) -> Result<(Catalog, Vec<Event>), Error> {
         let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
 
         let mut catalog = Catalog {
@@ -403,7 +405,7 @@ impl Catalog {
                 nonce: rand::random(),
                 experimental_mode,
                 cluster_id,
-                cache_directory: config.cache_directory,
+                cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
             },
         };
@@ -596,6 +598,21 @@ impl Catalog {
             }
         }
 
+        let mut catalog_content_version = catalog.storage().get_catalog_content_version()?;
+
+        while CONTENT_MIGRATIONS.len() > catalog_content_version {
+            if let Err(e) = CONTENT_MIGRATIONS[catalog_content_version](&mut catalog) {
+                return Err(Error::new(ErrorKind::FailedMigration {
+                    last_version: catalog_content_version,
+                    cause: e.to_string(),
+                }));
+            }
+            catalog_content_version += 1;
+            catalog
+                .storage()
+                .set_catalog_content_version(catalog_content_version)?;
+        }
+
         let items = catalog.storage().load_items()?;
         for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
@@ -622,8 +639,24 @@ impl Catalog {
             let oid = catalog.allocate_oid()?;
             events.push(catalog.insert_item(id, oid, name, item));
         }
-
         Ok((catalog, events))
+    }
+
+    /// Opens the catalog at `path` with parameters set appropriately for debug
+    /// contexts, like in tests.
+    ///
+    /// This function should not be called in production contexts. Use
+    /// [`Catalog::open`] with appropriately set configuration parameters
+    /// instead.
+    pub fn open_debug(path: &Path) -> Result<Catalog, anyhow::Error> {
+        let (catalog, _) = Self::open(&Config {
+            path,
+            enable_logging: true,
+            experimental_mode: None,
+            cache_directory: None,
+            build_info: &DUMMY_BUILD_INFO,
+        })?;
+        Ok(catalog)
     }
 
     pub fn for_session(&self, session: &Session) -> ConnCatalog {
@@ -1581,6 +1614,11 @@ impl Catalog {
         }
     }
 
+    /// Serializes the catalog's in-memory state.
+    ///
+    /// There are no guarantees about the format of the serialized state, except
+    /// that the serialized state for two identical catalogs will compare
+    /// identically.
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
@@ -1712,22 +1750,6 @@ impl From<PlanContext> for SerializedPlanContext {
     }
 }
 
-/// Loads the catalog stored at `path` and returns its serialized state.
-///
-/// There are no guarantees about the format of the serialized state, except
-/// that the serialized state for two identical catalogs will compare
-/// identically.
-pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
-    let (catalog, _events) = Catalog::open(Config {
-        path: Some(path),
-        enable_logging: true,
-        experimental_mode: None,
-        cache_directory: None,
-        build_info: &DUMMY_BUILD_INFO,
-    })?;
-    Ok(catalog.dump())
-}
-
 impl sql::catalog::Catalog for ConnCatalog<'_> {
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
         if include_system_schemas {
@@ -1798,8 +1820,49 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn type_exists(&self, name: &FullName) -> bool {
+    fn item_exists(&self, name: &FullName) -> bool {
         self.catalog.try_get(name, self.conn_id).is_some()
+    }
+
+    fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType> {
+        let entry = self.catalog.get_by_id(id);
+        let t = match entry.item() {
+            CatalogItem::Type(t) => t,
+            _ => return None,
+        };
+
+        Some(match t.inner {
+            TypeInner::Array { element_id } => {
+                let element_type = self
+                    .try_get_lossy_scalar_type_by_id(&element_id)
+                    .expect("array's element_id refers to a valid type");
+                ScalarType::Array(Box::new(element_type))
+            }
+            TypeInner::Base => pgrepr::Type::from_oid(entry.oid())?.to_scalar_type_lossy(),
+            TypeInner::List { element_id } => {
+                let element_type = self
+                    .try_get_lossy_scalar_type_by_id(&element_id)
+                    .expect("list's element_id refers to a valid type");
+                ScalarType::List {
+                    element_type: Box::new(element_type),
+                    custom_oid: Some(entry.oid),
+                }
+            }
+            TypeInner::Map { key_id, value_id } => {
+                let key_type = self
+                    .try_get_lossy_scalar_type_by_id(&key_id)
+                    .expect("map's key_id refers to a valid type");
+                assert!(matches!(key_type, ScalarType::String));
+                let value_type = Box::new(
+                    self.try_get_lossy_scalar_type_by_id(&value_id)
+                        .expect("map's value_id refers to a valid type"),
+                );
+                ScalarType::Map {
+                    value_type,
+                    custom_oid: Some(entry.oid),
+                }
+            }
+        })
     }
 
     fn config(&self) -> &sql::catalog::CatalogConfig {

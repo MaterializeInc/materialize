@@ -517,7 +517,7 @@ SELECT alias."bar baz", myfun(), "simple id" AS "column alias" FROM "a table" AS
 parse-statement roundtrip
 CREATE TABLE foo (bar int)
 ----
-CREATE TABLE foo (bar int)
+CREATE TABLE foo (bar int4)
 
 parse-statement roundtrip
 SELECT * FROM fn(1, 2) AS foo, schema.bar AS bar WITH (nolock)

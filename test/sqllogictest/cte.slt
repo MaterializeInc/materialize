@@ -104,6 +104,25 @@ WHERE x IN (
 ----
 1 1
 
+# Same query, but inside a view. Regression test for #5092.
+statement ok
+CREATE MATERIALIZED VIEW v AS
+SELECT * FROM squares
+WHERE x IN (
+    WITH squares_y AS (
+        SELECT squares.y
+    )
+    SELECT y FROM roots
+    WHERE y IN (
+        SELECT y FROM squares_y
+    )
+);
+
+query II
+SELECT * FROM v
+----
+1 1
+
 # Correlated CTE in different level than it was introduced. This is needlessly
 # convoluted but caused crashes in early iterations of CTE's development.
 query II

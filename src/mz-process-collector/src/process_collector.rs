@@ -202,7 +202,7 @@ impl Collector for ProcessCollector {
         // swap
         if let Ok(status) = p.status() {
             if let Some(vmswap_kib) = status.vmswap {
-                let vmswap = vmswap_kib / 1024;
+                let vmswap = vmswap_kib * 1024;
                 self.swap.set(vmswap as f64);
             }
         }

@@ -9,9 +9,11 @@
 
 use std::error::Error;
 
+use tempfile::NamedTempFile;
+
+use coord::catalog::Catalog;
 use ore::collections::CollectionExt;
 use pgrepr::Type;
-use sql::catalog::DummyCatalog;
 
 #[test]
 fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
@@ -33,7 +35,7 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
             vec![Type::Text, Type::Text, Type::Text],
         ),
         ("SELECT ($1), (((($2))))", vec![Type::Text, Type::Text]),
-        ("SELECT $1::int", vec![Type::Int4]),
+        ("SELECT $1::pg_catalog.int4", vec![Type::Int4]),
         ("SELECT 1 WHERE $1", vec![Type::Bool]),
         ("SELECT 1 HAVING $1", vec![Type::Bool]),
         (
@@ -65,20 +67,30 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
         ("SELECT $1 + 1", vec![Type::Int4]),
         ("SELECT $1 + 1.0", vec![Type::Numeric]),
         (
-            "SELECT TIMESTAMP '1970-01-01 00:00:00' + $1",
+            "SELECT '1970-01-01 00:00:00'::pg_catalog.timestamp + $1",
             vec![Type::Interval],
         ),
         (
-            "SELECT $1 + TIMESTAMP '1970-01-01 00:00:00'",
+            "SELECT $1 + '1970-01-01 00:00:00'::pg_catalog.timestamp",
             vec![Type::Interval],
         ),
-        ("SELECT $1::int, $1 + $2", vec![Type::Int4, Type::Int4]),
-        ("SELECT '[0, 1, 2]'::jsonb - $1", vec![Type::Text]),
+        (
+            "SELECT $1::pg_catalog.int4, $1 + $2",
+            vec![Type::Int4, Type::Int4],
+        ),
+        (
+            "SELECT '[0, 1, 2]'::pg_catalog.jsonb - $1",
+            vec![Type::Text],
+        ),
     ];
+
+    let catalog_file = NamedTempFile::new()?;
+    let catalog = Catalog::open_debug(catalog_file.path())?;
+    let catalog = catalog.for_system_session();
     for (sql, types) in test_cases {
         println!("> {}", sql);
         let stmt = sql::parse::parse(sql)?.into_element();
-        let desc = sql::plan::describe(&DummyCatalog, stmt, &[])?;
+        let desc = sql::plan::describe(&catalog, stmt, &[])?;
         assert_eq!(desc.param_types, types);
     }
     Ok(())

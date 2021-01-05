@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
@@ -15,7 +15,7 @@ use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
     CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior,
-    ObjectName, SqlOption, Statement, TableFactor, Value,
+    ObjectName, Query, SqlOption, Statement, TableFactor, Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -47,7 +47,7 @@ pub fn object_name(mut name: ObjectName) -> Result<PartialName, PlanError> {
     Ok(out)
 }
 
-pub fn options(options: &[SqlOption]) -> HashMap<String, Value> {
+pub fn options(options: &[SqlOption]) -> BTreeMap<String, Value> {
     options
         .iter()
         .map(|o| match o {
@@ -60,7 +60,7 @@ pub fn options(options: &[SqlOption]) -> HashMap<String, Value> {
         .collect()
 }
 
-pub fn option_objects(options: &[SqlOption]) -> HashMap<String, SqlOption> {
+pub fn option_objects(options: &[SqlOption]) -> BTreeMap<String, SqlOption> {
     options
         .iter()
         .map(|o| (ident(o.name().clone()), o.clone()))
@@ -102,10 +102,30 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
 
     struct QueryNormalizer<'a> {
         scx: &'a StatementContext<'a>,
+        ctes: Vec<Ident>,
         err: Option<PlanError>,
     }
 
+    impl<'a> QueryNormalizer<'a> {
+        fn new(scx: &'a StatementContext<'a>) -> QueryNormalizer<'a> {
+            QueryNormalizer {
+                scx,
+                ctes: vec![],
+                err: None,
+            }
+        }
+    }
+
     impl<'a, 'ast> VisitMut<'ast> for QueryNormalizer<'a> {
+        fn visit_query_mut(&mut self, query: &'ast mut Query) {
+            let n = self.ctes.len();
+            for cte in &query.ctes {
+                self.ctes.push(cte.alias.name.clone());
+            }
+            visit_mut::visit_query_mut(self, query);
+            self.ctes.truncate(n);
+        }
+
         fn visit_function_mut(&mut self, func: &'ast mut Function) {
             // Don't visit the function name, because function names are not
             // (yet) object names we can resolve.
@@ -155,6 +175,13 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
         }
 
         fn visit_object_name_mut(&mut self, object_name: &'ast mut ObjectName) {
+            // Single-part object names can refer to CTEs in addition to
+            // catalog objects.
+            if let [ident] = object_name.0.as_slice() {
+                if self.ctes.contains(ident) {
+                    return;
+                }
+            }
             match self.scx.resolve_item(object_name.clone()) {
                 Ok(full_name) => *object_name = unresolve(full_name.name().clone()),
                 Err(e) => self.err = Some(e),
@@ -190,12 +217,19 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
 
         Statement::CreateTable(CreateTableStatement {
             name,
-            columns: _,
+            columns,
             constraints: _,
             with_options: _,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;
+            let mut normalizer = QueryNormalizer::new(scx);
+            for c in columns {
+                normalizer.visit_column_def_mut(c);
+            }
+            if let Some(err) = normalizer.err {
+                return Err(err);
+            }
             *if_not_exists = false;
         }
 
@@ -229,7 +263,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
                 allocate_name(name)?
             };
             {
-                let mut normalizer = QueryNormalizer { scx, err: None };
+                let mut normalizer = QueryNormalizer::new(scx);
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
                     return Err(err);
@@ -246,7 +280,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             if_not_exists,
         }) => {
             *on_name = resolve_item(on_name)?;
-            let mut normalizer = QueryNormalizer { scx, err: None };
+            let mut normalizer = QueryNormalizer::new(scx);
             if let Some(key_parts) = key_parts {
                 for key_part in key_parts {
                     normalizer.visit_expr_mut(key_part);
@@ -273,7 +307,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
                     } => {
                         *option = SqlOption::ObjectName {
                             name: name.clone(),
-                            object_name: resolve_item(&ObjectName(vec![Ident::new(val.clone())]))?,
+                            object_name: resolve_item(&ObjectName::unqualified(&val))?,
                         }
                     }
                     _ => (),

@@ -105,9 +105,9 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
             // are "hot" and present in the topic ~500 times more frequently
             // than the "cold" keys.
             let key: i32 = if i % 3 != 0 {
-                rng.gen_range(0, 10_000)
+                rng.gen_range(0..10_000)
             } else {
-                rng.gen_range(0, 10_000_000)
+                rng.gen_range(0..10_000_000)
             };
             let res = k_client.send_key_value(
                 &config.topic,

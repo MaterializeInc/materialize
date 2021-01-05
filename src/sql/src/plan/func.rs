@@ -21,8 +21,8 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
-use repr::{ColumnName, Datum, RelationType, ScalarType};
-use sql_parser::ast::{Expr, Ident, ObjectName};
+use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
+use sql_parser::ast::{Expr, ObjectName};
 
 use super::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
@@ -101,7 +101,7 @@ impl TypeCategory {
             | ScalarType::Int64
             | ScalarType::Oid => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
-            ScalarType::List(..) => Self::List,
+            ScalarType::List { .. } => Self::List,
             ScalarType::String => Self::String,
             ScalarType::Record { .. } => Self::Pseudo,
             ScalarType::Map { .. } => Self::Pseudo,
@@ -375,9 +375,9 @@ impl ParamList {
         p.iter().any(|p| p.is_polymorphic())
     }
 
-    /// Enforces polymorphic type consistency by finding the concrete type
-    /// that satisfies the constraints expressed by the polymorphic types in
-    /// the parameter list.
+    /// Enforces polymorphic type consistency by finding the concrete type that
+    /// satisfies the constraints expressed by the polymorphic types in the
+    /// parameter list.
     ///
     /// Polymorphic type consistency constraints include:
     /// - All arguments passed to `ArrayAny` must be `ScalarType::Array`s with
@@ -390,14 +390,186 @@ impl ParamList {
     ///
     /// Returns `Some` if the constraints were successfully resolved, or `None`
     /// otherwise.
-    fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
-        let mut constrained_type: Option<ScalarType> = None;
-        let mut set_or_check_constrained_type = |typ: &ScalarType| {
-            match constrained_type {
-                None => constrained_type = Some(typ.clone()),
-                Some(ref t) => {
-                    if typ != t {
+    ///
+    /// ## Custom types
+    ///
+    /// To handle custom types w/r/t polymorphism, we derive a "complex type
+    /// signature" for the constrained type, which represents the constrained
+    /// type's `custom_oid` and an embdedded element. This complex type
+    /// signature is this function's return value.
+    ///
+    /// We define custom types as any type defined with `CREATE TYPE` or embeds
+    /// a custom type. We'll use the term anonymous type to define all
+    /// non-custom types, e.g. `int4`, `int4 list`.
+    ///
+    /// To understand how we generate the complex type signature, it's useful to
+    /// categorize polymorphic parameters in MZ.
+    ///
+    /// - **Complex parameters** include createable composite types' polymorphic
+    ///    parameters, e.g. `ListAny` and `MapAny`.
+    ///
+    ///   Values passed to these parameters have a `custom_oid` field and some
+    ///   embedded type, which we'll refer to as its element.
+    ///
+    /// - **Element parameters** which include `ListElementAny` and `NonVecAny`.
+    ///
+    /// Note that:
+    /// - Custom types can be used as values to either complex or element
+    ///   parameters; we'll refer to these as custom complex values and custom
+    ///   element values, or collectively as custom values.
+    /// - `ArrayAny` is slightly different from either case, but is uncommonly
+    ///   used and not addressed further.
+    ///
+    /// Upon encountering the first custom value, we constrain all future custom
+    /// values' elements to exactly matching the custom type's element. For
+    /// custom element values, this is the type itself. For custom complex
+    /// values, this is the embedded type. Note that if a custom complex value
+    /// embeds an anonymous type, the constrained type will be an anonymous
+    /// type––this means that any future custom element values will cause
+    /// resolution to fail.
+    ///
+    /// Upon encountering the first custom complex value, we constrain all
+    /// future custom complex values to having the same `custom_oid`––which,
+    /// e.g., can be `None` when you have otherwise-anonymous complex values
+    /// that embed custom elements.
+    ///
+    /// Consider the following scenario:
+    ///
+    /// ```sql
+    /// CREATE TYPE int4_list_custom AS LIST (element_type=int4);
+    /// CREATE TYPE int4_list_list_custom AS LIST (element_type=int4_list_custom);
+    /// /* Errors because we won't coerce int4_list_custom list to
+    ///    int4_list_list_custom */
+    /// SELECT '{{1}}'::int4_list_list_custom || '{{2}}'::int4_list_custom list;
+    /// ```
+    ///
+    /// We will not coerce int4_list_custom list to int4_list_list_custom so
+    /// that only truly anonymous types are ever coerced into custom types. It's
+    /// also trivial for users to add a cast to ensure custom type consistency.
+    fn resolve_polymorphic_types(
+        &self,
+        typs: &[Option<ScalarType>],
+    ) -> Option<(Option<u32>, ScalarType)> {
+        // Determines if types have the same [`ScalarBaseType`], and if complex
+        // types' elements do, as well. This function's primary use is allowing
+        // matches between `ScalarType::Decimal` values with different scales,
+        // and doing so for complex objects that embed them, as well.
+        fn complex_base_eq(l: &ScalarType, r: &ScalarType) -> bool {
+            match (l, r) {
+                (ScalarType::Array(l), ScalarType::Array(r))
+                | (
+                    ScalarType::List {
+                        element_type: l, ..
+                    },
+                    ScalarType::List {
+                        element_type: r, ..
+                    },
+                )
+                | (ScalarType::Map { value_type: l, .. }, ScalarType::Map { value_type: r, .. }) => {
+                    complex_base_eq(l, r)
+                }
+                (l, r) => ScalarBaseType::from(l) == ScalarBaseType::from(r),
+            }
+        }
+
+        // Returns a commmon form of `self` and `other` using the "greatest
+        // common" `ScalarType::Decimal`, or `None` if one does not exist.
+        //
+        // This computation includes complex types such as lists whose element
+        // types are `ScalarType::Decimal`.
+        //
+        // This is necesssary because in PostgreSQL, the numeric type does not
+        // preserve scale information, so polymorphic type resolution will
+        // always treat two numeric types as equivalent. To match this behavior
+        // in Materialize, we special-case equality here so that we can consider
+        // decimals with different scales to be equivalent and resolve the
+        // polymorphic constraint to the decimal type with the larger scale.
+        fn find_greatest_common_decimal(l: &ScalarType, r: &ScalarType) -> Option<ScalarType> {
+            match (l, r) {
+                (ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2)) => Some(
+                    ScalarType::Decimal(std::cmp::max(*p1, *p2), std::cmp::max(*s1, *s2)),
+                ),
+                (ScalarType::Array(l), ScalarType::Array(r)) => {
+                    let common = find_greatest_common_decimal(l, r)?;
+                    Some(ScalarType::Array(Box::new(common)))
+                }
+                (
+                    ScalarType::List {
+                        element_type: l, ..
+                    },
+                    ScalarType::List {
+                        element_type: r, ..
+                    },
+                ) => {
+                    let common = find_greatest_common_decimal(l, r)?;
+                    Some(ScalarType::List {
+                        element_type: Box::new(common),
+                        custom_oid: None,
+                    })
+                }
+                (ScalarType::Map { value_type: l, .. }, ScalarType::Map { value_type: r, .. }) => {
+                    let common = find_greatest_common_decimal(l, r)?;
+                    Some(ScalarType::Map {
+                        value_type: Box::new(common),
+                        custom_oid: None,
+                    })
+                }
+                _ => None,
+            }
+        }
+
+        let mut constrained_oid: Option<Option<u32>> = None;
+        let mut set_or_check_constrained_oid = |custom_oid: &Option<u32>| {
+            match constrained_oid {
+                None => constrained_oid = Some(*custom_oid),
+                Some(constrained_oid) => {
+                    if constrained_oid != *custom_oid {
                         return Err(());
+                    }
+                }
+            }
+            Ok(())
+        };
+
+        let mut constrained_type: Option<ScalarType> = None;
+        let mut constrained_type_lock = false;
+        let mut set_or_check_constrained_type = |typ: &ScalarType, is_custom: bool| {
+            match constrained_type {
+                None => {
+                    constrained_type_lock = is_custom;
+                    constrained_type = Some(typ.clone());
+                }
+                Some(ref mut t) if is_custom && !constrained_type_lock => {
+                    // Previously constrained type was not custom
+                    if !complex_base_eq(t, typ) {
+                        return Err(());
+                    }
+                    *t = typ.clone();
+                    constrained_type_lock = true;
+                }
+                Some(ref mut t) => {
+                    // Custom types must exactly match constrained type;
+                    // anonymous types must only match the constrained type's
+                    // complex base.
+                    if (is_custom && t != typ) || (!is_custom && !complex_base_eq(t, typ)) {
+                        return Err(());
+                    }
+
+                    // Potentially rescale decimal type if constrained type
+                    // isn't locked and the two elements differ, i.e. if they
+                    // are decimals and they are equal, they don't need to be rescaled.
+                    if !constrained_type_lock && t != typ {
+                        // Neither `t` nor `typ` can be custom if the
+                        // constrainted type is unlocked.
+                        assert!(!(t.is_custom_type() || typ.is_custom_type()));
+                        if let Some(d) = find_greatest_common_decimal(t, typ) {
+                            // `d` should never be a custom type because it is a
+                            // system-generated type. If users want to control
+                            // the resultant type's OID, they can provide
+                            // explicit casts to the desired OID.
+                            assert!(!d.is_custom_type());
+                            *t = d;
+                        }
                     }
                 }
             }
@@ -408,13 +580,50 @@ impl ParamList {
         for (i, typ) in typs.iter().enumerate() {
             let param = &self[i];
             match (param, typ) {
-                (ParamType::ListAny, Some(ScalarType::List(typ)))
-                | (ParamType::ArrayAny, Some(ScalarType::Array(typ)))
-                | (ParamType::MapAny, Some(ScalarType::Map { value_type: typ })) => {
-                    set_or_check_constrained_type(typ).ok()?
+                (
+                    ParamType::ListAny,
+                    Some(ScalarType::List {
+                        element_type: el_typ,
+                        custom_oid,
+                    }),
+                )
+                | (
+                    ParamType::MapAny,
+                    Some(ScalarType::Map {
+                        value_type: el_typ,
+                        custom_oid,
+                    }),
+                ) => {
+                    // We use typ.as_ref().unwrap() rather than binding the
+                    // interior `ScalarType` to a name because of
+                    // https://github.com/rust-lang/rust/issues/65490
+                    // Once that is resolved, the match could be made on:
+                    // ```
+                    // ...
+                    // (
+                    // ParamType::ListAny,
+                    // Some(typ @ ScalarType::List {
+                    //     element_type: el_typ,
+                    //     custom_oid,
+                    // }),
+                    // ...
+                    // typ.is_custom_type()
+                    // ```
+                    let is_custom = typ.as_ref().unwrap().is_custom_type();
+
+                    // Only check OID of custom types because `None` values for
+                    // `custom_oid` as a custom type signature, but anonymous types
+                    // use the same value.
+                    if is_custom {
+                        set_or_check_constrained_oid(custom_oid).ok()?;
+                    }
+                    set_or_check_constrained_type(el_typ, is_custom).ok()?;
                 }
-                (ParamType::ListElementAny, Some(typ)) | (ParamType::NonVecAny, Some(typ)) => {
-                    set_or_check_constrained_type(typ).ok()?
+                (ParamType::ArrayAny, Some(ScalarType::Array(t))) => {
+                    set_or_check_constrained_type(t, t.is_custom_type()).ok()?
+                }
+                (ParamType::ListElementAny, Some(t)) | (ParamType::NonVecAny, Some(t)) => {
+                    set_or_check_constrained_type(t, t.is_custom_type()).ok()?
                 }
                 // These checks don't need to be more exhaustive (e.g. failing
                 // if arguments passed to `ListAny` are not `ScalartType::List`)
@@ -424,7 +633,14 @@ impl ParamList {
             }
         }
 
-        constrained_type
+        match (constrained_oid, constrained_type) {
+            (Some(oid), Some(typ)) => Some((oid, typ)),
+            (None, Some(typ)) => Some((None, typ)),
+            (None, None) => None,
+            (Some(..), None) => {
+                unreachable!("must have at least one element to get constrained OID")
+            }
+        }
     }
 
     /// Matches a `&[ScalarType]` derived from the user's function argument
@@ -494,7 +710,7 @@ impl ParamType {
 
         match self {
             ArrayAny => matches!(t, Array(..)),
-            ListAny => matches!(t, List(..)),
+            ListAny => matches!(t, List{..}),
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
@@ -875,25 +1091,32 @@ fn coerce_args_to_types(
 
             // Polymorphic pseudotypes. Convert based on constrained type.
             ParamType::ArrayAny => {
-                let ty = ScalarType::Array(Box::new(get_constrained_ty()));
+                let (_, ty) = get_constrained_ty();
+                let ty = ScalarType::Array(Box::new(ty));
                 do_convert(arg, &ty)?
             }
             ParamType::ListAny => {
-                let ty = ScalarType::List(Box::new(get_constrained_ty()));
+                let (custom_oid, ty) = get_constrained_ty();
+                let ty = ScalarType::List {
+                    element_type: Box::new(ty),
+                    custom_oid,
+                };
                 do_convert(arg, &ty)?
             }
             ParamType::MapAny => {
+                let (custom_oid, ty) = get_constrained_ty();
                 let ty = ScalarType::Map {
-                    value_type: Box::new(get_constrained_ty()),
+                    value_type: Box::new(ty),
+                    custom_oid,
                 };
                 do_convert(arg, &ty)?
             }
             ParamType::ListElementAny => {
-                let ty = get_constrained_ty();
+                let (_, ty) = get_constrained_ty();
                 do_convert(arg, &ty)?
             }
             ParamType::NonVecAny => {
-                let ty = get_constrained_ty();
+                let (_, ty) = get_constrained_ty();
                 if ty.is_vec() {
                     bail!(
                         "could not constrain polymorphic type because {} used in \
@@ -1121,6 +1344,9 @@ lazy_static! {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes,
                 params!(String) => UnaryFunc::ByteLengthString
             },
+            "lower" => Scalar {
+                params!(String) => UnaryFunc::Lower
+            },
             "lpad" => Scalar {
                 params!(String, Int64) => VariadicFunc::PadLeading,
                 params!(String, Int64, String) => VariadicFunc::PadLeading
@@ -1220,6 +1446,14 @@ lazy_static! {
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 })
             },
+            "timezone" => Scalar {
+                params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp,
+                params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz,
+                params!(String, Time) => BinaryFunc::TimezoneTime,
+                params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp,
+                params!(Interval, TimestampTz) => BinaryFunc::TimezoneIntervalTimestampTz,
+                params!(Interval, Time) => BinaryFunc::TimezoneIntervalTime
+            },
             "to_char" => Scalar {
                 params!(Timestamp, String) => BinaryFunc::ToCharTimestamp,
                 params!(TimestampTz, String) => BinaryFunc::ToCharTimestampTz
@@ -1239,6 +1473,9 @@ lazy_static! {
             },
             "to_timestamp" => Scalar {
                 params!(Float64) => UnaryFunc::ToTimestamp
+            },
+            "upper" => Scalar {
+                params!(String) => UnaryFunc::Upper
             },
             "version" => Scalar {
                 params!() => Operation::nullary(|ecx| {
@@ -1399,7 +1636,7 @@ lazy_static! {
                         Some(id) => id,
                         None => bail!("source passed to internal_read_cached_data must be literal string"),
                     };
-                    let item = ecx.qcx.scx.resolve_item(ObjectName(vec![Ident::new(source.clone())]))?;
+                    let item = ecx.qcx.scx.resolve_item(ObjectName::unqualified(&source))?;
                     match item.item_type() {
                         CatalogItemType::Source => {},
                         _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, item.item_type()),
@@ -1718,6 +1955,10 @@ lazy_static! {
                 params!(Int64, Int64) => MulInt64,
                 params!(Float32, Float32) => MulFloat32,
                 params!(Float64, Float64) => MulFloat64,
+                params!(Interval, Float64) => MulInterval,
+                params!(Float64, Interval) => {
+                    Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, MulInterval)))
+                },
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     use std::cmp::*;
                     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
@@ -1733,6 +1974,7 @@ lazy_static! {
                 params!(Int64, Int64) => DivInt64,
                 params!(Float32, Float32) => DivFloat32,
                 params!(Float64, Float64) => DivFloat64,
+                params!(Interval, Float64) => DivInterval,
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     use std::cmp::*;
                     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();

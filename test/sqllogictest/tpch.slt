@@ -233,7 +233,7 @@ ORDER BY
 | Get materialize.public.region (u4)
 | ArrangeBy (#0)
 
-%5 =
+%5 = Let l0 =
 | Join %0 %1 %2 %3 %4 (= #23 #25) (= #12 #21) (= #9 #17) (= #0 #16)
 | | implementation = DeltaQuery
 | |   delta %0 %2.(#0) %1.(#0) %3.(#0) %4.(#0)
@@ -245,46 +245,43 @@ ORDER BY
 | Filter "^.*BRASS$" ~(#4), (#5 = 15), (#26 = "EUROPE")
 
 %6 =
-| Get %5
-
-%7 =
-| Get %5
+| Get %5 (l0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%8 =
+%7 =
 | Get materialize.public.partsupp (u11)
 | ArrangeBy (#0) (#1)
 
-%9 =
+%8 =
 | Get materialize.public.supplier (u8)
 | ArrangeBy (#0) (#3)
 
-%10 =
+%9 =
 | Get materialize.public.nation (u1)
 | ArrangeBy (#0) (#2)
 
-%11 =
+%10 =
 | Get materialize.public.region (u4)
 | ArrangeBy (#0)
 
-%12 =
-| Join %7 %8 %9 %10 %11 (= #0 #1) (= #2 #6) (= #9 #13) (= #15 #17)
+%11 =
+| Join %6 %7 %8 %9 %10 (= #0 #1) (= #2 #6) (= #9 #13) (= #15 #17)
 | | implementation = DeltaQuery
-| |   delta %7 %8.(#0) %9.(#0) %10.(#0) %11.(#0)
-| |   delta %8 %7.(#0) %9.(#0) %10.(#0) %11.(#0)
-| |   delta %9 %10.(#0) %11.(#0) %8.(#1) %7.(#0)
-| |   delta %10 %11.(#0) %9.(#3) %8.(#1) %7.(#0)
-| |   delta %11 %10.(#2) %9.(#3) %8.(#1) %7.(#0)
+| |   delta %6 %7.(#0) %8.(#0) %9.(#0) %10.(#0)
+| |   delta %7 %6.(#0) %8.(#0) %9.(#0) %10.(#0)
+| |   delta %8 %9.(#0) %10.(#0) %7.(#1) %6.(#0)
+| |   delta %9 %10.(#0) %8.(#3) %7.(#1) %6.(#0)
+| |   delta %10 %9.(#2) %8.(#3) %7.(#1) %6.(#0)
 | | demand = (#0, #4, #18)
 | Filter (#18 = "EUROPE")
 | Reduce group=(#0)
 | | agg min(#4)
 | ArrangeBy (#0, #1)
 
-%13 =
-| Join %6 %12 (= #0 #28) (= #19 #29)
-| | implementation = Differential %6 %12.(#0, #1)
+%12 =
+| Join %5 %11 (= #0 #28) (= #19 #29)
+| | implementation = Differential %5 %11.(#0, #1)
 | | demand = (#0, #2, #10, #11, #13..#15, #22)
 | Project (#14, #10, #22, #0, #2, #11, #13, #15)
 
@@ -371,34 +368,31 @@ GROUP BY
 ORDER BY
     o_orderpriority
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.orders (u18)
 | Filter (datetots(#4) < 1993-10-01 00:00:00), (#4 >= 1993-07-01)
 
 %1 =
-| Get %0
-
-%2 =
-| Get %0
+| Get %0 (l0)
 | ArrangeBy (#0)
 
-%3 =
+%2 =
 | Get materialize.public.lineitem (u21)
 | ArrangeBy (#0)
 
-%4 =
-| Join %2 %3 (= #0 #9)
+%3 =
+| Join %1 %2 (= #0 #9)
 | | implementation = DeltaQuery
-| |   delta %2 %3.(#0)
-| |   delta %3 %2.(#0)
+| |   delta %1 %2.(#0)
+| |   delta %2 %1.(#0)
 | | demand = (#0, #20, #21)
 | Filter (#20 < #21)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%5 =
-| Join %1 %4 (= #0 #9)
-| | implementation = Differential %1 %4.(#0)
+%4 =
+| Join %0 %3 (= #0 #9)
+| | implementation = Differential %0 %3.(#0)
 | | demand = (#5)
 | Reduce group=(#5)
 | | agg count(true)
@@ -484,29 +478,26 @@ WHERE
     AND l_shipdate < DATE '1994-01-01' + INTERVAL '1' year
     AND l_discount BETWEEN 0.06 - 0.01 AND 0.07
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.lineitem (u21)
 | Filter (#4 < 2400dec), (datetots(#10) < 1995-01-01 00:00:00), (#6 <= 7dec), (#6 >= 5dec), (#10 >= 1994-01-01)
 | Reduce group=()
 | | agg sum((#5 * #6))
 
 %1 =
-| Get %0
-
-%2 =
-| Get %0
+| Get %0 (l0)
 | Negate
 | Project ()
 
-%3 =
+%2 =
 | Constant ()
 
-%4 =
-| Union %2 %3
+%3 =
+| Union %1 %2
 | Map null
 
-%5 =
-| Union %1 %4
+%4 =
+| Union %0 %3
 
 EOF
 
@@ -1015,7 +1006,7 @@ ORDER BY
 | Get materialize.public.orders (u18)
 | ArrangeBy (#1)
 
-%2 =
+%2 = Let l0 =
 | Join %0 %1 (= #0 #9)
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#1)
@@ -1024,22 +1015,19 @@ ORDER BY
 | Filter !("^.*special.*requests.*$" ~(#16))
 
 %3 =
-| Get %2
-
-%4 =
-| Get %2
+| Get %2 (l0)
 | Distinct group=(#0, #1, #2, #3, #4, #5, #6, #7)
 | Negate
 
-%5 =
+%4 =
 | Get materialize.public.customer (u15)
 
-%6 =
-| Union %4 %5
+%5 =
+| Union %3 %4
 | Map null, null, null, null, null, null, null, null, null
 
-%7 =
-| Union %3 %6
+%6 =
+| Union %2 %5
 | Reduce group=(#0)
 | | agg count(#8)
 | Reduce group=(#1)
@@ -1074,7 +1062,7 @@ WHERE
 | Get materialize.public.part (u6)
 | ArrangeBy (#0)
 
-%2 =
+%2 = Let l0 =
 | Join %0 %1 (= #1 #16)
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
@@ -1086,22 +1074,19 @@ WHERE
 | | agg sum((#5 * (100dec - #6)))
 
 %3 =
-| Get %2
-
-%4 =
-| Get %2
+| Get %2 (l0)
 | Negate
 | Project ()
 
-%5 =
+%4 =
 | Constant ()
 
-%6 =
-| Union %4 %5
+%5 =
+| Union %3 %4
 | Map null, null
 
-%7 =
-| Union %3 %6
+%6 =
+| Union %2 %5
 | Map ((((10000dec * #0) * 10000000dec) / #1) * 1000dec)
 | Project (#2)
 
@@ -1214,7 +1199,7 @@ ORDER BY
 | Get materialize.public.part (u6)
 | ArrangeBy (#0)
 
-%2 =
+%2 = Let l0 =
 | Join %0 %1 (= #0 #5)
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
@@ -1222,16 +1207,16 @@ ORDER BY
 | | demand = (#1, #8..#10)
 | Filter !("^MEDIUM POLISHED.*$" ~(#9)), ((((((((#10 = 49) || (#10 = 14)) || (#10 = 23)) || (#10 = 45)) || (#10 = 19)) || (#10 = 3)) || (#10 = 36)) || (#10 = 9)), (#8 != "Brand#45")
 
-%3 =
-| Get %2
+%3 = Let l1 =
+| Get %2 (l0)
 | Distinct group=(#1)
 
 %4 =
-| Get %2
+| Get %2 (l0)
 | ArrangeBy (#1)
 
 %5 =
-| Get %3
+| Get %3 (l1)
 | ArrangeBy (#0)
 
 %6 =
@@ -1249,14 +1234,11 @@ ORDER BY
 | Project (#0)
 
 %8 =
-| Get %3
+| Union %7 %3
 
 %9 =
-| Union %7 %8
-
-%10 =
-| Join %4 %9 (= #1 #14)
-| | implementation = Differential %9 %4.(#1)
+| Join %4 %8 (= #1 #14)
+| | implementation = Differential %8 %4.(#1)
 | | demand = (#1, #8..#10)
 | Reduce group=(#8, #9, #10)
 | | agg count(distinct #1)
@@ -1294,7 +1276,7 @@ WHERE
 | Get materialize.public.part (u6)
 | ArrangeBy (#0)
 
-%2 =
+%2 = Let l0 =
 | Join %0 %1 (= #1 #16)
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
@@ -1303,22 +1285,19 @@ WHERE
 | Filter (#19 = "Brand#23"), (#22 = "MED BOX")
 
 %3 =
-| Get %2
-
-%4 =
-| Get %2
+| Get %2 (l0)
 | Distinct group=(#1)
 | ArrangeBy (#0)
 
-%5 =
+%4 =
 | Get materialize.public.lineitem (u21)
 | ArrangeBy (#1)
 
-%6 =
-| Join %4 %5 (= #0 #2)
+%5 =
+| Join %3 %4 (= #0 #2)
 | | implementation = DeltaQuery
-| |   delta %4 %5.(#1)
-| |   delta %5 %4.(#0)
+| |   delta %3 %4.(#1)
+| |   delta %4 %3.(#0)
 | | demand = (#0, #5)
 | Reduce group=(#0)
 | | agg sum(#5)
@@ -1326,31 +1305,28 @@ WHERE
 | Map (2dec * (((#1 * 10000000dec) / i64todec(if (#2 = 0) then {null} else {#2})) / 10dec))
 | ArrangeBy (#0)
 
-%7 =
-| Join %3 %6 (= #1 #25)
-| | implementation = Differential %3 %6.(#0)
+%6 = Let l1 =
+| Join %2 %5 (= #1 #25)
+| | implementation = Differential %2 %5.(#0)
 | | demand = (#4, #5, #28)
 | Filter ((#4 * 10000000dec) < #28)
 | Reduce group=()
 | | agg sum(#5)
 
-%8 =
-| Get %7
-
-%9 =
-| Get %7
+%7 =
+| Get %6 (l1)
 | Negate
 | Project ()
 
-%10 =
+%8 =
 | Constant ()
 
-%11 =
-| Union %9 %10
+%9 =
+| Union %7 %8
 | Map null
 
-%12 =
-| Union %8 %11
+%10 =
+| Union %6 %9
 | Map ((#0 * 10000000dec) / 70dec)
 | Project (#1)
 
@@ -1404,7 +1380,7 @@ ORDER BY
 | Get materialize.public.lineitem (u21)
 | ArrangeBy (#0)
 
-%3 =
+%3 = Let l0 =
 | Join %0 %1 %2 (= #8 #17) (= #0 #9)
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#1) %2.(#0)
@@ -1413,30 +1389,27 @@ ORDER BY
 | | demand = (#0, #1, #8, #11, #12, #21)
 
 %4 =
-| Get %3
-
-%5 =
-| Get %3
+| Get %3 (l0)
 | Distinct group=(#8)
 | ArrangeBy (#0)
 
-%6 =
+%5 =
 | Get materialize.public.lineitem (u21)
 | ArrangeBy (#0)
 
-%7 =
-| Join %5 %6 (= #0 #1)
+%6 =
+| Join %4 %5 (= #0 #1)
 | | implementation = DeltaQuery
-| |   delta %5 %6.(#0)
-| |   delta %6 %5.(#0)
+| |   delta %4 %5.(#0)
+| |   delta %5 %4.(#0)
 | | demand = (#0, #5)
 | Reduce group=(#0)
 | | agg sum(#5)
 | ArrangeBy (#0)
 
-%8 =
-| Join %4 %7 (= #8 #33)
-| | implementation = Differential %4 %7.(#0)
+%7 =
+| Join %3 %6 (= #8 #33)
+| | implementation = Differential %3 %6.(#0)
 | | demand = (#0, #1, #8, #11, #12, #21, #34)
 | Filter (#34 > 30000dec)
 | Reduce group=(#1, #0, #8, #12, #11)
@@ -1493,7 +1466,7 @@ WHERE
 | Get materialize.public.part (u6)
 | ArrangeBy (#0)
 
-%2 =
+%2 = Let l0 =
 | Join %0 %1 (= #1 #16)
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
@@ -1504,22 +1477,19 @@ WHERE
 | | agg sum((#5 * (100dec - #6)))
 
 %3 =
-| Get %2
-
-%4 =
-| Get %2
+| Get %2 (l0)
 | Negate
 | Project ()
 
-%5 =
+%4 =
 | Constant ()
 
-%6 =
-| Union %4 %5
+%5 =
+| Union %3 %4
 | Map null
 
-%7 =
-| Union %3 %6
+%6 =
+| Union %2 %5
 
 EOF
 
@@ -1572,7 +1542,7 @@ ORDER BY
 | Get materialize.public.nation (u1)
 | ArrangeBy (#0)
 
-%2 =
+%2 = Let l0 =
 | Join %0 %1 (= #3 #7)
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
@@ -1581,7 +1551,7 @@ ORDER BY
 | Filter (#8 = "CANADA")
 
 %3 =
-| Get %2
+| Get %2 (l0)
 | ArrangeBy ()
 
 %4 =
@@ -1592,33 +1562,30 @@ ORDER BY
 | Get materialize.public.part (u6)
 | ArrangeBy (#0)
 
-%6 =
+%6 = Let l1 =
 | Join %3 %4 %5 (= #11 #16)
 | | implementation = Differential %4.(#0) %5.(#0) %3.()
 | | demand = (#0, #11..#13, #17)
 | Filter "^forest.*$" ~(#17)
 
 %7 =
-| Get %2
-
-%8 =
-| Get %6
+| Get %6 (l1)
 | Filter (#0 = #12)
 
-%9 =
-| Get %6
+%8 =
+| Get %6 (l1)
 | Distinct group=(#11, #12)
 | ArrangeBy (#0, #1)
 
-%10 =
+%9 =
 | Get materialize.public.lineitem (u21)
 | ArrangeBy (#1, #2)
 
-%11 =
-| Join %9 %10 (= #1 #4) (= #0 #3)
+%10 =
+| Join %8 %9 (= #1 #4) (= #0 #3)
 | | implementation = DeltaQuery
-| |   delta %9 %10.(#1, #2)
-| |   delta %10 %9.(#0, #1)
+| |   delta %8 %9.(#1, #2)
+| |   delta %9 %8.(#0, #1)
 | | demand = (#0, #1, #6, #12)
 | Filter (datetots(#12) < 1996-01-01 00:00:00), (#12 >= 1995-01-01)
 | Reduce group=(#0, #1)
@@ -1626,17 +1593,17 @@ ORDER BY
 | Map (5dec * #2)
 | ArrangeBy (#0, #1)
 
-%12 =
-| Join %8 %11 (= #11 #25) (= #12 #26)
-| | implementation = Differential %8 %11.(#0, #1)
+%11 =
+| Join %7 %10 (= #11 #25) (= #12 #26)
+| | implementation = Differential %7 %10.(#0, #1)
 | | demand = (#0, #13, #28)
 | Filter ((i32todec(#13) * 1000dec) > #28)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%13 =
-| Join %7 %12 (= #0 #11)
-| | implementation = Differential %7 %12.(#0)
+%12 =
+| Join %2 %11 (= #0 #11)
+| | implementation = Differential %2 %11.(#0)
 | | demand = (#1, #2)
 | Project (#1, #2)
 
@@ -1703,7 +1670,7 @@ ORDER BY
 | Get materialize.public.nation (u1)
 | ArrangeBy (#0)
 
-%4 =
+%4 = Let l0 =
 | Join %0 %1 %2 %3 (= #7 #23) (= #3 #32) (= #0 #9)
 | | implementation = DeltaQuery
 | |   delta %0 %3.(#0) %1.(#2) %2.(#0)
@@ -1714,61 +1681,52 @@ ORDER BY
 | Filter (#25 = "F"), (#33 = "SAUDI ARABIA"), (#19 > #18)
 
 %5 =
-| Get %4
-
-%6 =
-| Get %4
+| Get %4 (l0)
 | Distinct group=(#7, #0)
 
-%7 =
+%6 =
 | Get materialize.public.lineitem (u21)
 | ArrangeBy (#0)
 
-%8 =
-| Join %6 %7 (= #0 #2)
-| | implementation = Differential %6 %7.(#0)
+%7 =
+| Join %5 %6 (= #0 #2)
+| | implementation = Differential %5 %6.(#0)
 | | demand = (#0, #1, #4)
 | Filter (#4 != #1)
 | Distinct group=(#0, #1)
 | ArrangeBy (#0, #1)
 
-%9 =
-| Join %5 %8 (= #0 #37) (= #7 #36)
-| | implementation = Differential %5 %8.(#0, #1)
+%8 = Let l1 =
+| Join %4 %7 (= #0 #37) (= #7 #36)
+| | implementation = Differential %4 %7.(#0, #1)
 | | demand = (#0, #1, #7)
 
-%10 =
-| Get %9
+%9 = Let l2 =
+| Get %8 (l1)
 | Distinct group=(#7, #0)
 
-%11 =
-| Get %9
+%10 =
+| Get %8 (l1)
 | ArrangeBy (#0, #7)
 
-%12 =
-| Get %10
-
-%13 =
+%11 =
 | Get materialize.public.lineitem (u21)
 | ArrangeBy (#0)
 
-%14 =
-| Join %12 %13 (= #0 #2)
-| | implementation = Differential %12 %13.(#0)
+%12 =
+| Join %9 %11 (= #0 #2)
+| | implementation = Differential %9 %11.(#0)
 | | demand = (#0, #1, #4, #13, #14)
 | Filter (#4 != #1), (#14 > #13)
 | Distinct group=(#0, #1)
 | Negate
 
-%15 =
-| Get %10
+%13 =
+| Union %12 %9
 
-%16 =
-| Union %14 %15
-
-%17 =
-| Join %11 %16 (= #0 #39) (= #7 #38)
-| | implementation = Differential %16 %11.(#0, #7)
+%14 =
+| Join %10 %13 (= #0 #39) (= #7 #38)
+| | implementation = Differential %13 %10.(#0, #7)
 | | demand = (#1)
 | Reduce group=(#1)
 | | agg count(true)
@@ -1841,18 +1799,18 @@ ORDER BY
 | Map (((#0 * 10000000dec) / i64todec(if (#1 = 0) then {null} else {#1})) / 10dec)
 | ArrangeBy ()
 
-%2 =
+%2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
 | | demand = (#0, #4, #5, #10)
 | Filter ((#5 * 1000000dec) > #10)
 
 %3 =
-| Get %2
+| Get %2 (l0)
 | ArrangeBy (#0)
 
 %4 =
-| Get %2
+| Get %2 (l0)
 | ArrangeBy (#0)
 
 %5 =
@@ -1869,7 +1827,7 @@ ORDER BY
 | Negate
 
 %7 =
-| Get %2
+| Get %2 (l0)
 | Project (#0)
 
 %8 =
@@ -1943,7 +1901,7 @@ ORDER BY
 | |
 | | %3 =
 | | | Get materialize.public.partsupp (u11)
-| | | Filter (select(%4) && ((i32todec(#2) * 1000dec) > select(%6)))
+| | | Filter (select(%4) && ((i32todec(#2) * 1000dec) > select(%5)))
 | | | |
 | | | | %4 =
 | | | | | Get materialize.public.part (u6)
@@ -1952,7 +1910,7 @@ ORDER BY
 | | | | | Reduce group=() any(((#^0 = #0) && true))
 | | | |
 | | | |
-| | | | %6 =
+| | | | %5 =
 | | | | | Get materialize.public.lineitem (u21)
 | | | | | Filter ((((#1 = #^0) && (#2 = #^1)) && (#10 >= strtodate("1995-01-01"))) && (datetots(#10) < (strtodate("1995-01-01") + 1 year)))
 | | | | | Reduce group=() sum(#4)

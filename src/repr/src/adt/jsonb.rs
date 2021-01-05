@@ -171,7 +171,7 @@ impl JsonbRef<'_> {
     /// Constructs an owned [`Jsonb`] from this `JsonbRef`.
     pub fn to_owned(&self) -> Jsonb {
         Jsonb {
-            row: Row::pack(&[self.datum]),
+            row: Row::pack_slice(&[self.datum]),
         }
     }
 

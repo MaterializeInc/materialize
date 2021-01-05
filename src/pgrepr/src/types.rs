@@ -96,6 +96,7 @@ impl Type {
             postgres_types::Type::INTERVAL => Some(Type::Interval),
             postgres_types::Type::JSONB => Some(Type::Jsonb),
             postgres_types::Type::NUMERIC => Some(Type::Numeric),
+            postgres_types::Type::OID => Some(Type::Oid),
             postgres_types::Type::TEXT | postgres_types::Type::VARCHAR => Some(Type::Text),
             postgres_types::Type::TIME => Some(Type::Time),
             postgres_types::Type::TIMESTAMP => Some(Type::Timestamp),
@@ -189,6 +190,43 @@ impl Type {
             Type::Uuid => 16,
         }
     }
+
+    /// Provides a [`ScalarType`] from `self`, but without necessarily
+    /// associating any meaningful values within the returned type.
+    ///
+    /// For example `Type::Numeric` returns `ScalarType::Decimal(0,0)`, meaning
+    /// that its precision and scale need to be associated with values from
+    /// elsewhere.
+    pub fn to_scalar_type_lossy(&self) -> ScalarType {
+        match self {
+            Type::Array(t) => ScalarType::Array(Box::new(t.to_scalar_type_lossy())),
+            Type::Bool => ScalarType::Bool,
+            Type::Bytea => ScalarType::Bytes,
+            Type::Date => ScalarType::Date,
+            Type::Float4 => ScalarType::Float32,
+            Type::Float8 => ScalarType::Float64,
+            Type::Int4 => ScalarType::Int32,
+            Type::Int8 => ScalarType::Int64,
+            Type::Interval => ScalarType::Interval,
+            Type::Jsonb => ScalarType::Jsonb,
+            Type::List(t) => ScalarType::List {
+                element_type: Box::new(t.to_scalar_type_lossy()),
+                custom_oid: None,
+            },
+            Type::Map { value_type } => ScalarType::Map {
+                value_type: Box::new(value_type.to_scalar_type_lossy()),
+                custom_oid: None,
+            },
+            Type::Numeric => ScalarType::Decimal(0, 0),
+            Type::Oid => ScalarType::Oid,
+            Type::Record(_) => ScalarType::Record { fields: vec![] },
+            Type::Text => ScalarType::String,
+            Type::Time => ScalarType::Time,
+            Type::Timestamp => ScalarType::Timestamp,
+            Type::TimestampTz => ScalarType::TimestampTz,
+            Type::Uuid => ScalarType::Uuid,
+        }
+    }
 }
 
 impl From<&ScalarType> for Type {
@@ -205,8 +243,10 @@ impl From<&ScalarType> for Type {
             ScalarType::Int64 => Type::Int8,
             ScalarType::Interval => Type::Interval,
             ScalarType::Jsonb => Type::Jsonb,
-            ScalarType::List(t) => Type::List(Box::new(From::from(&**t))),
-            ScalarType::Map { value_type } => Type::Map {
+            ScalarType::List { element_type, .. } => {
+                Type::List(Box::new(From::from(&**element_type)))
+            }
+            ScalarType::Map { value_type, .. } => Type::Map {
                 value_type: Box::new(From::from(&**value_type)),
             },
             ScalarType::Oid => Type::Oid,

@@ -96,9 +96,73 @@ impl Interval {
         }
     }
 
+    pub fn checked_mul(&self, other: f64) -> Option<Self> {
+        let months = self.months as f64 * other;
+        if months.is_nan() || months < i32::MIN as f64 || months > i32::MAX as f64 {
+            return None;
+        }
+
+        let seconds =
+            self.dur_as_secs() as f64 * other + months.fract() * 60.0 * 60.0 * 24.0 * 30.0;
+        if seconds.is_nan() || seconds < i64::MIN as f64 || seconds > i64::MAX as f64 {
+            return None;
+        }
+
+        let nanos = self.nanoseconds() as f64 * other + seconds.fract() * 1e9;
+        if nanos.is_nan() || nanos < i64::MIN as f64 || nanos > i64::MAX as f64 {
+            return None;
+        }
+
+        Self::new(months as i32, seconds as i64, nanos as i64).ok()
+    }
+
+    pub fn checked_div(&self, other: f64) -> Option<Self> {
+        let months = self.months as f64 / other;
+        if months.is_nan() || months < i32::MIN as f64 || months > i32::MAX as f64 {
+            return None;
+        }
+
+        let seconds =
+            self.dur_as_secs() as f64 / other + months.fract() * 60.0 * 60.0 * 24.0 * 30.0;
+        if seconds.is_nan() || seconds < i64::MIN as f64 || seconds > i64::MAX as f64 {
+            return None;
+        }
+
+        let nanos = self.nanoseconds() as f64 / other + seconds.fract() * 1e9;
+        if nanos.is_nan() || nanos < i64::MIN as f64 || nanos > i64::MAX as f64 {
+            return None;
+        }
+
+        Self::new(months as i32, seconds as i64, nanos as i64).ok()
+    }
+
     /// Returns the total number of whole seconds in the `Interval`'s duration.
     pub fn dur_as_secs(&self) -> i64 {
         (self.duration / 1_000_000_000) as i64
+    }
+
+    /// Computes the millennium part of the interval.
+    ///
+    /// The millennium part is the number of whole millennia in the interval. For example,
+    /// this function returns `3.0` for the interval `3400 years`.
+    pub fn millennia(&self) -> f64 {
+        (self.months / 12_000) as f64
+    }
+
+    /// Computes the century part of the interval.
+    ///
+    /// The century part is the number of whole centuries in the interval. For example,
+    /// this function returns `3.0` for the interval `340 years`.
+    pub fn centuries(&self) -> f64 {
+        (self.months / 1_200) as f64
+    }
+
+    /// Computes the decade part of the interval.
+    ///
+    /// The decade part is the number of whole decades in the interval. For example,
+    /// this function returns `3.0` for the interval `34 years`.
+    pub fn decades(&self) -> f64 {
+        (self.months / 120) as f64
     }
 
     /// Computes the year part of the interval.
@@ -109,9 +173,18 @@ impl Interval {
         (self.months / 12) as f64
     }
 
+    /// Computes the quarter part of the interval.
+    ///
+    /// The quarter part is obtained from taking the number of whole months modulo 12,
+    /// and assigning quarter #1 for months 0-2, #2 for 3-5, #3 for 6-8 and #4 for 9-11.
+    /// For example, this function returns `4.0` for the interval `11 months`.
+    pub fn quarters(&self) -> f64 {
+        ((self.months % 12) / 3 + 1) as f64
+    }
+
     /// Computes the month part of the interval.
     ///
-    /// The whole part is the number of whole months in the interval, modulo 12.
+    /// The month part is the number of whole months in the interval, modulo 12.
     /// For example, this function returns `4.0` for the interval `3 years 4
     /// months`.
     pub fn months(&self) -> f64 {
@@ -150,9 +223,23 @@ impl Interval {
     /// The second part is the number of fractional seconds in the interval,
     /// modulo 60.0.
     pub fn seconds(&self) -> f64 {
-        let s = (self.dur_as_secs() % 60) as f64;
-        let ns = f64::from(self.nanoseconds()) / 1e9;
-        s + ns
+        (self.duration % 60_000_000_000) as f64 / 1e9
+    }
+
+    /// Computes the second part of the interval displayed in milliseconds.
+    ///
+    /// The second part is the number of fractional seconds in the interval,
+    /// modulo 60.0.
+    pub fn milliseconds(&self) -> f64 {
+        (self.duration % 60_000_000_000) as f64 / 1e6
+    }
+
+    /// Computes the second part of the interval displayed in microseconds.
+    ///
+    /// The second part is the number of fractional seconds in the interval,
+    /// modulo 60.0.
+    pub fn microseconds(&self) -> f64 {
+        (self.duration % 60_000_000_000) as f64 / 1e3
     }
 
     /// Computes the nanosecond part of the interval.
@@ -162,7 +249,8 @@ impl Interval {
 
     /// Computes the total number of seconds in the interval.
     pub fn as_seconds(&self) -> f64 {
-        (self.months as f64) * 60.0 * 60.0 * 24.0 * 30.0
+        self.years() * 60.0 * 60.0 * 24.0 * 365.25
+            + self.months() * 60.0 * 60.0 * 24.0 * 30.0
             + (self.dur_as_secs() as f64)
             + f64::from(self.nanoseconds()) / 1e9
     }

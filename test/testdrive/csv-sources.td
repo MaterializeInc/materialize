@@ -13,6 +13,13 @@ Rochester,NY,14618
 New York,NY,10004
 "bad,place""",CA,92679
 
+# We should refuse to create a source with invalid WITH options
+! CREATE SOURCE invalid_with_option
+  FROM FILE '${testdrive.temp-dir}/static.csv'
+  WITH (badoption=true)
+  FORMAT CSV WITH 3 COLUMNS
+unexpected parameters for CREATE SOURCE: badoption
+
 # Static CSV without headers.
 > CREATE MATERIALIZED SOURCE static_csv
   FROM FILE '${testdrive.temp-dir}/static.csv'

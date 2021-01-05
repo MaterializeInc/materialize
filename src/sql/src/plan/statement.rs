@@ -18,7 +18,6 @@ use std::time::{Duration, UNIX_EPOCH};
 use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
 use itertools::Itertools;
-use kafka_util::{extract_config, generate_ccsr_client_config};
 use regex::Regex;
 use rusoto_core::Region;
 use url::Url;
@@ -555,7 +554,7 @@ fn handle_alter_index_options(
 
 fn kafka_sink_builder(
     format: Option<Format>,
-    with_options: Vec<SqlOption>,
+    with_options: &mut BTreeMap<String, Value>,
     broker: String,
     topic_prefix: String,
     desc: RelationDesc,
@@ -578,7 +577,6 @@ fn kafka_sink_builder(
 
     let broker_addrs = broker.parse()?;
 
-    let mut with_options = normalize::options(&with_options);
     let include_consistency = match with_options.remove("consistency") {
         Some(Value::Boolean(b)) => b,
         None => false,
@@ -608,12 +606,11 @@ fn kafka_sink_builder(
         None
     };
 
-    let config_options = extract_config(&with_options)?;
-
-    let ccsr_config = generate_ccsr_client_config(
+    let config_options = kafka_util::extract_config(with_options)?;
+    let ccsr_config = kafka_util::generate_ccsr_client_config(
         schema_registry_url.clone(),
         &config_options,
-        &ccsr_with_options,
+        ccsr_with_options,
     )?;
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
@@ -633,16 +630,11 @@ fn kafka_sink_builder(
 
 fn avro_ocf_sink_builder(
     format: Option<Format>,
-    with_options: Vec<SqlOption>,
     path: String,
     file_name_suffix: String,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     if format.is_some() {
         bail!("avro ocf sinks cannot specify a format");
-    }
-
-    if !with_options.is_empty() {
-        bail!("avro ocf sinks do not support WITH options");
     }
 
     let path = PathBuf::from(path);
@@ -684,6 +676,8 @@ fn handle_create_sink(
         scx.catalog.config().nonce
     );
 
+    let mut with_options = normalize::options(&with_options);
+
     let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
@@ -719,7 +713,7 @@ fn handle_create_sink(
             };
             kafka_sink_builder(
                 format,
-                with_options,
+                &mut with_options,
                 broker,
                 topic,
                 desc.clone(),
@@ -728,8 +722,15 @@ fn handle_create_sink(
             )?
         }
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
-        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, with_options, path, suffix)?,
+        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
     };
+
+    if !with_options.is_empty() {
+        bail!(
+            "unexpected parameters for CREATE SINK: {}",
+            with_options.keys().join(",")
+        )
+    }
 
     Ok(Plan::CreateSink {
         name,
@@ -973,15 +974,28 @@ fn handle_create_type(
             Some(SqlOption::Value {
                 value: Value::String(val),
                 ..
-            }) => ObjectName(vec![Ident::new(val)]),
+            }) => ObjectName::unqualified(&val),
             Some(SqlOption::ObjectName { object_name, .. }) => object_name,
             Some(_) => bail!("{} must be a string or identifier", key),
             None => bail!("{} parameter required", key),
         };
         let item = scx
             .catalog
-            .resolve_item(&normalize::object_name(item_name)?)?;
-        ids.push(item.id());
+            .resolve_item(&normalize::object_name(item_name.clone())?)?;
+        let item_id = item.id();
+        if scx
+            .catalog
+            .try_get_lossy_scalar_type_by_id(&item_id)
+            .is_none()
+        {
+            bail!(
+                "{} must be of class type, but received {} which is of class {}",
+                key,
+                item.name(),
+                item.item_type()
+            );
+        }
+        ids.push(item_id);
     }
 
     if !with_options.is_empty() {
@@ -992,8 +1006,8 @@ fn handle_create_type(
     }
 
     let name = scx.allocate_name(normalize::object_name(name)?);
-    if scx.catalog.type_exists(&name) {
-        bail!("type \"{}\" already exists", name.to_string());
+    if scx.catalog.item_exists(&name) {
+        bail!("catalog item \"{}\" already exists", name.to_string());
     }
 
     let inner = match as_type {
@@ -1002,13 +1016,12 @@ fn handle_create_type(
         },
         CreateTypeAs::Map => {
             let key_id = ids.remove(0);
-            // TODO(sean): As part of
-            // https://github.com/MaterializeInc/materialize/issues/4953 we
-            // should be able to resolve IDs to `ScalarType`s, so this shouldn't
-            // rely on external knowledge that this OID is text's.
-            if scx.catalog.get_item_by_id(&key_id).oid() != 25 {
-                bail!("key_type must be text")
-            };
+            match scx.catalog.try_get_lossy_scalar_type_by_id(&key_id) {
+                Some(ScalarType::String) => {}
+                Some(t) => bail!("key_type must be text, got {}", t),
+                None => unreachable!("already guaranteed id correlates to a type"),
+            }
+
             TypeInner::Map {
                 key_id,
                 value_id: ids.remove(0),
@@ -1025,7 +1038,7 @@ fn handle_create_type(
 }
 
 fn extract_timestamp_frequency_option(
-    with_options: &mut HashMap<String, Value>,
+    with_options: &mut BTreeMap<String, Value>,
 ) -> Result<Duration, anyhow::Error> {
     match with_options.remove("timestamp_frequency_ms") {
         None => Ok(Duration::from_secs(1)),
@@ -1081,11 +1094,11 @@ fn handle_create_source(
                     } => {
                         let url: Url = url.parse()?;
                         let kafka_options =
-                            kafka_util::extract_config(&normalize::options(with_options))?;
+                            kafka_util::extract_config(&mut normalize::options(with_options))?;
                         let ccsr_config = kafka_util::generate_ccsr_client_config(
                             url,
                             &kafka_options,
-                            &normalize::options(ccsr_options),
+                            normalize::options(ccsr_options),
                         )?;
 
                         if let Some(seed) = seed {
@@ -1163,7 +1176,7 @@ fn handle_create_source(
 
     let (external_connector, mut encoding) = match connector {
         Connector::Kafka { broker, topic, .. } => {
-            let config_options = kafka_util::extract_config(&with_options)?;
+            let config_options = kafka_util::extract_config(&mut with_options)?;
 
             consistency = match with_options.remove("consistency") {
                 None => Consistency::RealTime,
@@ -1241,7 +1254,12 @@ fn handle_create_source(
 
             let region: Region = match arn.region {
                 Some(region) => match region.parse() {
-                    Ok(region) => region,
+                    Ok(region) => {
+                        // ignore the endpoint option if we're pointing at a
+                        // valid, non-custom AWS region
+                        with_options.remove("endpoint");
+                        region
+                    }
                     Err(e) => {
                         // Region's fromstr doesn't support parsing custom regions.
                         // If a Kinesis stream's ARN indicates it exists in a custom
@@ -1501,6 +1519,14 @@ fn handle_create_source(
         },
         desc,
     };
+
+    if !with_options.is_empty() {
+        bail!(
+            "unexpected parameters for CREATE SOURCE: {}",
+            with_options.keys().join(",")
+        )
+    }
+
     Ok(Plan::CreateSource {
         name,
         source,
@@ -1546,7 +1572,7 @@ fn handle_create_table(
     let mut defaults = Vec::with_capacity(columns.len());
 
     for c in columns {
-        let ty = scalar_type_from_sql(&c.data_type)?;
+        let ty = scalar_type_from_sql(scx, &c.data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
         for option in &c.options {
@@ -1934,7 +1960,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_default_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
-        self.resolve_schema(ObjectName(vec![Ident::new("public")]))
+        self.resolve_schema(ObjectName::unqualified("public"))
     }
 
     pub fn resolve_database(&self, name: ObjectName) -> Result<&dyn CatalogDatabase, PlanError> {

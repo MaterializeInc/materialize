@@ -46,7 +46,7 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-{{% version-header v0.5.5 %}}
+{{% version-header v0.6.1 %}}
 
 - Add `ALL` to [`FETCH`](/sql/fetch).
 
@@ -55,23 +55,61 @@ Wrap your release notes at the 80 character mark.
 
   **Backwards-incompatible change.**
 
-{{% version-header v0.5.4 %}}
+- Consider the following keywords to be fully reserved: `WITH`, `SELECT`,
+  `WHERE`, `GROUP`, `HAVING`, `ORDER`, `LIMIT`, `OFFSET`, `FETCH`, `OPTION`,
+  `UNION`, `EXCEPT`, `INTERSECT`. Previously only the `FROM` keyword was
+  considered fully reserved.
 
-- Add the [`version`](/sql/functions#postgresql-compatibility-func) and
-  [`mz_version`](/sql/functions/#system-information-func) functions to report
-  PostgreSQL-specific and Materialize-specific version information,
-  respectively.
+  These keywords can no longer be used as bare identifiers anywhere in a SQL
+  statement, except following an `AS` keyword in a table or column alias. They
+  can continue to be used as identifiers if escaped. See the
+  [Keyword collision](/sql/identifiers#keyword-collision) documentation for
+  details.
 
-- Add the [`hmac` and `digest` cryptography functions](/sql/functions#cryptography-func).
-  These functions are based on the [`pgcrypto`] PostgreSQL extension.
+  **Backwards-incompatible change.**
 
-- Add a `timeout` option to [`FETCH`](/sql/fetch/).
+- Validate `WITH` clauses in `CREATE SOURCE` and `CREATE SINK` statements. This
+  is a potentially backwards-incompatible change as previously any invalid
+  `WITH` clauses would be silently ignored. Upgrading materialize in-place
+  on a persisted catalog that has an invalid `WITH` clause will now fail.
 
-- Fix a bug when requesting binary-formatted values with
-  [`FETCH`](/sql/fetch/) {{% gh 4976 %}}.
+  **Backwards-incompatible change.**
 
-- Fix a bug when using COPY with TAIL that could cause some drivers to
-  fail if the TAIL was idle for at least 1 second {{% gh 4976 %}}.
+- Add `upper` and `lower` to the [string function](/sql/functions#string-func) suite.
+
+{{% version-header v0.6.0 %}}
+
+- Support specifying default values for table columns via the new
+  [`DEFAULT` column option](/sql/create-table#syntax) in `CREATE TABLE`.
+  Thanks to external contributor [@petrosagg](https://github.com/petrosagg).
+
+- Add a `timeout` option to [`FETCH`](/sql/fetch/) to facilitate using `FETCH`
+  to poll a [`TAIL`](/sql/tail) operation for new records.
+
+- Add several new SQL functions:
+
+  - The [`digest`](/sql/functions#cryptography-func) and
+    [`hmac`](/sql/functions#cryptography-func) cryptography functions
+    compute message digests and authentication codes, respectively. These
+    functions are based on the [`pgcrypto`] PostgreSQL extension.
+
+  - The [`version`](/sql/functions#postgresql-compatibility-func) and
+    [`mz_version`](/sql/functions/#system-information-func) functions report
+    PostgreSQL-specific and Materialize-specific version information,
+    respectively.
+
+  - The [`current_schema`](/sql/functions#postgresql-compatibility-func)
+    function reports the name of the SQL schema that appears first in the
+    search path.
+
+- Fix a bug that would cause invalid data to be returned when requesting
+  binary-formatted values with [`FETCH`](/sql/fetch/) {{% gh 4976 %}}.
+
+- Fix a bug when using `COPY` with `TAIL` that could cause some drivers to
+  fail if the `TAIL` was idle for at least one second {{% gh 4976 %}}.
+
+- Avoid panicking if a record in a regex-formatted source fails to decode
+  as UTF-8 {{% gh 5008 %}}.
 
 {{% version-header v0.5.3 %}}
 
@@ -428,7 +466,7 @@ Wrap your release notes at the 80 character mark.
   features that require experimental mode will be marked as such in their
   documentation.
 
-- Support [SASL PLAIN authentication for Kafka sources](/sql/create-source/avro-kafka/#connecting-to-a-kafka-broker-using-sasl-plain-authentication).
+- Support [SASL PLAIN authentication for Kafka sources](/sql/create-source/avro-kafka/#connecting-to-a-kafka-broker-using-sasl-authentication).
   Notably, this allows Materialize to connect to Kafka clusters hosted by
   Confluent Cloud.
 

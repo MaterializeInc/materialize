@@ -8,6 +8,9 @@ avro_schema_spec ::=
   'SCHEMA' ('FILE' schema_file_path | inline_schema)
 close ::=
   'CLOSE' cursor_name
+col_option ::=
+  'NOT' 'NULL' |
+  'DEFAULT' expr
 connector_spec ::=
   'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
   'KAFKA BROKER' host 'TOPIC' topic?
@@ -135,7 +138,7 @@ create_view ::=
   'CREATE' 'OR REPLACE' 'VIEW' view_name 'AS' select_stmt
 create_table ::=
   'CREATE' 'TABLE' table_name
-  ('(' (col_name col_type ('NOT NULL')?) ( ( ',' col_name col_type ('NOT NULL')?) )* ')')?
+  '(' ((col_name col_type col_option*) (',' col_name col_type col_option*)*)? ')'
 declare ::=
   'DECLARE' cursor_name 'CURSOR' ('WITHOUT' 'HOLD')? 'FOR' query
 insert ::=

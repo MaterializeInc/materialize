@@ -106,3 +106,84 @@ name            type
 int_list_c      user
 int_map_c       user
 int_list_list_c user
+
+# Allow creating tables using custom types
+> CREATE TABLE custom_types (a int_list_c, b int_map_c);
+
+> INSERT INTO custom_types VALUES (LIST[1], '{a=>1}'::int_map_c);
+
+> CREATE TYPE int_array_list AS LIST (element_type=_int4);
+
+> CREATE TABLE custom_types_2 (a int_array_list);
+
+> INSERT INTO custom_types_2 VALUES (LIST[ARRAY[1]]);
+
+# Custom types are namespaced objects
+> CREATE SCHEMA other;
+
+> CREATE TYPE other.other_int_list_c AS LIST (element_type=int4);
+> CREATE TYPE other.other_int_map_c AS MAP (key_type=text, value_type=int4);
+
+> SHOW FULL TYPES FROM other;
+name                type
+-------------------------
+other_int_list_c    user
+other_int_map_c     user
+
+> CREATE TABLE custom_types_3 (a other.other_int_list_c, b other.other_int_map_c);
+
+> CREATE TYPE int_list_map AS MAP (key_type=text, value_type=other.other_int_list_c)
+
+# Array element types
+
+> CREATE TYPE bool_array_list_c AS LIST (element_type='_bool');
+> CREATE TABLE bool_array_list_t (a bool_array_list_c);
+> INSERT INTO bool_array_list_t VALUES (LIST[ARRAY[true]]);
+
+> CREATE TYPE int8_array_list_c AS LIST (element_type='_int8');
+> CREATE TABLE int8_array_list_t (a int8_array_list_c);
+> INSERT INTO int8_array_list_t VALUES (LIST[ARRAY[1::int8,2::int8]]);
+
+> CREATE TYPE int4_array_list_c AS LIST (element_type='_int4');
+> CREATE TABLE int4_array_list_t (a int4_array_list_c);
+> INSERT INTO int4_array_list_t VALUES (LIST[ARRAY[1,2]]);
+
+> CREATE TYPE text_array_list_c AS LIST (element_type='_text');
+> CREATE TABLE text_array_list_t (a text_array_list_c);
+> INSERT INTO text_array_list_t VALUES (LIST[ARRAY['a','b']]);
+
+> CREATE TYPE float4_array_list_c AS LIST (element_type='_float4');
+> CREATE TABLE float4_array_list_t (a float4_array_list_c);
+> INSERT INTO float4_array_list_t VALUES (LIST[ARRAY[1.2::float4,2.3::float4]]);
+
+> CREATE TYPE float8_array_list_c AS LIST (element_type='_float8');
+> CREATE TABLE float8_array_list_t (a float8_array_list_c);
+> INSERT INTO float8_array_list_t VALUES (LIST[ARRAY[1.2::float8,2.3::float8]]);
+
+> CREATE TYPE date_array_list_c AS LIST (element_type='_date');
+> CREATE TABLE date_array_list_t (a date_array_list_c);
+> INSERT INTO date_array_list_t VALUES (LIST[ARRAY['2001-01-01'::date]]);
+
+> CREATE TYPE time_array_list_c AS LIST (element_type='_time');
+> CREATE TABLE time_array_list_t (a time_array_list_c);
+> INSERT INTO time_array_list_t VALUES (LIST[ARRAY['12:34:56'::time]]);
+
+> CREATE TYPE timestamp_array_list_c AS LIST (element_type='_timestamp');
+> CREATE TABLE timestamp_array_list_t (a timestamp_array_list_c);
+> INSERT INTO timestamp_array_list_t VALUES (LIST[ARRAY['2001-01-01 12:34:56'::timestamp]]);
+
+> CREATE TYPE timestamptz_array_list_c AS LIST (element_type='_timestamptz');
+> CREATE TABLE timestamptz_array_list_t (a timestamptz_array_list_c);
+> INSERT INTO timestamptz_array_list_t VALUES (LIST[ARRAY['2001-01-01 12:34:56'::timestamptz]]);
+
+> CREATE TYPE interval_array_list_c AS LIST (element_type='_interval');
+> CREATE TABLE interval_array_list_t (a interval_array_list_c);
+> INSERT INTO interval_array_list_t VALUES (LIST[ARRAY['1y 2d 3h 4m'::interval]]);
+
+# > CREATE TYPE numeric_array_list_c AS LIST (element_type='_numeric');
+# > CREATE TABLE numeric_array_list_t (a numeric_array_list_c);
+# > INSERT INTO numeric_array_list_t VALUES (LIST[ARRAY[1.23, 2.34]]);
+
+> CREATE TYPE jsonb_array_list_c AS LIST (element_type='_jsonb');
+> CREATE TABLE jsonb_array_list_t (a jsonb_array_list_c);
+> INSERT INTO jsonb_array_list_t VALUES (LIST[ARRAY['\{\"1\":2\}'::jsonb]]);
