@@ -45,9 +45,7 @@ class ViewNotReady(Exception):
     pass
 
 
-def view_contents(
-    cursor: psycopg2.extensions.cursor, view: str, timestamp: int
-) -> bool:
+def view_contents(cursor: psycopg2.extensions.cursor, view: str, timestamp: int) -> str:
     """Return True if a SELECT from the VIEW matches the expected string."""
     stream = io.StringIO()
     query = f"COPY (SELECT * FROM {view} WHERE mz_logical_timestamp() > {timestamp}) TO STDOUT"
