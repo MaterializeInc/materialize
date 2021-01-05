@@ -62,6 +62,12 @@ async fn main() {
         "save JSON-formatted summary to file",
         "FILE",
     );
+    opts.optopt(
+        "w",
+        "workers",
+        "number of materialized workers to use (default: 3)",
+        "N",
+    );
 
     let popts = match opts.parse(&args[1..]) {
         Ok(popts) => popts,
@@ -80,6 +86,13 @@ async fn main() {
         stdout: &OutputStream::new(io::stdout(), popts.opt_present("timestamps")),
         stderr: &OutputStream::new(io::stderr(), popts.opt_present("timestamps")),
         verbosity: popts.opt_count("v"),
+        workers: match popts.opt_get_default("workers", 3) {
+            Ok(workers) => workers,
+            Err(e) => {
+                eprintln!("invalid --workers value: {}", e);
+                process::exit(1);
+            }
+        },
     };
 
     if popts.opt_present("rewrite-results") {
