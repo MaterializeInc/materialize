@@ -393,16 +393,11 @@ impl ParamList {
     ///
     /// ## Custom types
     ///
-    /// To handle custom types w/r/t polymorphism, we derive a "complex type
-    /// signature" for the constrained type, which represents the constrained
-    /// type's `custom_oid` and an embdedded element. This complex type
-    /// signature is this function's return value.
-    ///
     /// We define custom types as any type defined with `CREATE TYPE` or embeds
     /// a custom type. We'll use the term anonymous type to define all
     /// non-custom types, e.g. `int4`, `int4 list`.
     ///
-    /// To understand how we generate the complex type signature, it's useful to
+    /// To understand how we assess custom types' polymorphism, it's useful to
     /// categorize polymorphic parameters in MZ.
     ///
     /// - **Complex parameters** include createable composite types' polymorphic
@@ -420,20 +415,33 @@ impl ParamList {
     /// - `ArrayAny` is slightly different from either case, but is uncommonly
     ///   used and not addressed further.
     ///
-    /// Upon encountering the first custom value, we constrain all future custom
-    /// values' elements to exactly matching the custom type's element. For
-    /// custom element values, this is the type itself. For custom complex
-    /// values, this is the embedded type. Note that if a custom complex value
-    /// embeds an anonymous type, the constrained type will be an anonymous
-    /// type––this means that any future custom element values will cause
-    /// resolution to fail.
+    /// Upon encountering the first custom complex value:
+    /// - All other custom complex types must exactly match both its
+    ///   `custom_oid` and embedded element.
+    /// - All custom element types must exactly match its embedded element type.
     ///
-    /// Upon encountering the first custom complex value, we constrain all
-    /// future custom complex values to having the same `custom_oid`––which,
-    /// e.g., can be `None` when you have otherwise-anonymous complex values
-    /// that embed custom elements.
+    /// One of the complexities here is that the custom complex value's element
+    /// can be anonymous type, meaning any custom element values will cause
+    /// polymorphic resolution to feel.
     ///
-    /// Consider the following scenario:
+    /// Upon encountering the first custom element value:
+    /// - All other custom elemnt values must exactly match its type.
+    /// - All custom complex types' embedded elements must exactly match its
+    ///   type.
+    ///
+    /// ### Custom + anonymous types
+    ///
+    /// If you use both custom and anonymous types, the resultant type will be
+    /// the least-custom custom type that fulfills the above requirements.
+    ///
+    /// For example if you `list_append(int4 list list, custom_int4_list)`, the
+    /// resulant type will be complex: its `custom_oid` will be `None`, but its
+    /// embedded element will be the custom element type, i.e. `custom_int4_list
+    /// list`).
+    ///
+    /// However, it's also important to note that a complex value whose
+    /// `custom_oid` is `None` are still considered complex if its embedded
+    /// element is complex.Consider the following scenario:
     ///
     /// ```sql
     /// CREATE TYPE int4_list_custom AS LIST (element_type=int4);
@@ -443,13 +451,11 @@ impl ParamList {
     /// SELECT '{{1}}'::int4_list_list_custom || '{{2}}'::int4_list_custom list;
     /// ```
     ///
-    /// We will not coerce int4_list_custom list to int4_list_list_custom so
-    /// that only truly anonymous types are ever coerced into custom types. It's
-    /// also trivial for users to add a cast to ensure custom type consistency.
-    fn resolve_polymorphic_types(
-        &self,
-        typs: &[Option<ScalarType>],
-    ) -> Option<(Option<u32>, ScalarType)> {
+    /// We will not coerce `int4_list_custom list` to
+    /// `int4_list_list_custom`––only truly anonymous types are ever coerced
+    /// into custom types. It's also trivial for users to add a cast to ensure
+    /// custom type consistency.
+    fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
         // Determines if types have the same [`ScalarBaseType`], and if complex
         // types' elements do, as well. This function's primary use is allowing
         // matches between `ScalarType::Decimal` values with different scales,
@@ -518,112 +524,101 @@ impl ParamList {
             }
         }
 
-        let mut constrained_oid: Option<Option<u32>> = None;
-        let mut set_or_check_constrained_oid = |custom_oid: &Option<u32>| {
-            match constrained_oid {
-                None => constrained_oid = Some(*custom_oid),
-                Some(constrained_oid) => {
-                    if constrained_oid != *custom_oid {
-                        return Err(());
-                    }
-                }
-            }
-            Ok(())
-        };
-
+        let mut custom_oid_lock = false;
+        let mut element_lock = false;
         let mut constrained_type: Option<ScalarType> = None;
-        let mut constrained_type_lock = false;
-        let mut set_or_check_constrained_type = |typ: &ScalarType, is_custom: bool| {
-            match constrained_type {
-                None => {
-                    constrained_type_lock = is_custom;
+
+        // Determine the element on which to constrain the parameters.
+        for (i, typ) in typs.iter().enumerate() {
+            let param = &self[i];
+            match (param, typ, &mut constrained_type) {
+                (ParamType::ArrayAny, Some(typ), None) => {
                     constrained_type = Some(typ.clone());
                 }
-                Some(ref mut t) if is_custom && !constrained_type_lock => {
-                    // Previously constrained type was not custom
-                    if !complex_base_eq(t, typ) {
-                        return Err(());
+                (ParamType::ArrayAny, Some(typ), Some(constrained)) => {
+                    if !complex_base_eq(typ, constrained) {
+                        return None;
                     }
-                    *t = typ.clone();
-                    constrained_type_lock = true;
                 }
-                Some(ref mut t) => {
-                    // Custom types must exactly match constrained type;
-                    // anonymous types must only match the constrained type's
-                    // complex base.
-                    if (is_custom && t != typ) || (!is_custom && !complex_base_eq(t, typ)) {
-                        return Err(());
+                (ParamType::ListAny, Some(typ), None) | (ParamType::MapAny, Some(typ), None) => {
+                    constrained_type = Some(typ.clone());
+                    custom_oid_lock = typ.is_custom_type();
+                    element_lock = typ.is_custom_type();
+                }
+                (ParamType::ListAny, Some(typ), Some(constrained))
+                | (ParamType::MapAny, Some(typ), Some(constrained)) => {
+                    let element_accessor = match typ {
+                        ScalarType::List { .. } => ScalarType::unwrap_list_element_type,
+                        ScalarType::Map { .. } => ScalarType::unwrap_map_value_type,
+                        _ => unreachable!(),
+                    };
+
+                    if (custom_oid_lock && typ.is_custom_type() && typ != constrained)
+                        || (element_lock
+                            && typ.is_custom_type()
+                            && element_accessor(typ) != element_accessor(constrained))
+                        || !complex_base_eq(typ, constrained)
+                    {
+                        return None;
                     }
 
-                    // Potentially rescale decimal type if constrained type
-                    // isn't locked and the two elements differ, i.e. if they
-                    // are decimals and they are equal, they don't need to be rescaled.
-                    if !constrained_type_lock && t != typ {
-                        // Neither `t` nor `typ` can be custom if the
-                        // constrainted type is unlocked.
-                        assert!(!(t.is_custom_type() || typ.is_custom_type()));
-                        if let Some(d) = find_greatest_common_decimal(t, typ) {
+                    if typ.is_custom_type() && !custom_oid_lock {
+                        constrained_type = Some(typ.clone());
+                        custom_oid_lock = true;
+                        element_lock = true;
+                    } else if !element_lock {
+                        if let Some(d) = find_greatest_common_decimal(typ, constrained) {
                             // `d` should never be a custom type because it is a
                             // system-generated type. If users want to control
                             // the resultant type's OID, they can provide
                             // explicit casts to the desired OID.
                             assert!(!d.is_custom_type());
-                            *t = d;
+                            *constrained = d;
                         }
                     }
                 }
-            }
-            Ok(())
-        };
-
-        // Determine the element on which to constrain the parameters.
-        for (i, typ) in typs.iter().enumerate() {
-            let param = &self[i];
-            match (param, typ) {
-                (
-                    ParamType::ListAny,
-                    Some(ScalarType::List {
-                        element_type: el_typ,
-                        custom_oid,
-                    }),
-                )
-                | (
-                    ParamType::MapAny,
-                    Some(ScalarType::Map {
-                        value_type: el_typ,
-                        custom_oid,
-                    }),
-                ) => {
-                    // We use typ.as_ref().unwrap() rather than binding the
-                    // interior `ScalarType` to a name because of
-                    // https://github.com/rust-lang/rust/issues/65490
-                    // Once that is resolved, the match could be made on:
-                    // ```
-                    // ...
-                    // (
-                    // ParamType::ListAny,
-                    // Some(typ @ ScalarType::List {
-                    //     element_type: el_typ,
-                    //     custom_oid,
-                    // }),
-                    // ...
-                    // typ.is_custom_type()
-                    // ```
-                    let is_custom = typ.as_ref().unwrap().is_custom_type();
-
-                    // Only check OID of custom types because `None` values for
-                    // `custom_oid` as a custom type signature, but anonymous types
-                    // use the same value.
-                    if is_custom {
-                        set_or_check_constrained_oid(custom_oid).ok()?;
+                (ParamType::ListElementAny, Some(t), None) => {
+                    constrained_type = Some(ScalarType::List {
+                        custom_oid: None,
+                        element_type: Box::new(t.clone()),
+                    });
+                    element_lock = t.is_custom_type();
+                }
+                (ParamType::ListElementAny, Some(t), Some(constrained_list)) => {
+                    let constrained_element_type = constrained_list.unwrap_list_element_type();
+                    if (element_lock && t.is_custom_type() && t != constrained_element_type)
+                        || !complex_base_eq(t, &constrained_element_type)
+                    {
+                        return None;
                     }
-                    set_or_check_constrained_type(el_typ, is_custom).ok()?;
+                    if t.is_custom_type() && !element_lock {
+                        constrained_type = Some(ScalarType::List {
+                            custom_oid: None,
+                            element_type: Box::new(t.clone()),
+                        });
+                        element_lock = true;
+                    } else if !element_lock {
+                        if let Some(d) = find_greatest_common_decimal(t, &constrained_element_type)
+                        {
+                            // `d` should never be a custom type because it is a
+                            // system-generated type. If users want to control
+                            // the resultant type's OID, they can provide
+                            // explicit casts to the desired OID.
+                            assert!(!d.is_custom_type());
+                            *constrained_list = ScalarType::List {
+                                custom_oid: None,
+                                element_type: Box::new(d),
+                            };
+                        }
+                    }
                 }
-                (ParamType::ArrayAny, Some(ScalarType::Array(t))) => {
-                    set_or_check_constrained_type(t, t.is_custom_type()).ok()?
+                (ParamType::NonVecAny, Some(t), None) => {
+                    constrained_type = Some(t.clone());
                 }
-                (ParamType::ListElementAny, Some(t)) | (ParamType::NonVecAny, Some(t)) => {
-                    set_or_check_constrained_type(t, t.is_custom_type()).ok()?
+                (ParamType::NonVecAny, Some(t), Some(constrained)) => {
+                    if !complex_base_eq(t, &constrained) {
+                        return None;
+                    }
                 }
                 // These checks don't need to be more exhaustive (e.g. failing
                 // if arguments passed to `ListAny` are not `ScalartType::List`)
@@ -632,15 +627,7 @@ impl ParamList {
                 _ => {}
             }
         }
-
-        match (constrained_oid, constrained_type) {
-            (Some(oid), Some(typ)) => Some((oid, typ)),
-            (None, Some(typ)) => Some((None, typ)),
-            (None, None) => None,
-            (Some(..), None) => {
-                unreachable!("must have at least one element to get constrained OID")
-            }
-        }
+        constrained_type
     }
 
     /// Matches a `&[ScalarType]` derived from the user's function argument
@@ -1090,40 +1077,16 @@ fn coerce_args_to_types(
             ParamType::Plain(ty) => do_convert(arg, ty)?,
 
             // Polymorphic pseudotypes. Convert based on constrained type.
-            ParamType::ArrayAny => {
-                let (_, ty) = get_constrained_ty();
-                let ty = ScalarType::Array(Box::new(ty));
-                do_convert(arg, &ty)?
-            }
-            ParamType::ListAny => {
-                let (custom_oid, ty) = get_constrained_ty();
-                let ty = ScalarType::List {
-                    element_type: Box::new(ty),
-                    custom_oid,
-                };
-                do_convert(arg, &ty)?
-            }
-            ParamType::MapAny => {
-                let (custom_oid, ty) = get_constrained_ty();
-                let ty = ScalarType::Map {
-                    value_type: Box::new(ty),
-                    custom_oid,
-                };
-                do_convert(arg, &ty)?
+            ParamType::ArrayAny | ParamType::ListAny | ParamType::MapAny => {
+                do_convert(arg, &get_constrained_ty())?
             }
             ParamType::ListElementAny => {
-                let (_, ty) = get_constrained_ty();
-                do_convert(arg, &ty)?
+                let constrained_list = get_constrained_ty();
+                do_convert(arg, &constrained_list.unwrap_list_element_type())?
             }
             ParamType::NonVecAny => {
-                let (_, ty) = get_constrained_ty();
-                if ty.is_vec() {
-                    bail!(
-                        "could not constrain polymorphic type because {} used in \
-                        position that does not accept arrays or lists",
-                        ecx.humanize_scalar_type(&ty)
-                    )
-                }
+                let ty = get_constrained_ty();
+                assert!(!ty.is_vec());
                 do_convert(arg, &ty)?
             }
 
