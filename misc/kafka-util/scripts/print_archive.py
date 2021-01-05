@@ -19,9 +19,10 @@ import logging
 import pathlib
 import pprint
 import sys
+import typing
 
-import avro.io
-import avro.schema
+import avro.io  # type: ignore
+import avro.schema  # type: ignore
 import pyarrow  # type: ignore
 import pyarrow.fs  # type: ignore
 
@@ -31,14 +32,22 @@ log = logging.getLogger("print.records")
 log.setLevel(logging.INFO)
 
 
-def decode(reader: avro.io.DatumReader, msg: bytes):
+def decode(reader: avro.io.DatumReader, msg: bytes) -> typing.Any:
+    """Return the Python object represented by the avro-encoded message."""
     decoder = avro.io.BinaryDecoder(io.BytesIO(msg))
     return reader.read(decoder)
 
 
-def decode_archive(args: argparse.Namespace) -> None:
+def print_archive(args: argparse.Namespace) -> None:
+    """Print the decoded representation of messages in an archive file."""
 
-    printer = pprint.pprint if args.pretty_print else print
+    # Why not 'printer = pprint.pprint if args.pretty_print else print'?
+    # Because mypy exits with 'error: Cannot call function of unknown type'
+    def printer(obj: typing.Any) -> None:
+        if args.pretty_print:
+            pprint.pprint(obj)
+        else:
+            print(obj)
 
     topic = args.topic
 
@@ -121,7 +130,7 @@ def main() -> None:
     )
 
     args = parser.parse_args()
-    decode_archive(args)
+    print_archive(args)
 
 
 if __name__ == "__main__":
