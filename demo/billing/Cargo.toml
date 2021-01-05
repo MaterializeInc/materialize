@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.37"
 bytes = "0.5.6"
-chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.5"
 env_logger = "0.8.2"
 futures = "0.3.8"
