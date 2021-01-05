@@ -268,8 +268,6 @@ impl Outcomes {
     }
 }
 
-const NUM_TIMELY_WORKERS: usize = 3;
-
 pub(crate) struct Runner {
     // Drop order matters for these fields.
     client: Client,
@@ -498,14 +496,14 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 }
 
 impl Runner {
-    pub async fn start() -> Result<Self, anyhow::Error> {
+    pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
         let config = Config {
             logging: None,
             timestamp_frequency: Duration::from_millis(10),
             cache: None,
             logical_compaction_window: None,
-            threads: NUM_TIMELY_WORKERS,
+            threads: config.workers,
             process: 0,
             addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
             data_directory: temp_dir.path().to_path_buf(),
@@ -801,9 +799,10 @@ pub trait WriteFmt {
 }
 
 pub struct RunConfig<'a> {
-    pub verbosity: usize,
     pub stdout: &'a dyn WriteFmt,
     pub stderr: &'a dyn WriteFmt,
+    pub verbosity: usize,
+    pub workers: usize,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
@@ -821,7 +820,7 @@ pub async fn run_string(
     input: &str,
 ) -> Result<Outcomes, anyhow::Error> {
     let mut outcomes = Outcomes::default();
-    let mut state = Runner::start().await.unwrap();
+    let mut state = Runner::start(config).await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
     writeln!(config.stdout, "==> {}", source);
     for record in parser.parse_records()? {
@@ -882,7 +881,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
 
     let mut buf = RewriteBuffer::new(&input);
 
-    let mut state = Runner::start().await?;
+    let mut state = Runner::start(config).await?;
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
     writeln!(config.stdout, "==> {}", filename.display());
     for record in parser.parse_records()? {
