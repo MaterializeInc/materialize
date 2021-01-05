@@ -459,6 +459,7 @@ pub struct MyClosure {
 
 impl MyClosure {
     /// Applies per-row filtering and logic.
+    #[inline(always)]
     pub fn apply<'a>(
         &'a self,
         datums: &mut Vec<Datum<'a>>,

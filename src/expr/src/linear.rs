@@ -79,6 +79,7 @@ impl MapFilterProject {
     /// occurs in the evaluation it is returned as an `Err` variant.
     /// As the evaluation exits early with failed predicates, it may
     /// miss some errors that would occur later in evaluation.
+    #[inline(always)]
     pub fn evaluate<'a>(
         &'a self,
         datums: &mut Vec<Datum<'a>>,
@@ -99,6 +100,7 @@ impl MapFilterProject {
     /// This version is used internally by `evaluate` and can be useful
     /// when one wants to capture the resulting datums without packing
     /// and then unpacking a row.
+    #[inline(always)]
     pub fn evaluate_iter<'b, 'a: 'b>(
         &'a self,
         datums: &'b mut Vec<Datum<'a>>,
