@@ -40,7 +40,7 @@ pub async fn client(
                 region,
             )
         }
-        (_, _) => {
+        (None, None) => {
             info!("AWS access_key_id and secret_access_key not provided, creating a new Kinesis client using a chain provider.");
             let mut provider = ChainProvider::new();
             provider.set_timeout(Duration::from_secs(10));
@@ -49,6 +49,9 @@ pub async fn client(
 
             KinesisClient::new_with(request_dispatcher, provider, region)
         }
+        (_, _) => anyhow::bail!(
+            "access_key_id and secret_access_key must either both be provided, or neither"
+        ),
     };
     Ok(kinesis_client)
 }
