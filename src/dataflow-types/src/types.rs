@@ -641,6 +641,8 @@ pub struct FileSourceConnector {
 pub struct S3SourceConnector {
     pub bucket: String,
     pub objects_pattern: Glob,
+    /// Whether or not to download the objects in order
+    pub order: bool,
     pub aws_info: AwsConnectInfo,
 }
 

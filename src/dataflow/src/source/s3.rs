@@ -9,6 +9,7 @@
 
 //! Functionality for creating S3 sources
 
+use std::collections::BTreeSet;
 use std::convert::{From, TryInto};
 use std::default::Default;
 use std::ops::AddAssign;
@@ -16,7 +17,7 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::{anyhow, Error};
 use globset::GlobMatcher;
-use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, Object, S3Client, S3};
+use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
 use timely::scheduling::{Activator, SyncActivator};
 use tokio::io::AsyncReadExt;
 use tokio::time::{delay_for, Duration};
@@ -104,6 +105,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             tokio::spawn(read_bucket_task(
                 bucket,
                 glob.compile_matcher(),
+                s3_conn.order,
                 aws_info,
                 tx,
                 Some(consumer_activator),
@@ -135,6 +137,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
 async fn read_bucket_task(
     bucket: String,
     glob: GlobMatcher,
+    order: bool,
     aws_info: AwsConnectInfo,
     tx: SyncSender<anyhow::Result<Vec<u8>>>,
     activator: Option<SyncActivator>,
@@ -161,6 +164,7 @@ async fn read_bucket_task(
 
     let mut continuation_token = None;
     let mut allowed_errors = 10;
+    let mut all_keys = BTreeSet::new();
 
     loop {
         let response = client
@@ -176,15 +180,20 @@ async fn read_bucket_task(
             Ok(response) => {
                 allowed_errors = 10;
 
-                download_all(
-                    &glob,
-                    response.contents,
-                    &tx,
-                    activator.as_ref(),
-                    &client,
-                    bucket.clone(),
-                )
-                .await;
+                if let Some(c) = response.contents {
+                    let keys = c
+                        .into_iter()
+                        .filter_map(|obj| obj.key)
+                        .filter(|key| glob.is_match(key));
+                    if order {
+                        all_keys.extend(keys);
+                    } else {
+                        for key in keys {
+                            download_object(&tx, activator.as_ref(), &client, bucket.clone(), key)
+                                .await;
+                        }
+                    }
+                }
 
                 if response.next_continuation_token.is_none() {
                     break;
@@ -192,13 +201,13 @@ async fn read_bucket_task(
                 continuation_token = response.next_continuation_token;
             }
             Err(e) => {
+                allowed_errors -= 1;
                 log::error!(
                     "unable to list bucket {}: {} ({} retries remaining)",
                     bucket,
                     e,
                     allowed_errors
                 );
-                allowed_errors -= 1;
                 if allowed_errors == 0 {
                     break;
                 }
@@ -207,25 +216,10 @@ async fn read_bucket_task(
             }
         }
     }
-}
 
-async fn download_all(
-    glob: &GlobMatcher,
-    contents: Option<Vec<Object>>,
-    tx: &SyncSender<anyhow::Result<Vec<u8>>>,
-    activator: Option<&SyncActivator>,
-    client: &S3Client,
-    bucket: String,
-) {
-    if let Some(c) = contents {
-        for obj in c {
-            if let Some(key) = obj.key {
-                if glob.is_match(&key) {
-                    download_object(&tx, activator, &client, bucket.clone(), key).await;
-                }
-            } else {
-                log::warn!("object has no key: {:?}", obj);
-            }
+    if order {
+        for key in all_keys {
+            download_object(&tx, activator.as_ref(), &client, bucket.clone(), key).await;
         }
     }
 }

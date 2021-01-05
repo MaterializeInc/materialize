@@ -1313,6 +1313,7 @@ fn handle_create_source(
         Connector::S3 {
             bucket,
             objects_pattern,
+            order,
         } => {
             scx.require_experimental_mode("S3 Sources")?;
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
@@ -1321,6 +1322,7 @@ fn handle_create_source(
                     .literal_separator(true)
                     .backslash_escape(true)
                     .build()?,
+                order: *order,
                 aws_info: aws_connect_info(&mut with_options, None)?,
             });
             let encoding = get_encoding(format)?;

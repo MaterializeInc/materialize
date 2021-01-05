@@ -235,6 +235,8 @@ pub enum Connector {
         bucket: String,
         /// A glob-like object specifier: `'a/**/*.json'`
         objects_pattern: String,
+        /// True if `ORDER BY OBJECT KEY` is present
+        order: bool,
     },
 }
 
@@ -272,12 +274,16 @@ impl AstDisplay for Connector {
             Connector::S3 {
                 bucket,
                 objects_pattern,
+                order,
             } => {
                 f.write_str("S3 BUCKET '");
                 f.write_str(&display::escape_single_quote_string(bucket));
                 f.write_str("' OBJECTS '");
                 f.write_str(&display::escape_single_quote_string(objects_pattern));
                 f.write_str("'");
+                if *order {
+                    f.write_str(" ORDER BY OBJECT KEY");
+                }
             }
         }
     }

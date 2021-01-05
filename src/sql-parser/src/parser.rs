@@ -1604,13 +1604,16 @@ impl<'a> Parser<'a> {
             }
             S3 => {
                 // FROM S3 BUCKET '<bucket>' OBJECTS '<pattern>'
+                // [ORDER BY OBJECT KEY]
                 self.expect_keyword(BUCKET)?;
                 let bucket = self.parse_literal_string()?;
                 self.expect_keyword(OBJECTS)?;
                 let objects_pattern = self.parse_literal_string()?;
+                let order = self.parse_keywords(&[ORDER, BY, OBJECT, KEY]);
                 Ok(Connector::S3 {
                     bucket,
                     objects_pattern,
+                    order,
                 })
             }
             _ => unreachable!(),
