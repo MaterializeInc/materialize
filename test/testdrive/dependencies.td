@@ -268,11 +268,11 @@ unknown catalog item 'i4'
 > CREATE INDEX j1 on s3(ascii(y))
 
 > SHOW INDEX in s3;
-on_name  key_name        seq_in_index  column_name expression  nullable
-------------------------------------------------------------------------
-s3       j1              1             <null>      "ascii(y)"  false
-s3       s3_primary_idx  1             x           <null>      false
-s3       s3_primary_idx  2             y           <null>      false
+on_name  key_name        seq_in_index  column_name expression             nullable
+----------------------------------------------------------------------------------
+s3       j1              1             <null>      "pg_catalog.ascii(y)"  false
+s3       s3_primary_idx  1             x           <null>                 false
+s3       s3_primary_idx  2             y           <null>                 false
 
 > DROP SOURCE s3;
 

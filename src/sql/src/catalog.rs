@@ -22,6 +22,7 @@ use repr::{ColumnType, RelationDesc, ScalarType};
 use sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
+use crate::func::Func;
 use crate::names::{FullName, PartialName, SchemaName};
 use crate::plan::PlanContext;
 
@@ -183,6 +184,12 @@ pub trait CatalogItem {
     /// an index), it returns an error.
     fn desc(&self) -> Result<&RelationDesc, CatalogError>;
 
+    /// Returns the resolved function.
+    ///
+    /// If the catalog item is not of a type that produces functions (i.e.,
+    /// anything other than a function), it returns an error.
+    fn func(&self) -> Result<&'static Func, CatalogError>;
+
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
 
@@ -224,6 +231,8 @@ pub enum CatalogItemType {
     Index,
     /// A type.
     Type,
+    /// A func.
+    Func,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -235,6 +244,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::View => f.write_str("view"),
             CatalogItemType::Index => f.write_str("index"),
             CatalogItemType::Type => f.write_str("type"),
+            CatalogItemType::Func => f.write_str("func"),
         }
     }
 }
@@ -248,6 +258,8 @@ pub enum CatalogError {
     UnknownSchema(String),
     /// Unknown item.
     UnknownItem(String),
+    /// Unknown function.
+    UnknownFunction(String),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -261,6 +273,7 @@ impl fmt::Display for CatalogError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
+            Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
             Self::InvalidDependency { name, typ } => write!(
