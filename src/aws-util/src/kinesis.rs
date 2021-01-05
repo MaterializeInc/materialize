@@ -23,7 +23,7 @@ use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsIn
 ///
 /// The AutoRefreshingProvider caches the underlying provider's AWS credentials,
 /// automatically fetching updated credentials if they've expired.
-pub async fn kinesis_client(
+pub async fn client(
     region: Region,
     access_key_id: Option<String>,
     secret_access_key: Option<String>,
