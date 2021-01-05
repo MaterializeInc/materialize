@@ -16,12 +16,9 @@ import argparse
 import io
 import json
 import logging
-import glob
-import os
 import pathlib
 import pprint
 import sys
-import typing
 
 import avro.io
 import avro.schema
