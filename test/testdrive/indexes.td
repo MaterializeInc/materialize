@@ -212,11 +212,11 @@ materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\"
 > CREATE INDEX ON foo (a + b)
 > CREATE INDEX ON foo (substr(z, 3))
 > SHOW INDEXES FROM foo
-foo  foo_primary_idx   1  a       <null>          false
-foo  foo_primary_idx   2  b       <null>          true
-foo  foo_primary_idx   3  z       <null>          true
-foo  foo_expr_idx      1  <null>  "a + b"         true
-foo  foo_expr_idx1     1  <null>  "substr(z, 3)"  true
+foo  foo_primary_idx   1  a       <null>                     false
+foo  foo_primary_idx   2  b       <null>                     true
+foo  foo_primary_idx   3  z       <null>                     true
+foo  foo_expr_idx      1  <null>  "a + b"                    true
+foo  foo_expr_idx1     1  <null>  "pg_catalog.substr(z, 3)"  true
 > SHOW INDEXES FROM foo WHERE Column_name = 'b'
 foo  foo_primary_idx   2  b       <null>          true
 > SHOW INDEXES FROM foo WHERE Column_name = 'noexist'
