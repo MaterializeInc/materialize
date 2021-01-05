@@ -1451,7 +1451,8 @@ pub fn plan_drop_item(
         for id in catalog_entry.used_by() {
             let dep = scx.catalog.get_item_by_id(id);
             match dep.item_type() {
-                CatalogItemType::Table
+                CatalogItemType::Func
+                | CatalogItemType::Table
                 | CatalogItemType::Source
                 | CatalogItemType::View
                 | CatalogItemType::Sink

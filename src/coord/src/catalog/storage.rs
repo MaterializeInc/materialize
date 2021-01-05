@@ -100,6 +100,11 @@ const MIGRATIONS: &[&str] = &[
         name text NOT NULL UNIQUE
     );
     INSERT INTO roles VALUES (1, 'materialize');",
+    // Makes the mz_internal schema literal so it can store functions.
+    //
+    // Introduced in v0.6.2.
+    "INSERT INTO schemas (database_id, name) VALUES
+        (NULL, 'mz_internal');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:

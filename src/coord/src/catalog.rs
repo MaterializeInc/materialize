@@ -37,7 +37,7 @@ use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
 use crate::catalog::builtin::{
-    Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::migrate::CONTENT_MIGRATIONS;
@@ -143,7 +143,7 @@ pub struct CatalogEntry {
     name: FullName,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub enum CatalogItem {
     Table(Table),
     Source(Source),
@@ -151,9 +151,10 @@ pub enum CatalogItem {
     Sink(Sink),
     Index(Index),
     Type(Type),
+    Func(Func),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Table {
     pub create_sql: String,
     pub plan_cx: PlanContext,
@@ -162,7 +163,7 @@ pub struct Table {
     pub defaults: Vec<Expr<Raw>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
     pub plan_cx: PlanContext,
@@ -170,7 +171,7 @@ pub struct Source {
     pub desc: RelationDesc,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Sink {
     pub create_sql: String,
     pub plan_cx: PlanContext,
@@ -181,13 +182,13 @@ pub struct Sink {
     pub as_of: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub enum SinkConnectorState {
     Pending(SinkConnectorBuilder),
     Ready(SinkConnector),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct View {
     pub create_sql: String,
     pub plan_cx: PlanContext,
@@ -196,7 +197,7 @@ pub struct View {
     pub conn_id: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Index {
     pub create_sql: String,
     pub plan_cx: PlanContext,
@@ -205,14 +206,14 @@ pub struct Index {
     pub conn_id: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Type {
     pub create_sql: String,
     pub plan_cx: PlanContext,
     pub inner: TypeInner,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub enum TypeInner {
     Array {
         element_id: GlobalId,
@@ -235,6 +236,12 @@ impl From<sql::plan::TypeInner> for TypeInner {
         }
     }
 }
+#[derive(Debug, Clone, Serialize)]
+pub struct Func {
+    pub plan_cx: PlanContext,
+    #[serde(skip)]
+    pub inner: &'static sql::func::Func,
+}
 
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
@@ -246,20 +253,29 @@ impl CatalogItem {
             CatalogItem::View(_) => sql::catalog::CatalogItemType::View,
             CatalogItem::Index(_) => sql::catalog::CatalogItemType::Index,
             CatalogItem::Type(_) => sql::catalog::CatalogItemType::Type,
+            CatalogItem::Func(_) => sql::catalog::CatalogItemType::Func,
         }
     }
 
     pub fn desc(&self, name: &FullName) -> Result<&RelationDesc, SqlCatalogError> {
         match &self {
-            CatalogItem::Table(tbl) => Ok(&tbl.desc),
             CatalogItem::Source(src) => Ok(&src.desc),
+            CatalogItem::Table(tbl) => Ok(&tbl.desc),
             CatalogItem::View(view) => Ok(&view.desc),
-            CatalogItem::Index(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => {
-                Err(SqlCatalogError::InvalidDependency {
-                    name: name.to_string(),
-                    typ: self.typ(),
-                })
-            }
+            CatalogItem::Func(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_) => Err(SqlCatalogError::InvalidDependency {
+                name: name.to_string(),
+                typ: self.typ(),
+            }),
+        }
+    }
+
+    pub fn func(&self, name: &FullName) -> Result<&'static sql::func::Func, SqlCatalogError> {
+        match &self {
+            CatalogItem::Func(func) => Ok(func.inner),
+            _ => Err(SqlCatalogError::UnknownFunction(name.to_string())),
         }
     }
 
@@ -267,17 +283,18 @@ impl CatalogItem {
     /// upon.
     pub fn uses(&self) -> Vec<GlobalId> {
         match self {
-            CatalogItem::Table(_) => vec![],
-            CatalogItem::Source(_) => vec![],
-            CatalogItem::Sink(sink) => vec![sink.from],
-            CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
+            CatalogItem::Func(_) => vec![],
             CatalogItem::Index(idx) => vec![idx.on],
+            CatalogItem::Sink(sink) => vec![sink.from],
+            CatalogItem::Source(_) => vec![],
+            CatalogItem::Table(_) => vec![],
             CatalogItem::Type(typ) => match &typ.inner {
                 TypeInner::Array { element_id } => vec![*element_id],
                 TypeInner::Base { .. } => vec![],
                 TypeInner::List { element_id } => vec![*element_id],
                 TypeInner::Map { key_id, value_id } => vec![*key_id, *value_id],
             },
+            CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
         }
     }
 
@@ -285,11 +302,12 @@ impl CatalogItem {
     /// or if it's actually a real item.
     pub fn is_placeholder(&self) -> bool {
         match self {
-            CatalogItem::Table(_)
-            | CatalogItem::Source(_)
-            | CatalogItem::View(_)
+            CatalogItem::Func(_)
             | CatalogItem::Index(_)
-            | CatalogItem::Type(_) => false,
+            | CatalogItem::Source(_)
+            | CatalogItem::Table(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::View(_) => false,
             CatalogItem::Sink(s) => match s.connector {
                 SinkConnectorState::Pending(_) => true,
                 SinkConnectorState::Ready(_) => false,
@@ -357,7 +375,9 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Index(i))
             }
-            CatalogItem::Type(_) => unreachable!("types cannot be renamed"),
+            CatalogItem::Func(_) | CatalogItem::Type(_) => {
+                unreachable!("{}s cannot be renamed", self.typ())
+            }
         }
     }
 }
@@ -366,6 +386,11 @@ impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
     pub fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
         self.item.desc(&self.name)
+    }
+
+    /// Returns the [`sql::func::Func`] associated with this `CatalogEntry`.
+    pub fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
+        self.item.func(&self.name)
     }
 
     /// Reports whether this catalog entry is a table.
@@ -631,6 +656,19 @@ impl Catalog {
                             },
                         }),
                     ));
+                }
+
+                Builtin::Func(func) => {
+                    let oid = catalog.allocate_oid()?;
+                    let _ = catalog.insert_item(
+                        func.id,
+                        oid,
+                        name.clone(),
+                        CatalogItem::Func(Func {
+                            plan_cx: PlanContext::default(),
+                            inner: func.inner,
+                        }),
+                    );
                 }
 
                 _ => (),
@@ -952,7 +990,7 @@ impl Catalog {
                     .unwrap()
                     .push((id, index.keys.clone()));
             }
-            CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
+            CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
         }
 
         let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
@@ -1543,6 +1581,7 @@ impl Catalog {
                 create_sql: typ.create_sql.clone(),
                 eval_env: Some(typ.plan_cx.clone().into()),
             },
+            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
@@ -1676,8 +1715,13 @@ impl Catalog {
                 CatalogItem::Table(_) => {
                     unreachable!("tables always have at least one index");
                 }
-                CatalogItem::Sink(_) | CatalogItem::Index(_) | CatalogItem::Type(_) => {
-                    unreachable!("sinks, indexes, and user-defined types cannot be depended upon");
+                CatalogItem::Func(_)
+                | CatalogItem::Index(_)
+                | CatalogItem::Sink(_)
+                | CatalogItem::Type(_) => {
+                    unreachable!(
+                        "cannot depend on functions, indexes, sinks, or user-defined types"
+                    );
                 }
             }
         }
@@ -1697,8 +1741,11 @@ impl Catalog {
             CatalogItem::Table(_) => true,
             CatalogItem::Source(_) => false,
             item @ CatalogItem::View(_) => item.uses().into_iter().any(|id| self.uses_tables(id)),
-            CatalogItem::Sink(_) | CatalogItem::Index(_) | CatalogItem::Type(_) => {
-                unreachable!("sinks, indexes, and user-defined types cannot be depended upon");
+            CatalogItem::Func(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_) => {
+                unreachable!("cannot depend on functions, indexes, sinks, or user-defined types");
             }
         }
     }
@@ -1960,6 +2007,7 @@ impl SqlCatalog for ConnCatalog<'_> {
                     (**s != PG_CATALOG_SCHEMA)
                         && (**s != MZ_CATALOG_SCHEMA)
                         && (**s != MZ_TEMP_SCHEMA)
+                        && (**s != MZ_INTERNAL_SCHEMA)
                 })
                 .cloned()
                 .collect()
@@ -2136,6 +2184,10 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.desc()?)
     }
 
+    fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
+        Ok(self.func()?)
+    }
+
     fn create_sql(&self) -> &str {
         match self.item() {
             CatalogItem::Table(Table { create_sql, .. }) => create_sql,
@@ -2144,6 +2196,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::View(View { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
+            CatalogItem::Func(_) => "TODO",
         }
     }
 
@@ -2155,6 +2208,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::View(View { plan_cx, .. }) => plan_cx,
             CatalogItem::Index(Index { plan_cx, .. }) => plan_cx,
             CatalogItem::Type(Type { plan_cx, .. }) => plan_cx,
+            CatalogItem::Func(Func { plan_cx, .. }) => plan_cx,
         }
     }
 

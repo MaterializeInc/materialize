@@ -136,8 +136,8 @@ pub fn create_statement(
         }
 
         fn visit_function_mut(&mut self, func: &'ast mut Function<Raw>) {
-            // Don't visit the function name, because function names are not
-            // (yet) object names we can resolve.
+            self.visit_object_name_mut(&mut func.name);
+
             match &mut func.args {
                 FunctionArgs::Star => (),
                 FunctionArgs::Args(args) => {
@@ -159,11 +159,8 @@ pub fn create_statement(
                         self.visit_table_alias_mut(alias);
                     }
                 }
-                TableFactor::Function {
-                    name: _,
-                    args,
-                    alias,
-                } => {
+                TableFactor::Function { name, args, alias } => {
+                    self.visit_object_name_mut(name);
                     match args {
                         FunctionArgs::Star => (),
                         FunctionArgs::Args(args) => {
