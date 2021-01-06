@@ -31,8 +31,7 @@ use ore::cast::CastFrom;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{FetchDirection, Ident, Statement};
-use sql::plan::FetchOptions;
-use sql::plan::{CopyFormat, StatementDesc};
+use sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
 use crate::message::{self, BackendMessage, ErrorResponse, FrontendMessage, VERSIONS, VERSION_3};
@@ -306,31 +305,25 @@ where
             }
         }
 
-        let result = match self.handle_cursors(EMPTY_PORTAL, ExecuteCount::All).await {
-            Some(result) => result,
-            None => {
-                // Not a cursor, Execute.
-                match self.coord_client.execute(EMPTY_PORTAL.to_string()).await {
-                    Ok(response) => {
-                        self.send_execute_response(
-                            response,
-                            stmt_desc.relation_desc,
-                            EMPTY_PORTAL.to_string(),
-                            ExecuteCount::All,
-                            portal_exec_message,
-                            None,
-                            ExecuteTimeout::None,
-                        )
-                        .await
-                    }
-                    Err(e) => {
-                        self.error(ErrorResponse::error(
-                            SqlState::INTERNAL_ERROR,
-                            format!("{:#}", e),
-                        ))
-                        .await
-                    }
-                }
+        let result = match self.coord_client.execute(EMPTY_PORTAL.to_string()).await {
+            Ok(response) => {
+                self.send_execute_response(
+                    response,
+                    stmt_desc.relation_desc,
+                    EMPTY_PORTAL.to_string(),
+                    ExecuteCount::All,
+                    portal_exec_message,
+                    None,
+                    ExecuteTimeout::None,
+                )
+                .await
+            }
+            Err(e) => {
+                self.error(ErrorResponse::error(
+                    SqlState::INTERNAL_ERROR,
+                    format!("{:#}", e),
+                ))
+                .await
             }
         };
 
@@ -338,85 +331,6 @@ where
         self.coord_client.session().remove_portal(EMPTY_PORTAL);
 
         result
-    }
-
-    async fn handle_cursors(
-        &mut self,
-        portal_name: &str,
-        max_rows: ExecuteCount,
-    ) -> Option<Result<State, comm::Error>> {
-        let portal = self
-            .coord_client
-            .session()
-            .get_portal_mut(portal_name)
-            .expect("portal should exist");
-
-        // Some statements are equivalent to session control messages and should be
-        // intercepted instead of being passed on to the coordinator.
-        match &portal.stmt {
-            Some(Statement::Declare(stmt)) => {
-                portal.state = PortalState::Completed(None);
-                let name = stmt.name.to_string();
-                let stmt = *stmt.stmt.clone();
-                Some(self.declare(name, stmt).await)
-            }
-            Some(Statement::Fetch(stmt)) => {
-                let name = stmt.name.clone();
-                let count = stmt.count.clone();
-                let options = match FetchOptions::try_from(stmt.options.clone()) {
-                    Ok(options) => options,
-                    Err(e) => {
-                        return Some(
-                            self.error(ErrorResponse::error(
-                                SqlState::INVALID_PARAMETER_VALUE,
-                                format!("{}", e),
-                            ))
-                            .await,
-                        )
-                    }
-                };
-                let timeout = match options.timeout {
-                    Some(timeout) => {
-                        // Limit FETCH timeouts to 1 day. If users have a legitimate need it can be
-                        // bumped. If we do bump it, ensure that the new upper limit is within the
-                        // bounds of a tokio time future, otherwise it'll panic.
-                        const SECS_PER_DAY: f64 = 60f64 * 60f64 * 24f64;
-                        let timeout_secs = timeout.as_seconds();
-                        if !timeout_secs.is_finite()
-                            || timeout_secs < 0f64
-                            || timeout_secs > SECS_PER_DAY
-                        {
-                            return Some(
-                                self.error(ErrorResponse::error(
-                                    SqlState::INVALID_PARAMETER_VALUE,
-                                    format!("timeout out of range: {:#}", timeout),
-                                ))
-                                .await,
-                            );
-                        }
-                        ExecuteTimeout::Seconds(timeout_secs)
-                    }
-                    // FETCH defaults to WaitOnce.
-                    None => ExecuteTimeout::WaitOnce,
-                };
-                Some(
-                    self.fetch(
-                        name,
-                        count,
-                        max_rows,
-                        Some(portal_name.to_string()),
-                        timeout,
-                    )
-                    .await,
-                )
-            }
-            Some(Statement::Close(stmt)) => {
-                portal.state = PortalState::Completed(None);
-                let name = stmt.name.clone();
-                Some(self.close_cursor(name).await)
-            }
-            _ => None,
-        }
     }
 
     // See "Multiple Statements in a Simple Query" which documents how implicit
@@ -643,12 +557,6 @@ where
 
             match &mut portal.state {
                 PortalState::NotStarted => {
-                    if portal.stmt.is_some() {
-                        if let Some(result) = self.handle_cursors(&portal_name, max_rows).await {
-                            return result;
-                        }
-                    }
-
                     match self.coord_client.execute(portal_name.clone()).await {
                         Ok(response) => {
                             self.send_execute_response(
@@ -771,9 +679,18 @@ where
         Ok(State::Ready)
     }
 
+    fn complete_portal(&mut self, name: &str) {
+        let portal = self
+            .coord_client
+            .session()
+            .get_portal_mut(name)
+            .expect("portal should exist");
+        portal.state = PortalState::Completed(None);
+    }
+
     async fn fetch(
         &mut self,
-        name: Ident,
+        name: String,
         count: Option<FetchDirection>,
         max_rows: ExecuteCount,
         fetch_portal_name: Option<String>,
@@ -832,42 +749,6 @@ where
         .await
     }
 
-    async fn declare(&mut self, name: String, stmt: Statement) -> Result<State, comm::Error> {
-        let param_types = vec![];
-        if let Err(e) = self.coord_client.declare(name, stmt, param_types).await {
-            return self
-                .error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
-                .await;
-        }
-        self.conn
-            .send(BackendMessage::CommandComplete {
-                tag: "DECLARE CURSOR".to_string(),
-            })
-            .await?;
-        Ok(State::Ready)
-    }
-
-    async fn close_cursor(&mut self, name: Ident) -> Result<State, comm::Error> {
-        let cursor_name = name.to_string();
-        if !self.coord_client.session().remove_portal(&cursor_name) {
-            return self
-                .error(ErrorResponse::error(
-                    SqlState::INVALID_CURSOR_NAME,
-                    format!("cursor {} does not exist", name.to_ast_string_stable()),
-                ))
-                .await;
-        }
-        self.conn
-            .send(BackendMessage::CommandComplete {
-                tag: "CLOSE CURSOR".to_string(),
-            })
-            .await?;
-        Ok(State::Ready)
-    }
-
     async fn flush(&mut self) -> Result<State, comm::Error> {
         self.conn.flush().await?;
         Ok(State::Ready)
@@ -916,6 +797,10 @@ where
         }
 
         match response {
+            ExecuteResponse::ClosedCursor => {
+                self.complete_portal(&portal_name);
+                command_complete!("CLOSE CURSOR")
+            }
             ExecuteResponse::CreatedDatabase { existed } => {
                 created!(existed, SqlState::DUPLICATE_DATABASE, "database")
             }
@@ -938,6 +823,10 @@ where
                 created!(existed, SqlState::DUPLICATE_OBJECT, "view")
             }
             ExecuteResponse::CreatedType => command_complete!("CREATE TYPE"),
+            ExecuteResponse::DeclaredCursor => {
+                self.complete_portal(&portal_name);
+                command_complete!("DECLARE CURSOR")
+            }
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
             ExecuteResponse::DiscardedTemp => command_complete!("DISCARD TEMP"),
             ExecuteResponse::DiscardedAll => command_complete!("DISCARD ALL"),
@@ -952,6 +841,20 @@ where
             ExecuteResponse::EmptyQuery => {
                 self.conn.send(BackendMessage::EmptyQueryResponse).await?;
                 Ok(State::Ready)
+            }
+            ExecuteResponse::Fetch {
+                name,
+                count,
+                timeout,
+            } => {
+                self.fetch(
+                    name,
+                    count,
+                    max_rows,
+                    Some(portal_name.to_string()),
+                    timeout,
+                )
+                .await
             }
             ExecuteResponse::Inserted(n) => {
                 // "On successful completion, an INSERT command returns a
@@ -1425,11 +1328,4 @@ fn fetch_message(
 enum ExecuteCount {
     All,
     Count(usize),
-}
-
-#[derive(Debug, Copy, Clone)]
-enum ExecuteTimeout {
-    None,
-    Seconds(f64),
-    WaitOnce,
 }

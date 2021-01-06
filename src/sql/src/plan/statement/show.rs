@@ -7,25 +7,40 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Handlers for `SHOW ...` queries.
+//! Queries that show the state of the database system.
+//!
+//! This module houses the handlers for the `SHOW` suite of statements, like
+//! `SHOW CREATE TABLE` and `SHOW VIEWS`. Note that `SHOW <var>` is considered
+//! an SCL statement.
 
 use anyhow::bail;
 
 use ore::collections::CollectionExt;
-use repr::{Datum, Row};
-use sql_parser::ast::{
+use repr::{Datum, RelationDesc, Row, ScalarType};
+
+use crate::ast::{
     ObjectName, ObjectType, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowStatementFilter, Statement, Value,
 };
-
 use crate::catalog::CatalogItemType;
 use crate::parse;
-use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::statement::{dml, StatementContext, StatementDesc};
 use crate::plan::{Params, Plan};
 
-pub fn handle_show_create_view(
+pub fn describe_show_create_view(
+    _: &StatementContext,
+    _: ShowCreateViewStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("View", ScalarType::String.nullable(false))
+            .with_column("Create View", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_view(
     scx: &StatementContext,
     ShowCreateViewStatement { view_name }: ShowCreateViewStatement,
 ) -> Result<Plan, anyhow::Error> {
@@ -40,7 +55,18 @@ pub fn handle_show_create_view(
     }
 }
 
-pub fn handle_show_create_table(
+pub fn describe_show_create_table(
+    _: &StatementContext,
+    _: ShowCreateTableStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Table", ScalarType::String.nullable(false))
+            .with_column("Create Table", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_table(
     scx: &StatementContext,
     ShowCreateTableStatement { table_name }: ShowCreateTableStatement,
 ) -> Result<Plan, anyhow::Error> {
@@ -55,7 +81,18 @@ pub fn handle_show_create_table(
     }
 }
 
-pub fn handle_show_create_source(
+pub fn describe_show_create_source(
+    _: &StatementContext,
+    _: ShowCreateSourceStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Source", ScalarType::String.nullable(false))
+            .with_column("Create Source", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_source(
     scx: &StatementContext,
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement,
 ) -> Result<Plan, anyhow::Error> {
@@ -70,7 +107,18 @@ pub fn handle_show_create_source(
     }
 }
 
-pub fn handle_show_create_sink(
+pub fn describe_show_create_sink(
+    _: &StatementContext,
+    _: ShowCreateSinkStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Sink", ScalarType::String.nullable(false))
+            .with_column("Create Sink", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_sink(
     scx: &StatementContext,
     ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement,
 ) -> Result<Plan, anyhow::Error> {
@@ -85,7 +133,18 @@ pub fn handle_show_create_sink(
     }
 }
 
-pub fn handle_show_create_index(
+pub fn describe_show_create_index(
+    _: &StatementContext,
+    _: ShowCreateIndexStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Index", ScalarType::String.nullable(false))
+            .with_column("Create Index", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_index(
     scx: &StatementContext,
     ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement,
 ) -> Result<Plan, anyhow::Error> {
@@ -497,11 +556,11 @@ impl<'a> ShowSelect<'a> {
 
     /// Computes the shape of this `ShowSelect`.
     pub fn describe(self) -> Result<StatementDesc, anyhow::Error> {
-        super::describe_statement(self.scx.catalog, Statement::Select(self.stmt), &[])
+        dml::describe_select(self.scx, self.stmt)
     }
 
     /// Converts this `ShowSelect` into a [`Plan`].
-    pub fn handle(self) -> Result<Plan, anyhow::Error> {
-        super::handle_select(self.scx, self.stmt, &Params::empty(), None)
+    pub fn plan(self) -> Result<Plan, anyhow::Error> {
+        dml::plan_select(self.scx, self.stmt, &Params::empty(), None)
     }
 }

@@ -10,7 +10,7 @@
 $ set-sql-timeout duration=125ms
 
 ! UPDATE foo SET x = 1
-UPDATE statements are not supported
+UPDATE statements not yet supported
 
 ! DELETE FROM foo
-DELETE statements are not supported
+DELETE statements not yet supported

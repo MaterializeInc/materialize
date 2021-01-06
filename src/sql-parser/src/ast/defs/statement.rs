@@ -64,8 +64,15 @@ pub enum Statement {
     Tail(TailStatement),
     Explain(ExplainStatement),
     Declare(DeclareStatement),
-    Close(CloseStatement),
     Fetch(FetchStatement),
+    Close(CloseStatement),
+}
+
+impl Statement {
+    /// Reports whether the statement is cursor-related.
+    pub fn is_cursor(&self) -> bool {
+        matches!(self, Statement::Declare(_) | Statement::Fetch(_) | Statement::Close(_))
+    }
 }
 
 impl AstDisplay for Statement {

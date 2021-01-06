@@ -52,6 +52,7 @@ use crate::plan::expr::{
     ColumnRef, JoinKind, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func::{self, Func, FuncSpec};
+use crate::plan::plan_utils;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
@@ -461,7 +462,7 @@ fn plan_query(
         let (val, scope) = plan_subquery(qcx, &cte.query)?;
         let typ = qcx.relation_type(&val);
         let mut val_desc = RelationDesc::new(typ, scope.column_names());
-        val_desc = crate::plan::statement::maybe_rename_columns(
+        val_desc = plan_utils::maybe_rename_columns(
             format!("CTE {}", cte.alias.name),
             val_desc,
             &cte.alias.columns,
