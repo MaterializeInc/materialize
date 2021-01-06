@@ -222,32 +222,31 @@ where
 
     let tokio_executor = tokio::runtime::Handle::current();
     timely::execute::execute_from(builders, Box::new(guard), move |timely_worker| {
-        tokio_executor.enter(|| {
-            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % threads]
-                .take()
-                .unwrap()
-                .request_unparks();
-            let worker_idx = timely_worker.index();
-            Worker {
-                timely_worker,
-                render_state: RenderState {
-                    traces: TraceManager::new(worker_idx),
-                    local_inputs: HashMap::new(),
-                    ts_source_mapping: HashMap::new(),
-                    ts_histories: Default::default(),
-                    ts_source_updates: Default::default(),
-                    dataflow_tokens: HashMap::new(),
-                    caching_tx: None,
-                },
-                materialized_logger: None,
-                command_rx,
-                pending_peeks: Vec::new(),
-                feedback_tx: None,
-                reported_frontiers: HashMap::new(),
-                metrics: Metrics::for_worker_id(worker_idx),
-            }
-            .run()
-        })
+        let _tokio_guard = tokio_executor.enter();
+        let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % threads]
+            .take()
+            .unwrap()
+            .request_unparks();
+        let worker_idx = timely_worker.index();
+        Worker {
+            timely_worker,
+            render_state: RenderState {
+                traces: TraceManager::new(worker_idx),
+                local_inputs: HashMap::new(),
+                ts_source_mapping: HashMap::new(),
+                ts_histories: Default::default(),
+                ts_source_updates: Default::default(),
+                dataflow_tokens: HashMap::new(),
+                caching_tx: None,
+            },
+            materialized_logger: None,
+            command_rx,
+            pending_peeks: Vec::new(),
+            feedback_tx: None,
+            reported_frontiers: HashMap::new(),
+            metrics: Metrics::for_worker_id(worker_idx),
+        }
+        .run()
     })
 }
 

@@ -172,7 +172,10 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     Ok(topic_list) => topic_list
                         .elements_for_topic(&self.topic_name)
                         .get(kafka_pid as usize)
-                        .map(|el| el.offset().to_raw() - 1),
+                        .map(|el| match el.offset() {
+                            Offset::Offset(o) => o - 1,
+                            _ => -1,
+                        }),
                     Err(_) => Some(-1),
                 }
                 .unwrap_or(-1),
@@ -538,14 +541,14 @@ impl KafkaSourceInfo {
         // Create list from assignments
         let mut partition_list = TopicPartitionList::new();
         for partition in tpl.elements_for_topic(&self.topic_name) {
-            partition_list.add_partition_offset(
-                partition.topic(),
-                partition.partition(),
-                partition.offset(),
-            );
+            partition_list
+                .add_partition_offset(partition.topic(), partition.partition(), partition.offset())
+                .expect("offset known to be valid");
         }
         // Add new partition
-        partition_list.add_partition_offset(&self.topic_name, partition_id, Offset::Beginning);
+        partition_list
+            .add_partition_offset(&self.topic_name, partition_id, Offset::Beginning)
+            .expect("offset known to be valid");
         self.consumer
             .assign(&partition_list)
             .expect("assignment known to be valid");
@@ -579,13 +582,17 @@ impl KafkaSourceInfo {
         match res {
             Ok(_) => {
                 let res = self.consumer.position().unwrap_or_default().to_topic_map();
-                let position = res.get(&(self.topic_name.clone(), pid));
+                let position = res
+                    .get(&(self.topic_name.clone(), pid))
+                    .and_then(|p| match p {
+                        Offset::Offset(o) => Some(o),
+                        _ => None,
+                    });
                 if let Some(position) = position {
-                    let position = position.to_raw();
                     info!(
                         "Tried to fast-forward consumer on partition PID: {} to Kafka offset {}. Consumer is now at position {}",
                         pid, next_offset.offset, position);
-                    if position != next_offset.offset {
+                    if *position != next_offset.offset {
                         warn!("We did not seek to the expected Kafka offset. Current Kafka offset: {} Expected Kafka offset: {}", position, next_offset.offset);
                     }
                 } else {

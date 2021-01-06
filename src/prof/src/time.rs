@@ -7,11 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::{StackProfile, WeightedStack};
+use std::os::raw::c_int;
+
 use anyhow::bail;
 use pprof::ProfilerGuard;
-use std::{os::raw::c_int, time::Duration};
-use tokio::time::delay_for;
+use tokio::time::{self, Duration};
+
+use crate::{StackProfile, WeightedStack};
 
 /// # Safety
 ///
@@ -26,7 +28,7 @@ pub async unsafe fn prof_time(
         bail!("Sub-microsecond intervals are not supported.");
     }
     let pg = ProfilerGuard::new(sample_freq as c_int)?;
-    delay_for(total_time).await;
+    time::sleep(total_time).await;
     let builder = pg.report();
     let report = builder.build_unresolved()?;
     let mut profile = <StackProfile as Default>::default();

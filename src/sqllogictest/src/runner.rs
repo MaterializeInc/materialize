@@ -33,6 +33,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops;
 use std::path::Path;
 use std::str;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -43,13 +44,13 @@ use md5::{Digest, Md5};
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
+use tokio::runtime::Runtime;
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
-use tokio_postgres::{connect, Client, NoTls, Row};
+use tokio_postgres::{connect, NoTls, Row};
 use uuid::Uuid;
 
-use materialized::{serve, Config, Server};
 use pgrepr::{Interval, Jsonb, Numeric, Value};
 use repr::ColumnName;
 use sql::ast::Statement;
@@ -270,8 +271,8 @@ impl Outcomes {
 
 pub(crate) struct Runner {
     // Drop order matters for these fields.
-    client: Client,
-    _server: Server,
+    client: tokio_postgres::Client,
+    _server: materialized::Server,
     _temp_dir: TempDir,
 }
 
@@ -498,7 +499,7 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 impl Runner {
     pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
-        let config = Config {
+        let mz_config = materialized::Config {
             logging: None,
             timestamp_frequency: Duration::from_millis(10),
             cache: None,
@@ -513,7 +514,7 @@ impl Runner {
             experimental_mode: true,
             telemetry_url: None,
         };
-        let server = serve(config).await?;
+        let server = materialized::serve(mz_config, config.runtime.clone()).await?;
         let addr = server.local_addr();
         let (client, connection) = connect(
             &format!("host={} port={} user=root", addr.ip(), addr.port()),
@@ -799,6 +800,7 @@ pub trait WriteFmt {
 }
 
 pub struct RunConfig<'a> {
+    pub runtime: Arc<Runtime>,
     pub stdout: &'a dyn WriteFmt,
     pub stderr: &'a dyn WriteFmt,
     pub verbosity: usize,

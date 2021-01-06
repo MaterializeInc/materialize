@@ -25,9 +25,6 @@ kafka-util = { path = "../kafka-util" }
 lazy_static = "1.4.0"
 log = "0.4.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
-mz_rusoto_core = "0.46.0"
-mz_rusoto_credential = "0.46.0"
-mz_rusoto_kinesis = "0.46.0"
 notify = "4.0.0"
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
@@ -37,10 +34,13 @@ rand = "0.8.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
 regex = "1.4.1"
 repr = { path = "../repr" }
+rusoto_core = "0.46.0"
+rusoto_credential = "0.46.0"
+rusoto_kinesis = "0.46.0"
 serde = { version = "1.0.0", features = ["derive"] }
 serde_json = "1.0.60"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
-tokio = { version = "0.2.0", features = ["blocking", "fs", "rt-threaded"] }
-tokio-util = { version = "0.3.0", features = ["codec"] }
+tokio = { version = "1.0.0", features = ["fs", "rt"] }
+tokio-util = { version = "0.6.0", features = ["codec"] }
 url = { version = "2.2.0", features = ["serde"] }
 uuid = { version = "0.8.0", features = ["serde", "v4"] }

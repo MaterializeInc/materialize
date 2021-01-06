@@ -14,7 +14,7 @@
 //! in testdrive, e.g., because they depend on the current time.
 
 use std::error::Error;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufRead, Write};
 use std::net::TcpListener;
 use std::path::Path;
@@ -503,25 +503,40 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let temp_dir = tempfile::tempdir()?;
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let (server, _) = util::start_server(util::Config::default())?;
 
-    // Create a tailing file source that never produces any data. This is the
-    // simplest way to cause a TAIL to never terminate.
-    let path = Path::join(temp_dir.path(), "file");
-    fs::write(&path, "")?;
-    client.batch_execute(&*format!(
-        "CREATE MATERIALIZED SOURCE s FROM FILE '{}' WITH (tail = true) FORMAT BYTES",
-        path.display()
-    ))?;
+    // We have to use the async PostgreSQL client so that we can ungracefully
+    // abort the connection task.
+    // See: https://github.com/sfackler/rust-postgres/issues/725
+    server.runtime.block_on(async {
+        let (client, conn_task) = server.connect_async().await?;
 
-    // Launch the ill-fated tail.
-    client.copy_out("COPY (TAIL s) TO STDOUT")?;
+        // Create a tailing file source that never produces any data. This is
+        // the simplest way to cause a TAIL to never terminate.
+        let path = Path::join(temp_dir.path(), "file");
+        tokio::fs::write(&path, "").await?;
+        client
+            .batch_execute(&*format!(
+                "CREATE MATERIALIZED SOURCE s FROM FILE '{}' WITH (tail = true) FORMAT BYTES",
+                path.display()
+            ))
+            .await?;
 
-    // Drop order will first disconnect clients and then gracefully shut down
-    // the server. We previously had a bug where the server would fail to notice
-    // that the client running `TAIL v` had disconnected, and would hang forever
-    // waiting for data to be written to `path`, which in this test never comes.
-    // So if this function exits, things are working correctly.
+        // Launch the ill-fated tail.
+        client.copy_out("COPY (TAIL s) TO STDOUT").await?;
+
+        // Un-gracefully abort the connection.
+        conn_task.abort();
+
+        Ok::<_, Box<dyn Error>>(())
+    })?;
+
+    // Dropping the server will initiate a graceful shutdown. We previously had
+    // a bug where the server would fail to notice that the client running `TAIL
+    // v` had disconnected, and would hang forever waiting for data to be
+    // written to `path`, which in this test never comes. So if this function
+    // exits, things are working correctly.
+
     Ok(())
 }
 

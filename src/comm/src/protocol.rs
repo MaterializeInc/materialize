@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
 use tokio::runtime::Handle;
+use tokio::task;
 use tokio_serde::formats::SymmetricalBincode as BincodeCodec;
 use tokio_util::codec::LengthDelimitedCodec;
 use uuid::Uuid;
@@ -553,7 +554,9 @@ where
         // attempt a synchronous hangup when dropping an encoder, but for now
         // it's convenient.
         if self.inner.is_some() {
-            let _ = futures::executor::block_on(self.close());
+            // TODO(benesch): use `Handle::current()block_in_place()` when it
+            // lands. See: https://github.com/tokio-rs/tokio/pull/3097.
+            let _ = task::block_in_place(|| futures::executor::block_on(self.close()));
         }
     }
 }

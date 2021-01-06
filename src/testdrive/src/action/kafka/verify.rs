@@ -13,7 +13,8 @@ use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
-use tokio::stream::StreamExt;
+use tokio::pin;
+use tokio_stream::StreamExt;
 
 use crate::action::{Action, State};
 use crate::format::avro;
@@ -127,10 +128,11 @@ impl Action for VerifyAction {
         consumer.subscribe(&[&topic]).map_err(|e| e.to_string())?;
 
         // Wait up to 10 seconds for each message.
-        let mut message_stream = consumer
-            .start()
+        let message_stream = consumer
+            .stream()
             .take(self.expected_messages.len())
             .timeout(Duration::from_secs(15));
+        pin!(message_stream);
 
         let mut actual_messages = vec![];
 
