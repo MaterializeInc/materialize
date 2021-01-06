@@ -55,6 +55,56 @@ WITH c AS (SELECT a + 1 FROM x) SELECT (SELECT * FROM c);
 3
 4
 
+# Allow re-using names laterally.
+query I rowsort
+SELECT * FROM (
+  (WITH c AS (SELECT 1) SELECT * FROM c)
+  UNION ALL
+  (WITH c AS (SELECT 2) SELECT * FROM c)
+)
+----
+1
+2
+
+statement error specified more than once
+SELECT * FROM (
+  (WITH c AS (SELECT 1), c AS (SELECT 2)
+  SELECT * FROM c UNION ALL SELECT * FROM c)
+)
+
+# Allow re-using names nested.
+query I rowsort
+SELECT * FROM (
+  (WITH c AS (SELECT 1) SELECT * FROM
+    (WITH c AS (SELECT 2) SELECT * FROM c)
+    UNION ALL
+    SELECT * FROM c
+  )
+)
+----
+1
+2
+
+# CTE names should only be accessible in their scope.
+statement error unknown catalog item
+SELECT * FROM (
+  (WITH c AS (SELECT 1) SELECT * FROM c)
+    UNION ALL
+  SELECT * FROM c
+)
+
+query I
+WITH foo AS (SELECT 1)
+  (SELECT * FROM foo
+    UNION ALL
+  (WITH foo AS (SELECT 2) SELECT * FROM foo)
+    UNION ALL
+  (SELECT * FROM foo))
+----
+1
+1
+2
+
 statement ok
 CREATE TABLE squares (x int, y int);
 

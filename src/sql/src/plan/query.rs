@@ -441,11 +441,18 @@ fn plan_query(
     qcx: &mut QueryContext,
     q: &Query,
 ) -> Result<(RelationExpr, Scope, RowSetFinishing), anyhow::Error> {
+    // Retain the old values of various CTE names so that we can restore them after we're done
+    // planning this SELECT.
+    let mut old_cte_values = Vec::new();
+    // A single WITH block cannot use the same name multiple times.
+    let mut used_names = HashSet::new();
     for cte in &q.ctes {
         let cte_name = normalize::ident(cte.alias.name.clone());
-        if qcx.ctes.get(&cte_name).is_some() {
+
+        if used_names.contains(&cte_name) {
             bail!("WITH query name \"{}\" specified more than once", cte_name)
         }
+        used_names.insert(cte_name.clone());
 
         // Plan CTE.
         let (val, scope) = plan_subquery(qcx, &cte.query)?;
@@ -457,14 +464,15 @@ fn plan_query(
             &cte.alias.columns,
         )?;
 
-        qcx.ctes.insert(
-            cte_name,
+        let old_val = qcx.ctes.insert(
+            cte_name.clone(),
             CteDesc {
                 val,
                 val_desc,
                 level_offset: 0,
             },
         );
+        old_cte_values.push((cte_name, old_val));
     }
     let limit = match &q.limit {
         None => None,
@@ -487,7 +495,7 @@ fn plan_query(
         _ => bail!("OFFSET must be an integer constant"),
     };
 
-    match &q.body {
+    let result = match &q.body {
         SetExpr::Select(s) => {
             let plan = plan_view_select(qcx, s, &q.order_by)?;
             let finishing = RowSetFinishing {
@@ -517,7 +525,21 @@ fn plan_query(
             };
             Ok((expr.map(map_exprs), scope, finishing))
         }
+    };
+
+    // Restore the old values of the CTEs.
+    for (name, value) in old_cte_values.iter() {
+        match value {
+            Some(value) => {
+                qcx.ctes.insert(name.to_string(), value.clone());
+            }
+            None => {
+                qcx.ctes.remove(name);
+            }
+        };
     }
+
+    result
 }
 
 fn plan_subquery(
