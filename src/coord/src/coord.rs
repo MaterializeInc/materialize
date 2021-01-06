@@ -22,6 +22,7 @@ use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
@@ -31,7 +32,7 @@ use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
-use tokio::runtime::Handle;
+use tokio::runtime::{Handle, Runtime};
 use uuid::Uuid;
 
 use build_info::BuildInfo;
@@ -366,8 +367,11 @@ where
         let mut timestamper =
             Timestamper::new(&self.timestamp_config, internal_cmd_tx.clone(), ts_rx);
         let executor = Handle::current();
-        let _timestamper_thread =
-            thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
+        let _timestamper_thread = thread::spawn(move || {
+            let _executor_guard = executor.enter();
+            timestamper.update()
+        })
+        .join_on_drop();
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
@@ -2955,6 +2959,10 @@ pub async fn serve<C>(
         experimental_mode,
         build_info,
     }: Config<'_, C>,
+    // TODO(benesch): Don't pass runtime explicitly when
+    // `Handle::current().block_in_place()` lands. See:
+    // https://github.com/tokio-rs/tokio/pull/3097.
+    runtime: Arc<Runtime>,
 ) -> Result<(JoinHandle<()>, Uuid), anyhow::Error>
 where
     C: comm::Connection,
@@ -3065,10 +3073,7 @@ where
     // can't use `tokio::spawn`, but instead have to spawn a dedicated thread to
     // run the future.
     Ok((
-        thread::spawn({
-            let executor = Handle::current();
-            move || executor.block_on(coord.serve(cmd_rx, feedback_rx))
-        }),
+        thread::spawn(move || runtime.block_on(coord.serve(cmd_rx, feedback_rx))),
         cluster_id,
     ))
 }

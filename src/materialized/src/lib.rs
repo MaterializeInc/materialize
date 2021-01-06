@@ -17,22 +17,24 @@ use std::any::Any;
 use std::env;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use async_stream::try_stream;
 use compile_time_run::run_command_str;
 use futures::channel::mpsc;
 use futures::StreamExt;
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
 use tokio::io;
 use tokio::net::TcpListener;
+use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 
 use build_info::BuildInfo;
 use comm::Switchboard;
 use coord::{CacheConfig, LoggingConfig};
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use ore::tokio::net::TcpStreamExt;
 
 use crate::mux::Mux;
 
@@ -144,16 +146,22 @@ pub struct TlsConfig {
 }
 
 impl TlsConfig {
-    fn acceptor(&self) -> Result<SslAcceptor, anyhow::Error> {
+    fn validate(&self) -> Result<SslContext, anyhow::Error> {
         let mut builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
         builder.set_certificate_file(&self.cert, SslFiletype::PEM)?;
         builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
-        Ok(builder.build())
+        Ok(builder.build().into_context())
     }
 }
 
 /// Start a `materialized` server.
-pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
+pub async fn serve(
+    mut config: Config,
+    // TODO(benesch): Don't pass runtime explicitly when
+    // `Handle::current().block_in_place()` lands. See:
+    // https://github.com/tokio-rs/tokio/pull/3097.
+    runtime: Arc<Runtime>,
+) -> Result<Server, anyhow::Error> {
     let start_time = Instant::now();
 
     // Construct shared channels for SQL command and result exchange, and
@@ -168,7 +176,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     // Validate TLS configuration, if present.
     let tls = match &config.tls {
         None => None,
-        Some(tls_config) => Some(tls_config.acceptor()?),
+        Some(tls_config) => Some(tls_config.validate()?),
     };
 
     // Initialize network listener.
@@ -181,7 +189,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             config.addresses[config.process].port(),
         )
     });
-    let mut listener = TcpListener::bind(&listen_addr).await?;
+    let listener = TcpListener::bind(&listen_addr).await?;
     let local_addr = listener.local_addr()?;
     config.addresses[config.process].set_port(local_addr.port());
 
@@ -201,7 +209,14 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     tokio::spawn({
         let switchboard = switchboard.clone();
         async move {
-            let incoming = &mut listener.incoming();
+            // TODO(benesch): replace with `listener.incoming()` if that is
+            // restored when the `Stream` trait stabilizes.
+            let mut incoming = Box::pin(try_stream! {
+                loop {
+                    let (conn, _addr) = listener.accept().await?;
+                    yield conn;
+                }
+            });
 
             // The primary is responsible for pgwire and HTTP traffic in
             // addition to switchboard traffic until draining starts.
@@ -215,7 +230,8 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                     start_time,
                     &num_timely_workers.to_string(),
                 ));
-                mux.serve(incoming.take_until(drain_tripwire)).await;
+                mux.serve(incoming.by_ref().take_until(drain_tripwire))
+                    .await;
             }
 
             // Draining primaries and non-primary servers are only responsible
@@ -232,7 +248,13 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         .into_iter()
         .map(|conn| match conn {
             None => Ok(None),
-            Some(conn) => Ok(Some(conn.into_inner().into_std()?)),
+            Some(conn) => {
+                let conn = conn.into_inner().into_std()?;
+                // Tokio will have put the stream into non-blocking mode.
+                // Undo that, since Timely wants blocking TCP streams.
+                conn.set_nonblocking(false)?;
+                Ok(Some(conn))
+            }
         })
         .collect::<Result<_, io::Error>>()?;
 
@@ -251,21 +273,24 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     // dataflow workers, as booting the coordinator can involve sending enough
     // data to workers to fill up a `comm` channel buffer (#3280).
     let coord_thread = if is_primary {
-        let (handle, cluster_id) = coord::serve(coord::Config {
-            switchboard,
-            cmd_rx,
-            num_timely_workers,
-            symbiosis_url: config.symbiosis_url.as_deref(),
-            logging: config.logging,
-            data_directory: &config.data_directory,
-            timestamp: coord::TimestampConfig {
-                frequency: config.timestamp_frequency,
+        let (handle, cluster_id) = coord::serve(
+            coord::Config {
+                switchboard,
+                cmd_rx,
+                num_timely_workers,
+                symbiosis_url: config.symbiosis_url.as_deref(),
+                logging: config.logging,
+                data_directory: &config.data_directory,
+                timestamp: coord::TimestampConfig {
+                    frequency: config.timestamp_frequency,
+                },
+                cache: config.cache,
+                logical_compaction_window: config.logical_compaction_window,
+                experimental_mode: config.experimental_mode,
+                build_info: &BUILD_INFO,
             },
-            cache: config.cache,
-            logical_compaction_window: config.logical_compaction_window,
-            experimental_mode: config.experimental_mode,
-            build_info: &BUILD_INFO,
-        })
+            runtime,
+        )
         .await?;
 
         // Start a task that checks for the latest version and prints a warning if it

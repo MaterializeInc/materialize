@@ -25,8 +25,8 @@ use rand::distributions::{
 use rand::prelude::{Distribution, ThreadRng};
 use rand::thread_rng;
 use rdkafka::error::KafkaError;
-use rdkafka::producer::{BaseRecord, DefaultProducerContext, ThreadedProducer};
-use rdkafka::types::RDKafkaError;
+use rdkafka::producer::{BaseRecord, DefaultProducerContext, Producer, ThreadedProducer};
+use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::util::Timeout;
 use rdkafka::ClientConfig;
 use serde_json::Map;
@@ -597,7 +597,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             match producer.send(rec) {
                 Ok(()) => break,
-                Err((KafkaError::MessageProduction(RDKafkaError::QueueFull), rec2)) => {
+                Err((KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull), rec2)) => {
                     rec = rec2;
                     thread::sleep(Duration::from_secs(1));
                 }

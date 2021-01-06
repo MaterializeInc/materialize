@@ -12,8 +12,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::bail;
-use openssl::ssl::SslAcceptor;
-use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
+use openssl::ssl::{Ssl, SslContext};
+use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio_openssl::SslStream;
 
 use coord::session::Session;
@@ -27,12 +27,12 @@ use crate::secrets::SecretManager;
 pub struct Server {
     id_alloc: IdAllocator,
     secrets: SecretManager,
-    tls: Option<SslAcceptor>,
+    tls: Option<SslContext>,
     coord_client: coord::Client,
 }
 
 impl Server {
-    pub fn new(tls: Option<SslAcceptor>, coord_client: coord::Client) -> Server {
+    pub fn new(tls: Option<SslContext>, coord_client: coord::Client) -> Server {
         Server {
             id_alloc: IdAllocator::new(1, 1 << 16),
             secrets: SecretManager::new(),
@@ -93,7 +93,9 @@ impl Server {
                     Conn::Unencrypted(mut conn) if self.tls.is_some() => {
                         conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
                         let tls = self.tls.as_ref().unwrap();
-                        Conn::Ssl(tokio_openssl::accept(tls, conn).await?)
+                        let mut ssl_stream = SslStream::new(Ssl::new(tls)?, conn)?;
+                        Pin::new(&mut ssl_stream).accept().await?;
+                        Conn::Ssl(ssl_stream)
                     }
                     mut conn => {
                         conn.write_all(&[REJECT_ENCRYPTION]).await?;
@@ -123,8 +125,8 @@ where
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Conn::Unencrypted(inner) => Pin::new(inner).poll_read(cx, buf),
             Conn::Ssl(inner) => Pin::new(inner).poll_read(cx, buf),

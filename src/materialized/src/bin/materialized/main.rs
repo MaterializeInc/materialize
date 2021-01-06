@@ -26,7 +26,8 @@ use std::panic;
 use std::panic::PanicInfo;
 use std::path::PathBuf;
 use std::process;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::{cmp, env};
@@ -427,32 +428,37 @@ swap: {swap_total}KB total, {swap_used}KB used",
     sys::adjust_rlimits();
 
     // Start Tokio runtime.
-    let mut runtime = tokio::runtime::Builder::new()
-        .threaded_scheduler()
-        // The default thread name exceeds the Linux limit on thread name
-        // length, so pick something shorter.
-        //
-        // TODO(benesch): use `thread_name_fn` to get unique names if that
-        // lands upstream: https://github.com/tokio-rs/tokio/pull/1921.
-        .thread_name("tokio:worker")
-        .enable_all()
-        .build()?;
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            // The default thread name exceeds the Linux limit on thread name
+            // length, so pick something shorter.
+            .thread_name_fn(|| {
+                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                format!("tokio:work-{}", id)
+            })
+            .enable_all()
+            .build()?,
+    );
 
-    let server = runtime.block_on(materialized::serve(materialized::Config {
-        threads,
-        process,
-        addresses,
-        logging,
-        logical_compaction_window,
-        timestamp_frequency,
-        cache,
-        listen_addr,
-        tls,
-        data_directory,
-        symbiosis_url,
-        experimental_mode,
-        telemetry_url,
-    }))?;
+    let server = runtime.block_on(materialized::serve(
+        materialized::Config {
+            threads,
+            process,
+            addresses,
+            logging,
+            logical_compaction_window,
+            timestamp_frequency,
+            cache,
+            listen_addr,
+            tls,
+            data_directory,
+            symbiosis_url,
+            experimental_mode,
+            telemetry_url,
+        },
+        runtime.clone(),
+    ))?;
 
     eprintln!(
         "=======================================================================
