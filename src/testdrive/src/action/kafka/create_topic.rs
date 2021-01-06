@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rdkafka::admin::{NewTopic, TopicReplication};
-use rdkafka::error::RDKafkaError;
+use rdkafka::error::RDKafkaErrorCode;
+use rdkafka::producer::Producer;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -82,7 +83,7 @@ impl Action for CreateTopicAction {
             }
             for (res, topic) in res.iter().zip(stale_kafka_topics.iter()) {
                 match res {
-                    Ok(_) | Err((_, RDKafkaError::UnknownTopicOrPartition)) => (),
+                    Ok(_) | Err((_, RDKafkaErrorCode::UnknownTopicOrPartition)) => (),
                     Err((_, err)) => {
                         eprintln!("warning: unable to delete {}: {}", topic, err.to_string())
                     }

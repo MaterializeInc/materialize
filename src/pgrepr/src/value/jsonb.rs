@@ -9,8 +9,7 @@
 
 use std::error::Error;
 
-use bytes::buf::{BufMut, BufMutExt};
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
 /// A wrapper for the `repr` crate's [`Jsonb`](repr::adt::jsonb::Jsonb) type

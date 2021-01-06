@@ -43,9 +43,9 @@
 //! tokio::spawn({
 //!     let switchboard = switchboard.clone();
 //!     async move {
-//!         let mut incoming = listener.incoming();
-//!         while let Some(conn) = incoming.next().await {
-//!             switchboard.handle_connection(conn.expect("accept failed"));
+//!         loop {
+//!             let (conn, _addr) = listener.accept().await.expect("accept failed");
+//!             switchboard.handle_connection(conn).await;
 //!         }
 //!     }
 //! });

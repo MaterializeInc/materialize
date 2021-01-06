@@ -21,7 +21,7 @@ use ore::future::{OreStreamExt, OreTryStreamExt};
 /// simultaneously. The original implementation had a bug in which streams were
 /// exhausted in order, i.e., messages from the second stream were only
 /// presented after the first stream was closed.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_mpsc_select() -> Result<(), Box<dyn Error>> {
     let switchboard = Switchboard::local()?;
     let (tx, mut rx) = switchboard.mpsc();
@@ -47,7 +47,7 @@ async fn test_mpsc_select() -> Result<(), Box<dyn Error>> {
 
 /// Verifies that `mpsc_limited` will close the receiver after the expected
 /// number of producers have connected and then disconnected.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_mpsc_limited_close() -> Result<(), Box<dyn Error>> {
     let switchboard = Switchboard::local()?;
     let (tx, rx) = switchboard.mpsc_limited(2);
@@ -73,20 +73,22 @@ async fn test_mpsc_limited_close() -> Result<(), Box<dyn Error>> {
 /// Verifies that TCP connections are reused by repeatedly connecting the same
 /// MPSC transmitter. Without connection reuse, the test should crash with an
 /// AddrNotAvailable error because the OS will run out of outgoing TCP ports.
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-    let mut listener = TcpListener::bind(&addr).await?;
+    let listener = TcpListener::bind(&addr).await?;
 
     let switchboard = Switchboard::new(vec![listener.local_addr()?], 0);
     tokio::spawn({
         let switchboard = switchboard.clone();
         async move {
-            let mut incoming = listener.incoming();
-            while let Some(conn) = incoming.next().await {
-                let conn = conn.expect("test switchboard: accept failed");
+            loop {
+                let (conn, _addr) = listener
+                    .accept()
+                    .await
+                    .expect("test switchboard: accept failed");
                 switchboard
                     .handle_connection(conn)
                     .await
@@ -120,7 +122,7 @@ async fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
 /// limit is higher, but we don't test that here to minimize the runtime of this
 /// test. The goal is just to make sure we're not using Tokio's default limit of
 /// 8MiB, which is too low.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_mpsc_big_frame() -> Result<(), Box<dyn Error>> {
     const BIG_LEN: usize = 64 * (1 << 20); // 64MiB
     let switchboard = Switchboard::local()?;

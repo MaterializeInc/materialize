@@ -1291,7 +1291,7 @@ where
                             .await?;
                     }
                 }
-                Err(time::Elapsed { .. }) => {
+                Err(time::error::Elapsed { .. }) => {
                     // It's been a while since we've had any data to send, and the client may have
                     // disconnected. Send a notice, which will error if the client has, in fact,
                     // disconnected. Otherwise we might block forever waiting for rows, leaking

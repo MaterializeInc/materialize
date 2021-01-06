@@ -35,5 +35,4 @@ pub mod stats;
 pub mod sync;
 pub mod test;
 pub mod thread;
-pub mod tokio;
 pub mod vec;
