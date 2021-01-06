@@ -10,10 +10,6 @@ skip = [
     # Waiting for approximately the entire Rust ecosystem to upgrade to v1.0.
     { name = "cfg-if", version = "0.1.0" },
 
-    # Waiting on mio 0.7: https://github.com/tokio-rs/tokio/issues/1190.
-    { name = "miow", version = "0.2.1" },
-    { name = "winapi", version = "0.2.8" },
-
     # Waiting on tracing-futures.
     { name = "pin-project", version = "0.4.27" },
     { name = "pin-project-internal", version = "0.4.22" },
@@ -34,9 +30,6 @@ skip = [
 
     # Waiting on http v0.2.3: https://github.com/hyperium/http/pull/461.
     { name = "bytes", version = "0.5.6" },
-
-    # Waiting on notify.
-    { name = "mio", version = "0.6.21" },
 
     # Waiting on parse_duration.
     { name = "num-bigint", version = "0.2.6" }
