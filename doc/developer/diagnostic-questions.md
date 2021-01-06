@@ -20,10 +20,13 @@ various ways that can cause Materialize to behave not as expected.
 
 # Checklist
 
+Is the user reporting the issue the same user that set up Materialize?
+- If not, ensure the version check below is performed anew.
+
 Is the version of Materialize:
-- an old one? Check the date and/or SHA. If it is an old version, check if the
-  issue reported existed back then. If the issue existed but then was fixed,
-  tell user to update to a newer version.
+- an old one? Check the date and/or SHA, or use `select version()`.
+  If it is an old version, check if the issue reported existed back then.
+  If the issue existed but then was fixed, tell user to update to a newer version.
 - based on an actual merge to main? If the user is using a docker image, make
   sure it is not an `mzbuild-...` because that's somebody's random PR.
 
