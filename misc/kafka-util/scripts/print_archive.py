@@ -61,7 +61,7 @@ def print_archive(args: argparse.Namespace) -> None:
             printer(json.loads(key_schema))
             printer(json.loads(value_schema))
     except KeyError:
-        log.error("Failed to locate schema for topic {topic}")
+        log.error(f"Failed to locate schema for topic {topic}")
         raise
 
     key_reader = avro.io.DatumReader(avro.schema.parse(key_schema))
@@ -125,9 +125,7 @@ def main() -> None:
         action="store_true",
     )
 
-    parser.add_argument(
-        "topic", help="Name of the topic", type=str, nargs="?",
-    )
+    parser.add_argument("topic", help="Name of the topic", type=str)
 
     args = parser.parse_args()
     print_archive(args)
