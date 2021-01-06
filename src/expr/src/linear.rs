@@ -374,7 +374,10 @@ impl MapFilterProject {
             available_expr[*index] = true;
         }
         for expr in self.expressions.into_iter() {
-            let is_available = expr.support().into_iter().all(|i| available_expr[i]);
+            // We treat an expression as available if its supporting columns are available,
+            // and if it is not a literal (we want to avoid pushing down literals).
+            let is_available =
+                expr.support().into_iter().all(|i| available_expr[i]) && !expr.is_literal();
             if is_available {
                 before_expr.push(expr);
             } else {
@@ -549,7 +552,7 @@ impl MapFilterProject {
     /// Expressions are "used" if they are relied upon by any output columns
     /// or any predicates, even transitively. Any expressions that are not
     /// relied upon in this way can be discarded.
-    fn remove_undemanded(&mut self) {
+    pub fn remove_undemanded(&mut self) {
         // Determine the demanded expressions to remove irrelevant ones.
         let mut demand = std::collections::HashSet::new();
         for (_index, pred) in self.predicates.iter() {

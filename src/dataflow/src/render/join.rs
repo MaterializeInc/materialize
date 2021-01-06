@@ -254,7 +254,6 @@ where
             if !mfp.is_identity() {
                 // The `mfp` should just be projection at this point. If it is not,
                 // something incorrect has happen in prior closure extraction.
-                assert!(mfp.expressions.is_empty() && mfp.predicates.is_empty());
                 joined = joined.map({
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();

@@ -322,7 +322,6 @@ where
                                 if !mfp.is_identity() {
                                     // The `mfp` should just be projection at this point. If it is not,
                                     // something incorrect has happen in prior closure extraction.
-                                    assert!(mfp.expressions.is_empty() && mfp.predicates.is_empty());
                                     update_stream = update_stream.map({
                                         // Reuseable allocation for unpacking.
                                         let mut datums = DatumVec::new();
@@ -593,6 +592,9 @@ impl MyClosure {
                 columns.insert(*column, index);
             }
         }
+
+        // TODO(mcsherry): perform more optimizations here.
+        before.remove_undemanded();
 
         // Cons up an instance of the closure with the closed-over state.
         Self {
