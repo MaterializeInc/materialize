@@ -298,8 +298,22 @@ impl AvroDecode for DebeziumTransactionDecoder {
         }
         Ok(total_order.map(|total_order| DebeziumTransactionMetadata { total_order }))
     }
+    fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
+        self,
+        idx: usize,
+        _n_variants: usize,
+        null_variant: Option<usize>,
+        deserializer: D,
+        reader: &'a mut R,
+    ) -> Result<Self::Out, AvroError> {
+        if Some(idx) == null_variant {
+            Ok(None)
+        } else {
+            deserializer.deserialize(reader, self)
+        }
+    }
     define_unexpected! {
-        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+        array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
     }
 }
 
