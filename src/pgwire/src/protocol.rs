@@ -1164,7 +1164,7 @@ where
                         .error(ErrorResponse::error(
                             SqlState::INTERNAL_ERROR,
                             format!(
-                                "internal error: column {} is not of expected type {}: {}",
+                                "internal error: column {} is not of expected type {:?}: {}",
                                 i, t, d
                             ),
                         ))

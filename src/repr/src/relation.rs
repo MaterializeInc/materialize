@@ -52,14 +52,12 @@ impl ColumnType {
         self.nullable = nullable;
         self
     }
-}
 
-impl fmt::Display for ColumnType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
+    /// Returns a value suitable for `EXPLAIN` statements.
+    pub fn explain(&self) -> String {
+        format!(
             "{}{}",
-            self.scalar_type,
+            self.scalar_type.explain(),
             if self.nullable { "?" } else { "" }
         )
     }

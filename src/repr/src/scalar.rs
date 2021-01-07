@@ -818,6 +818,40 @@ impl<'a> ScalarType {
             _ => false,
         }
     }
+
+    /// Returns a Rust-like name for `self`, appropriate to use in `EXPLAIN`
+    /// statements.
+    pub fn explain(&self) -> String {
+        use ScalarType::*;
+        match self {
+            Bool => "bool".into(),
+            Int32 => "i32".into(),
+            Int64 => "i64".into(),
+            Float32 => "f32".into(),
+            Float64 => "f64".into(),
+            Decimal(p, s) => format!("decimal({}, {})", p, s),
+            Date => "date".into(),
+            Time => "time".into(),
+            Timestamp => "timestamp".into(),
+            TimestampTz => "timestamptz".into(),
+            Interval => "interval".into(),
+            Bytes => "bytes".into(),
+            String => "string".into(),
+            Jsonb => "jsonb".into(),
+            Uuid => "uuid".into(),
+            Array(t) => format!("{}[]", t.explain()),
+            List { element_type, .. } => format!("{} list", element_type.explain()),
+            Record { fields } => format!(
+                "record({})",
+                fields
+                    .iter()
+                    .map(|f| format!("{}: {}", f.0, f.1.explain()))
+                    .join(", ")
+            ),
+            Oid => "oid".into(),
+            Map { value_type, .. } => format!("map(text=>{})", value_type.explain()),
+        }
+    }
 }
 
 // TODO(benesch): the implementations of PartialEq and Hash for ScalarType can
@@ -941,43 +975,6 @@ impl Hash for ScalarType {
                 value_type.hash(state);
                 custom_oid.hash(state);
             }
-        }
-    }
-}
-
-impl fmt::Display for ScalarType {
-    /// Arbitrary display name for scalars
-    ///
-    /// Right now the names correspond most closely to Rust names (e.g. i32).
-    /// There are other functions in other packages that construct a mapping
-    /// between `ScalarType`s and type names in other systems, like PostgreSQL.
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use ScalarType::*;
-        match self {
-            Bool => f.write_str("bool"),
-            Int32 => f.write_str("i32"),
-            Int64 => f.write_str("i64"),
-            Float32 => f.write_str("f32"),
-            Float64 => f.write_str("f64"),
-            Decimal(p, s) => write!(f, "decimal({}, {})", p, s),
-            Date => f.write_str("date"),
-            Time => f.write_str("time"),
-            Timestamp => f.write_str("timestamp"),
-            TimestampTz => f.write_str("timestamptz"),
-            Interval => f.write_str("interval"),
-            Bytes => f.write_str("bytes"),
-            String => f.write_str("string"),
-            Jsonb => f.write_str("jsonb"),
-            Uuid => f.write_str("uuid"),
-            Array(t) => write!(f, "{}[]", t),
-            List { element_type, .. } => write!(f, "{} list", element_type),
-            Record { fields } => {
-                f.write_str("record(")?;
-                write_delimited(f, ", ", fields, |f, (n, t)| write!(f, "{}: {}", n, t))?;
-                f.write_str(")")
-            }
-            Oid => f.write_str("oid"),
-            Map { value_type, .. } => write!(f, "map(text=>{})", value_type),
         }
     }
 }

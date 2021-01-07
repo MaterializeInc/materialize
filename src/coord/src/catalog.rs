@@ -26,7 +26,7 @@ use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::Expr;
-use sql::catalog::CatalogError as SqlCatalogError;
+use sql::catalog::{Catalog as SqlCatalog, CatalogError as SqlCatalogError};
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
@@ -79,6 +79,7 @@ pub const FIRST_USER_OID: u32 = 20_000;
 pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
+    by_oid: HashMap<u32, GlobalId>,
     indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
@@ -395,6 +396,7 @@ impl Catalog {
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
             by_id: BTreeMap::new(),
+            by_oid: HashMap::new(),
             indexes: HashMap::new(),
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
@@ -921,6 +923,7 @@ impl Catalog {
             .expect("catalog out of sync");
         let schema_id = schema.id;
         schema.items.insert(entry.name.item.clone(), entry.id);
+        self.by_oid.insert(oid, entry.id);
         self.by_id.insert(entry.id, entry);
 
         Event::CreatedItem {
@@ -1750,7 +1753,13 @@ impl From<PlanContext> for SerializedPlanContext {
     }
 }
 
-impl sql::catalog::Catalog for ConnCatalog<'_> {
+impl ConnCatalog<'_> {
+    fn resolve_item_name(&self, name: &PartialName) -> Result<&FullName, SqlCatalogError> {
+        self.resolve_item(name).map(|entry| entry.name())
+    }
+}
+
+impl SqlCatalog for ConnCatalog<'_> {
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
         if include_system_schemas {
             self.search_path.to_vec()
@@ -1820,6 +1829,11 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
+    fn get_item_by_oid(&self, oid: &u32) -> &dyn sql::catalog::CatalogItem {
+        let id = self.catalog.by_oid[oid];
+        self.catalog.get_by_id(&id)
+    }
+
     fn item_exists(&self, name: &FullName) -> bool {
         self.catalog.try_get(name, self.conn_id).is_some()
     }
@@ -1867,6 +1881,41 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
 
     fn config(&self) -> &sql::catalog::CatalogConfig {
         &self.catalog.config
+    }
+
+    fn minimal_qualification(&self, full_name: &FullName) -> PartialName {
+        let database = match &full_name.database {
+            DatabaseSpecifier::Ambient => None,
+            DatabaseSpecifier::Name(n) => {
+                if *n == self.database {
+                    None
+                } else {
+                    Some(n.clone())
+                }
+            }
+        };
+
+        let schema = if database.is_none()
+            && self.resolve_item_name(&PartialName {
+                database: None,
+                schema: None,
+                item: full_name.item.clone(),
+            }) == Ok(full_name)
+        {
+            None
+        } else {
+            // If `search_path` does not contain `full_name.schema`, the
+            // `PartialName` must contain it.
+            Some(full_name.schema.clone())
+        };
+
+        let res = PartialName {
+            database,
+            schema,
+            item: full_name.item.clone(),
+        };
+        assert_eq!(self.resolve_item_name(&res), Ok(full_name));
+        res
     }
 }
 

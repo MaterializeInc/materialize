@@ -348,6 +348,7 @@ impl<'a> Explanation<'a> {
         }
 
         if let Some(RelationType { column_types, keys }) = &node.typ {
+            let column_types: Vec<_> = column_types.iter().map(|c| c.explain()).collect();
             writeln!(f, "| | types = ({})", separated(", ", column_types))?;
             writeln!(
                 f,

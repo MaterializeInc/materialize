@@ -65,7 +65,7 @@ SELECT (LIST[[[[1], [2]]], [[[3]]]])::text
 {{{{1},{2}}},{{{3}}}}
 
 # List(Int) cannot be cast to List(List(Int))
-query error CAST does not support casting from i32 list to i32 list list
+query error CAST does not support casting from int4 list to int4 list list
 SELECT LIST[1, null] :: INT LIST LIST
 
 query T
@@ -109,7 +109,7 @@ SELECT LIST [1, 2, 3][100]
 NULL
 
 # exceeds maximum dimension
-query error cannot subscript type i32
+query error cannot subscript type int4
 SELECT LIST [1, 2, 3][1][1]
 
 # 🔬🔬 list slices
@@ -194,7 +194,7 @@ SELECT (LIST [[1, 2, 3], [4, 5]][100][1])::text
 NULL
 
 # exceeds maximum dimension
-query error cannot subscript type i32
+query error cannot subscript type int4
 SELECT LIST [[1, 2, 3], [4, 5]][1][1][1]
 
 # 🔬🔬 list list slices
@@ -320,7 +320,7 @@ SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100][2][3]
 NULL
 
 # exceeds maximum dimension
-query error cannot subscript type i32
+query error cannot subscript type int4
 SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2][3][1]
 
 # 🔬🔬 list list list slices
@@ -668,19 +668,19 @@ SELECT (LIST[1,2,3][LIST[1][2.0 / 2]])::text
 query error invalid input syntax for int8: invalid digit found in string: "dog"
 SELECT LIST[1,2,3]['dog']
 
-query error subscript \(indexing\) does not support casting from date to i64
+query error subscript \(indexing\) does not support casting from date to int8
 SELECT LIST [[1, 2, 3], [4, 5]][DATE '2001-01-01']
 
-query error subscript \(indexing\) does not support casting from timestamp to i64
+query error subscript \(indexing\) does not support casting from timestamp to int8
 SELECT LIST [[1, 2, 3], [4, 5]][TIMESTAMP '2001-01-01']
 
 query error invalid input syntax for int8: invalid digit found in string: "dog"
 SELECT (LIST[1,2,3][1:'dog'])::text
 
-query error subscript \(slicing\) does not support casting from date to i64
+query error subscript \(slicing\) does not support casting from date to int8
 SELECT LIST [[1, 2, 3], [4, 5]][1:DATE '2001-01-01']
 
-query error subscript \(slicing\) does not support casting from timestamp to i64
+query error subscript \(slicing\) does not support casting from timestamp to int8
 SELECT LIST [[1, 2, 3], [4, 5]][1:TIMESTAMP '2001-01-01']
 
 # 🔬 Built-in functions
@@ -1244,7 +1244,7 @@ NULL
 query error invalid input syntax for int4: invalid digit found in string: "dog"
 SELECT (LIST['1', 'dog']::int list)::text
 
-query error CAST does not support casting from date list to i32 list
+query error CAST does not support casting from date list to int4 list
 SELECT LIST[DATE '2008-02-01']::int list
 
 # 🔬🔬🔬 Multi-dimensional and jagged lists
@@ -1324,7 +1324,7 @@ SELECT length(LIST['1','2']::text)
 ----
 5
 
-query error Cannot call function length\(string list\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function length\(text list\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT length(LIST['1','2'])
 
 # 🔬🔬 text to list
@@ -1863,23 +1863,23 @@ SELECT (NULL::INT LIST || NULL::INT LIST LIST)::text
 
 # 🔬🔬🔬 errors
 
-query error no overload for i32 list || unknown: Cannot concatenate i32 list and string list
+query error no overload for int4 list || unknown: Cannot concatenate int4 list and string list
 SELECT LIST[1] || LIST['a']
 
-query error  no overload for i32 list || unknown: Cannot concatenate i32 list and string
+query error  no overload for int4 list || unknown: Cannot concatenate int4 list and string
 SELECT LIST[1] || 'a'
 
-query error no overload for unknown || i32 list: Cannot concatenate string list and i32 list
+query error no overload for unknown || int4 list: Cannot concatenate string list and int4 list
 SELECT LIST[NULL] || LIST[1]
 
-query error no overload for unknown || i32 list: Cannot concatenate string list list and i32 list
+query error no overload for unknown || int4 list: Cannot concatenate string list list and int4 list
 SELECT LIST[[NULL]] || LIST[1]
 
-query error no overload for i32 list list list || i32 list: Cannot concatenate i32 list list list and i32 list
+query error no overload for int4 list list list || int4 list: Cannot concatenate int4 list list list and int4 list
 SELECT LIST[[[1]]] || LIST[2]
 
 # Literal text cannot be implicitly cast to list
-query error no overload for i32 list || string: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error no overload for int4 list || string: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT LIST[1] || '{2}'::text
 
 # Two lists containing implicitly castable element types are not implicitly castable to one another
@@ -1918,7 +1918,7 @@ SELECT '{{1,2}}'::int4_list_c list::text
 query T
 SELECT pg_typeof(NULL::int4_list_c);
 ----
-list
+int4_list_c
 
 statement ok
 CREATE TYPE int4_list_list_c AS LIST (element_type = int4_list_c);
