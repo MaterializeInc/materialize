@@ -16,7 +16,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use anyhow::bail;
-use itertools::Itertools;
 
 use ore::collections::CollectionExt;
 use repr::{ColumnType, RelationDesc, ScalarType};
@@ -352,52 +351,11 @@ impl<'a> StatementContext<'a> {
         Ok(out)
     }
 
-    pub fn get_scalar_type_name(&self, typ: &ScalarType) -> String {
-        use ScalarType::*;
-
-        match typ {
-            Array(t) => format!("{}[]", self.get_scalar_type_name(t)),
-            List { custom_oid, .. } | Map { custom_oid, .. } if custom_oid.is_some() => {
-                let full_name = self.catalog.get_item_by_oid(&custom_oid.unwrap()).name();
-                self.catalog.minimal_qualification(full_name).to_string()
-            }
-            List { element_type, .. } => {
-                format!("{} list", self.get_scalar_type_name(element_type))
-            }
-            Map { value_type, .. } => {
-                format!(
-                    "map[{}=>{}]",
-                    self.get_scalar_type_name(&ScalarType::String),
-                    self.get_scalar_type_name(value_type)
-                )
-            }
-            Record { fields } => format!(
-                "record({})",
-                fields
-                    .iter()
-                    .map(|f| format!("{}: {}", f.0, self.get_column_type_name(&f.1)))
-                    .join(",")
-            ),
-            ty => {
-                let full_name = self
-                    .catalog
-                    .get_item_by_oid(&pgrepr::Type::from(ty).oid())
-                    .name();
-                let res = self.catalog.minimal_qualification(full_name).to_string();
-                if let ScalarType::Decimal(p, s) = typ {
-                    format!("{}({},{})", res, p, s)
-                } else {
-                    res
-                }
-            }
-        }
+    pub fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
+        self.catalog.humanize_scalar_type(typ)
     }
 
-    pub fn get_column_type_name(&self, typ: &ColumnType) -> String {
-        format!(
-            "{}{}",
-            self.get_scalar_type_name(&typ.scalar_type),
-            if typ.nullable { "?" } else { "" }
-        )
+    pub fn humanize_column_type(&self, typ: &ColumnType) -> String {
+        self.catalog.humanize_column_type(typ)
     }
 }

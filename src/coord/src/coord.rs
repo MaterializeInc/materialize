@@ -44,7 +44,7 @@ use dataflow_types::{
     SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use expr::{
-    GlobalId, Id, IdHumanizer, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
+    ExprHumanizer, GlobalId, Id, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
     ScalarExpr, SourceInstanceId,
 };
 use ore::collections::CollectionExt;
@@ -1404,7 +1404,7 @@ where
                 object_columns,
             } => tx.send(
                 self.sequence_tail(
-                    session.conn_id(),
+                    &session,
                     id,
                     with_snapshot,
                     ts,
@@ -1426,6 +1426,7 @@ where
                 options,
             } => tx.send(
                 self.sequence_explain_plan(
+                    &session,
                     raw_plan,
                     decorrelated_plan,
                     row_set_finishing,
@@ -2107,7 +2108,7 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn sequence_tail(
         &mut self,
-        conn_id: u32,
+        session: &Session,
         source_id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
@@ -2121,11 +2122,12 @@ where
         let sink_name = format!(
             "tail-source-{}",
             self.catalog
+                .for_session(session)
                 .humanize_id(source_id)
                 .expect("Source id is known to exist in catalog")
         );
         let sink_id = self.catalog.allocate_id()?;
-        self.active_tails.insert(conn_id, sink_id);
+        self.active_tails.insert(session.conn_id(), sink_id);
         let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
@@ -2317,6 +2319,7 @@ where
 
     fn sequence_explain_plan(
         &mut self,
+        session: &Session,
         raw_plan: sql::plan::RelationExpr,
         decorrelated_plan: expr::RelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
@@ -2325,7 +2328,8 @@ where
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let explanation_string = match stage {
             ExplainStage::RawPlan => {
-                let mut explanation = sql::plan::Explanation::new(&raw_plan, &self.catalog);
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = sql::plan::Explanation::new(&raw_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2335,8 +2339,8 @@ where
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
-                let mut explanation =
-                    expr::explain::Explanation::new(&decorrelated_plan, &self.catalog);
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = expr::explain::Explanation::new(&decorrelated_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2349,8 +2353,8 @@ where
                 let optimized_plan = self
                     .prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?
                     .into_inner();
-                let mut explanation =
-                    expr::explain::Explanation::new(&optimized_plan, &self.catalog);
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = expr::explain::Explanation::new(&optimized_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }

@@ -14,6 +14,7 @@ use std::time::SystemTime;
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
@@ -22,8 +23,8 @@ use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
-use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::{RelationDesc, ScalarType};
+use expr::{ExprHumanizer, GlobalId, OptimizedRelationExpr, ScalarExpr};
+use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::Expr;
 use sql::catalog::{Catalog as SqlCatalog, CatalogError as SqlCatalogError};
@@ -1631,12 +1632,6 @@ impl Catalog {
     }
 }
 
-impl IdHumanizer for Catalog {
-    fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        self.by_id.get(&id).map(|entry| entry.name.to_string())
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum Op {
     CreateDatabase {
@@ -1756,6 +1751,91 @@ impl From<PlanContext> for SerializedPlanContext {
 impl ConnCatalog<'_> {
     fn resolve_item_name(&self, name: &PartialName) -> Result<&FullName, SqlCatalogError> {
         self.resolve_item(name).map(|entry| entry.name())
+    }
+
+    fn minimal_qualification(&self, full_name: &FullName) -> PartialName {
+        let database = match &full_name.database {
+            DatabaseSpecifier::Ambient => None,
+            DatabaseSpecifier::Name(n) if *n == self.database => None,
+            DatabaseSpecifier::Name(n) => Some(n.clone()),
+        };
+
+        let schema = if database.is_none()
+            && self.resolve_item_name(&PartialName {
+                database: None,
+                schema: None,
+                item: full_name.item.clone(),
+            }) == Ok(full_name)
+        {
+            None
+        } else {
+            // If `search_path` does not contain `full_name.schema`, the
+            // `PartialName` must contain it.
+            Some(full_name.schema.clone())
+        };
+
+        let res = PartialName {
+            database,
+            schema,
+            item: full_name.item.clone(),
+        };
+        assert_eq!(self.resolve_item_name(&res), Ok(full_name));
+        res
+    }
+}
+
+impl ExprHumanizer for ConnCatalog<'_> {
+    fn humanize_id(&self, id: GlobalId) -> Option<String> {
+        self.catalog
+            .by_id
+            .get(&id)
+            .map(|entry| entry.name.to_string())
+    }
+
+    fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
+        use ScalarType::*;
+
+        match typ {
+            Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
+            List { custom_oid, .. } | Map { custom_oid, .. } if custom_oid.is_some() => {
+                let full_name = self.get_item_by_oid(&custom_oid.unwrap()).name();
+                self.minimal_qualification(full_name).to_string()
+            }
+            List { element_type, .. } => {
+                format!("{} list", self.humanize_scalar_type(element_type))
+            }
+            Map { value_type, .. } => {
+                format!(
+                    "map[{}=>{}]",
+                    self.humanize_scalar_type(&ScalarType::String),
+                    self.humanize_scalar_type(value_type)
+                )
+            }
+            Record { fields } => format!(
+                "record({})",
+                fields
+                    .iter()
+                    .map(|f| format!("{}: {}", f.0, self.humanize_column_type(&f.1)))
+                    .join(",")
+            ),
+            ty => {
+                let full_name = self.get_item_by_oid(&pgrepr::Type::from(ty).oid()).name();
+                let res = self.minimal_qualification(full_name).to_string();
+                if let ScalarType::Decimal(p, s) = typ {
+                    format!("{}({},{})", res, p, s)
+                } else {
+                    res
+                }
+            }
+        }
+    }
+
+    fn humanize_column_type(&self, typ: &ColumnType) -> String {
+        format!(
+            "{}{}",
+            self.humanize_scalar_type(&typ.scalar_type),
+            if typ.nullable { "?" } else { "" }
+        )
     }
 }
 
@@ -1882,41 +1962,6 @@ impl SqlCatalog for ConnCatalog<'_> {
     fn config(&self) -> &sql::catalog::CatalogConfig {
         &self.catalog.config
     }
-
-    fn minimal_qualification(&self, full_name: &FullName) -> PartialName {
-        let database = match &full_name.database {
-            DatabaseSpecifier::Ambient => None,
-            DatabaseSpecifier::Name(n) => {
-                if *n == self.database {
-                    None
-                } else {
-                    Some(n.clone())
-                }
-            }
-        };
-
-        let schema = if database.is_none()
-            && self.resolve_item_name(&PartialName {
-                database: None,
-                schema: None,
-                item: full_name.item.clone(),
-            }) == Ok(full_name)
-        {
-            None
-        } else {
-            // If `search_path` does not contain `full_name.schema`, the
-            // `PartialName` must contain it.
-            Some(full_name.schema.clone())
-        };
-
-        let res = PartialName {
-            database,
-            schema,
-            item: full_name.item.clone(),
-        };
-        assert_eq!(self.resolve_item_name(&res), Ok(full_name));
-        res
-    }
 }
 
 impl sql::catalog::CatalogDatabase for Database {
@@ -2011,5 +2056,85 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn used_by(&self) -> &[GlobalId] {
         self.used_by()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::NamedTempFile;
+
+    use sql::names::{DatabaseSpecifier, FullName, PartialName};
+
+    use crate::catalog::{Catalog, MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA};
+    use crate::session::Session;
+
+    /// System sessions have an empty `search_path` so it's necessary to
+    /// schema-qualify all referenced items.
+    ///
+    /// Dummy (and ostensibly client) sessions contain system schemas in their
+    /// search paths, so do not require schema qualification on system objects such
+    /// as types.
+    #[test]
+    fn test_minimal_qualification() -> Result<(), anyhow::Error> {
+        struct TestCase {
+            input: FullName,
+            system_output: PartialName,
+            normal_output: PartialName,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                input: FullName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: PG_CATALOG_SCHEMA.to_string(),
+                    item: "numeric".to_string(),
+                },
+                system_output: PartialName {
+                    database: None,
+                    schema: Some(PG_CATALOG_SCHEMA.to_string()),
+                    item: "numeric".to_string(),
+                },
+                normal_output: PartialName {
+                    database: None,
+                    schema: None,
+                    item: "numeric".to_string(),
+                },
+            },
+            TestCase {
+                input: FullName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: MZ_CATALOG_SCHEMA.to_string(),
+                    item: "mz_array_types".to_string(),
+                },
+                system_output: PartialName {
+                    database: None,
+                    schema: Some(MZ_CATALOG_SCHEMA.to_string()),
+                    item: "mz_array_types".to_string(),
+                },
+                normal_output: PartialName {
+                    database: None,
+                    schema: None,
+                    item: "mz_array_types".to_string(),
+                },
+            },
+        ];
+
+        let catalog_file = NamedTempFile::new()?;
+        let catalog = Catalog::open_debug(catalog_file.path())?;
+        for tc in test_cases {
+            assert_eq!(
+                catalog
+                    .for_system_session()
+                    .minimal_qualification(&tc.input),
+                tc.system_output
+            );
+            assert_eq!(
+                catalog
+                    .for_session(&Session::dummy())
+                    .minimal_qualification(&tc.input),
+                tc.normal_output
+            );
+        }
+        Ok(())
     }
 }

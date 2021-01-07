@@ -52,15 +52,6 @@ impl ColumnType {
         self.nullable = nullable;
         self
     }
-
-    /// Returns a value suitable for `EXPLAIN` statements.
-    pub fn explain(&self) -> String {
-        format!(
-            "{}{}",
-            self.scalar_type.explain(),
-            if self.nullable { "?" } else { "" }
-        )
-    }
 }
 
 /// The type of a relation.

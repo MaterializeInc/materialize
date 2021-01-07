@@ -1155,7 +1155,7 @@ pub fn plan_create_type(
                 Some(ScalarType::String) => {}
                 Some(t) => bail!(
                     "key_type must be text, got {}",
-                    scx.get_scalar_type_name(&t)
+                    scx.humanize_scalar_type(&t)
                 ),
                 None => unreachable!("already guaranteed id correlates to a type"),
             }
