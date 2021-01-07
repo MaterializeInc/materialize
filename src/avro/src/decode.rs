@@ -884,7 +884,6 @@ pub mod public_decoders {
             DefaultArrayAsVecDecoder::<T>::default()
         }
     }
-
     pub struct TrivialDecoder;
 
     impl TrivialDecoder {
