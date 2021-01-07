@@ -190,8 +190,8 @@ impl CoercibleScalarExpr {
             bail!(
                 "{} must have type {}, not type {}",
                 ecx.name,
-                ecx.get_scalar_type_name(ty),
-                ecx.get_scalar_type_name(&expr_ty),
+                ecx.humanize_scalar_type(ty),
+                ecx.humanize_scalar_type(&expr_ty),
             );
         }
         Ok(expr)

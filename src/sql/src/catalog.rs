@@ -17,8 +17,8 @@ use std::time::SystemTime;
 use std::{error::Error, unimplemented};
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use expr::{GlobalId, ScalarExpr};
-use repr::{RelationDesc, ScalarType};
+use expr::{DummyHumanizer, ExprHumanizer, GlobalId, ScalarExpr};
+use repr::{ColumnType, RelationDesc, ScalarType};
 use sql_parser::ast::Expr;
 use uuid::Uuid;
 
@@ -49,7 +49,7 @@ use crate::plan::PlanContext;
 /// [`list_databases`]: Catalog::list_databases
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: Catalog::resolve_item
-pub trait Catalog: fmt::Debug {
+pub trait Catalog: fmt::Debug + ExprHumanizer {
     /// Returns the search path used by the catalog.
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str>;
 
@@ -119,9 +119,6 @@ pub trait Catalog: fmt::Debug {
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
-
-    /// Determines the minimal qualification required to address the named item.
-    fn minimal_qualification(&self, full_name: &FullName) -> PartialName;
 }
 
 /// Configuration associated with a catalog.
@@ -353,8 +350,18 @@ impl Catalog for DummyCatalog {
     fn config(&self) -> &CatalogConfig {
         &DUMMY_CONFIG
     }
+}
 
-    fn minimal_qualification(&self, _full_name: &FullName) -> PartialName {
-        unimplemented!()
+impl ExprHumanizer for DummyCatalog {
+    fn humanize_id(&self, id: GlobalId) -> Option<String> {
+        DummyHumanizer.humanize_id(id)
+    }
+
+    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+        DummyHumanizer.humanize_scalar_type(ty)
+    }
+
+    fn humanize_column_type(&self, ty: &ColumnType) -> String {
+        DummyHumanizer.humanize_column_type(ty)
     }
 }

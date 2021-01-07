@@ -30,7 +30,7 @@ use std::iter;
 
 use repr::RelationType;
 
-use crate::{Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, RowSetFinishing};
+use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, RelationExpr, RowSetFinishing};
 
 /// An `Explanation` facilitates pretty-printing of a [`RelationExpr`].
 ///
@@ -39,7 +39,7 @@ use crate::{Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, RowSetFi
 /// explanation via the other public methods on the type.
 #[derive(Debug)]
 pub struct Explanation<'a> {
-    id_humanizer: &'a dyn IdHumanizer,
+    expr_humanizer: &'a dyn ExprHumanizer,
     /// One `ExplanationNode` for each `RelationExpr` in the plan, in
     /// left-to-right post-order.
     nodes: Vec<ExplanationNode<'a>>,
@@ -105,7 +105,7 @@ impl<'a> fmt::Display for Explanation<'a> {
 
 impl<'a> Explanation<'a> {
     /// Creates an explanation for a [`RelationExpr`].
-    pub fn new(expr: &'a RelationExpr, id_humanizer: &'a dyn IdHumanizer) -> Explanation<'a> {
+    pub fn new(expr: &'a RelationExpr, expr_humanizer: &'a dyn ExprHumanizer) -> Explanation<'a> {
         use RelationExpr::*;
 
         // Do a post-order traversal of the expression, grouping "chains" of
@@ -180,7 +180,7 @@ impl<'a> Explanation<'a> {
         }
 
         let mut explanation = Explanation {
-            id_humanizer,
+            expr_humanizer,
             nodes: vec![],
             finishing: None,
             expr_chains: HashMap::new(),
@@ -230,7 +230,7 @@ impl<'a> Explanation<'a> {
                 Id::Global(id) => writeln!(
                     f,
                     "| Get {} ({})",
-                    self.id_humanizer
+                    self.expr_humanizer
                         .humanize_id(*id)
                         .unwrap_or_else(|| "?".to_owned()),
                     id,
@@ -356,7 +356,10 @@ impl<'a> Explanation<'a> {
         }
 
         if let Some(RelationType { column_types, keys }) = &node.typ {
-            let column_types: Vec<_> = column_types.iter().map(|c| c.explain()).collect();
+            let column_types: Vec<_> = column_types
+                .iter()
+                .map(|c| self.expr_humanizer.humanize_column_type(c))
+                .collect();
             writeln!(f, "| | types = ({})", separated(", ", column_types))?;
             writeln!(
                 f,
