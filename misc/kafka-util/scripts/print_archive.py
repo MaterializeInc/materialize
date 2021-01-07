@@ -60,8 +60,8 @@ def print_archive(args: argparse.Namespace) -> None:
         if args.print_schemas:
             printer(json.loads(key_schema))
             printer(json.loads(value_schema))
-    except KeyError:
-        log.error("Failed to locate schema for topic {topic}")
+    except KeyError as e:
+        log.error(f"Failed to locate schema for topic {topic}")
         raise
 
     key_reader = avro.io.DatumReader(avro.schema.parse(key_schema))
@@ -82,7 +82,8 @@ def print_archive(args: argparse.Namespace) -> None:
         value = table["value"][i].as_py()
         timestamp = table["timestamp"][i].value
 
-        # Strip the first 5 bytes, as they are added by Kafka
+        # Strip the first 5 bytes, as they are added by Confluent Platform and are not part of the
+        # actual serialized data
         decoded = {
             "key": decode(key_reader, key[5:]),
             "timestamp": timestamp,
@@ -125,9 +126,7 @@ def main() -> None:
         action="store_true",
     )
 
-    parser.add_argument(
-        "topic", help="Name of the topic", type=str, nargs="?",
-    )
+    parser.add_argument("topic", help="Name of the topic", type=str)
 
     args = parser.parse_args()
     print_archive(args)

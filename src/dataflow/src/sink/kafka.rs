@@ -22,9 +22,9 @@ use prometheus::{
 };
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
-use rdkafka::error::{KafkaError, RDKafkaError};
+use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::message::Message;
-use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
+use rdkafka::producer::{BaseRecord, DeliveryResult, Producer, ProducerContext, ThreadedProducer};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::FrontieredInputHandle;
@@ -151,7 +151,7 @@ impl KafkaSink {
             error!("unable to produce message in {}: {}", self.name, e);
             self.metrics.message_send_errors_counter.inc();
 
-            if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
+            if let KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull) = e {
                 self.activator.activate_after(Duration::from_secs(60));
                 Err(true)
             } else {

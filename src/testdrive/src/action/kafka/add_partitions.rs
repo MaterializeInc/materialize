@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rdkafka::admin::NewPartitions;
+use rdkafka::producer::Producer;
 
 use ore::collections::CollectionExt;
 use ore::retry;

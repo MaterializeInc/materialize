@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic};
 use rdkafka::client::ClientContext;
-use rdkafka::error::{KafkaError, RDKafkaError};
+use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 
 use ore::collections::CollectionExt;
 use ore::retry;
@@ -51,7 +51,7 @@ where
         return Err(CreateTopicError::TopicCountMismatch(res.len()));
     }
     match res.into_element() {
-        Ok(_) | Err((_, RDKafkaError::TopicAlreadyExists)) => Ok(()),
+        Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => Ok(()),
         Err((_, e)) => Err(CreateTopicError::Kafka(KafkaError::AdminOp(e))),
     }?;
 

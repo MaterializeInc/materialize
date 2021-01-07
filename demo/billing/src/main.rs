@@ -20,11 +20,11 @@
 
 use std::process;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
 use protobuf::Message;
 use structopt::StructOpt;
+use tokio::time::{self, Duration};
 
 use test_util::kafka::kafka_client;
 use test_util::mz_client;
@@ -111,7 +111,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     let mut messages_remaining = config.message_count;
     while messages_remaining > 0 {
         let mut bytes_sent = 0;
-        let backoff = tokio::time::delay_for(Duration::from_secs(1));
+        let backoff = time::sleep(Duration::from_secs(1));
         let messages_to_send = std::cmp::min(config.messages_per_second, messages_remaining);
         for _ in 0..messages_to_send {
             let m = randomizer::random_batch(rng, &mut recordstate);
@@ -124,7 +124,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
                 }
                 Err(e) => {
                     log::error!("failed to produce message: {}", e);
-                    tokio::time::delay_for(Duration::from_millis(100)).await;
+                    time::sleep(Duration::from_millis(100)).await;
                 }
             };
             bytes_sent += buf.len();

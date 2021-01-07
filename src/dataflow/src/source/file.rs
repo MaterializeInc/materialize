@@ -10,12 +10,13 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 
 use anyhow::{Context, Error};
+#[cfg(target_os = "linux")]
+use inotify::{Inotify, WatchMask};
 use log::error;
-#[cfg(not(target_os = "macos"))]
-use notify::{RecursiveMode, Watcher};
 use timely::scheduling::{Activator, SyncActivator};
 
 use dataflow_types::{
@@ -134,7 +135,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         name: String,
         source_id: SourceInstanceId,
         active: bool,
-        _: usize,
+        worker_id: usize,
         _: usize,
         logger: Option<Logger>,
         consumer_activator: SyncActivator,
@@ -143,7 +144,8 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         _: DataEncoding,
     ) -> Result<FileSourceInfo<Vec<u8>>, anyhow::Error> {
         let receiver = match connector {
-            ExternalSourceConnector::File(fc) => {
+            ExternalSourceConnector::File(fc) if active => {
+                log::debug!("creating FileSourceInfo worker_id={}", worker_id);
                 let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000);
                 let tail = if fc.tail {
@@ -154,6 +156,11 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
                 std::thread::spawn(move || {
                     read_file_task(fc.path, tx, Some(consumer_activator), tail, ctor);
                 });
+                rx
+            }
+            ExternalSourceConnector::File(_) => {
+                log::trace!("creating stub FileSourceInfo worker_id={}", worker_id);
+                let (_tx, rx) = std::sync::mpsc::sync_channel(0);
                 rx
             }
             _ => panic!(
@@ -303,6 +310,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
     Err: Into<anyhow::Error>,
 {
+    log::trace!("reading file {}", path.display());
     let file = match std::fs::File::open(&path).with_context(|| {
         format!(
             "file source: unable to open file at path {}",
@@ -319,6 +327,8 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     let iter = match read_style {
         FileReadStyle::ReadOnce => iter_ctor(Box::new(file)),
         FileReadStyle::TailFollowFd => {
+            let (notice_tx, notice_rx) = mpsc::channel();
+
             // FSEvents doesn't raise events until you close the file, making it
             // useless for tailing log files that are kept open by the daemon
             // writing to them.
@@ -332,32 +342,23 @@ pub fn read_file_task<Ctor, I, Out, Err>(
             // if the file has data available.
             //
             // https://github.com/notify-rs/notify/issues/240
-            #[cfg(target_os = "macos")]
-            let (file_events_stream, handle) = {
-                let (timer_tx, timer_rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    while let Ok(()) = timer_tx.send(()) {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                });
-                (timer_rx, ())
-            };
+            #[cfg(not(target_os = "linux"))]
+            thread::spawn(move || {
+                while let Ok(()) = notice_tx.send(()) {
+                    thread::sleep(std::time::Duration::from_millis(100));
+                }
+            });
 
-            #[cfg(not(target_os = "macos"))]
-            let (file_events_stream, handle) = {
-                let (notice_tx, notice_rx) = std::sync::mpsc::channel();
-                let mut w = match notify::RecommendedWatcher::new_raw(notice_tx) {
+            #[cfg(target_os = "linux")]
+            {
+                let mut inotify = match Inotify::init() {
                     Ok(w) => w,
                     Err(err) => {
-                        error!(
-                            "file source: failed to create notify watcher: {:#} (path: {})",
-                            err,
-                            path.display()
-                        );
+                        error!("file source: failed to initialize inotify: {:#}", err,);
                         return;
                     }
                 };
-                if let Err(err) = w.watch(&path, RecursiveMode::NonRecursive) {
+                if let Err(err) = inotify.add_watch(&path, WatchMask::ALL_EVENTS) {
                     error!(
                         "file source: failed to add watch for file: {:#} (path: {})",
                         err,
@@ -365,13 +366,34 @@ pub fn read_file_task<Ctor, I, Out, Err>(
                     );
                     return;
                 }
-                (notice_rx, w)
+                let path = path.clone();
+                thread::spawn(move || {
+                    // This buffer must be at least `sizeof(struct inotify_event) + NAME_MAX + 1`.
+                    // The `inotify` crate documentation uses 1KB, so that's =
+                    // what we do too.
+                    let mut buf = [0; 1024];
+                    loop {
+                        if let Err(err) = inotify.read_events_blocking(&mut buf) {
+                            error!(
+                                "file source: failed to get events for file: {:#} (path: {})",
+                                err,
+                                path.display()
+                            );
+                            return;
+                        };
+                        if notice_tx.send(()).is_err() {
+                            // If the notice_tx returns an error, it's because
+                            // the source has been dropped. Just exit the
+                            // thread.
+                            return;
+                        }
+                    }
+                });
             };
 
             let file = ForeverTailedFile {
-                rx: file_events_stream,
+                rx: notice_rx,
                 inner: file,
-                _h: handle,
             };
 
             iter_ctor(Box::new(file))
@@ -405,21 +427,18 @@ pub enum FileReadStyle {
 ///
 /// This involves silently swallowing EOFs,
 /// and waiting on a Notify handle for more data to be written.
-struct ForeverTailedFile<Ev, Handle> {
+struct ForeverTailedFile<Ev> {
     rx: std::sync::mpsc::Receiver<Ev>,
     inner: std::fs::File,
-    // This field only exists to keep the file watcher or timer
-    // alive
-    _h: Handle,
 }
 
-impl<Ev, H> Skip for ForeverTailedFile<Ev, H> {
+impl<Ev> Skip for ForeverTailedFile<Ev> {
     fn skip(&mut self, len: usize) -> Result<(), io::Error> {
         self.inner.skip(len)
     }
 }
 
-impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
+impl<Ev> Read for ForeverTailedFile<Ev> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
             // First drain the buffer of pending events from notify.
@@ -451,7 +470,9 @@ fn send_records<I, Out, Err>(
     I: IntoIterator<Item = Result<Out, Err>>,
     Err: Into<anyhow::Error>,
 {
+    let mut records = 0;
     for record in iter {
+        records += 1;
         let record = record.map_err(Into::into);
         // TODO: each call to `send` allocates and performs some
         // atomic work; we could aim to batch up transmissions.
@@ -466,4 +487,5 @@ fn send_records<I, Out, Err>(
             activator.activate().expect("activation failed");
         }
     }
+    log::trace!("sent {} records to reader", records);
 }

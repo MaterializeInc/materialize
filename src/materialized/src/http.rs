@@ -13,12 +13,14 @@
 //! process. At the moment, its primary exports are Prometheus metrics, heap
 //! profiles, and catalog dumps.
 
+use std::pin::Pin;
 use std::time::Instant;
 
 use futures::future::{FutureExt, TryFutureExt};
 use hyper::{service, Method};
-use openssl::ssl::SslAcceptor;
+use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_openssl::SslStream;
 
 use ore::netio::SniffedStream;
 
@@ -41,7 +43,7 @@ fn sniff_tls(buf: &[u8]) -> bool {
 }
 
 pub struct Server {
-    tls: Option<SslAcceptor>,
+    tls: Option<SslContext>,
     coord_client: coord::Client,
     /// When this server started
     start_time: Instant,
@@ -49,7 +51,7 @@ pub struct Server {
 
 impl Server {
     pub fn new(
-        tls: Option<SslAcceptor>,
+        tls: Option<SslContext>,
         coord_client: coord::Client,
         start_time: Instant,
         worker_count: &str,
@@ -83,8 +85,9 @@ impl Server {
     {
         match (&self.tls, sniff_tls(&conn.sniff_buffer())) {
             (Some(tls), true) => {
-                let conn = tokio_openssl::accept(tls, conn).await?;
-                self.handle_connection_inner(conn).await
+                let mut ssl_stream = SslStream::new(Ssl::new(tls)?, conn)?;
+                Pin::new(&mut ssl_stream).accept().await?;
+                self.handle_connection_inner(ssl_stream).await
             }
             _ => self.handle_connection_inner(conn).await,
         }

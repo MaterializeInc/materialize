@@ -13,8 +13,8 @@ use ore::collections::CollectionExt;
 use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::VisitMut;
 use sql::ast::{
-    CreateIndexStatement, CreateTableStatement, CreateViewStatement, DataType, Ident, ObjectName,
-    Statement,
+    CreateIndexStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType,
+    Ident, ObjectName, Statement,
 };
 
 use crate::catalog::PG_CATALOG_SCHEMA;
@@ -88,6 +88,16 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                         for key_part in key_parts {
                             TypeNormalizer.visit_expr_mut(key_part);
                         }
+                    }
+                }
+
+                Statement::CreateType(CreateTypeStatement {
+                    name: _,
+                    as_type: _,
+                    with_options,
+                }) => {
+                    for option in with_options {
+                        TypeNormalizer.visit_sql_option_mut(option);
                     }
                 }
 

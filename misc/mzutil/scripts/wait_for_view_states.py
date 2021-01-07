@@ -41,9 +41,11 @@ def view_names(
             yield row[0]
 
 
-def view_matches(
-    cursor: psycopg2.extensions.cursor, view: str, expected: str, timestamp: int
-) -> bool:
+class ViewNotReady(Exception):
+    pass
+
+
+def view_contents(cursor: psycopg2.extensions.cursor, view: str, timestamp: int) -> str:
     """Return True if a SELECT from the VIEW matches the expected string."""
     stream = io.StringIO()
     query = f"COPY (SELECT * FROM {view} WHERE mz_logical_timestamp() > {timestamp}) TO STDOUT"
@@ -51,8 +53,8 @@ def view_matches(
         cursor.copy_expert(query, stream)
     except psycopg2.errors.InternalError_:
         # The view is not yet ready to be queried
-        return False
-    return stream.getvalue() == expected
+        raise ViewNotReady()
+    return stream.getvalue().strip()
 
 
 def source_at_offset(
@@ -81,11 +83,12 @@ def source_at_offset(
 def wait_for_materialize_views(args: argparse.Namespace) -> None:
     """Record the current table status of all views installed in Materialize."""
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
     # Create a dictionary mapping view names (as calculated from the filename) to expected contents
     view_snapshots = {
-        p.stem: p.read_text() for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
+        p.stem: p.read_text().strip()
+        for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
     }
 
     # Create a dictionary mapping view names to source name and offset
@@ -109,19 +112,37 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
         while pending_views:
             views_to_remove = []
+            time_taken = time.monotonic() - start_time
             for view in pending_views:
                 with conn.cursor() as cursor:
 
+                    # Determine if the source is at the desired offset and identify the
+                    # mz_logical_timestamp associated with the offset
                     desired_offset = source_offsets[view]["offset"]
                     source_name = source_offsets[view]["topic"]
                     timestamp = source_at_offset(cursor, source_name, desired_offset)
                     if not timestamp:
                         continue
 
-                    if view_matches(cursor, view, view_snapshots[view], timestamp):
-                        time_taken = time.time() - start_time
-                        print(f"{time_taken:>6.1f}s: {view}")
-                        views_to_remove.append(view)
+                    # Get the contents of the view at the desired timestamp, where an empty result
+                    # implies that the desired timestamp is not yet incorporated into the view
+                    try:
+                        contents = view_contents(cursor, view, timestamp)
+                        if not contents:
+                            continue
+                    except ViewNotReady:
+                        continue
+
+                    views_to_remove.append(view)
+                    expected = view_snapshots[view]
+                    if contents == expected:
+                        print(
+                            f"PASSED: {time_taken:>6.1f}s: {view} (result={contents})"
+                        )
+                    else:
+                        print(
+                            f"FAILED: {time_taken:>6.1f}s: {view} ({contents} != {expected})"
+                        )
 
             for view in views_to_remove:
                 pending_views.remove(view)

@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use tokio::io;
-use tokio::time::{Delay, Duration, Instant, Timeout};
+use tokio::time::{self, Duration, Instant, Sleep, Timeout};
 
 use crate::protocol;
 
@@ -66,7 +66,7 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             match &mut self.state {
-                TryConnectFutureState::Connecting(future) => match Pin::new(future).poll(cx) {
+                TryConnectFutureState::Connecting(future) => match future.as_mut().poll(cx) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(Ok(Ok(conn))) => {
                         return Poll::Ready(Ok(conn));
@@ -84,7 +84,7 @@ where
                         )));
                     }
                 },
-                TryConnectFutureState::Sleeping(future) => match Pin::new(future).poll(cx) {
+                TryConnectFutureState::Sleeping(future) => match future.as_mut().poll(cx) {
                     Poll::Ready(()) => {
                         self.state =
                             TryConnectFutureState::connect(self.addr.clone(), self.deadline)
@@ -97,8 +97,8 @@ where
 }
 
 enum TryConnectFutureState<C> {
-    Connecting(Timeout<Pin<Box<dyn Future<Output = Result<C, io::Error>> + Send>>>),
-    Sleeping(Delay),
+    Connecting(Pin<Box<Timeout<Pin<Box<dyn Future<Output = Result<C, io::Error>> + Send>>>>>),
+    Sleeping(Pin<Box<Sleep>>),
 }
 
 impl<C> TryConnectFutureState<C>
@@ -106,8 +106,8 @@ where
     C: protocol::Connection,
 {
     fn connect(addr: C::Addr, deadline: Instant) -> TryConnectFutureState<C> {
-        let future = tokio::time::timeout_at(deadline, C::connect(addr));
-        TryConnectFutureState::Connecting(future)
+        let future = time::timeout_at(deadline, C::connect(addr));
+        TryConnectFutureState::Connecting(Box::pin(future))
     }
 
     fn sleep(duration: Duration, deadline: Instant) -> TryConnectFutureState<C> {
@@ -115,7 +115,7 @@ where
         if when > deadline {
             when = deadline;
         }
-        TryConnectFutureState::Sleeping(tokio::time::delay_until(when))
+        TryConnectFutureState::Sleeping(Box::pin(time::sleep_until(when)))
     }
 }
 

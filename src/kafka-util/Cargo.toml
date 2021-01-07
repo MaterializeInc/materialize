@@ -17,5 +17,5 @@ rand = "0.8.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 serde = { version = "1.0.0", features = ["derive"] }
 serde_json = "1.0.0"
-tokio = { version = "0.2.0", features = ["macros"] }
+tokio = { version = "1.0.0", features = ["macros"] }
 url = "2.0.0"

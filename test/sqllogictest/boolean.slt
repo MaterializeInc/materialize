@@ -48,25 +48,25 @@ TRUE              true
 query error invalid input syntax for bool: "blah"
 SELECT 'blah'::bool
 
-query error NOT argument must have type bool, not type i32
+query error NOT argument must have type bool, not type int4
 SELECT NOT 1
 
-query error AND argument must have type bool, not type i32
+query error AND argument must have type bool, not type int4
 SELECT 1 AND 1
 
-query error OR argument must have type bool, not type i32
+query error OR argument must have type bool, not type int4
 SELECT 1 OR 1
 
-query error OR argument must have type bool, not type i32
+query error OR argument must have type bool, not type int4
 SELECT 1 OR FALSE
 
-query error OR argument must have type bool, not type i32
+query error OR argument must have type bool, not type int4
 SELECT FALSE OR 1
 
-query error AND argument must have type bool, not type i32
+query error AND argument must have type bool, not type int4
 SELECT 1 AND FALSE
 
-query error AND argument must have type bool, not type i32
+query error AND argument must have type bool, not type int4
 SELECT FALSE AND 1
 
 query B

@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use openssl::asn1::Asn1Time;
@@ -79,7 +80,7 @@ impl Config {
 }
 
 pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
-    let mut runtime = Runtime::new()?;
+    let runtime = Arc::new(Runtime::new()?);
     let (data_directory, temp_dir) = match config.data_directory {
         None => {
             // If no data directory is provided, we create a temporary
@@ -91,29 +92,32 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         }
         Some(data_directory) => (data_directory, None),
     };
-    let inner = runtime.block_on(materialized::serve(materialized::Config {
-        logging: config
-            .logging_granularity
-            .map(|granularity| coord::LoggingConfig {
-                granularity,
-                log_logging: false,
-            }),
-        timestamp_frequency: Duration::from_millis(10),
-        cache: None,
-        logical_compaction_window: None,
-        threads: config.threads,
-        process: 0,
-        addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
-        data_directory,
-        symbiosis_url: None,
-        listen_addr: None,
-        tls: config.tls,
-        experimental_mode: config.experimental_mode,
-        telemetry_url: None,
-    }))?;
+    let inner = runtime.block_on(materialized::serve(
+        materialized::Config {
+            logging: config
+                .logging_granularity
+                .map(|granularity| coord::LoggingConfig {
+                    granularity,
+                    log_logging: false,
+                }),
+            timestamp_frequency: Duration::from_millis(10),
+            cache: None,
+            logical_compaction_window: None,
+            threads: config.threads,
+            process: 0,
+            addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
+            data_directory,
+            symbiosis_url: None,
+            listen_addr: None,
+            tls: config.tls,
+            experimental_mode: config.experimental_mode,
+            telemetry_url: None,
+        },
+        runtime.clone(),
+    ))?;
     let server = Server {
         inner,
-        _runtime: runtime,
+        runtime,
         _temp_dir: temp_dir,
     };
     let client = server.connect()?;
@@ -122,7 +126,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
 
 pub struct Server {
     pub inner: materialized::Server,
-    _runtime: Runtime,
+    pub runtime: Arc<Runtime>,
     _temp_dir: Option<TempDir>,
 }
 
@@ -151,17 +155,19 @@ impl Server {
         Ok(self.pg_config().connect(postgres::NoTls)?)
     }
 
-    pub async fn connect_async(&self) -> Result<tokio_postgres::Client, Box<dyn Error>> {
+    pub async fn connect_async(
+        &self,
+    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), Box<dyn Error>> {
         let (client, conn) = self
             .pg_config_async()
             .connect(tokio_postgres::NoTls)
             .await?;
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             if let Err(err) = conn.await {
                 panic!("connection error: {}", err);
             }
         });
-        Ok(client)
+        Ok((client, handle))
     }
 }
 

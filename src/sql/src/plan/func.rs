@@ -363,7 +363,7 @@ impl ParamList {
     fn validate_arg_len(&self, input_len: usize) -> bool {
         match self {
             Self::Exact(p) => p.len() == input_len,
-            Self::Repeat(p) => input_len % p.len() == 0 && input_len > 0,
+            Self::Repeat(p) => input_len % p.len() == 0,
         }
     }
 
@@ -809,7 +809,7 @@ where
         let types: Vec<_> = types
             .into_iter()
             .map(|ty| match ty {
-                Some(ty) => ty.to_string(),
+                Some(ty) => ecx.humanize_scalar_type(&ty),
                 None => "unknown".to_string(),
             })
             .collect();
@@ -1121,7 +1121,7 @@ fn coerce_args_to_types(
                     bail!(
                         "could not constrain polymorphic type because {} used in \
                         position that does not accept arrays or lists",
-                        ty
+                        ecx.humanize_scalar_type(&ty)
                     )
                 }
                 do_convert(arg, &ty)?
@@ -1243,6 +1243,10 @@ lazy_static! {
             },
             "concat" => Scalar {
                  params!((Any)...) => Operation::variadic(|ecx, cexprs| {
+                    if cexprs.is_empty() {
+                        bail!("No function matches the given name and argument types. \
+                        You might need to add explicit type casts.")
+                    }
                     let mut exprs = vec![];
                     for expr in cexprs {
                         if ecx.scalar_type(&expr) == ScalarType::Bool {
@@ -1309,14 +1313,12 @@ lazy_static! {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
             },
             "jsonb_build_array" => Scalar {
-                params!() => VariadicFunc::JsonbBuildArray,
                 params!((Any)...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
                     func: VariadicFunc::JsonbBuildArray,
                     exprs: exprs.into_iter().map(|e| typeconv::to_jsonb(ecx, e)).collect(),
                 }))
             },
             "jsonb_build_object" => Scalar {
-                params!() => VariadicFunc::JsonbBuildObject,
                 params!((Any, Any)...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
                     func: VariadicFunc::JsonbBuildObject,
                     exprs: exprs.into_iter().tuples().map(|(key, val)| {
@@ -1388,8 +1390,8 @@ lazy_static! {
                 params!(Any) => Operation::new(|ecx, spec, exprs, params| {
                     // pg_typeof reports the type *before* coercion.
                     let name = match ecx.scalar_type(&exprs[0]) {
-                        None => "unknown",
-                        Some(ty) => pgrepr::Type::from(&ty).name(),
+                        None => "unknown".to_string(),
+                        Some(ty) => ecx.humanize_scalar_type(&ty),
                     };
 
                     // For consistency with other functions, verify that
@@ -1401,7 +1403,7 @@ lazy_static! {
                     // regtype, when we support that type. Document the function
                     // at that point. For now, it's useful enough to have this
                     // halfway version that returns a string.
-                    Ok(ScalarExpr::literal(Datum::String(name), ScalarType::String))
+                    Ok(ScalarExpr::literal(Datum::String(&name), ScalarType::String))
                 })
             },
             "regexp_match" => Scalar {

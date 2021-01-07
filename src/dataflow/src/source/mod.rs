@@ -465,7 +465,8 @@ impl ConsistencyInfo {
                 &source_id.to_string(),
                 &worker_id.to_string(),
             ),
-            time_since_downgrade: Instant::now(),
+            // we have never downgraded, so make sure the initial value is outside of our frequncy
+            time_since_downgrade: Instant::now() - timestamp_frequency,
             partition_metrics: Default::default(),
         }
     }
@@ -934,10 +935,10 @@ where
                 return SourceStatus::Done;
             }
 
-            if !read_cached_files {
-                // Downgrade capability (if possible) before reading next cached file.
-                consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
+            // Downgrade capability (if possible)
+            consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
 
+            if !read_cached_files {
                 if let Some(msgs) = source_info.next_cached_file() {
                     // TODO(rkhaitan) change this to properly re-use old timestamps.
                     // Currently this is hard to do because there can be arbitrary delays between

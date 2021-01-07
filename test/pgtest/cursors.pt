@@ -130,10 +130,10 @@ send
 Query {"query": "CLOSE c"}
 ----
 
-until
+until err_field_typs=M
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"cursor \"c\" does not exist"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"cursor \"c\" does not exist"}]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -152,10 +152,10 @@ Execute {"portal": "c"}
 Sync
 ----
 
-until
+until err_field_typs=M
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"portal \"c\" does not exist"}]}
 ReadyForQuery {"status":"I"}
 
 # Verify that Describe will fail before and after a transaction, but work within one.
