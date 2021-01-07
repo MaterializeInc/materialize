@@ -83,7 +83,7 @@ def source_at_offset(
 def wait_for_materialize_views(args: argparse.Namespace) -> None:
     """Record the current table status of all views installed in Materialize."""
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
     # Create a dictionary mapping view names (as calculated from the filename) to expected contents
     view_snapshots = {
@@ -112,7 +112,7 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
         while pending_views:
             views_to_remove = []
-            time_taken = time.time() - start_time
+            time_taken = time.monotonic() - start_time
             for view in pending_views:
                 with conn.cursor() as cursor:
 
