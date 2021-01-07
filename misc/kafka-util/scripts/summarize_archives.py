@@ -30,9 +30,8 @@ import pyarrow  # type: ignore
 import pyarrow.fs  # type: ignore
 
 # Setup basic formatting for logging output
-logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s %(message)s", level=logging.INFO)
 log = logging.getLogger("summarize.archive")
-log.setLevel(logging.INFO)
 
 
 def decode(reader: avro.io.DatumReader, msg: bytes) -> typing.Any:
@@ -51,8 +50,8 @@ def summarize_archive(archive: str) -> None:
     try:
         key_schema = schemas[f"{topic}-key"]["schema"]
         value_schema = schemas[f"{topic}-value"]["schema"]
-    except KeyError:
-        log.error(f"Failed to locate schema for topic {topic}")
+    except KeyError as e:
+        log.error("Failed to locate schema for topic %s", e)
         raise
 
     key_reader = avro.io.DatumReader(avro.schema.parse(key_schema))
@@ -78,7 +77,8 @@ def summarize_archive(archive: str) -> None:
         if value:
             value_bytes += len(value)
 
-        # Strip the first 5 bytes, as they are added by Kafka
+        # Strip the first 5 bytes, as they are added by Confluent Platform and are not part of the
+        # actual serialized data
         decoded = {
             "key": decode(key_reader, key[5:]),
             "timestamp": timestamp,
@@ -98,7 +98,7 @@ def summarize_archives(args: argparse.Namespace) -> None:
 
     topic_archives = glob.glob(f"{args.topic_filter}.arrow")
     if not topic_archives:
-        log.error(f"No archives matching filter {args.topic_filter}")
+        log.error("No archives matching filter %s", args.topic_filter)
         sys.exit(1)
 
     print("Topic,NumMessages,KeyBytes,ValueBytes,NumCreates,NumUpdates,NumDeletes")

@@ -27,9 +27,8 @@ import pyarrow  # type: ignore
 import pyarrow.fs  # type: ignore
 
 # Setup basic formatting for logging output
-logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s %(message)s", level=logging.INFO)
 log = logging.getLogger("print.records")
-log.setLevel(logging.INFO)
 
 
 def decode(reader: avro.io.DatumReader, msg: bytes) -> typing.Any:
@@ -61,7 +60,7 @@ def print_archive(args: argparse.Namespace) -> None:
             printer(json.loads(key_schema))
             printer(json.loads(value_schema))
     except KeyError as e:
-        log.error(f"Failed to locate schema for topic {topic}")
+        log.error("Failed to locate schema for topic: %s", e)
         raise
 
     key_reader = avro.io.DatumReader(avro.schema.parse(key_schema))
