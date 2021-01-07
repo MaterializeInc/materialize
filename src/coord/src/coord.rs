@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
@@ -1472,6 +1472,35 @@ where
                 self.drop_temp_items(session.conn_id()).await;
                 session.reset();
                 tx.send(Ok(ExecuteResponse::DiscardedAll), session);
+            }
+
+            Plan::Declare { name, stmt } => {
+                let param_types = vec![];
+                let res = self
+                    .handle_declare(&mut session, name, stmt, param_types)
+                    .map(|()| ExecuteResponse::DeclaredCursor);
+                tx.send(res, session);
+            }
+
+            Plan::Fetch {
+                name,
+                count,
+                timeout,
+            } => tx.send(
+                Ok(ExecuteResponse::Fetch {
+                    name,
+                    count,
+                    timeout,
+                }),
+                session,
+            ),
+
+            Plan::Close { name } => {
+                if session.remove_portal(&name) {
+                    tx.send(Ok(ExecuteResponse::ClosedCursor), session)
+                } else {
+                    tx.send(Err(anyhow!("cursor \"{}\" does not exist", name)), session)
+                }
             }
         }
     }
