@@ -818,40 +818,6 @@ impl<'a> ScalarType {
             _ => false,
         }
     }
-
-    /// Returns a Rust-like name for `self`, appropriate to use in `EXPLAIN`
-    /// statements.
-    pub fn explain(&self) -> String {
-        use ScalarType::*;
-        match self {
-            Bool => "bool".into(),
-            Int32 => "i32".into(),
-            Int64 => "i64".into(),
-            Float32 => "f32".into(),
-            Float64 => "f64".into(),
-            Decimal(p, s) => format!("decimal({}, {})", p, s),
-            Date => "date".into(),
-            Time => "time".into(),
-            Timestamp => "timestamp".into(),
-            TimestampTz => "timestamptz".into(),
-            Interval => "interval".into(),
-            Bytes => "bytes".into(),
-            String => "string".into(),
-            Jsonb => "jsonb".into(),
-            Uuid => "uuid".into(),
-            Array(t) => format!("{}[]", t.explain()),
-            List { element_type, .. } => format!("{} list", element_type.explain()),
-            Record { fields } => format!(
-                "record({})",
-                fields
-                    .iter()
-                    .map(|f| format!("{}: {}", f.0, f.1.explain()))
-                    .join(", ")
-            ),
-            Oid => "oid".into(),
-            Map { value_type, .. } => format!("map(text=>{})", value_type.explain()),
-        }
-    }
 }
 
 // TODO(benesch): the implementations of PartialEq and Hash for ScalarType can

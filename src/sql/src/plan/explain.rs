@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use expr::explain::{bracketed, separated, Indices};
-use expr::{Id, IdGen, IdHumanizer, RowSetFinishing};
+use expr::{ExprHumanizer, Id, IdGen, RowSetFinishing};
 use repr::{RelationType, ScalarType};
 
 use crate::plan::expr::{AggregateExpr, RelationExpr, ScalarExpr};
@@ -33,7 +33,7 @@ use crate::plan::expr::{AggregateExpr, RelationExpr, ScalarExpr};
 /// explanation via the other public methods on the type.
 #[derive(Debug)]
 pub struct Explanation<'a> {
-    id_humanizer: &'a dyn IdHumanizer,
+    expr_humanizer: &'a dyn ExprHumanizer,
     /// One `ExplanationNode` for each `RelationExpr` in the plan, in
     /// left-to-right post-order.
     nodes: Vec<ExplanationNode<'a>>,
@@ -94,13 +94,13 @@ impl<'a> fmt::Display for Explanation<'a> {
 
 impl<'a> Explanation<'a> {
     /// Creates an explanation for a [`RelationExpr`].
-    pub fn new(expr: &'a RelationExpr, id_humanizer: &'a dyn IdHumanizer) -> Explanation<'a> {
-        Self::new_internal(expr, id_humanizer, &mut IdGen::default())
+    pub fn new(expr: &'a RelationExpr, expr_humanizer: &'a dyn ExprHumanizer) -> Explanation<'a> {
+        Self::new_internal(expr, expr_humanizer, &mut IdGen::default())
     }
 
     pub fn new_internal(
         expr: &'a RelationExpr,
-        id_humanizer: &'a dyn IdHumanizer,
+        expr_humanizer: &'a dyn ExprHumanizer,
         id_gen: &mut IdGen,
     ) -> Explanation<'a> {
         use RelationExpr::*;
@@ -169,7 +169,7 @@ impl<'a> Explanation<'a> {
                 scalar.visit(&mut |scalar| match scalar {
                     ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
                         let subquery =
-                            Explanation::new_internal(expr, explanation.id_humanizer, id_gen);
+                            Explanation::new_internal(expr, explanation.expr_humanizer, id_gen);
                         explanation.expr_chains.insert(
                             &**expr as *const RelationExpr,
                             subquery.nodes.last().unwrap().chain,
@@ -193,7 +193,7 @@ impl<'a> Explanation<'a> {
         }
 
         let mut explanation = Explanation {
-            id_humanizer,
+            expr_humanizer,
             nodes: vec![],
             finishing: None,
             expr_chains: HashMap::new(),
@@ -246,7 +246,7 @@ impl<'a> Explanation<'a> {
                 Id::Global(id) => writeln!(
                     f,
                     "| Get {} ({})",
-                    self.id_humanizer
+                    self.expr_humanizer
                         .humanize_id(*id)
                         .unwrap_or_else(|| "?".to_owned()),
                     id,
@@ -348,7 +348,10 @@ impl<'a> Explanation<'a> {
         }
 
         if let Some(RelationType { column_types, keys }) = &node.typ {
-            let column_types: Vec<_> = column_types.iter().map(|c| c.explain()).collect();
+            let column_types: Vec<_> = column_types
+                .iter()
+                .map(|c| self.expr_humanizer.humanize_column_type(c))
+                .collect();
             writeln!(f, "| | types = ({})", separated(", ", column_types))?;
             writeln!(
                 f,

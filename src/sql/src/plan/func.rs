@@ -809,7 +809,7 @@ where
         let types: Vec<_> = types
             .into_iter()
             .map(|ty| match ty {
-                Some(ty) => ecx.get_scalar_type_name(&ty),
+                Some(ty) => ecx.humanize_scalar_type(&ty),
                 None => "unknown".to_string(),
             })
             .collect();
@@ -1121,7 +1121,7 @@ fn coerce_args_to_types(
                     bail!(
                         "could not constrain polymorphic type because {} used in \
                         position that does not accept arrays or lists",
-                        ecx.get_scalar_type_name(&ty)
+                        ecx.humanize_scalar_type(&ty)
                     )
                 }
                 do_convert(arg, &ty)?
@@ -1391,7 +1391,7 @@ lazy_static! {
                     // pg_typeof reports the type *before* coercion.
                     let name = match ecx.scalar_type(&exprs[0]) {
                         None => "unknown".to_string(),
-                        Some(ty) => ecx.get_scalar_type_name(&ty),
+                        Some(ty) => ecx.humanize_scalar_type(&ty),
                     };
 
                     // For consistency with other functions, verify that

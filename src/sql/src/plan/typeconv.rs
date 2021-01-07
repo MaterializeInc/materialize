@@ -663,8 +663,8 @@ where
             } else {
                 ""
             },
-            ecx.get_scalar_type_name(&from_typ),
-            ecx.get_scalar_type_name(&cast_to),
+            ecx.humanize_scalar_type(&from_typ),
+            ecx.humanize_scalar_type(&cast_to),
         ),
     }
 }
