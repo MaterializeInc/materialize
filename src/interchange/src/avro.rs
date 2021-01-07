@@ -277,7 +277,7 @@ fn decode_change_lsn(input: &str) -> Option<MSSqlLsn> {
     })
 }
 
-// TODO - If #[derive(AvroDecodeable)] supported optional fields, we wouldn't need to do this by hand.
+// TODO - If #[derive(AvroDecodable)] supported optional fields, we wouldn't need to do this by hand.
 impl AvroDecode for DebeziumTransactionDecoder {
     type Out = Option<DebeziumTransactionMetadata>;
     fn record<R: AvroRead, A: AvroRecordAccess<R>>(
