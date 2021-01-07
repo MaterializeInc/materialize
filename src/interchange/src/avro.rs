@@ -1325,10 +1325,17 @@ impl DebeziumDeduplicationStrategy {
 }
 
 /// Track whether or not we should skip a specific debezium message
+///
+/// The goal of deduplication is to omit sending true duplicates -- the exact
+/// same record being sent into materialize twice. That means that we create
+/// one deduplicator per timely worker and use use timely key sharding
+/// normally. But it also means that no single deduplicator knows the
+/// highest-ever seen binlog offset.
 #[derive(Debug)]
 struct DebeziumDeduplicationState {
-    /// Last recorded (pos, row, offset) for each MySQL binlog file.
-    /// (Or "", in the Postgres case)
+    /// Last recorded (pos, row, offset) for each binlog stream.
+    ///
+    /// A binlog stream is either a file name (for mysql) or "" for postgres.
     ///
     /// [`DebeziumDeduplicationstrategy`] determines whether messages that are not ahead
     /// of the last recorded pos/row will be skipped.

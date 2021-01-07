@@ -22,7 +22,7 @@ use ore::future::OreTryStreamExt;
 
 /// Verifies that broadcast tokens can allocate channels dynamically by
 /// overriding the `Token::uuid` method.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_broadcast_dynamic() -> Result<(), Box<dyn Error>> {
     #[derive(Clone, Copy)]
     struct TestToken(Uuid);
@@ -57,7 +57,7 @@ async fn test_broadcast_dynamic() -> Result<(), Box<dyn Error>> {
 /// receiver creation does not result in dropped messages. We previously had
 /// a bug where the second broadcast transmitter would not be connected to
 /// the broadcast receiver.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_broadcast_interleaving() -> Result<(), Box<dyn Error>> {
     struct TestToken;
 
@@ -85,7 +85,7 @@ async fn test_broadcast_interleaving() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_broadcast_fanout() -> Result<(), Box<dyn Error>> {
     struct TestToken;
 
@@ -108,7 +108,10 @@ async fn test_broadcast_fanout() -> Result<(), Box<dyn Error>> {
             .map(|_| {
                 let rx = rx.attach();
                 let executor = Handle::current();
-                thread::spawn(move || executor.enter(|| f(rx)))
+                thread::spawn(move || {
+                    let _guard = executor.enter();
+                    f(rx)
+                })
             })
             .collect();
 

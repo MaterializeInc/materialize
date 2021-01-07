@@ -15,12 +15,12 @@ use std::fs::File;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 
-use ccsr::tls::{Certificate, Identity};
-use reqwest::Url;
-
 use anyhow::bail;
 use log::{debug, error, info, warn};
-use rdkafka::consumer::BaseConsumer;
+use rdkafka::consumer::{BaseConsumer, Consumer};
+use reqwest::Url;
+
+use ccsr::tls::{Certificate, Identity};
 use sql_parser::ast::Value;
 
 enum ValType {

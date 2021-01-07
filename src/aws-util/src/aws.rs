@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Utility mod for AWS.
-
-use std::time::Duration;
+//! Utility functions for AWS.
 
 use rusoto_core::Region;
 use rusoto_credential::{AwsCredentials, ChainProvider, ProvideAwsCredentials};
 use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient};
+use tokio::time::error::Elapsed;
+use tokio::time::{self, Duration};
 
 /// Fetches the AWS account number of the caller via AWS Security Token Service.
 ///
@@ -21,9 +21,9 @@ use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient};
 pub async fn account(timeout: Duration) -> Result<String, anyhow::Error> {
     let sts_client = StsClient::new(Region::default());
     let get_identity = sts_client.get_caller_identity(GetCallerIdentityRequest {});
-    let account = tokio::time::timeout(timeout, get_identity)
+    let account = time::timeout(timeout, get_identity)
         .await
-        .map_err(|e: tokio::time::Elapsed| {
+        .map_err(|e: Elapsed| {
             anyhow::Error::new(e)
                 .context("timeout while retrieving AWS account number from STS".to_owned())
         })?

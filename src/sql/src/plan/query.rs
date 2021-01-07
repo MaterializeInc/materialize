@@ -52,6 +52,7 @@ use crate::plan::expr::{
     ColumnRef, JoinKind, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func::{self, Func, FuncSpec};
+use crate::plan::plan_utils;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
@@ -365,7 +366,10 @@ pub fn eval_as_of<'a>(
         ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
         ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
         ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
-        _ => bail!("can't use {} as a timestamp for AS OF", ex.typ(desc.typ())),
+        _ => bail!(
+            "can't use {} as a timestamp for AS OF",
+            scx.humanize_column_type(&ex.typ(desc.typ()))
+        ),
     })
 }
 
@@ -441,30 +445,38 @@ fn plan_query(
     qcx: &mut QueryContext,
     q: &Query,
 ) -> Result<(RelationExpr, Scope, RowSetFinishing), anyhow::Error> {
+    // Retain the old values of various CTE names so that we can restore them after we're done
+    // planning this SELECT.
+    let mut old_cte_values = Vec::new();
+    // A single WITH block cannot use the same name multiple times.
+    let mut used_names = HashSet::new();
     for cte in &q.ctes {
         let cte_name = normalize::ident(cte.alias.name.clone());
-        if qcx.ctes.get(&cte_name).is_some() {
+
+        if used_names.contains(&cte_name) {
             bail!("WITH query name \"{}\" specified more than once", cte_name)
         }
+        used_names.insert(cte_name.clone());
 
         // Plan CTE.
         let (val, scope) = plan_subquery(qcx, &cte.query)?;
         let typ = qcx.relation_type(&val);
         let mut val_desc = RelationDesc::new(typ, scope.column_names());
-        val_desc = crate::plan::statement::maybe_rename_columns(
+        val_desc = plan_utils::maybe_rename_columns(
             format!("CTE {}", cte.alias.name),
             val_desc,
             &cte.alias.columns,
         )?;
 
-        qcx.ctes.insert(
-            cte_name,
+        let old_val = qcx.ctes.insert(
+            cte_name.clone(),
             CteDesc {
                 val,
                 val_desc,
                 level_offset: 0,
             },
         );
+        old_cte_values.push((cte_name, old_val));
     }
     let limit = match &q.limit {
         None => None,
@@ -487,7 +499,7 @@ fn plan_query(
         _ => bail!("OFFSET must be an integer constant"),
     };
 
-    match &q.body {
+    let result = match &q.body {
         SetExpr::Select(s) => {
             let plan = plan_view_select(qcx, s, &q.order_by)?;
             let finishing = RowSetFinishing {
@@ -517,7 +529,21 @@ fn plan_query(
             };
             Ok((expr.map(map_exprs), scope, finishing))
         }
+    };
+
+    // Restore the old values of the CTEs.
+    for (name, value) in old_cte_values.iter() {
+        match value {
+            Some(value) => {
+                qcx.ctes.insert(name.to_string(), value.clone());
+            }
+            None => {
+                qcx.ctes.remove(name);
+            }
+        };
     }
+
+    result
 }
 
 fn plan_subquery(
@@ -575,8 +601,8 @@ fn plan_set_expr(
                     bail!(
                         "{} types {} and {} cannot be matched",
                         op,
-                        left_col_type.scalar_type,
-                        right_col_type.scalar_type
+                        qcx.humanize_scalar_type(&left_col_type.scalar_type),
+                        qcx.humanize_scalar_type(&right_col_type.scalar_type)
                     );
                 }
             }
@@ -1502,7 +1528,7 @@ fn expand_select_item<'a>(
             let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
             let fields = match ecx.scalar_type(&expr) {
                 ScalarType::Record { fields, .. } => fields,
-                ty => bail!("type {} is not composite", ty),
+                ty => bail!("type {} is not composite", ecx.humanize_scalar_type(&ty)),
             };
             let items = fields
                 .iter()
@@ -1948,11 +1974,15 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 }
                 ty => bail!(
                     "column notation applied to type {}, which is not a composite type",
-                    ty
+                    ecx.humanize_scalar_type(&ty)
                 ),
             };
             match i {
-                None => bail!("field {} not found in data type {}", field, ty),
+                None => bail!(
+                    "field {} not found in data type {}",
+                    field,
+                    ecx.humanize_scalar_type(&ty)
+                ),
                 Some(i) => expr.call_unary(UnaryFunc::RecordGet(i)).into(),
             }
         }
@@ -1963,7 +1993,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             let func = match &ty {
                 ScalarType::List { .. } => BinaryFunc::ListIndex,
                 ScalarType::Array(_) => BinaryFunc::ArrayIndex,
-                ty => bail!("cannot subscript type {}", ty),
+                ty => bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
             };
 
             expr.call_binary(
@@ -2002,7 +2032,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                         )
                     }
                 }
-                ty => bail!("cannot subscript type {}", ty),
+                ty => bail!("cannot subscript type {}", ecx.humanize_scalar_type(&ty)),
             };
 
             let mut exprs = vec![expr];
@@ -2068,8 +2098,8 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                     if element_type != **array_type {
                         bail!(
                             "cannot evaluate ANY for element type {} and array type {}",
-                            element_type,
-                            array_type
+                            ecx.humanize_scalar_type(&element_type),
+                            ecx.humanize_scalar_type(array_type),
                         )
                     }
                 }
@@ -2598,7 +2628,11 @@ pub fn scalar_type_from_sql(
         } => {
             match scalar_type_from_sql(scx, &key_type)? {
                 ScalarType::String => {}
-                other => bail!("map key type must be text, got {}", other),
+                other => bail!(
+                    "map key type must be {}, got {}",
+                    scx.humanize_scalar_type(&ScalarType::String),
+                    scx.humanize_scalar_type(&other)
+                ),
             }
             ScalarType::Map {
                 value_type: Box::new(scalar_type_from_sql(scx, &value_type)?),
@@ -2606,14 +2640,7 @@ pub fn scalar_type_from_sql(
             }
         }
         DataType::Other { name, typ_mod } => {
-            // Rewrite some unqualified aliases to the name we know they should
-            // use in the catalog, i.e. canonicalize the catalog name.
-            let canonical_name = match name.to_string().as_str() {
-                "char" | "varchar" => ObjectName::unqualified("text"),
-                "json" => ObjectName::unqualified("jsonb"),
-                "smallint" => ObjectName::unqualified("int4"),
-                _ => name.clone(),
-            };
+            let canonical_name = canonicalize_type_name_internal(name);
             let canonical_name = normalize::object_name(canonical_name)?;
             let item = match scx.catalog.resolve_item(&canonical_name) {
                 Ok(i) => i,
@@ -2643,6 +2670,17 @@ pub fn scalar_type_from_sql(
             }
         }
     })
+}
+
+pub fn canonicalize_type_name_internal(name: &ObjectName) -> ObjectName {
+    // Rewrite some unqualified aliases to the name we know they should
+    // use in the catalog, i.e. canonicalize the catalog name.
+    match name.to_string().as_str() {
+        "char" | "varchar" => ObjectName::unqualified("text"),
+        "json" => ObjectName::unqualified("jsonb"),
+        "smallint" => ObjectName::unqualified("int4"),
+        _ => name.clone(),
+    }
 }
 
 /// Returns the first two values provided as typ_mods as `u8`, which are
@@ -2926,6 +2964,10 @@ impl<'a> QueryContext<'a> {
 
         Ok((expr, scope))
     }
+
+    pub fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
+        self.scx.humanize_scalar_type(typ)
+    }
 }
 
 /// A bundle of unrelated things that we need for planning `Expr`s.
@@ -2986,5 +3028,9 @@ impl<'a> ExprContext<'a> {
 
     pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {
         &self.qcx.scx.param_types
+    }
+
+    pub fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
+        self.qcx.scx.humanize_scalar_type(typ)
     }
 }

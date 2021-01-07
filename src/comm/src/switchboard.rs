@@ -82,15 +82,16 @@ impl Switchboard<UnixStream> {
             .collect();
         let mut path = std::env::temp_dir();
         path.push(format!("comm.switchboard.{}", suffix));
-        let mut listener = UnixListener::bind(&path)?;
+        let listener = UnixListener::bind(&path)?;
         let switchboard = Switchboard::new(vec![path.to_str().unwrap()], 0);
         tokio::spawn({
             let switchboard = switchboard.clone();
             async move {
-                let mut incoming = listener.incoming();
-                while let Some(conn) = incoming.next().await {
-                    let conn =
-                        conn.unwrap_or_else(|err| panic!("local switchboard: accept: {}", err));
+                loop {
+                    let (conn, _addr) = listener
+                        .accept()
+                        .await
+                        .unwrap_or_else(|err| panic!("local switchboard: accept: {}", err));
                     switchboard
                         .handle_connection(conn)
                         .await

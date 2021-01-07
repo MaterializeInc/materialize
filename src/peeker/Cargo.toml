@@ -9,15 +9,15 @@ publish = false
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 env_logger = "0.8.2"
 getopts = "0.2.0"
-hyper = "0.13.0"
+hyper = { version = "0.14.0", features = ["http1", "server"] }
 lazy_static = "1.4.0"
 log = "0.4.11"
 mz-process-collector = { path = "../mz-process-collector" }
 ore = { path = "../ore" }
 parse_duration = "2.1.0"
-postgres = "0.17.5"
+postgres = "0.19.0"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.4.1"
 serde = { version = "1.0.118", features = ["derive"] }
-tokio = { version = "0.2.22", features = ["rt-threaded"] }
+tokio = { version = "1.0.0", features = ["rt-multi-thread"] }
 toml = "0.5.8"
