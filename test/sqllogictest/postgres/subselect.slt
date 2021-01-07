@@ -73,7 +73,7 @@ query TI rowsort
 SELECT 'onek', count(*) FROM onek
 UNION ALL
 SELECT 'tenk1', count(*) FROM tenk1
-AS OF 1
+AS OF 18446744073709551615
 ----
 onek 1000
 tenk1 10000
