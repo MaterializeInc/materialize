@@ -82,7 +82,8 @@ def print_archive(args: argparse.Namespace) -> None:
         value = table["value"][i].as_py()
         timestamp = table["timestamp"][i].value
 
-        # Strip the first 5 bytes, as they are added by Kafka
+        # Strip the first 5 bytes, as they are added by Confluent Platform and are not part of the
+        # actual serialized data
         decoded = {
             "key": decode(key_reader, key[5:]),
             "timestamp": timestamp,
