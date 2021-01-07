@@ -2766,7 +2766,7 @@ pub mod cdc_v2 {
     use mz_avro::{
         define_unexpected,
         error::{DecodeError, Error as AvroError},
-        ArrayAsVecDecoder, AvroDecode, AvroDecodable, AvroDeserializer, AvroRead,
+        ArrayAsVecDecoder, AvroDecodable, AvroDecode, AvroDeserializer, AvroRead,
         StatefulAvroDecodable,
     };
     use std::{cell::RefCell, rc::Rc};
