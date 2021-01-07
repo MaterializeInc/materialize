@@ -27,7 +27,9 @@ import pyarrow  # type: ignore
 import pyarrow.fs  # type: ignore
 
 # Setup basic formatting for logging output
-logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(name)s %(message)s", level=logging.INFO
+)
 log = logging.getLogger("print.records")
 
 
