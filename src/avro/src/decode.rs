@@ -20,25 +20,25 @@ use crate::{
     TrivialDecoder, ValueDecoder,
 };
 
-pub trait StatefulAvroDecodeable: Sized {
+pub trait StatefulAvroDecodable: Sized {
     type Decoder: AvroDecode<Out = Self>;
     type State;
     fn new_decoder(state: Self::State) -> Self::Decoder;
 }
-pub trait AvroDecodeable: Sized {
+pub trait AvroDecodable: Sized {
     type Decoder: AvroDecode<Out = Self>;
 
     fn new_decoder() -> Self::Decoder;
 }
-impl<T> AvroDecodeable for T
+impl<T> AvroDecodable for T
 where
-    T: StatefulAvroDecodeable,
+    T: StatefulAvroDecodable,
     T::State: Default,
 {
-    type Decoder = <Self as StatefulAvroDecodeable>::Decoder;
+    type Decoder = <Self as StatefulAvroDecodable>::Decoder;
 
     fn new_decoder() -> Self::Decoder {
-        <Self as StatefulAvroDecodeable>::new_decoder(Default::default())
+        <Self as StatefulAvroDecodable>::new_decoder(Default::default())
     }
 }
 #[inline]
@@ -663,7 +663,7 @@ pub trait AvroDecode: Sized {
 
 pub mod public_decoders {
 
-    use super::{AvroDecodeable, AvroMapAccess, StatefulAvroDecodeable};
+    use super::{AvroDecodable, AvroMapAccess, StatefulAvroDecodable};
     use crate::error::{DecodeError, Error as AvroError};
     use crate::types::{DecimalValue, Scalar, Value};
     use crate::{
@@ -691,7 +691,7 @@ pub mod public_decoders {
                 }
             }
 
-            impl StatefulAvroDecodeable for $out {
+            impl StatefulAvroDecodable for $out {
                 type Decoder = $name;
                 type State = ();
                 fn new_decoder(_state: ()) -> $name {
@@ -861,7 +861,7 @@ pub mod public_decoders {
             Self { buf: vec![] }
         }
     }
-    impl<T: AvroDecodeable> AvroDecode for DefaultArrayAsVecDecoder<T> {
+    impl<T: AvroDecodable> AvroDecode for DefaultArrayAsVecDecoder<T> {
         type Out = Vec<T>;
         fn array<A: AvroArrayAccess>(mut self, a: &mut A) -> Result<Self::Out, AvroError> {
             while let Some(next) = {
@@ -876,7 +876,7 @@ pub mod public_decoders {
             record, union_branch, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
         }
     }
-    impl<T: AvroDecodeable> StatefulAvroDecodeable for Vec<T> {
+    impl<T: AvroDecodable> StatefulAvroDecodable for Vec<T> {
         type Decoder = DefaultArrayAsVecDecoder<T>;
         type State = ();
 

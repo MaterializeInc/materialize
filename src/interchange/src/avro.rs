@@ -39,7 +39,7 @@ use mz_avro::{
     give_value,
     types::{DecimalValue, Scalar, Value},
     AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess, AvroRead, AvroRecordAccess,
-    GeneralDeserializer, StatefulAvroDecodeable, TrivialDecoder, ValueDecoder, ValueOrReader,
+    GeneralDeserializer, StatefulAvroDecodable, TrivialDecoder, ValueDecoder, ValueOrReader,
 };
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
@@ -541,7 +541,7 @@ impl AvroDecode for RowDecoder {
 // Get around orphan rule
 #[derive(Debug)]
 struct RowWrapper(Row);
-impl StatefulAvroDecodeable for RowWrapper {
+impl StatefulAvroDecodable for RowWrapper {
     type Decoder = RowDecoder;
     // TODO - can we make this some sort of &'a mut (RowPacker, Vec<u8>) without
     // running into lifetime crap?
@@ -2759,15 +2759,15 @@ pub mod cdc_v2 {
     use super::RowWrapper;
 
     use anyhow::anyhow;
-    use avro_derive::AvroDecodeable;
+    use avro_derive::AvroDecodable;
     use differential_dataflow::capture::{Message, Progress};
     use mz_avro::schema::Schema;
     use mz_avro::types::Value;
     use mz_avro::{
         define_unexpected,
         error::{DecodeError, Error as AvroError},
-        ArrayAsVecDecoder, AvroDecode, AvroDecodeable, AvroDeserializer, AvroRead,
-        StatefulAvroDecodeable,
+        ArrayAsVecDecoder, AvroDecodable, AvroDecode, AvroDeserializer, AvroRead,
+        StatefulAvroDecodable,
     };
     use std::{cell::RefCell, rc::Rc};
 
@@ -2856,7 +2856,7 @@ pub mod cdc_v2 {
         }
     }
 
-    #[derive(AvroDecodeable)]
+    #[derive(AvroDecodable)]
     #[state_type(Rc<RefCell<RowPacker>>, Rc<RefCell<Vec<u8>>>)]
     struct MyUpdate {
         #[state_expr(self._STATE.0.clone(), self._STATE.1.clone())]
@@ -2864,7 +2864,7 @@ pub mod cdc_v2 {
         time: Timestamp,
         diff: Diff,
     }
-    #[derive(AvroDecodeable)]
+    #[derive(AvroDecodable)]
     struct Count {
         time: Timestamp,
         count: usize,
@@ -2872,10 +2872,10 @@ pub mod cdc_v2 {
 
     fn make_counts_decoder() -> impl AvroDecode<Out = Vec<(Timestamp, usize)>> {
         ArrayAsVecDecoder::new(|| {
-            <Count as AvroDecodeable>::new_decoder().map_decoder(|ct| Ok((ct.time, ct.count)))
+            <Count as AvroDecodable>::new_decoder().map_decoder(|ct| Ok((ct.time, ct.count)))
         })
     }
-    #[derive(AvroDecodeable)]
+    #[derive(AvroDecodable)]
     struct MyProgress {
         lower: Vec<Timestamp>,
         upper: Vec<Timestamp>,
@@ -2898,7 +2898,7 @@ pub mod cdc_v2 {
                     let packer = Rc::new(RefCell::new(RowPacker::new()));
                     let buf = Rc::new(RefCell::new(vec![]));
                     let d = ArrayAsVecDecoder::new(|| {
-                        <MyUpdate as StatefulAvroDecodeable>::new_decoder((
+                        <MyUpdate as StatefulAvroDecodable>::new_decoder((
                             packer.clone(),
                             buf.clone(),
                         ))
@@ -2909,7 +2909,7 @@ pub mod cdc_v2 {
                 }
                 1 => {
                     let progress = deserializer
-                        .deserialize(r, <MyProgress as AvroDecodeable>::new_decoder())?;
+                        .deserialize(r, <MyProgress as AvroDecodable>::new_decoder())?;
                     let progress = Progress {
                         lower: progress.lower,
                         upper: progress.upper,
