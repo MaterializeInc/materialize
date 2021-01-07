@@ -40,7 +40,7 @@ use sql_parser::ast::{
     ColumnOption, Connector, CopyDirection, CopyRelation, CopyStatement, CopyTarget,
     CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, DiscardStatement, DiscardTarget, DropDatabaseStatement,
+    CreateViewStatement, DataType, DiscardStatement, DiscardTarget, DropDatabaseStatement,
     DropObjectsStatement, ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident,
     IfExistsBehavior, InsertStatement, ObjectName, ObjectType, Query, SelectStatement,
     SetVariableStatement, SetVariableValue, ShowVariableStatement, SqlOption, Statement,
@@ -971,12 +971,28 @@ fn handle_create_type(
     let mut ids = vec![];
     for key in option_keys {
         let item_name = match with_options.remove(&key.to_string()) {
-            Some(SqlOption::Value {
-                value: Value::String(val),
-                ..
-            }) => ObjectName::unqualified(&val),
-            Some(SqlOption::ObjectName { object_name, .. }) => object_name,
-            Some(_) => bail!("{} must be a string or identifier", key),
+            Some(SqlOption::DataType { data_type, .. }) => match data_type {
+                DataType::Other { name, typ_mod } => {
+                    if !typ_mod.is_empty() {
+                        bail!(
+                            "CREATE TYPE ... AS {}option \"{}\" cannot accept type modifier on \
+                            {}, you must use the default type",
+                            as_type,
+                            key,
+                            name
+                        )
+                    }
+                    query::canonicalize_type_name_internal(&name)
+                }
+                d => bail!(
+                    "CREATE TYPE ... AS {}option \"{}\" can only use named data types, but \
+                    found unnamed data type {}. Use CREATE TYPE to create a named type first",
+                    as_type,
+                    key,
+                    d.to_ast_string(),
+                ),
+            },
+            Some(_) => bail!("{} must be a data type", key),
             None => bail!("{} parameter required", key),
         };
         let item = scx

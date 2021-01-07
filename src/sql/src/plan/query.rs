@@ -2628,14 +2628,7 @@ pub fn scalar_type_from_sql(
             }
         }
         DataType::Other { name, typ_mod } => {
-            // Rewrite some unqualified aliases to the name we know they should
-            // use in the catalog, i.e. canonicalize the catalog name.
-            let canonical_name = match name.to_string().as_str() {
-                "char" | "varchar" => ObjectName::unqualified("text"),
-                "json" => ObjectName::unqualified("jsonb"),
-                "smallint" => ObjectName::unqualified("int4"),
-                _ => name.clone(),
-            };
+            let canonical_name = canonicalize_type_name_internal(name);
             let canonical_name = normalize::object_name(canonical_name)?;
             let item = match scx.catalog.resolve_item(&canonical_name) {
                 Ok(i) => i,
@@ -2665,6 +2658,17 @@ pub fn scalar_type_from_sql(
             }
         }
     })
+}
+
+pub fn canonicalize_type_name_internal(name: &ObjectName) -> ObjectName {
+    // Rewrite some unqualified aliases to the name we know they should
+    // use in the catalog, i.e. canonicalize the catalog name.
+    match name.to_string().as_str() {
+        "char" | "varchar" => ObjectName::unqualified("text"),
+        "json" => ObjectName::unqualified("jsonb"),
+        "smallint" => ObjectName::unqualified("int4"),
+        _ => name.clone(),
+    }
 }
 
 /// Returns the first two values provided as typ_mods as `u8`, which are
