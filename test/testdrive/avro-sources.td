@@ -509,17 +509,31 @@ $ set pg-dbz-schema={
             }
           ]
         }
+      },
+      {
+        "name": "transaction",
+        "type": {
+          "type": "record",
+          "name": "TransactionMetadata",
+          "fields": [
+            {
+              "name": "total_order",
+              "type": "long"
+            }
+          ]
+        }
       }
     ]
   }
 
 $ kafka-create-topic topic=pg-dbz-data
 
-# The third record will be skipped, since `lsn` has gone backwards.
+# The third and fourth records will be skipped, since `(lsn, total_order)` has gone backwards.
 $ kafka-ingest format=avro topic=pg-dbz-data schema=${pg-dbz-schema} timestamp=1
-{"before": null, "after": {"row":{"a": 1, "b": 1}}, "source": {"lsn": {"long": 1}, "snapshot": {"string": "false"}}}
-{"before": null, "after": {"row":{"a": 2, "b": 3}}, "source": {"lsn": {"long": 2}, "snapshot": {"string": "false"}}}
-{"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"lsn": {"long": 0}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"row":{"a": 1, "b": 1}}, "source": {"lsn": {"long": 1}, "snapshot": {"string": "false"}}, "transaction": {"total_order": 0}}
+{"before": null, "after": {"row":{"a": 2, "b": 3}}, "source": {"lsn": {"long": 2}, "snapshot": {"string": "false"}}, "transaction": {"total_order": 1}}
+{"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"lsn": {"long": 0}, "snapshot": {"string": "false"}}, "transaction": {"total_order": 0}}
+{"before": null, "after": {"row":{"a": 4, "b": 5}}, "source": {"lsn": {"long": 2}, "snapshot": {"string": "false"}}, "transaction": {"total_order": 0}}
 
 > CREATE MATERIALIZED SOURCE pg_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}'
