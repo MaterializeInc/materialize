@@ -14,7 +14,8 @@ use derivative::Derivative;
 
 use dataflow_types::PeekResponse;
 use repr::Row;
-use sql::ast::{ObjectType, Statement};
+use sql::ast::{FetchDirection, ObjectType, Statement};
+use sql::plan::ExecuteTimeout;
 
 use crate::session::Session;
 
@@ -101,6 +102,8 @@ pub enum ExecuteResponse {
     AlteredObject(ObjectType),
     // The index was altered.
     AlteredIndexLogicalCompaction,
+    /// The requested cursor was closed.
+    ClosedCursor,
     CopyTo {
         format: sql::plan::CopyFormat,
         #[derivative(Debug = "ignore")]
@@ -136,6 +139,8 @@ pub enum ExecuteResponse {
     },
     /// The requested type was created.
     CreatedType,
+    /// The requested cursor was declared.
+    DeclaredCursor,
     /// The specified number of rows were deleted from the requested table.
     Deleted(usize),
     /// The temporary objects associated with the session have been discarded.
@@ -160,6 +165,15 @@ pub enum ExecuteResponse {
     DroppedType,
     /// The provided query was empty.
     EmptyQuery,
+    /// Fetch results from a cursor.
+    Fetch {
+        /// The name of the cursor from which to fetch results.
+        name: String,
+        /// The number of results to fetch.
+        count: Option<FetchDirection>,
+        /// How long to wait for results to arrive.
+        timeout: ExecuteTimeout,
+    },
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
     /// Rows will be delivered via the specified future.

@@ -11,9 +11,9 @@
 
 > SHOW TYPES
 
-> CREATE TYPE bool AS MAP (key_type=text, value_type='int4')
+> CREATE TYPE bool AS MAP (key_type=text, value_type=int4)
 
-> CREATE TYPE custom AS MAP (key_type='text', value_type=bool)
+> CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
 
 # Without qualifiers, should default to builtin bool.
 > SELECT mz_internal.mz_classify_object_id(value_id)
@@ -21,7 +21,7 @@
   WHERE name = 'custom'
 system
 
-> CREATE TYPE another_custom AS MAP (key_type='text', value_type=public.bool)
+> CREATE TYPE another_custom AS MAP (key_type=text, value_type=public.bool)
 
 # Qualified name should point to user-defined bool.
 > SELECT mz_internal.mz_classify_object_id(value_id)
@@ -31,7 +31,7 @@ user
 
 > CREATE SCHEMA test_schema
 
-> CREATE TYPE test_schema.bool AS MAP (key_type=text, value_type='float4')
+> CREATE TYPE test_schema.bool AS MAP (key_type=text, value_type=float4)
 
 > SHOW TYPES
 name

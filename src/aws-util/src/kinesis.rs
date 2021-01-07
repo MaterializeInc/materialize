@@ -74,6 +74,7 @@ pub async fn list_shards(
                 next_token,
                 stream_creation_timestamp: None,
                 stream_name: Some(stream_name.to_owned()),
+                shard_filter: None,
             })
             .await
             .context("fetching shard list")?;

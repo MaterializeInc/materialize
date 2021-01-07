@@ -13,9 +13,11 @@ use std::fmt;
 use std::fs::File;
 use std::io::{self, Write};
 use std::process;
+use std::sync::Arc;
 
 use chrono::Utc;
 use getopts::Options;
+use tokio::runtime::Runtime;
 use walkdir::WalkDir;
 
 use sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
@@ -26,8 +28,12 @@ const USAGE: &str = r#"usage: sqllogictest [PATH...]
 Runs one or more sqllogictest files. Directories will be searched
 recursively for sqllogictest files."#;
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    runtime.block_on(run(runtime.clone()))
+}
+
+async fn run(runtime: Arc<Runtime>) {
     ore::panic::set_abort_on_panic();
     ore::test::init_logging_default("warn");
 
@@ -62,6 +68,12 @@ async fn main() {
         "save JSON-formatted summary to file",
         "FILE",
     );
+    opts.optopt(
+        "w",
+        "workers",
+        "number of materialized workers to use (default: 3)",
+        "N",
+    );
 
     let popts = match opts.parse(&args[1..]) {
         Ok(popts) => popts,
@@ -77,9 +89,17 @@ async fn main() {
     }
 
     let config = RunConfig {
+        runtime,
         stdout: &OutputStream::new(io::stdout(), popts.opt_present("timestamps")),
         stderr: &OutputStream::new(io::stderr(), popts.opt_present("timestamps")),
         verbosity: popts.opt_count("v"),
+        workers: match popts.opt_get_default("workers", 3) {
+            Ok(workers) => workers,
+            Err(e) => {
+                eprintln!("invalid --workers value: {}", e);
+                process::exit(1);
+            }
+        },
     };
 
     if popts.opt_present("rewrite-results") {

@@ -593,16 +593,16 @@ SELECT (1).x
 query error pq: type int is not composite
 SELECT ((1)).x
 
-query error pq: type string is not composite
+query error pq: type text is not composite
 SELECT ('a').*
 
-query error pq: type string is not composite
+query error pq: type text is not composite
 SELECT (('a')).*
 
-query error pq: type string is not composite
+query error pq: type text is not composite
 SELECT ('a').x
 
-query error pq: type string is not composite
+query error pq: type text is not composite
 SELECT (('a')).x
 
 query error pq: unnest\(\): cannot determine type of empty array. Consider annotating with the desired type, for example ARRAY\[\]:::int\[\]

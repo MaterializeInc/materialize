@@ -467,10 +467,10 @@ CREATE TABLE string_t (
 statement ok
 INSERT INTO string_t VALUES ('str')
 
-query error value type string doesn't match type bytes of column "b"
+query error value type text doesn't match type bytes of column "b"
 INSERT INTO bytes_t SELECT * FROM string_t
 
-query error value type bytes doesn't match type string of column "s"
+query error value type bytes doesn't match type text of column "s"
 INSERT INTO string_t SELECT * FROM bytes_t
 
 subtest string_width_check

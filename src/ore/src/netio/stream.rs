@@ -7,14 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::fmt;
-use std::io::{self, Read};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::ready;
 use smallvec::{smallvec, SmallVec};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 
 const INLINE_BUF_LEN: usize = 8;
 
@@ -113,18 +113,21 @@ where
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<Result<usize, io::Error>> {
+        buf: &mut ReadBuf,
+    ) -> Poll<Result<(), io::Error>> {
         let me = &mut *self;
         if me.off == me.len {
             if me.len == me.buf.len() {
                 me.buf.resize(me.buf.len() << 1, 0);
             }
-            me.len += ready!(Pin::new(&mut me.inner).poll_read(cx, &mut me.buf[me.len..]))?;
+            let mut buf = ReadBuf::new(&mut me.buf[me.len..]);
+            ready!(Pin::new(&mut me.inner).poll_read(cx, &mut buf))?;
+            me.len += buf.filled().len();
         }
-        let ncopied = (&me.buf[me.off..me.len]).read(buf)?;
-        me.off += ncopied;
-        Poll::Ready(Ok(ncopied))
+        let n = cmp::min(me.len - me.off, buf.remaining());
+        buf.put_slice(&me.buf[me.off..me.off + n]);
+        me.off += n;
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -200,14 +203,15 @@ where
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<Result<usize, io::Error>> {
+        buf: &mut ReadBuf,
+    ) -> Poll<Result<(), io::Error>> {
         if self.off == self.buf.len() {
             return self.inner_pin().poll_read(cx, buf);
         }
-        let ncopied = (&self.buf[self.off..]).read(buf)?;
-        self.off += ncopied;
-        Poll::Ready(Ok(ncopied))
+        let n = cmp::min(self.buf.len() - self.off, buf.remaining());
+        buf.put_slice(&self.buf[self.off..self.off + n]);
+        self.off += n;
+        Poll::Ready(Ok(()))
     }
 }
 

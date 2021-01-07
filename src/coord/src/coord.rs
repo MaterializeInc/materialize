@@ -22,16 +22,17 @@ use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
-use tokio::runtime::Handle;
+use tokio::runtime::{Handle, Runtime};
 use uuid::Uuid;
 
 use build_info::BuildInfo;
@@ -43,7 +44,7 @@ use dataflow_types::{
     SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use expr::{
-    GlobalId, Id, IdHumanizer, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
+    ExprHumanizer, GlobalId, Id, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
     ScalarExpr, SourceInstanceId,
 };
 use ore::collections::CollectionExt;
@@ -366,8 +367,11 @@ where
         let mut timestamper =
             Timestamper::new(&self.timestamp_config, internal_cmd_tx.clone(), ts_rx);
         let executor = Handle::current();
-        let _timestamper_thread =
-            thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
+        let _timestamper_thread = thread::spawn(move || {
+            let _executor_guard = executor.enter();
+            timestamper.update()
+        })
+        .join_on_drop();
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
@@ -1400,7 +1404,7 @@ where
                 object_columns,
             } => tx.send(
                 self.sequence_tail(
-                    session.conn_id(),
+                    &session,
                     id,
                     with_snapshot,
                     ts,
@@ -1422,6 +1426,7 @@ where
                 options,
             } => tx.send(
                 self.sequence_explain_plan(
+                    &session,
                     raw_plan,
                     decorrelated_plan,
                     row_set_finishing,
@@ -1468,6 +1473,35 @@ where
                 self.drop_temp_items(session.conn_id()).await;
                 session.reset();
                 tx.send(Ok(ExecuteResponse::DiscardedAll), session);
+            }
+
+            Plan::Declare { name, stmt } => {
+                let param_types = vec![];
+                let res = self
+                    .handle_declare(&mut session, name, stmt, param_types)
+                    .map(|()| ExecuteResponse::DeclaredCursor);
+                tx.send(res, session);
+            }
+
+            Plan::Fetch {
+                name,
+                count,
+                timeout,
+            } => tx.send(
+                Ok(ExecuteResponse::Fetch {
+                    name,
+                    count,
+                    timeout,
+                }),
+                session,
+            ),
+
+            Plan::Close { name } => {
+                if session.remove_portal(&name) {
+                    tx.send(Ok(ExecuteResponse::ClosedCursor), session)
+                } else {
+                    tx.send(Err(anyhow!("cursor \"{}\" does not exist", name)), session)
+                }
             }
         }
     }
@@ -2074,7 +2108,7 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn sequence_tail(
         &mut self,
-        conn_id: u32,
+        session: &Session,
         source_id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
@@ -2088,11 +2122,12 @@ where
         let sink_name = format!(
             "tail-source-{}",
             self.catalog
+                .for_session(session)
                 .humanize_id(source_id)
                 .expect("Source id is known to exist in catalog")
         );
         let sink_id = self.catalog.allocate_id()?;
-        self.active_tails.insert(conn_id, sink_id);
+        self.active_tails.insert(session.conn_id(), sink_id);
         let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
@@ -2284,6 +2319,7 @@ where
 
     fn sequence_explain_plan(
         &mut self,
+        session: &Session,
         raw_plan: sql::plan::RelationExpr,
         decorrelated_plan: expr::RelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
@@ -2292,7 +2328,8 @@ where
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let explanation_string = match stage {
             ExplainStage::RawPlan => {
-                let mut explanation = sql::plan::Explanation::new(&raw_plan, &self.catalog);
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = sql::plan::Explanation::new(&raw_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2302,8 +2339,8 @@ where
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
-                let mut explanation =
-                    expr::explain::Explanation::new(&decorrelated_plan, &self.catalog);
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = expr::explain::Explanation::new(&decorrelated_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2316,8 +2353,8 @@ where
                 let optimized_plan = self
                     .prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?
                     .into_inner();
-                let mut explanation =
-                    expr::explain::Explanation::new(&optimized_plan, &self.catalog);
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = expr::explain::Explanation::new(&optimized_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2955,6 +2992,10 @@ pub async fn serve<C>(
         experimental_mode,
         build_info,
     }: Config<'_, C>,
+    // TODO(benesch): Don't pass runtime explicitly when
+    // `Handle::current().block_in_place()` lands. See:
+    // https://github.com/tokio-rs/tokio/pull/3097.
+    runtime: Arc<Runtime>,
 ) -> Result<(JoinHandle<()>, Uuid), anyhow::Error>
 where
     C: comm::Connection,
@@ -3065,10 +3106,7 @@ where
     // can't use `tokio::spawn`, but instead have to spawn a dedicated thread to
     // run the future.
     Ok((
-        thread::spawn({
-            let executor = Handle::current();
-            move || executor.block_on(coord.serve(cmd_rx, feedback_rx))
-        }),
+        thread::spawn(move || runtime.block_on(coord.serve(cmd_rx, feedback_rx))),
         cluster_id,
     ))
 }

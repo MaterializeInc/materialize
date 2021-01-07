@@ -20,8 +20,7 @@ use repr::{ColumnType, Datum, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::Explanation;
-use crate::id::DummyHumanizer;
-use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
+use crate::{DummyHumanizer, ExprHumanizer, GlobalId, Id, LocalId, ScalarExpr};
 
 pub mod func;
 pub mod join_input_mapper;
@@ -1000,9 +999,9 @@ impl RelationExpr {
 
     /// Pretty-print this RelationExpr to a string.
     ///
-    /// This method allows an additional IdHumanizer which can annotate
+    /// This method allows an additional `ExprHumanizer` which can annotate
     /// identifiers with human-meaningful names for the identifiers.
-    pub fn pretty_humanized(&self, id_humanizer: &impl IdHumanizer) -> String {
+    pub fn pretty_humanized(&self, id_humanizer: &impl ExprHumanizer) -> String {
         Explanation::new(self, id_humanizer).to_string()
     }
 

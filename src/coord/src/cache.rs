@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use futures::select;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
+use tokio::select;
 use uuid::Uuid;
 
 use dataflow::source::cache::RecordFileMetadata;
@@ -214,7 +214,7 @@ impl Cacher {
             })
             .fuse();
 
-        let mut interval = tokio::time::interval(CACHE_FLUSH_INTERVAL).fuse();
+        let mut interval = tokio::time::interval(CACHE_FLUSH_INTERVAL);
         loop {
             select! {
                 data = rx_stream.next() => {
@@ -230,7 +230,7 @@ impl Cacher {
                        break;
                    }
                 }
-                _ = interval.next() => {
+                _ = interval.tick() => {
                     for (_, s) in self.sources.iter_mut() {
                         s.maybe_flush()?;
                     }

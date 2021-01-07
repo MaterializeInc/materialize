@@ -97,7 +97,7 @@ d
 > SHOW DATABASES WHERE (name = (SELECT min(name) FROM mz_databases))
 d
 ! SHOW DATABASES WHERE 7
-WHERE clause must have type bool, not type i32
+WHERE clause must have type bool, not type int4
 
 # Creating a database with a name that already exists should fail.
 ! CREATE DATABASE d
@@ -155,6 +155,36 @@ v1_primary_idx
 v2
 v2_primary_idx
 
+# Test minimizing name qualification
+
+> CREATE TYPE int_list AS list (element_type=int4)
+
+> SELECT pg_typeof('{1}'::d.public.int_list)
+int_list
+
+> CREATE SCHEMA other
+> CREATE TYPE other.int_list AS list (element_type=int4)
+> SELECT pg_typeof('{1}'::d.other.int_list)
+other.int_list
+
+> CREATE DATABASE foo
+> CREATE SCHEMA foo.other
+> CREATE TYPE foo.other.int_list AS LIST (element_type=int4)
+> SELECT pg_typeof('{1}'::foo.other.int_list)
+foo.other.int_list
+
+> CREATE TYPE bool AS LIST (element_type=int4)
+! SELECT '{1}'::bool
+invalid input syntax for bool: "{1}"
+
+> SELECT pg_typeof('{1}'::public.bool);
+public.bool
+
+> SELECT pg_typeof('{1}'::d.public.bool);
+public.bool
+
+> DROP DATABASE foo
+
 ! DROP OBJECT v1
 Expected DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, INDEX, or TYPE after DROP, found identifier
 
@@ -179,6 +209,7 @@ Expected end of statement, found RESTRICT
 name
 ----
 materialize
+
 > SELECT id, name FROM mz_databases
 id          name
 -----------------------

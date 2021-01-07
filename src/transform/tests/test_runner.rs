@@ -134,7 +134,10 @@ mod tests {
     use anyhow::{anyhow, bail, Error};
 
     use expr::explain::Explanation;
-    use expr::{GlobalId, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, ScalarExpr};
+    use expr::{
+        DummyHumanizer, ExprHumanizer, GlobalId, Id, JoinImplementation, LocalId, RelationExpr,
+        ScalarExpr,
+    };
     use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
     use transform::{Optimizer, Transform, TransformArgs};
 
@@ -198,9 +201,17 @@ mod tests {
         }
     }
 
-    impl IdHumanizer for TestCatalog {
+    impl ExprHumanizer for TestCatalog {
         fn humanize_id(&self, id: GlobalId) -> Option<String> {
             self.names.get(&id).map(|s| s.to_string())
+        }
+
+        fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+            DummyHumanizer.humanize_scalar_type(ty)
+        }
+
+        fn humanize_column_type(&self, ty: &ColumnType) -> String {
+            DummyHumanizer.humanize_column_type(ty)
         }
     }
 
