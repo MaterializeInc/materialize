@@ -133,6 +133,7 @@ enum RowCoordinates {
     },
     Postgres {
         lsn: usize,
+        total_order: Option<usize>,
     },
     MSSql {
         change_lsn: MSSqlLsn,
@@ -146,9 +147,18 @@ pub struct DebeziumSourceCoordinates {
     snapshot: bool,
     row: RowCoordinates,
 }
+
+#[derive(Debug)]
+pub struct DebeziumTransactionMetadata {
+    // The order of the record within the transaction
+    total_order: usize,
+}
+
 struct DebeziumSourceDecoder<'a> {
     file_buf: &'a mut Vec<u8>,
 }
+
+struct DebeziumTransactionDecoder;
 
 struct AvroStringDecoder<'a> {
     pub buf: &'a mut Vec<u8>,
@@ -266,6 +276,47 @@ fn decode_change_lsn(input: &str) -> Option<MSSqlLsn> {
         slot_num,
     })
 }
+
+// TODO - If #[derive(AvroDecodable)] supported optional fields, we wouldn't need to do this by hand.
+impl AvroDecode for DebeziumTransactionDecoder {
+    type Out = Option<DebeziumTransactionMetadata>;
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(
+        self,
+        a: &mut A,
+    ) -> Result<Self::Out, AvroError> {
+        let mut total_order = None;
+        while let Some((name, _, field)) = a.next_field()? {
+            match name {
+                "total_order" => {
+                    let val = field.decode_field(ValueDecoder)?;
+                    total_order = Some(val.into_usize().ok_or_else(|| {
+                        DecodeError::Custom("\"total_order\" is not an integer".to_string())
+                    })?);
+                }
+                _ => field.decode_field(TrivialDecoder)?,
+            }
+        }
+        Ok(total_order.map(|total_order| DebeziumTransactionMetadata { total_order }))
+    }
+    fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
+        self,
+        idx: usize,
+        _n_variants: usize,
+        null_variant: Option<usize>,
+        deserializer: D,
+        reader: &'a mut R,
+    ) -> Result<Self::Out, AvroError> {
+        if Some(idx) == null_variant {
+            Ok(None)
+        } else {
+            deserializer.deserialize(reader, self)
+        }
+    }
+    define_unexpected! {
+        array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+    }
+}
+
 impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
     type Out = DebeziumSourceCoordinates;
     fn record<R: AvroRead, A: AvroRecordAccess<R>>(
@@ -395,7 +446,10 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
             RowCoordinates::MySql { pos, row }
         } else if pg_any {
             let lsn = lsn.ok_or_else(|| DecodeError::Custom("no lsn".to_string()))? as usize;
-            RowCoordinates::Postgres { lsn }
+            RowCoordinates::Postgres {
+                lsn,
+                total_order: None,
+            }
         } else if mssql_any {
             let change_lsn =
                 change_lsn.ok_or_else(|| DecodeError::Custom("no change_lsn".to_string()))?;
@@ -464,6 +518,7 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
         let mut before = None;
         let mut after = None;
         let mut coords = None;
+        let mut transaction = None;
         while let Some((name, _, field)) = a.next_field()? {
             match name {
                 "before" => {
@@ -500,9 +555,22 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
                     };
                     coords = Some(field.decode_field(d)?);
                 }
+                "transaction" => {
+                    let d = DebeziumTransactionDecoder;
+                    transaction = field.decode_field(d)?;
+                }
                 _ => {
                     field.decode_field(TrivialDecoder)?;
                 }
+            }
+        }
+        if let Some(transaction) = transaction {
+            if let Some(DebeziumSourceCoordinates {
+                row: RowCoordinates::Postgres { total_order, .. },
+                ..
+            }) = coords.as_mut()
+            {
+                *total_order = Some(transaction.total_order);
             }
         }
         Ok((DiffPair { before, after }, coords))
@@ -1482,7 +1550,7 @@ impl DebeziumDeduplicationState {
     ) -> bool {
         let (pos, row) = match row {
             RowCoordinates::MySql { pos, row } => (pos, row),
-            RowCoordinates::Postgres { lsn } => (lsn, 0),
+            RowCoordinates::Postgres { lsn, total_order } => (lsn, total_order.unwrap_or(0)),
             RowCoordinates::MSSql {
                 change_lsn,
                 event_serial_no,
