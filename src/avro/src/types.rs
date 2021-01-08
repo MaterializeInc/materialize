@@ -3,6 +3,7 @@
 // Use of this software is governed by the Apache License, Version 2.0
 //! Logic handling the intermediate representation of Avro values.
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::fmt;
 use std::hash::BuildHasher;
 use std::u8;
@@ -433,6 +434,10 @@ impl Value {
             Value::Long(l) => Some(l),
             _ => None,
         }
+    }
+
+    pub fn into_usize(self) -> Option<usize> {
+        self.into_integral().and_then(|i| i.try_into().ok())
     }
 }
 

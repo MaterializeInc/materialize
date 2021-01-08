@@ -8,18 +8,18 @@ publish = false
 [dependencies]
 anyhow = "1.0.37"
 aws-util = { path = "../../../src/aws-util" }
-bytes = "0.5.6"
+bytes = "1.0.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 env_logger = "0.8.2"
 futures = "0.3.8"
 futures-channel = "0.3.5"
 log = "0.4.11"
-mz_rusoto_core = "0.46.0"
-mz_rusoto_credential = "0.46.0"
-mz_rusoto_kinesis = "0.46.0"
 ore = { path = "../../../src/ore" }
 rand = "0.8.0"
+rusoto_core = "0.46.0"
+rusoto_credential = "0.46.0"
+rusoto_kinesis = "0.46.0"
 structopt = "0.3.21"
 test-util = { path = "../../test-util" }
-tokio = { version = "0.2.22", features = ["full"] }
-tokio-postgres = "0.5.5"
+tokio = "1.0.0"
+tokio-postgres = "0.7.0"

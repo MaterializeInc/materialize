@@ -337,8 +337,10 @@ class Workflow:
         for step in self._steps:
             step.run(self)
 
-    def run_compose(self, args: List[str]) -> None:
-        self.composition.run(args, self.env)
+    def run_compose(
+        self, args: List[str], capture: bool = False
+    ) -> subprocess.CompletedProcess:
+        return self.composition.run(args, self.env, capture=capture)
 
 
 class Steps:
@@ -1080,12 +1082,7 @@ class WaitStep(WorkflowStep):
 
     def run(self, workflow: Workflow) -> None:
         say("Wait for the specified service to exit")
-        ps_cmd = [
-            "ps",
-            "-q",
-            self._service,
-        ]
-        ps_proc = spawn.runv(ps_cmd, capture_output=True)
+        ps_proc = workflow.run_compose(["ps", "-q", self._service], capture=True)
         container_ids = [c for c in ps_proc.stdout.decode("utf-8").strip().split("\n")]
         if len(container_ids) > 1:
             raise errors.Failed(

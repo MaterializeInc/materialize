@@ -13,7 +13,7 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use futures::sink::SinkExt;
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
@@ -32,18 +32,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let id = popts.opt_get_default("p", 0)?;
     let magic_number = popts.free.get(0).unwrap_or(&"42".into()).parse()?;
 
-    let mut runtime = tokio::runtime::Runtime::new()?;
+    let runtime = tokio::runtime::Runtime::new()?;
     let nodes: Vec<_> = (0..n).map(|i| (Ipv4Addr::LOCALHOST, 6876 + i)).collect();
-    let mut listener = runtime.block_on(TcpListener::bind(&nodes[id]))?;
+    let listener = runtime.block_on(TcpListener::bind(&nodes[id]))?;
     println!("listening on {}...", listener.local_addr()?);
 
     let switchboard = Switchboard::new(nodes, id);
     runtime.spawn({
         let switchboard = switchboard.clone();
         async move {
-            let mut incoming = listener.incoming();
-            while let Some(conn) = incoming.next().await {
-                let conn = conn.expect("accept failed");
+            loop {
+                let (conn, _addr) = listener.accept().await.expect("accept failed");
                 switchboard
                     .handle_connection(conn)
                     .await

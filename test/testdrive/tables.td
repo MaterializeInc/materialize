@@ -33,7 +33,7 @@ materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" \"pg
 > DROP TABLE s;
 
 ! CREATE TABLE s (a date DEFAULT 42)
-DEFAULT expression does not support casting from i32 to date
+DEFAULT expression does not support casting from int4 to date
 
 ! CREATE TABLE s (a int, b int DEFAULT a + 3)
 column "a" does not exist

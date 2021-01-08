@@ -56,6 +56,10 @@ pub fn options(options: &[SqlOption]) -> BTreeMap<String, Value> {
                 ident(name.clone()),
                 Value::String(object_name.to_ast_string()),
             ),
+            SqlOption::DataType { name, data_type } => (
+                ident(name.clone()),
+                Value::String(data_type.to_ast_string()),
+            ),
         })
         .collect()
 }
@@ -296,22 +300,17 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             name, with_options, ..
         }) => {
             *name = allocate_name(name)?;
+            let mut normalizer = QueryNormalizer::new(scx);
             for option in with_options {
                 match option {
-                    SqlOption::ObjectName { object_name, .. } => {
-                        *object_name = resolve_item(object_name)?;
+                    SqlOption::DataType { data_type, .. } => {
+                        normalizer.visit_data_type_mut(data_type);
                     }
-                    SqlOption::Value {
-                        name,
-                        value: Value::String(val),
-                    } => {
-                        *option = SqlOption::ObjectName {
-                            name: name.clone(),
-                            object_name: resolve_item(&ObjectName::unqualified(&val))?,
-                        }
-                    }
-                    _ => (),
+                    _ => unreachable!(),
                 }
+            }
+            if let Some(err) = normalizer.err {
+                return Err(err);
             }
         }
 

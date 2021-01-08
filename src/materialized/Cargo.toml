@@ -29,6 +29,7 @@ name = "materialized-unstable"
 [dependencies]
 anyhow = "1.0.37"
 askama = { version = "0.10.5", features = ["serde-json"] }
+async-stream = "0.3.0"
 async-trait = "0.1.42"
 backtrace = "0.3.55"
 build-info = { path = "../build-info" }
@@ -41,7 +42,7 @@ dataflow-types = { path = "../dataflow-types" }
 futures = "0.3.0"
 getopts = "0.2.0"
 hex = "0.4.0"
-hyper = "0.13.9"
+hyper = { version = "0.14.0", features = ["http1", "server"] }
 include_dir = "0.6.0"
 itertools = "0.9.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
@@ -55,13 +56,11 @@ ore = { path = "../ore" }
 os_info = "3.0.1"
 parse_duration = "2.1.0"
 pgwire = { path = "../pgwire" }
-postgres-openssl = "0.3.0"
-postgres_array = "0.10.0"
 prof = { path = "../prof", features = ["auto-jemalloc"] }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 repr = { path = "../repr" }
-reqwest = { version = "0.10.8", features = ["json"] }
+reqwest = { version = "0.11.0", features = ["json"] }
 rlimit = "0.5.3"
 semver = "0.11.0"
 serde = { version = "1.0.0", features = ["derive"] }
@@ -72,8 +71,8 @@ sql-parser = { path = "../sql-parser" }
 sysctl = "0.4.0"
 sysinfo = "0.15.3"
 tempfile = "3.1.0"
-tokio = { version = "0.2.0", features = ["sync"] }
-tokio-openssl = "0.4.0"
+tokio = { version = "1.0.0", features = ["sync"] }
+tokio-openssl = "0.6.0"
 tracing = "0.1.21"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
@@ -96,19 +95,21 @@ fallible-iterator = "0.2.0"
 itertools = "0.9.0"
 pgrepr = { path = "../pgrepr" }
 pgtest = { path = "../pgtest" }
-postgres = { version = "0.17.0", features = ["with-chrono-0_4"] }
+postgres = { version = "0.19.0", features = ["with-chrono-0_4"] }
+postgres-openssl = "0.5.0"
+postgres_array = "0.11.0"
 predicates = "1.0.6"
 repr = { path = "../repr" }
-reqwest = { version = "0.10.8", features = ["blocking"] }
+reqwest = { version = "0.11.0", features = ["blocking"] }
 serde_json = "1.0.0"
-tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4"] }
+tokio-postgres = { version = "0.7.0", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
 anyhow = "1.0.37"
 flate2 = "1.0.19"
 hex = "0.4.2"
 hex-literal = "0.3.1"
-reqwest = { version = "0.10.8", features = ["blocking"] }
+reqwest = { version = "0.11.0", features = ["blocking"] }
 sha2 = "0.9.2"
 tar = "0.4.30"
 walkdir = "2.3.1"

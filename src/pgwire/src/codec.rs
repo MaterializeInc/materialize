@@ -19,18 +19,19 @@ use std::error::Error;
 use std::fmt;
 use std::str;
 
+use async_trait::async_trait;
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
 use futures::{sink, SinkExt, TryStreamExt};
 use lazy_static::lazy_static;
 use log::trace;
 use prometheus::{register_uint_counter, UIntCounter};
-use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, Interest, Ready};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
 use ore::cast::CastFrom;
 use ore::future::OreSinkExt;
-use ore::netio;
+use ore::netio::{self, AsyncReady};
 
 use crate::message::{
     BackendMessage, ErrorResponse, FrontendMessage, FrontendStartupMessage, TransactionStatus,
@@ -145,6 +146,16 @@ where
     /// performance.
     pub fn set_encode_state(&mut self, encode_state: Vec<(pgrepr::Type, pgrepr::Format)>) {
         self.inner.get_mut().codec_mut().encode_state = encode_state;
+    }
+}
+
+#[async_trait]
+impl<A> AsyncReady for FramedConn<A>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+{
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        self.inner.get_ref().get_ref().ready(interest).await
     }
 }
 

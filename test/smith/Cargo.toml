@@ -11,12 +11,12 @@ env_logger = "0.8.2"
 futures = "0.3.8"
 futures-channel = "0.3.5"
 log = "0.4.11"
-postgres-types = "0.1.1"
-reqwest = { version = "0.10.8", features = ["json"] }
+postgres-types = "0.2.0"
+reqwest = { version = "0.11.0", features = ["json"] }
 serde = { version = "1.0.0", features = ["derive"] }
 serde_json = "1.0.60"
 structopt = "0.3.21"
 test-util = { path = "../test-util" }
-tokio = { version = "0.2.22", features = ["full"] }
-tokio-postgres = "0.5.5"
+tokio = "1.0.0"
+tokio-postgres = "0.7.0"
 url = "2.2.0"

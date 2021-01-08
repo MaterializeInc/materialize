@@ -39,7 +39,7 @@ use mz_avro::{
     give_value,
     types::{DecimalValue, Scalar, Value},
     AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess, AvroRead, AvroRecordAccess,
-    GeneralDeserializer, StatefulAvroDecodeable, TrivialDecoder, ValueDecoder, ValueOrReader,
+    GeneralDeserializer, StatefulAvroDecodable, TrivialDecoder, ValueDecoder, ValueOrReader,
 };
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
@@ -133,6 +133,7 @@ enum RowCoordinates {
     },
     Postgres {
         lsn: usize,
+        total_order: Option<usize>,
     },
     MSSql {
         change_lsn: MSSqlLsn,
@@ -146,9 +147,18 @@ pub struct DebeziumSourceCoordinates {
     snapshot: bool,
     row: RowCoordinates,
 }
+
+#[derive(Debug)]
+pub struct DebeziumTransactionMetadata {
+    // The order of the record within the transaction
+    total_order: usize,
+}
+
 struct DebeziumSourceDecoder<'a> {
     file_buf: &'a mut Vec<u8>,
 }
+
+struct DebeziumTransactionDecoder;
 
 struct AvroStringDecoder<'a> {
     pub buf: &'a mut Vec<u8>,
@@ -266,6 +276,47 @@ fn decode_change_lsn(input: &str) -> Option<MSSqlLsn> {
         slot_num,
     })
 }
+
+// TODO - If #[derive(AvroDecodable)] supported optional fields, we wouldn't need to do this by hand.
+impl AvroDecode for DebeziumTransactionDecoder {
+    type Out = Option<DebeziumTransactionMetadata>;
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(
+        self,
+        a: &mut A,
+    ) -> Result<Self::Out, AvroError> {
+        let mut total_order = None;
+        while let Some((name, _, field)) = a.next_field()? {
+            match name {
+                "total_order" => {
+                    let val = field.decode_field(ValueDecoder)?;
+                    total_order = Some(val.into_usize().ok_or_else(|| {
+                        DecodeError::Custom("\"total_order\" is not an integer".to_string())
+                    })?);
+                }
+                _ => field.decode_field(TrivialDecoder)?,
+            }
+        }
+        Ok(total_order.map(|total_order| DebeziumTransactionMetadata { total_order }))
+    }
+    fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
+        self,
+        idx: usize,
+        _n_variants: usize,
+        null_variant: Option<usize>,
+        deserializer: D,
+        reader: &'a mut R,
+    ) -> Result<Self::Out, AvroError> {
+        if Some(idx) == null_variant {
+            Ok(None)
+        } else {
+            deserializer.deserialize(reader, self)
+        }
+    }
+    define_unexpected! {
+        array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+    }
+}
+
 impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
     type Out = DebeziumSourceCoordinates;
     fn record<R: AvroRead, A: AvroRecordAccess<R>>(
@@ -395,7 +446,10 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
             RowCoordinates::MySql { pos, row }
         } else if pg_any {
             let lsn = lsn.ok_or_else(|| DecodeError::Custom("no lsn".to_string()))? as usize;
-            RowCoordinates::Postgres { lsn }
+            RowCoordinates::Postgres {
+                lsn,
+                total_order: None,
+            }
         } else if mssql_any {
             let change_lsn =
                 change_lsn.ok_or_else(|| DecodeError::Custom("no change_lsn".to_string()))?;
@@ -464,6 +518,7 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
         let mut before = None;
         let mut after = None;
         let mut coords = None;
+        let mut transaction = None;
         while let Some((name, _, field)) = a.next_field()? {
             match name {
                 "before" => {
@@ -500,9 +555,22 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
                     };
                     coords = Some(field.decode_field(d)?);
                 }
+                "transaction" => {
+                    let d = DebeziumTransactionDecoder;
+                    transaction = field.decode_field(d)?;
+                }
                 _ => {
                     field.decode_field(TrivialDecoder)?;
                 }
+            }
+        }
+        if let Some(transaction) = transaction {
+            if let Some(DebeziumSourceCoordinates {
+                row: RowCoordinates::Postgres { total_order, .. },
+                ..
+            }) = coords.as_mut()
+            {
+                *total_order = Some(transaction.total_order);
             }
         }
         Ok((DiffPair { before, after }, coords))
@@ -541,7 +609,7 @@ impl AvroDecode for RowDecoder {
 // Get around orphan rule
 #[derive(Debug)]
 struct RowWrapper(Row);
-impl StatefulAvroDecodeable for RowWrapper {
+impl StatefulAvroDecodable for RowWrapper {
     type Decoder = RowDecoder;
     // TODO - can we make this some sort of &'a mut (RowPacker, Vec<u8>) without
     // running into lifetime crap?
@@ -1325,10 +1393,17 @@ impl DebeziumDeduplicationStrategy {
 }
 
 /// Track whether or not we should skip a specific debezium message
+///
+/// The goal of deduplication is to omit sending true duplicates -- the exact
+/// same record being sent into materialize twice. That means that we create
+/// one deduplicator per timely worker and use use timely key sharding
+/// normally. But it also means that no single deduplicator knows the
+/// highest-ever seen binlog offset.
 #[derive(Debug)]
 struct DebeziumDeduplicationState {
-    /// Last recorded (pos, row, offset) for each MySQL binlog file.
-    /// (Or "", in the Postgres case)
+    /// Last recorded (pos, row, offset) for each binlog stream.
+    ///
+    /// A binlog stream is either a file name (for mysql) or "" for postgres.
     ///
     /// [`DebeziumDeduplicationstrategy`] determines whether messages that are not ahead
     /// of the last recorded pos/row will be skipped.
@@ -1475,7 +1550,7 @@ impl DebeziumDeduplicationState {
     ) -> bool {
         let (pos, row) = match row {
             RowCoordinates::MySql { pos, row } => (pos, row),
-            RowCoordinates::Postgres { lsn } => (lsn, 0),
+            RowCoordinates::Postgres { lsn, total_order } => (lsn, total_order.unwrap_or(0)),
             RowCoordinates::MSSql {
                 change_lsn,
                 event_serial_no,
@@ -2752,15 +2827,15 @@ pub mod cdc_v2 {
     use super::RowWrapper;
 
     use anyhow::anyhow;
-    use avro_derive::AvroDecodeable;
+    use avro_derive::AvroDecodable;
     use differential_dataflow::capture::{Message, Progress};
     use mz_avro::schema::Schema;
     use mz_avro::types::Value;
     use mz_avro::{
         define_unexpected,
         error::{DecodeError, Error as AvroError},
-        ArrayAsVecDecoder, AvroDecode, AvroDecodeable, AvroDeserializer, AvroRead,
-        StatefulAvroDecodeable,
+        ArrayAsVecDecoder, AvroDecodable, AvroDecode, AvroDeserializer, AvroRead,
+        StatefulAvroDecodable,
     };
     use std::{cell::RefCell, rc::Rc};
 
@@ -2849,7 +2924,7 @@ pub mod cdc_v2 {
         }
     }
 
-    #[derive(AvroDecodeable)]
+    #[derive(AvroDecodable)]
     #[state_type(Rc<RefCell<RowPacker>>, Rc<RefCell<Vec<u8>>>)]
     struct MyUpdate {
         #[state_expr(self._STATE.0.clone(), self._STATE.1.clone())]
@@ -2857,7 +2932,7 @@ pub mod cdc_v2 {
         time: Timestamp,
         diff: Diff,
     }
-    #[derive(AvroDecodeable)]
+    #[derive(AvroDecodable)]
     struct Count {
         time: Timestamp,
         count: usize,
@@ -2865,10 +2940,10 @@ pub mod cdc_v2 {
 
     fn make_counts_decoder() -> impl AvroDecode<Out = Vec<(Timestamp, usize)>> {
         ArrayAsVecDecoder::new(|| {
-            <Count as AvroDecodeable>::new_decoder().map_decoder(|ct| Ok((ct.time, ct.count)))
+            <Count as AvroDecodable>::new_decoder().map_decoder(|ct| Ok((ct.time, ct.count)))
         })
     }
-    #[derive(AvroDecodeable)]
+    #[derive(AvroDecodable)]
     struct MyProgress {
         lower: Vec<Timestamp>,
         upper: Vec<Timestamp>,
@@ -2891,7 +2966,7 @@ pub mod cdc_v2 {
                     let packer = Rc::new(RefCell::new(RowPacker::new()));
                     let buf = Rc::new(RefCell::new(vec![]));
                     let d = ArrayAsVecDecoder::new(|| {
-                        <MyUpdate as StatefulAvroDecodeable>::new_decoder((
+                        <MyUpdate as StatefulAvroDecodable>::new_decoder((
                             packer.clone(),
                             buf.clone(),
                         ))
@@ -2902,7 +2977,7 @@ pub mod cdc_v2 {
                 }
                 1 => {
                     let progress = deserializer
-                        .deserialize(r, <MyProgress as AvroDecodeable>::new_decoder())?;
+                        .deserialize(r, <MyProgress as AvroDecodable>::new_decoder())?;
                     let progress = Progress {
                         lower: progress.lower,
                         upper: progress.upper,

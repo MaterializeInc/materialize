@@ -12,11 +12,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::bail;
-use openssl::ssl::SslAcceptor;
-use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
+use async_trait::async_trait;
+use openssl::ssl::{Ssl, SslContext};
+use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
 
 use coord::session::Session;
+use ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
@@ -27,12 +29,12 @@ use crate::secrets::SecretManager;
 pub struct Server {
     id_alloc: IdAllocator,
     secrets: SecretManager,
-    tls: Option<SslAcceptor>,
+    tls: Option<SslContext>,
     coord_client: coord::Client,
 }
 
 impl Server {
-    pub fn new(tls: Option<SslAcceptor>, coord_client: coord::Client) -> Server {
+    pub fn new(tls: Option<SslContext>, coord_client: coord::Client) -> Server {
         Server {
             id_alloc: IdAllocator::new(1, 1 << 16),
             secrets: SecretManager::new(),
@@ -43,7 +45,7 @@ impl Server {
 
     pub async fn handle_connection<A>(&self, conn: A) -> Result<(), anyhow::Error>
     where
-        A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
         let mut conn = Conn::Unencrypted(conn);
         loop {
@@ -93,7 +95,9 @@ impl Server {
                     Conn::Unencrypted(mut conn) if self.tls.is_some() => {
                         conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
                         let tls = self.tls.as_ref().unwrap();
-                        Conn::Ssl(tokio_openssl::accept(tls, conn).await?)
+                        let mut ssl_stream = SslStream::new(Ssl::new(tls)?, conn)?;
+                        Pin::new(&mut ssl_stream).accept().await?;
+                        Conn::Ssl(ssl_stream)
                     }
                     mut conn => {
                         conn.write_all(&[REJECT_ENCRYPTION]).await?;
@@ -123,8 +127,8 @@ where
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Conn::Unencrypted(inner) => Pin::new(inner).poll_read(cx, buf),
             Conn::Ssl(inner) => Pin::new(inner).poll_read(cx, buf),
@@ -154,6 +158,19 @@ where
         match self.get_mut() {
             Conn::Unencrypted(inner) => Pin::new(inner).poll_shutdown(cx),
             Conn::Ssl(inner) => Pin::new(inner).poll_shutdown(cx),
+        }
+    }
+}
+
+#[async_trait]
+impl<A> AsyncReady for Conn<A>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Sync + Unpin,
+{
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        match self {
+            Conn::Unencrypted(inner) => inner.ready(interest).await,
+            Conn::Ssl(inner) => inner.ready(interest).await,
         }
     }
 }

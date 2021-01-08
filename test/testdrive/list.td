@@ -11,7 +11,7 @@
 
 > SHOW TYPES
 
-> CREATE TYPE bool AS LIST (element_type='int4')
+> CREATE TYPE bool AS LIST (element_type=int4)
 
 > CREATE TYPE custom AS LIST (element_type=bool)
 
@@ -31,7 +31,7 @@ user
 
 > CREATE SCHEMA test_schema
 
-> CREATE TYPE test_schema.bool AS LIST (element_type='float4')
+> CREATE TYPE test_schema.bool AS LIST (element_type=float4)
 
 > SHOW TYPES
 name

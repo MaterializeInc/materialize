@@ -12,8 +12,7 @@
 use std::fmt;
 use std::io;
 
-use bytes::buf::{BufMut, BufMutExt};
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 
 /// A trait for objects that can be infallibly written to.
 ///
