@@ -24,6 +24,7 @@ use rusoto_credential::AwsCredentials;
 use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient};
 use url::Url;
 
+use aws_util::aws;
 use repr::strconv;
 
 use crate::error::{Error, InputError, ResultExt};
@@ -472,10 +473,13 @@ pub async fn create_state(
 
     let (aws_region, aws_account, aws_credentials, kinesis_client, kinesis_stream_names) = {
         let kinesis_client = aws_util::kinesis::client(
-            config.aws_region.clone(),
-            Some(config.aws_credentials.aws_access_key_id().to_owned()),
-            Some(config.aws_credentials.aws_secret_access_key().to_owned()),
-            config.aws_credentials.token().clone(),
+            aws::ConnectInfo::new(
+                config.aws_region.clone(),
+                Some(config.aws_credentials.aws_access_key_id().to_owned()),
+                Some(config.aws_credentials.aws_secret_access_key().to_owned()),
+                config.aws_credentials.token().clone(),
+            )
+            .unwrap(),
         )
         .await
         .map_err(|e| Error::General {

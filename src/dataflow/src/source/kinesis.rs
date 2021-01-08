@@ -358,13 +358,7 @@ async fn create_state(
     ),
     anyhow::Error,
 > {
-    let kinesis_client = aws_util::kinesis::client(
-        c.aws_info.region.clone(),
-        c.aws_info.access_key_id.clone(),
-        c.aws_info.secret_access_key.clone(),
-        c.aws_info.token,
-    )
-    .await?;
+    let kinesis_client = aws_util::kinesis::client(c.aws_info).await?;
 
     let shard_set: HashSet<String> = get_shard_ids(&kinesis_client, &c.stream_name).await?;
     let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();

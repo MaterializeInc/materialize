@@ -21,9 +21,8 @@ use timely::scheduling::{Activator, SyncActivator};
 use tokio::io::AsyncReadExt;
 use tokio::time::{self, Duration};
 
-use dataflow_types::{
-    AwsConnectInfo, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
-};
+use aws_util::aws;
+use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
@@ -135,18 +134,11 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
 async fn read_bucket_task(
     bucket: String,
     glob: Option<GlobMatcher>,
-    aws_info: AwsConnectInfo,
+    aws_info: aws::ConnectInfo,
     tx: SyncSender<anyhow::Result<Vec<u8>>>,
     activator: Option<SyncActivator>,
 ) {
-    let client = match aws_util::s3::client(
-        aws_info.region.clone(),
-        aws_info.access_key_id,
-        aws_info.secret_access_key,
-        aws_info.token,
-    )
-    .await
-    {
+    let client = match aws_util::s3::client(aws_info).await {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(anyhow!("Unable to create s3 client: {}", e)))

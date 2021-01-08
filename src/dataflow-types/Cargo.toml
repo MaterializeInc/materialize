@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.38"
+aws-util = { path = "../aws-util" }
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 expr = { path = "../expr" }
