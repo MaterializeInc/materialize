@@ -2382,6 +2382,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
+ "openssl",
  "phf_shared",
  "smallvec",
  "tokio",
