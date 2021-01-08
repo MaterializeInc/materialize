@@ -12,11 +12,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::bail;
+use async_trait::async_trait;
 use openssl::ssl::{Ssl, SslContext};
-use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
 
 use coord::session::Session;
+use ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
@@ -43,7 +45,7 @@ impl Server {
 
     pub async fn handle_connection<A>(&self, conn: A) -> Result<(), anyhow::Error>
     where
-        A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
         let mut conn = Conn::Unencrypted(conn);
         loop {
@@ -156,6 +158,19 @@ where
         match self.get_mut() {
             Conn::Unencrypted(inner) => Pin::new(inner).poll_shutdown(cx),
             Conn::Ssl(inner) => Pin::new(inner).poll_shutdown(cx),
+        }
+    }
+}
+
+#[async_trait]
+impl<A> AsyncReady for Conn<A>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Sync + Unpin,
+{
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        match self {
+            Conn::Unencrypted(inner) => inner.ready(interest).await,
+            Conn::Ssl(inner) => inner.ready(interest).await,
         }
     }
 }
