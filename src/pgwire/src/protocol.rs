@@ -21,13 +21,14 @@ use lazy_static::lazy_static;
 use log::debug;
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_uint_counter};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, Interest};
 use tokio::time::{self, Duration, Instant};
 
 use coord::session::{Portal, PortalState, RowBatchStream, TransactionStatus};
 use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
+use ore::netio::AsyncReady;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{FetchDirection, Ident, Statement};
@@ -87,7 +88,7 @@ pub struct StateMachine<A> {
 
 impl<A> StateMachine<A>
 where
-    A: AsyncRead + AsyncWrite + Send + Unpin,
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
 {
     // Manually desugar this (don't use `async fn run`) here because a much better
     // error message is produced if there are problems with Send or other traits
@@ -1195,19 +1196,26 @@ where
                     }
                 }
                 Err(time::error::Elapsed { .. }) => {
-                    // It's been a while since we've had any data to send, and the client may have
-                    // disconnected. Send a notice, which will error if the client has, in fact,
-                    // disconnected. Otherwise we might block forever waiting for rows, leaking
-                    // memory and a socket.
+                    // It's been a while since we've had any data to send, and
+                    // the client may have disconnected. Check whether the
+                    // socket is no longer readable and error if so. Otherwise
+                    // we might block forever waiting for rows, leaking memory
+                    // and a socket.
                     //
-                    // TODO: When we are on tokio 0.3, use
-                    // https://github.com/tokio-rs/tokio/issues/2228 to detect this.
-                    self.conn
-                        .send(BackendMessage::ErrorResponse(ErrorResponse::notice(
-                            SqlState::NO_DATA,
-                            "TAIL waiting for more data",
-                        )))
-                        .await?;
+                    // In theory we should check for writability rather than
+                    // readability—after all, we're writing data to the socket,
+                    // not reading from it—but read-closed events are much more
+                    // reliable on TCP streams than write-closed events.
+                    // See: https://github.com/tokio-rs/mio/pull/1110
+                    let ready = self.conn.ready(Interest::READABLE).await?;
+                    if ready.is_read_closed() {
+                        return self
+                            .error(ErrorResponse::fatal(
+                                SqlState::CONNECTION_FAILURE,
+                                "connection closed",
+                            ))
+                            .await;
+                    }
                 }
             }
             self.conn.flush().await?;

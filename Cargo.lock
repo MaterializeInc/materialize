@@ -2374,6 +2374,7 @@ dependencies = [
 name = "ore"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes 1.0.0",
  "crossbeam-utils",
  "fallible-iterator",
@@ -2384,6 +2385,7 @@ dependencies = [
  "phf_shared",
  "smallvec",
  "tokio",
+ "tokio-openssl",
  "tracing-subscriber",
 ]
 
@@ -2592,6 +2594,7 @@ name = "pgwire"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "byteorder",
  "bytes 1.0.0",
  "chrono",

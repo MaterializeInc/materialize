@@ -12,9 +12,12 @@ use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use async_trait::async_trait;
 use futures::ready;
 use smallvec::{smallvec, SmallVec};
-use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{self, AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
+
+use crate::netio::AsyncReady;
 
 const INLINE_BUF_LEN: usize = 8;
 
@@ -152,6 +155,16 @@ where
     }
 }
 
+#[async_trait]
+impl<A> AsyncReady for SniffingStream<A>
+where
+    A: AsyncReady + Send + Sync,
+{
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        self.inner.ready(interest).await
+    }
+}
+
 /// A [`SniffingStream`] that has relinquished its capability to sniff bytes.
 pub struct SniffedStream<A> {
     inner: A,
@@ -233,5 +246,15 @@ where
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), io::Error>> {
         self.inner_pin().poll_shutdown(cx)
+    }
+}
+
+#[async_trait]
+impl<A> AsyncReady for SniffedStream<A>
+where
+    A: AsyncReady + Send + Sync,
+{
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        self.inner.ready(interest).await
     }
 }
