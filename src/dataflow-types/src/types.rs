@@ -22,11 +22,11 @@ use anyhow::Context;
 use globset::Glob;
 use log::warn;
 use regex::Regex;
-use rusoto_core::Region;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use url::Url;
 
+use aws_util::aws;
 use expr::{GlobalId, OptimizedRelationExpr, PartitionId, RelationExpr, ScalarExpr};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
@@ -628,7 +628,7 @@ pub struct KafkaSourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnector {
     pub stream_name: String,
-    pub aws_info: AwsConnectInfo,
+    pub aws_info: aws::ConnectInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -641,15 +641,7 @@ pub struct FileSourceConnector {
 pub struct S3SourceConnector {
     pub bucket: String,
     pub pattern: Option<Glob>,
-    pub aws_info: AwsConnectInfo,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct AwsConnectInfo {
-    pub region: Region,
-    pub access_key_id: Option<String>,
-    pub secret_access_key: Option<String>,
-    pub token: Option<String>,
+    pub aws_info: aws::ConnectInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -735,9 +727,9 @@ pub struct KafkaSinkConnectorBuilder {
     pub key_schema: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,

@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.38"
 aws-arn = "0.1.1"
+aws-util = { path = "../aws-util" }
 build-info = { path = "../build-info" }
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
