@@ -34,6 +34,7 @@ use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use rusoto_kinesis::KinesisClient;
 
+use aws_util::kinesis;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
@@ -1101,26 +1102,19 @@ impl Timestamper {
         _id: SourceInstanceId,
         kinc: KinesisSourceConnector,
     ) -> Option<RtKinesisConnector> {
-        let (kinesis_client, cached_shard_ids) = match block_on(aws_util::kinesis::client(
-            kinc.aws_info.region.clone(),
-            kinc.aws_info.access_key_id.clone(),
-            kinc.aws_info.secret_access_key.clone(),
-            kinc.aws_info.token.clone(),
-        )) {
+        let (kinesis_client, cached_shard_ids) = match block_on(kinesis::client(kinc.aws_info)) {
             Ok(kinesis_client) => {
-                let cached_shard_ids = match block_on(aws_util::kinesis::get_shard_ids(
-                    &kinesis_client,
-                    &kinc.stream_name,
-                )) {
-                    Ok(shard_ids) => shard_ids,
-                    Err(e) => {
-                        error!(
-                            "Initializing KinesisSourceConnector with empty shard list: {}",
-                            e
-                        );
-                        HashSet::new()
-                    }
-                };
+                let cached_shard_ids =
+                    match block_on(kinesis::get_shard_ids(&kinesis_client, &kinc.stream_name)) {
+                        Ok(shard_ids) => shard_ids,
+                        Err(e) => {
+                            error!(
+                                "Initializing KinesisSourceConnector with empty shard list: {}",
+                                e
+                            );
+                            HashSet::new()
+                        }
+                    };
 
                 (Some(kinesis_client), Some(cached_shard_ids))
             }

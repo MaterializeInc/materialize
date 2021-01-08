@@ -32,6 +32,7 @@ use rand::Rng;
 use rusoto_core::Region;
 use structopt::StructOpt;
 
+use aws_util::aws;
 use test_util::mz_client;
 
 mod kinesis;
@@ -61,7 +62,8 @@ async fn run() -> Result<(), anyhow::Error> {
 
     // Initialize test resources in Kinesis.
     let region: Region = args.aws_region.parse().context("parsing AWS region")?;
-    let kinesis_client = aws_util::kinesis::client(region.clone(), None, None, None).await?;
+    let kinesis_client =
+        aws_util::kinesis::client(aws::ConnectInfo::new(region, None, None, None)?).await?;
     let stream_arn =
         kinesis::create_stream(&kinesis_client, &stream_name, args.shard_count).await?;
     log::info!("Created Kinesis stream {}", stream_name);

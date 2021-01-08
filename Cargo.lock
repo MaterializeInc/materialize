@@ -222,6 +222,7 @@ dependencies = [
  "rusoto_kinesis",
  "rusoto_s3",
  "rusoto_sts",
+ "serde",
  "tokio",
 ]
 
@@ -777,6 +778,7 @@ name = "dataflow-types"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-util",
  "ccsr",
  "comm",
  "expr",
@@ -3695,6 +3697,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "aws-arn",
+ "aws-util",
  "build-info",
  "ccsr",
  "chrono",
