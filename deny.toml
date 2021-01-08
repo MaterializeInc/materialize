@@ -14,22 +14,13 @@ skip = [
     { name = "pin-project", version = "0.4.27" },
     { name = "pin-project-internal", version = "0.4.22" },
 
-    # Waiting on rustc_version.
-    { name = "semver", version = "0.9.0" },
-    { name = "semver-parser", version = "0.7.0" },
-
-    # Waiting on rusoto_sts.
-    { name = "serde_urlencoded", version = "0.6.1" },
-
     # Waiting on at least tempfile, phf, and uuid to upgrade to rand v0.8.
     { name = "getrandom", version = "0.1" },
     { name = "rand", version = "0.7.3" },
     { name = "rand_chacha", version = "0.2.2" },
     { name = "rand_core", version = "0.5.1" },
     { name = "rand_hc", version = "0.2.0" },
-
-    # Waiting on http v0.2.3: https://github.com/hyperium/http/pull/461.
-    { name = "bytes", version = "0.5.6" },
+    { name = "wasi", version = "0.10.0+wasi-snapshot-preview1" },
 
     # Waiting on parse_duration.
     { name = "num-bigint", version = "0.2.6" }
@@ -62,4 +53,5 @@ allow-git = [
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",
+    "https://github.com/rusoto/rusoto.git"
 ]
