@@ -1092,6 +1092,7 @@ dependencies = [
  "ordered-float",
  "ore",
  "pdqselect",
+ "pgrepr",
  "regex",
  "regex-syntax",
  "repr",

@@ -177,7 +177,6 @@ SELECT pg_typeof('1'::int)
 ----
 int4
 
-
 query T
 SELECT '1'::integer
 ----
@@ -190,7 +189,6 @@ query T
 SELECT pg_typeof('1'::integer)
 ----
 int4
-
 
 query T
 SELECT '1'::smallint
@@ -304,8 +302,6 @@ SELECT '1'::decimal(38,0)
 
 query error type "pg_catalog.decimal" does not exist
 SELECT '1'::pg_catalog.decimal(38,0)
-----
-1
 
 query T
 SELECT '1'::dec(38,0)
@@ -470,3 +466,249 @@ SELECT '1'::materialize.pg_catalog.int4
 # tables are not types yet
 query error type "pg_catalog.pg_enum" does not exist
 SELECT '1'::pg_catalog.pg_enum
+
+# 🔬 format_type
+
+query T
+SELECT format_type(NULL, NULL)
+----
+NULL
+
+query T
+SELECT format_type(NULL, 1)
+----
+NULL
+
+query T
+SELECT format_type(16, NULL)
+----
+bool
+
+query T
+SELECT format_type(17, NULL)
+----
+bytea
+
+query T
+SELECT format_type(20, NULL)
+----
+int8
+
+query T
+SELECT format_type(23, NULL)
+----
+int4
+
+query T
+SELECT format_type(25, NULL)
+----
+text
+
+query T
+SELECT format_type(26, NULL)
+----
+oid
+
+query T
+SELECT format_type(700, NULL)
+----
+float4
+
+query T
+SELECT format_type(701, NULL)
+----
+float8
+
+query T
+SELECT format_type(1082, NULL)
+----
+date
+
+query T
+SELECT format_type(1083, NULL)
+----
+time
+
+query T
+SELECT format_type(1114, NULL)
+----
+timestamp
+
+query T
+SELECT format_type(1184, NULL)
+----
+timestamptz
+
+query T
+SELECT format_type(1186, NULL)
+----
+interval
+
+query T
+SELECT format_type(1700, NULL)
+----
+numeric
+
+query T
+SELECT format_type(2950, NULL)
+----
+uuid
+
+query T
+SELECT format_type(3802, NULL)
+----
+jsonb
+
+query T
+SELECT format_type(1000, NULL)
+----
+_bool
+
+query T
+SELECT format_type(1001, NULL)
+----
+_bytea
+
+query T
+SELECT format_type(1016, NULL)
+----
+_int8
+
+query T
+SELECT format_type(1007, NULL)
+----
+_int4
+
+query T
+SELECT format_type(1009, NULL)
+----
+_text
+
+query T
+SELECT format_type(1028, NULL)
+----
+_oid
+
+query T
+SELECT format_type(1021, NULL)
+----
+_float4
+
+query T
+SELECT format_type(1022, NULL)
+----
+_float8
+
+query T
+SELECT format_type(1182, NULL)
+----
+_date
+
+query T
+SELECT format_type(1183, NULL)
+----
+_time
+
+query T
+SELECT format_type(1115, NULL)
+----
+_timestamp
+
+query T
+SELECT format_type(1185, NULL)
+----
+_timestamptz
+
+query T
+SELECT format_type(1187, NULL)
+----
+_interval
+
+query T
+SELECT format_type(1231, NULL)
+----
+_numeric
+
+query T
+SELECT format_type(2951, NULL)
+----
+_uuid
+
+query T
+SELECT format_type(3807, NULL)
+----
+_jsonb
+
+# 🔬🔬 non-type OID
+
+query T
+SELECT format_type(6, NULL);
+----
+???
+
+query T
+SELECT format_type(600, 100);
+----
+???
+
+query T
+SELECT format_type(6000, -100);
+----
+???
+
+# 🔬🔬 non-NULL typemod
+
+query T
+SELECT format_type(1700, 0);
+----
+numeric(65535,65532)
+
+query T
+SELECT format_type(1700, 3);
+----
+numeric(65535,65535)
+
+query T
+SELECT format_type(1700, 4);
+----
+numeric(0,0)
+
+query T
+SELECT format_type(1700, 65540);
+----
+numeric(1,0)
+
+query T
+SELECT format_type(1700, 65541);
+----
+numeric(1,1)
+
+query T
+SELECT format_type(1700, 2490372);
+----
+numeric(38,0)
+
+query T
+SELECT format_type(1700, 2490371);
+----
+numeric(37,65535)
+
+query T
+SELECT format_type(1700, 2490373);
+----
+numeric(38,1)
+
+query T
+SELECT format_type(1700, -2490373);
+----
+numeric
+
+query T
+SELECT format_type(26, 1);
+----
+oid
+
+query T
+SELECT format_type(26, -1);
+----
+oid
