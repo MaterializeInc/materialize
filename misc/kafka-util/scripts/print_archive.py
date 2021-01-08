@@ -86,9 +86,9 @@ def print_archive(args: argparse.Namespace) -> None:
         # Strip the first 5 bytes, as they are added by Confluent Platform and are not part of the
         # actual serialized data
         decoded = {
-            "key": decode(key_reader, key[5:]),
+            "key": decode(key_reader, key[5:]) if key else None,
             "timestamp": timestamp,
-            "value": decode(value_reader, value[5:]),
+            "value": decode(value_reader, value[5:]) if value else None,
         }
 
         printer(decoded)
