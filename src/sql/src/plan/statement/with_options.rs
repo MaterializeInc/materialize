@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use rusoto_core::Region;
 
 use aws_util::aws;
@@ -97,26 +97,98 @@ macro_rules! with_options {
 
 pub(crate) fn aws_connect_info(
     options: &mut BTreeMap<String, Value>,
-    region: Option<Region>,
+    region: Option<String>,
 ) -> anyhow::Result<aws::ConnectInfo> {
-    // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
-    // https://github.com/materializeinc/materialize/issues/1991
     let mut extract = |key| match options.remove(key) {
         Some(Value::String(key)) => Ok(Some(key)),
         Some(_) => bail!("{} must be a string", key),
         _ => Ok(None),
     };
-    let region = match region {
+
+    let region_raw = match region {
         Some(region) => region,
-        None => extract("region")?
-            .map(|r| r.parse())
-            .transpose()?
-            .ok_or_else(|| anyhow::anyhow!("region is required"))?,
+        None => extract("region")?.ok_or(anyhow!("region is required"))?,
     };
+
+    let region = match region_raw.parse() {
+        Ok(region) => {
+            // ignore the endpoint option if we're pointing at a
+            // valid, non-custom AWS region
+            let _ = extract("endpoint");
+            region
+        }
+        Err(e) => {
+            // Region's fromstr doesn't support parsing custom regions.
+            // If a Kinesis stream's ARN indicates it exists in a custom
+            // region, support it iff a valid endpoint for the stream
+            // is also provided.
+            match extract("endpoint")? {
+                Some(endpoint) => Region::Custom {
+                    name: region_raw,
+                    endpoint,
+                },
+                _ => bail!(
+                    "Unable to parse AWS region: {}. If providing a custom \
+                         region, an `endpoint` option must also be provided",
+                    e
+                ),
+            }
+        }
+    };
+
     aws::ConnectInfo::new(
         region,
         extract("access_key_id")?,
         extract("secret_access_key")?,
         extract("token")?,
     )
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::ast::Value;
+
+    #[test]
+    fn with_options_errirs_if_endpoint_missing_for_invalid_region() {
+        let mut map = BTreeMap::new();
+        map.insert("region".to_string(), Value::String("nonsense".into()));
+        assert!(aws_connect_info(&mut map, None).is_err());
+
+        let mut map = BTreeMap::new();
+        assert!(aws_connect_info(&mut map, Some("nonsense".into())).is_err());
+    }
+
+    #[test]
+    fn with_options_allows_invalid_region_with_endpoint() {
+        let mut map = BTreeMap::new();
+        map.insert("region".to_string(), Value::String("nonsense".into()));
+        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
+        assert!(aws_connect_info(&mut map, None).is_ok());
+
+        let mut map = BTreeMap::new();
+        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
+        assert!(aws_connect_info(&mut map, Some("nonsense".into())).is_ok());
+    }
+
+    #[test]
+    fn with_options_ignores_endpoint_with_valid_region() {
+        let mut map = BTreeMap::new();
+        map.insert("region".to_string(), Value::String("us-east-1".into()));
+        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
+        assert!(aws_connect_info(&mut map, None).is_ok());
+
+        let mut map = BTreeMap::new();
+        map.insert("endpoint".to_string(), Value::String("endpoint".into()));
+        assert!(aws_connect_info(&mut map, Some("us-east-1".into())).is_ok());
+
+        let mut map = BTreeMap::new();
+        map.insert("region".to_string(), Value::String("us-east-1".into()));
+        assert!(aws_connect_info(&mut map, None).is_ok());
+
+        let mut map = BTreeMap::new();
+        assert!(aws_connect_info(&mut map, Some("us-east-1".into())).is_ok());
+    }
 }
