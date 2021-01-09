@@ -7,12 +7,10 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- Get time spent in each operator, across workers
-select mdo.id, mdo.worker, mdo.name, sum(mse.elapsed_ns) as elapsed_ns
-from mz_scheduling_elapsed as mse,
-     mz_dataflow_operators as mdo
-where
-    mse.id = mdo.id and
-    mse.worker = mdo.worker
-group by mdo.id, mdo.worker, mdo.name
-order by mdo.id ASC;
+-- Get time spent in each Worker
+SELECT mz_logical_timestamp()::float AS mz_logical_timestamp,
+       mz_scheduling_elapsed.worker AS mz_scheduling_worker_id,
+       sum(mz_scheduling_elapsed.elapsed_ns) AS mz_scheduling_elapsed_ns
+FROM mz_scheduling_elapsed
+GROUP BY mz_scheduling_elapsed.worker
+ORDER BY mz_scheduling_elapsed.worker ASC;

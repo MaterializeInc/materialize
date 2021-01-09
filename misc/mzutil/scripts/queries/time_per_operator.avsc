@@ -1,0 +1,10 @@
+{"namespace": "metrics.materialize.com",
+ "type": "record",
+ "name": "time_per_operator",
+ "fields": [
+     {"name": "mz_logical_timestamp",  "type": "double"},
+     {"name": "mz_dataflow_operator_id",  "type": "int"},
+     {"name": "mz_dataflow_operator_name", "type": "string"},
+     {"name": "mz_scheduling_elapsed_ns", "type": "long"}
+ ]
+}
