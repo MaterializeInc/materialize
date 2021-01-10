@@ -69,7 +69,7 @@ shell-words = "1.0.0"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
 sysctl = "0.4.0"
-sysinfo = "0.15.3"
+sysinfo = "0.15.7"
 tempfile = "3.1.0"
 tokio = { version = "1.0.0", features = ["sync"] }
 tokio-openssl = "0.6.0"
