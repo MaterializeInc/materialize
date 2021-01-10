@@ -15,7 +15,7 @@ kafka-util = { path = "../kafka-util" }
 log = "0.4.0"
 regex = "1.4.1"
 repr = { path = "../repr" }
-rusoto_core = "0.46.0"
+rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.0", features = ["derive"] }
 serde_regex = "1.1.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }

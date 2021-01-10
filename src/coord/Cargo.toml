@@ -34,7 +34,7 @@ rand = "0.8.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.4.1"
 repr = { path = "../repr" }
-rusoto_kinesis = "0.46.0"
+rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
 rusqlite = { version = "0.24.0", features = ["bundled", "unlock_notify"] }
 serde = "1.0.0"
 serde_json = "1.0.60"
