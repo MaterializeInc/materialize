@@ -80,9 +80,9 @@ here:
   * The [Compile Times][nethercote] chapter of Nicholas Nethercote's *The Rust
     Performance Book*.
 
-  * Brian Anderson's [The Rust Compilation Model Calamity] blog post, published
-    on PingCAP's blog. The blog post is the start of an ongoing series about
-    compile times in Rust.
+  * Brian Anderson's [The Rust Compilation Model Calamity][brson] blog post,
+    published on PingCAP's blog. The blog post is the start of an ongoing series
+    about compile times in Rust.
 
   * Matthias Endler's [Tips for Faster Rust Compile Times][endler].
 
