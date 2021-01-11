@@ -26,7 +26,7 @@ use ore::retry;
 use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::{
     CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, Statement,
+    CreateViewStatement, Raw, Statement,
 };
 
 use crate::action::{Action, State};
@@ -34,7 +34,7 @@ use crate::parser::{FailSqlCommand, SqlCommand, SqlOutput};
 
 pub struct SqlAction {
     cmd: SqlCommand,
-    stmt: Statement,
+    stmt: Statement<Raw>,
     timeout: Duration,
 }
 

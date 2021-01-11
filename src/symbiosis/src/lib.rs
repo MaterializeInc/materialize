@@ -40,7 +40,7 @@ use repr::adt::decimal::Significand;
 use repr::{Datum, RelationDesc, RelationType, Row, RowPacker};
 use sql::ast::{
     ColumnOption, CreateTableStatement, DataType, DeleteStatement, DropObjectsStatement, Expr,
-    InsertStatement, ObjectType, Statement, TableConstraint, UpdateStatement,
+    InsertStatement, ObjectType, Raw, Statement, TableConstraint, UpdateStatement,
 };
 use sql::catalog::Catalog;
 use sql::names::FullName;
@@ -104,7 +104,7 @@ END $$;
         })
     }
 
-    pub fn can_handle(&self, stmt: &Statement) -> bool {
+    pub fn can_handle(&self, stmt: &Statement<Raw>) -> bool {
         matches!(stmt,
             Statement::CreateTable { .. }
             | Statement::DropObjects { .. }
@@ -117,7 +117,7 @@ END $$;
         &mut self,
         pcx: &PlanContext,
         catalog: &dyn Catalog,
-        stmt: &Statement,
+        stmt: &Statement<Raw>,
     ) -> Result<Plan, anyhow::Error> {
         let scx = StatementContext {
             pcx,

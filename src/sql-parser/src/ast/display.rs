@@ -127,6 +127,16 @@ macro_rules! impl_display {
     };
 }
 
+macro_rules! impl_display_t {
+    ($name:ident) => {
+        impl<T: AstInfo> std::fmt::Display for $name<T> {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(self.to_ast_string().as_str())
+            }
+        }
+    };
+}
+
 impl<T: AstDisplay> AstDisplay for &Box<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         (*self).fmt(f);

@@ -31,9 +31,9 @@ use itertools::Itertools;
 use ore::iter::IteratorExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
-    DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
+    Aug, DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
     JoinOperator, Limit, ObjectName, OrderByExpr, Query, Raw, Select, SelectItem, SetExpr,
-    SetOperator, TableAlias, TableFactor, TableWithJoins, Value, Values,
+    SetOperator, TableAlias, TableFactor, TableName, TableWithJoins, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -70,7 +70,7 @@ pub fn plan_root_query(
     scx: &StatementContext,
     mut query: Query<Raw>,
     lifetime: QueryLifetime,
-) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
+) -> Result<(Query<Aug>, RelationDesc, RowSetFinishing), anyhow::Error> {
     transform_ast::transform_query(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
     let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
@@ -2923,7 +2923,11 @@ impl<'a> QueryContext<'a> {
 
     /// Resolves `name` to a table expr, i.e. getting a catalog table or
     /// inlining a CTE.
-    pub fn resolve_table_name(&self, name: ObjectName) -> Result<(RelationExpr, Scope), PlanError> {
+    pub fn resolve_table_name(&self, name: TableName) -> Result<(RelationExpr, Scope), PlanError> {
+        let name = match name {
+            TableName::Resolvable(n) => n,
+            _ => panic!("unhandled"),
+        };
         // Check if unqualified name refers to a CTE.
         if name.0.len() == 1 {
             let norm_name = normalize::ident(name.0[0].clone());
