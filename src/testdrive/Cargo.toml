@@ -30,7 +30,7 @@ postgres_array = "0.11.0"
 protobuf = { version = "2.17.0", features = ["with-serde"] }
 rand = "0.8.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-regex = "1.0.0"
+regex = "1.4.3"
 repr = { path = "../repr" }
 reqwest = { version = "0.11.0", features = ["native-tls-vendored"] }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }

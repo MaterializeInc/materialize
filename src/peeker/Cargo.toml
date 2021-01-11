@@ -17,7 +17,7 @@ ore = { path = "../ore" }
 parse_duration = "2.1.0"
 postgres = "0.19.0"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-regex = "1.4.1"
+regex = "1.4.3"
 serde = { version = "1.0.118", features = ["derive"] }
 tokio = { version = "1.0.0", features = ["rt-multi-thread"] }
 toml = "0.5.8"
