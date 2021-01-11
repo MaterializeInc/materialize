@@ -47,7 +47,7 @@ include_dir = "0.6.0"
 itertools = "0.9.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
-log = "0.4.11"
+log = "0.4.13"
 mz-process-collector = { path = "../mz-process-collector" }
 num_cpus = "1.0.0"
 openssl = { version = "0.10.32", features = ["vendored"] }

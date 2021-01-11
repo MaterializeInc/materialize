@@ -10,7 +10,7 @@ anyhow = "1.0.38"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
-log = "0.4.11"
+log = "0.4.13"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 repr = { path = "../repr" }
