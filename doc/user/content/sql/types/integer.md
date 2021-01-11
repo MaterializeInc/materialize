@@ -17,6 +17,7 @@ Detail | Info
 -------|------
 **Size** | 4 bytes
 **Aliases** | `int`, `int4`
+**Catalog name** | `pg_catalog.int4`
 **OID** | 23
 **Range** | [-2,147,483,648, 2,147,483,647]
 
@@ -26,6 +27,7 @@ Detail | Info
 -------|------
 **Size** | 8 bytes
 **Aliases** | `int8`
+**Catalog name** | `pg_catalog.int8`
 **OID** | 20
 **Range** | [-9,223,372,036,854,775,808, 9,223,372,036,854,775,807]
 

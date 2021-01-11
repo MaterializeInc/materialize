@@ -15,6 +15,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `LIST[[1,2],[3]]`
 **Size** | Variable
+**Catalog name** | Anonymous, but [nameable](../../create-type)
 
 ## Syntax
 
@@ -423,6 +424,20 @@ expressed as a list of comma-separated ranges inside a single square bracket.
 **Arrays** require each element of a dimension to have the same length. For
 example, if the first element in a 2D list has a length of 2, all subsequent
 members must also have a length of 2.
+
+### Custom types
+
+You can create [custom `list` types](/sql/types/#custom-types), which lets you
+create a named entry in your Materialize nodes' catalogs for a specific type of
+list.
+
+Currently, custom types only provides a shorthand for referring to
+otherwise-annoying-to-type names, but in the future will provide [binary
+encoding and decoding][binary] for these types, as well.
+
+Note that custom `list` types have special rules regarding [polymorphism](/sql/types/#polymorphism).
+
+[binary]:https://github.com/MaterializeInc/materialize/issues/4628
 
 ### Valid casts
 

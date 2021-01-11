@@ -15,6 +15,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `ROW($expr, ...)`
 **Size** | Variable
+**Catalog name** | Unnameable
 
 ## Syntax
 
@@ -28,6 +29,11 @@ The fields of a record are named `field1`, `field2`, and so on. To access a
 field of a record, use the `.` operator. Note that you need to parenthesize the
 record expression to ensure that the `.` is interpreted as the field selection
 operator, rather than part of a database- or schema-qualified table name.
+
+### Catalog name
+
+`record` is a named type in PostgreSQL (`pg_catalog.record`), but is
+currently an [unnameable](../#catalog-name) type in Materalize.
 
 ## Examples
 

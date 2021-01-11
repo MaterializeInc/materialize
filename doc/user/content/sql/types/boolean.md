@@ -15,6 +15,7 @@ Detail | Info
 **Quick Syntax** | `TRUE` or `FALSE`
 **Size** | 1 byte
 **Aliases** | `bool`
+**Catalog name** | `pg_catalog.bool`
 **OID** | 16
 
 ## Syntax

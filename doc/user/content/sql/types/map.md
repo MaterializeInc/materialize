@@ -17,6 +17,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `'{a=>123.4, b=>111.1}'::map[text=>double]'`
 **Size** | Variable
+**Catalog name** | Anonymous, but [nameable](../../create-type)
 
 ## Syntax
 
@@ -67,7 +68,27 @@ SELECT '{a=>{b=>{c=>d}}}'::map[text=>map[text=>map[text=>text]]] as nested_map;
   (`key`, `value`) pairs will be retained. There is no guarantee which will be
   retained.
 
+### Custom types
+
+You can create [custom `map` types](/sql/types/#custom-types), which lets you
+create a named entry in your Materialize nodes' catalogs for a specific type of
+`map`.
+
+Currently, custom types only provides a shorthand for referring to
+otherwise-annoying-to-type names, but in the future will provide [binary
+encoding and decoding][binary] for these types, as well.
+
+[binary]:https://github.com/MaterializeInc/materialize/issues/4628
+
 ### Valid casts
+
+#### Between `map`s
+
+Two `map` types can only be cast to and from one another if they are
+structurally equivalent, e.g. one is a [custom map
+type](/sql/types#custom-types) and the other is a [built-in
+map](/sql/types#built-in-types) and their key-value types are structurally
+equivalent.
 
 #### From `map`
 
