@@ -382,12 +382,22 @@ impl<B: BufMut> Pgbuf for B {
     }
 }
 
-pub async fn decode_startup<A>(mut conn: A) -> Result<FrontendStartupMessage, io::Error>
+pub async fn decode_startup<A>(mut conn: A) -> Result<Option<FrontendStartupMessage>, io::Error>
 where
     A: AsyncRead + Unpin,
 {
     let mut frame_len = [0; 4];
-    conn.read_exact(&mut frame_len).await?;
+    let nread = netio::read_exact_or_eof(&mut conn, &mut frame_len).await?;
+    match nread {
+        // Complete frame length. Continue.
+        4 => (),
+        // Connection closed cleanly. Indicate that the startup sequence has
+        // been terminated by the client.
+        0 => return Ok(None),
+        // Partial frame length. Likely a client bug or network glitch, so
+        // surface the unexpected EOF.
+        _ => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "early eof")),
+    };
     let frame_len = parse_frame_len(&frame_len)?;
 
     let mut buf = BytesMut::new();
@@ -396,24 +406,24 @@ where
 
     let mut buf = Cursor::new(&buf);
     let version = buf.read_i32()?;
-    if version == VERSION_CANCEL {
-        Ok(FrontendStartupMessage::CancelRequest {
+    let message = match version {
+        VERSION_CANCEL => FrontendStartupMessage::CancelRequest {
             conn_id: buf.read_u32()?,
             secret_key: buf.read_u32()?,
-        })
-    } else if version == VERSION_SSL {
-        Ok(FrontendStartupMessage::SslRequest)
-    } else if version == VERSION_GSSENC {
-        Ok(FrontendStartupMessage::GssEncRequest)
-    } else {
-        let mut params = vec![];
-        while buf.peek_byte()? != 0 {
-            let name = buf.read_cstr()?.to_owned();
-            let value = buf.read_cstr()?.to_owned();
-            params.push((name, value));
+        },
+        VERSION_SSL => FrontendStartupMessage::SslRequest,
+        VERSION_GSSENC => FrontendStartupMessage::GssEncRequest,
+        _ => {
+            let mut params = vec![];
+            while buf.peek_byte()? != 0 {
+                let name = buf.read_cstr()?.to_owned();
+                let value = buf.read_cstr()?.to_owned();
+                params.push((name, value));
+            }
+            FrontendStartupMessage::Startup { version, params }
         }
-        Ok(FrontendStartupMessage::Startup { version, params })
-    }
+    };
+    Ok(Some(message))
 }
 
 #[derive(Debug)]
