@@ -25,7 +25,7 @@ structopt = "0.3.21"
 test-util = { path = "../../test/test-util" }
 tokio = "1.0.0"
 tokio-postgres = "0.7.0"
-uuid = { version = "0.8.0", features = ["v4"] }
+uuid = { version = "0.8.2", features = ["v4"] }
 
 [build-dependencies]
 protoc = { path = "../../src/protoc" }
