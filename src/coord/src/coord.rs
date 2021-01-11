@@ -33,6 +33,7 @@ use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::{Handle, Runtime};
+use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use build_info::BuildInfo;
@@ -1470,9 +1471,17 @@ where
             }
 
             Plan::DiscardAll => {
-                self.drop_temp_items(session.conn_id()).await;
-                session.reset();
-                tx.send(Ok(ExecuteResponse::DiscardedAll), session);
+                let ret = if session.transaction() != &TransactionStatus::Idle {
+                    ExecuteResponse::PgError {
+                        code: SqlState::ACTIVE_SQL_TRANSACTION,
+                        message: "DISCARD ALL cannot run inside a transaction block".to_string(),
+                    }
+                } else {
+                    self.drop_temp_items(session.conn_id()).await;
+                    session.reset();
+                    ExecuteResponse::DiscardedAll
+                };
+                tx.send(Ok(ret), session);
             }
 
             Plan::Declare { name, stmt } => {

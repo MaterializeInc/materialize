@@ -177,3 +177,102 @@ ReadyForQuery
 RowDescription {"fields":[{"name":"?column?"}]}
 ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"I"}
+
+# Test DISCARD ALL, which "cannot be executed inside a transaction
+# block". This is important to test here because in materialize it
+# calls end_transaction, so we need to ensure it has correct transaction
+# semantics.
+
+# Should fail within an implicit transaction.
+send
+Query {"query": "SELECT 1; DISCARD ALL;"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot run inside a transaction block"}]}
+ReadyForQuery {"status":"I"}
+
+# Should fail within an explicit transaction.
+send
+Query {"query": "BEGIN"}
+Query {"query": "DISCARD ALL"}
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot run inside a transaction block"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+# Should succeed as a single statement.
+send
+Query {"query": "DISCARD ALL"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DISCARD ALL"}
+ReadyForQuery {"status":"I"}
+
+# Should (apparently?) succeed as a second statement in an extended
+# session. I expected this to fail but I guess postgres allows it.
+send
+Parse {"query": "SELECT 1"}
+Bind
+Execute
+Parse {"query": "DISCARD ALL"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DISCARD ALL"}
+ReadyForQuery {"status":"I"}
+
+# Verify DISCARD ALL fails in explicit transaction during extended mode.
+send
+Parse {"query": "BEGIN"}
+Bind
+Execute
+Parse {"query": "DISCARD ALL"}
+Bind
+Execute
+Sync
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"BEGIN"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot run inside a transaction block"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
