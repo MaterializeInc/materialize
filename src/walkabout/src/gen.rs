@@ -12,12 +12,12 @@
 //! This module processes the IR to generate the `visit` and `visit_mut`
 //! modules.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fstrings::{f, format_args_f};
 
 use ore::codegen::CodegenBuf;
-use syn::{GenericParam, Ident, TypeParam};
+use syn::{GenericParam, Ident, TypeParam, TypeParamBound};
 
 use crate::ir::{Ir, Item, Type};
 
@@ -41,13 +41,22 @@ struct Config {
     mutable: bool,
 }
 
-fn item_generics(item: &Item) -> HashSet<Ident> {
-    let mut result = HashSet::new();
+fn item_generics(item: &Item) -> BTreeSet<(Ident, BTreeSet<Ident>)> {
+    let mut result = BTreeSet::new();
     let generics = item.generics().clone();
     for g in generics.params.iter() {
         match g {
-            GenericParam::Type(TypeParam { ident, .. }) => {
-                result.insert(ident.clone());
+            GenericParam::Type(TypeParam { ident, bounds, .. }) => {
+                let all_bounds = bounds
+                    .iter()
+                    .map(|b| match b {
+                        TypeParamBound::Trait(t) => t.path.segments[0].ident.clone(),
+                        _ => {
+                            panic!("unsupported by walkabout")
+                        }
+                    })
+                    .collect::<BTreeSet<_>>();
+                result.insert((ident.clone(), all_bounds));
             }
             _ => {
                 panic!("unsupported by walkabout")
@@ -58,16 +67,14 @@ fn item_generics(item: &Item) -> HashSet<Ident> {
 }
 
 fn generics_string_for_item(item: &Item) -> String {
-    let mut generics = item_generics(item)
+    let generics = item_generics(item)
         .iter()
-        .map(|i| i.to_string())
+        .map(|(id, _)| id.to_string())
         .collect::<Vec<_>>();
-    generics.sort();
     if generics.is_empty() {
         "".into()
     } else {
-        let joined = generics.join(", ");
-        f!("<{joined}>")
+        format!("<{}>", generics.join(", "))
     }
 }
 
@@ -77,23 +84,45 @@ fn gen_root(c: &Config, ir: &Ir) -> String {
 
     let mut buf = CodegenBuf::new();
 
-    let generics_seen = ir
-        .iter()
-        .flat_map(|(_, item)| item_generics(item))
-        .collect::<HashSet<_>>();
+    let mut generics_to_bounds: BTreeMap<Ident, BTreeSet<Ident>> = BTreeMap::new();
+    // For each occurrence of a generic (we assume they are named consistently
+    // througout) compute the union of all trait bounds ever required of it.
+    for (_, item) in ir.iter() {
+        for (ident, bounds) in item_generics(item) {
+            if let Some(v) = generics_to_bounds.get_mut(&ident) {
+                v.extend(bounds.iter().cloned());
+            } else {
+                generics_to_bounds.insert(ident, bounds);
+            }
+        }
+    }
 
-    let mut sorted_generics = generics_seen
+    let all_generics_with_bounds_str = generics_to_bounds
         .iter()
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>();
-    sorted_generics.sort();
-    let all_generics = sorted_generics
-        .iter()
-        .map(|s| f!(", {s}"))
+        .map(|(ident, bounds)| {
+            if bounds.len() == 0 {
+                format!(", {}", ident.to_string())
+            } else {
+                let b = bounds
+                    .iter()
+                    .map(|b| b.to_string())
+                    .collect::<Vec<String>>()
+                    .join("+");
+                format!(", {}: {}", ident, b)
+            }
+        })
         .collect::<Vec<String>>()
         .join("");
 
-    buf.start_block(f!("pub trait {trait_name}<'ast{all_generics}>"));
+    let all_generics_no_bounds_str = generics_to_bounds
+        .keys()
+        .map(|ident| format!(", {}", ident.to_string()))
+        .collect::<Vec<String>>()
+        .join("");
+
+    buf.start_block(f!(
+        "pub trait {trait_name}<'ast{all_generics_with_bounds_str}>"
+    ));
     for (name, item) in ir {
         let generics = generics_string_for_item(item);
         let fn_name = visit_fn_name(c, name);
@@ -109,10 +138,12 @@ fn gen_root(c: &Config, ir: &Ir) -> String {
         let generics = generics_string_for_item(item);
         let fn_name = visit_fn_name(c, name);
         buf.writeln(f!(
-            "pub fn {fn_name}<'ast, V{all_generics}>(visitor: &mut V, node: &'ast {muta}{name}{generics})"
+            "pub fn {fn_name}<'ast, V{all_generics_with_bounds_str}>(visitor: &mut V, node: &'ast {muta}{name}{generics})"
         ));
         buf.writeln(f!("where"));
-        buf.writeln(f!("    V: {trait_name}<'ast{all_generics}> + ?Sized,"));
+        buf.writeln(f!(
+            "    V: {trait_name}<'ast{all_generics_no_bounds_str}> + ?Sized,"
+        ));
         buf.start_block("");
         match item {
             Item::Struct(s) => {
