@@ -15,14 +15,14 @@ use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
     CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, Expr, Ident, ObjectName, Query, Statement,
+    CreateViewStatement, Expr, Ident, ObjectName, Query, Raw, Statement,
 };
 use crate::names::FullName;
 
 /// Changes the `name` used in an item's `CREATE` statement. To complete a
 /// rename operation, you must also call `create_stmt_rename_refs` on all dependent
 /// items.
-pub fn create_stmt_rename(create_stmt: &mut Statement, to_item_name: String) {
+pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String) {
     // TODO(sploiselle): Support renaming schemas and databases.
     match create_stmt {
         Statement::CreateIndex(CreateIndexStatement { name, .. }) => {
@@ -51,7 +51,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement, to_item_name: String) {
 ///   the rename. Right now, given the first condition, this is just a coherence
 ///   check, but will be more meaningful once the first restriction is lifted.
 pub fn create_stmt_rename_refs(
-    create_stmt: &mut Statement,
+    create_stmt: &mut Statement<Raw>,
     from_name: FullName,
     to_item_name: String,
 ) -> Result<(), String> {
@@ -81,7 +81,7 @@ pub fn create_stmt_rename_refs(
 }
 
 /// Rewrites `query`'s references of `from` to `to` or errors if too ambiguous.
-fn rewrite_query(from: FullName, to: String, query: &mut Query) -> Result<(), String> {
+fn rewrite_query(from: FullName, to: String, query: &mut Query<Raw>) -> Result<(), String> {
     let from_ident = Ident::new(from.item.clone());
     let to_ident = Ident::new(to);
     let qual_depth =
@@ -129,7 +129,7 @@ impl<'a> QueryIdentAgg<'a> {
     fn determine_qual_depth(
         name: &Ident,
         fail_on: Option<Ident>,
-        query: &Query,
+        query: &Query<Raw>,
     ) -> Result<usize, String> {
         let mut v = QueryIdentAgg {
             qualifiers: HashMap::new(),
@@ -186,8 +186,8 @@ impl<'a> QueryIdentAgg<'a> {
     }
 }
 
-impl<'a, 'ast> Visit<'ast> for QueryIdentAgg<'a> {
-    fn visit_expr(&mut self, e: &'ast Expr) {
+impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
+    fn visit_expr(&mut self, e: &'ast Expr<Raw>) {
         match e {
             Expr::Identifier(i) => {
                 self.check_failure(i);
@@ -251,7 +251,7 @@ impl CreateSqlRewriter {
         from_name: FullName,
         to_name: Ident,
         qual_depth: usize,
-        query: &mut Query,
+        query: &mut Query<Raw>,
     ) {
         let from = match qual_depth {
             1 => vec![Ident::new(from_name.item)],
@@ -274,8 +274,8 @@ impl CreateSqlRewriter {
     }
 }
 
-impl<'ast> VisitMut<'ast> for CreateSqlRewriter {
-    fn visit_expr_mut(&mut self, e: &'ast mut Expr) {
+impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
+    fn visit_expr_mut(&mut self, e: &'ast mut Expr<Raw>) {
         match e {
             Expr::Identifier(id) => {
                 // The last ID component is a column name that should not be

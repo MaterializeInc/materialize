@@ -17,7 +17,7 @@ use derivative::Derivative;
 use futures::Stream;
 
 use repr::{Datum, Row, ScalarType};
-use sql::ast::Statement;
+use sql::ast::{Raw, Statement};
 use sql::plan::{Params, StatementDesc};
 
 mod vars;
@@ -137,7 +137,7 @@ impl Session {
         &mut self,
         portal_name: String,
         desc: StatementDesc,
-        stmt: Option<Statement>,
+        stmt: Option<Statement<Raw>>,
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<pgrepr::Format>,
     ) {
@@ -199,19 +199,19 @@ impl Session {
 /// A prepared statement.
 #[derive(Debug)]
 pub struct PreparedStatement {
-    sql: Option<Statement>,
+    sql: Option<Statement<Raw>>,
     desc: StatementDesc,
 }
 
 impl PreparedStatement {
     /// Constructs a new prepared statement.
-    pub fn new(sql: Option<Statement>, desc: StatementDesc) -> PreparedStatement {
+    pub fn new(sql: Option<Statement<Raw>>, desc: StatementDesc) -> PreparedStatement {
         PreparedStatement { sql, desc }
     }
 
     /// Returns the raw SQL string associated with this prepared statement,
     /// if the prepared statement was not the empty query.
-    pub fn sql(&self) -> Option<&Statement> {
+    pub fn sql(&self) -> Option<&Statement<Raw>> {
         self.sql.as_ref()
     }
 
@@ -226,7 +226,7 @@ impl PreparedStatement {
 #[derivative(Debug)]
 pub struct Portal {
     /// The statement that is bound to this portal.
-    pub stmt: Option<Statement>,
+    pub stmt: Option<Statement<Raw>>,
     /// The statement description.
     pub desc: StatementDesc,
     /// The bound values for the parameters in the prepared statement, if any.

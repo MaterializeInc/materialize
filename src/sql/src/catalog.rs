@@ -19,7 +19,7 @@ use std::{error::Error, unimplemented};
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{DummyHumanizer, ExprHumanizer, GlobalId, ScalarExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
-use sql_parser::ast::Expr;
+use sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
 use crate::names::{FullName, PartialName, SchemaName};
@@ -206,7 +206,7 @@ pub trait CatalogItem {
 
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table.
-    fn table_details(&self) -> Option<&[Expr]>;
+    fn table_details(&self) -> Option<&[Expr<Raw>]>;
 }
 
 /// The type of a [`CatalogItem`].
