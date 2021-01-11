@@ -11,7 +11,7 @@ env_logger = "0.8.2"
 getopts = "0.2.0"
 hyper = { version = "0.14.0", features = ["http1", "server"] }
 lazy_static = "1.4.0"
-log = "0.4.11"
+log = "0.4.13"
 mz-process-collector = { path = "../mz-process-collector" }
 ore = { path = "../ore" }
 parse_duration = "2.1.0"

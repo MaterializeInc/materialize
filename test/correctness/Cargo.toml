@@ -16,7 +16,7 @@ futures = "0.3.9"
 getopts = "0.2.0"
 hyper = "0.14.0"
 lazy_static = "1.4.0"
-log = "0.4.11"
+log = "0.4.13"
 mz-process-collector = { path = "../../src/mz-process-collector" }
 ore = { path = "../../src/ore" }
 pgrepr = { path = "../../src/pgrepr" }

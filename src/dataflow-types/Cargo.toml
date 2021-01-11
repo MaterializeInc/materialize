@@ -12,7 +12,7 @@ comm = { path = "../comm" }
 expr = { path = "../expr" }
 interchange = { path = "../interchange" }
 kafka-util = { path = "../kafka-util" }
-log = "0.4.0"
+log = "0.4.13"
 regex = "1.4.3"
 repr = { path = "../repr" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
