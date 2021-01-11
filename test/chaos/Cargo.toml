@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.37"
 env_logger = "0.8.2"
-futures = "0.3.8"
+futures = "0.3.9"
 log = "0.4.11"
 md-5 = "0.9.0"
 ore = { path = "../../src/ore" }
