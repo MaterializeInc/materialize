@@ -393,45 +393,55 @@ impl ParamList {
     ///
     /// ## Custom types
     ///
-    /// We define custom types as any type defined with `CREATE TYPE` or embeds
-    /// a custom type. We'll use the term anonymous type to define all
-    /// non-custom types, e.g. `int4`, `int4 list`.
+    /// Materialize supports two classes of types:
+    /// - Custom types, which are defined by `CREATE TYPE` or contain a
+    ///   reference to a type that was.
+    /// - Built-in types, which are all other types, e.g. `int4`, `int4 list`.
     ///
-    /// To understand how we assess custom types' polymorphism, it's useful to
-    /// categorize polymorphic parameters in MZ.
+    ///   Among built-in types there are:
+    ///   - Complex types, which contain references to other types
+    ///   - Simple types, which do not contain referneces to other types
     ///
-    /// - **Complex parameters** include createable composite types' polymorphic
+    /// To support accepting custom type values passed to polymorphic
+    /// parameters, we must handle polymorphism for custom types. To understand
+    /// how we assess custom types' polymorphism, it's useful to categorize
+    /// polymorphic parameters in MZ.
+    ///
+    /// - **Complex parameters** include complex built-in types' polymorphic
     ///    parameters, e.g. `ListAny` and `MapAny`.
     ///
-    ///   Values passed to these parameters have a `custom_oid` field and some
-    ///   embedded type, which we'll refer to as its element.
+    ///   Valid `ScalarType`s passed to these parameters have a `custom_oid`
+    ///   field and some embedded type, which we'll refer to as its element.
     ///
     /// - **Element parameters** which include `ListElementAny` and `NonVecAny`.
     ///
     /// Note that:
-    /// - Custom types can be used as values to either complex or element
+    /// - Custom types can be used as values for either complex or element
     ///   parameters; we'll refer to these as custom complex values and custom
     ///   element values, or collectively as custom values.
     /// - `ArrayAny` is slightly different from either case, but is uncommonly
     ///   used and not addressed further.
     ///
-    /// Upon encountering the first custom complex value:
-    /// - All other custom complex types must exactly match both its
-    ///   `custom_oid` and embedded element.
-    /// - All custom element types must exactly match its embedded element type.
+    /// ### Resolution
     ///
-    /// One of the complexities here is that the custom complex value's element
-    /// can be anonymous type, meaning any custom element values will cause
-    /// polymorphic resolution to feel.
+    /// - Upon encountering the first custom complex value:
+    ///   - All other custom complex types must exactly match both its
+    ///     `custom_oid` and embedded element.
+    ///   - All custom element types must exactly match its embedded element
+    ///     type.
     ///
-    /// Upon encountering the first custom element value:
-    /// - All other custom elemnt values must exactly match its type.
-    /// - All custom complex types' embedded elements must exactly match its
-    ///   type.
+    ///   One of the complexities here is that the custom complex value's
+    ///   element can be built-in type, meaning any custom element values will
+    ///   cause polymorphic resolution to fail.
     ///
-    /// ### Custom + anonymous types
+    /// - Upon encountering the first custom element value:
+    ///   - All other custom element values must exactly match its type.
+    ///   - All custom complex types' embedded elements must exactly match its
+    ///     type.
     ///
-    /// If you use both custom and anonymous types, the resultant type will be
+    /// ### Custom + built-in types
+    ///
+    /// If you use both custom and built-in types, the resultant type will be
     /// the least-custom custom type that fulfills the above requirements.
     ///
     /// For example if you `list_append(int4 list list, custom_int4_list)`, the
@@ -452,9 +462,9 @@ impl ParamList {
     /// ```
     ///
     /// We will not coerce `int4_list_custom list` to
-    /// `int4_list_list_custom`––only truly anonymous types are ever coerced
-    /// into custom types. It's also trivial for users to add a cast to ensure
-    /// custom type consistency.
+    /// `int4_list_list_custom`––only built-in types are ever coerced into
+    /// custom types. It's also trivial for users to add a cast to ensure custom
+    /// type consistency.
     fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
         // Determines if types have the same [`ScalarBaseType`], and if complex
         // types' elements do, as well. This function's primary use is allowing

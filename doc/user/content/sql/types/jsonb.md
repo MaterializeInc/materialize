@@ -15,6 +15,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `'{"1":2,"3":4}'::JSONB`
 **Size** | Variable
+**Catalog name** | `pg_catalog.jsonb`
 **OID** | 3802
 
 Materialize does not yet support a type more similar to PostgreSQL's

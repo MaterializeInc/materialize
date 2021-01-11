@@ -15,6 +15,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `LIST[[1,2],[3]]`
 **Size** | Variable
+**Catalog name** | Anonymous, but [nameable](../../create-type)
 
 ## Syntax
 

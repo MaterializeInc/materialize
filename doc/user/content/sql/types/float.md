@@ -19,6 +19,7 @@ Detail | Info
 -------|------
 **Size** | 4 bytes
 **Aliases** | `real`
+**Catalog name** | `pg_catalog.float4`
 **OID** | 700
 **Range** | Approx. 1E-37 to 1E+37 with 6 decimal digits of precision
 
@@ -28,7 +29,7 @@ Detail | Info
 -------|------
 **Size** | 8 bytes
 **Aliases** | `float`, `double`, `double precision`
-**Addressability** | `pg_catalog.float8`
+**Catalog name** | `pg_catalog.float8`
 **OID** | 701
 **Range** | Approx. 1E-307 to 1E+307 with 15 decimal digits of precision
 

@@ -11,6 +11,7 @@ menu:
 Detail | Info
 -------|------
 **Size** | 4 bytes
+**Catalog name** | `pg_catalog.oid`
 **OID** | 26
 
 ## Details

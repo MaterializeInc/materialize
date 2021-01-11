@@ -17,6 +17,7 @@ Detail | Info
 **Quick Syntax** | `'foo'`
 **Aliases** | `string`
 **Size** | Variable
+**Catalog name** | `pg_catalog.text`
 **OID** | 25
 
 ## Syntax

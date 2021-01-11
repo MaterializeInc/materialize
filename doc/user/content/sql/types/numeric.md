@@ -14,6 +14,7 @@ Detail | Info
 -------|------
 **Size** | 16 bytes
 **Aliases** | `dec`, `decimal`
+**Catalog name** | `pg_catalog.numeric`
 **OID** | 1700
 **Max precision** | 38
 **Max scale** | 38

@@ -105,6 +105,31 @@ SELECT ARRAY[ARRAY['a', 'white space'], ARRAY[NULL, ''], ARRAY['escape"m\e', 'nU
  {{a,"white space"},{NULL,""},{"escape\"m\\e","nUlL"}}
 ```
 
+### Catalog names
+
+Builtin types (e.g. `int4`) have a builtin array type that can be referred to by
+prefixing the type name with an underscore (e.g. `_int4`). This builtin array
+type is in the `pg_catalog` schema.
+
+Array element | Array object | OID
+--------------|--------------|-----
+`bool` | `pg_catalog._bool` | 1000
+`bytea` | `pg_catalog._bytea` | 1001
+`date` | `pg_catalog._date` | 1182
+`float4` | `pg_catalog._float4` | 1021
+`float8` | `pg_catalog._float8` | 1022
+`int4` | `pg_catalog._bool` | 1007
+`int8` | `pg_catalog._int8` | 1016
+`interval` | `pg_catalog._interval` | 1187
+`jsonb` | `pg_catalog.3807` | 1000
+`numeric` | `pg_catalog._numeric` | 1231
+`oid` | `pg_catalog._oid` | 1028
+`text` | `pg_catalog._bool` | 1009
+`time` | `pg_catalog._time` | 1183
+`timestamp` | `pg_catalog._timestamp` | 1115
+`timestamptz` | `pg_catalog._timestamptz` | 1185
+`uuid` | `pg_catalog._uuid` | 2951
+
 ### Valid casts
 
 You can [cast](/sql/functions/cast) all array types to

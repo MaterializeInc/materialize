@@ -17,6 +17,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `TIMESTAMP WITH TIME ZONE '2007-02-01 15:04:05+06'`
 **Size** | 8 bytes
+**Catalog name** | `pg_catalog.timestamp`
 **OID** | 1083
 **Min value** | 4713 BC
 **Max value** | 294276 AD
@@ -29,6 +30,7 @@ Detail | Info
 **Quick Syntax** | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
 **Aliases** | `timestamp with time zone`
 **Size** | 8 bytes
+**Catalog name** | `pg_catalog.timestamptz`
 **OID** | 1184
 **Min value** | 4713 BC
 **Max value** | 294276 AD

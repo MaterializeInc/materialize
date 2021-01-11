@@ -17,6 +17,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `'{a=>123.4, b=>111.1}'::map[text=>double]'`
 **Size** | Variable
+**Catalog name** | Anonymous, but [nameable](../../create-type)
 
 ## Syntax
 

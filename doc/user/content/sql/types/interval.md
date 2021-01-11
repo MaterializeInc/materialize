@@ -12,6 +12,7 @@ Detail | Info
 -------|-----
 **Quick Syntax** | `INTERVAL '1' MINUTE` <br/> `INTERVAL '1-2 3 4:5:6.7'` <br/>`INTERVAL '1 year 2.3 days 4.5 seconds'`
 **Size** | 20 bytes
+**Catalog name** | `pg_catalog.interval`
 **OID** | 1186
 **Min value** | -178956970 years -7 months -2236962132 days -07:59:59.999999
 **Max value** | 178956970 years 7 months 2236962132 days 07:59:59.999999
