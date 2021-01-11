@@ -27,7 +27,7 @@ use ore::fmt::FormatBuffer;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit::Visit;
 use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{Expr, Ident};
+use sql_parser::ast::{Expr, Ident, Raw};
 use sql_parser::parser::{self, ParserError};
 
 #[test]
@@ -102,8 +102,8 @@ fn datadriven() {
 fn op_precedence() -> Result<(), Box<dyn Error>> {
     struct RemoveParens;
 
-    impl<'a> VisitMut<'a> for RemoveParens {
-        fn visit_expr_mut(&mut self, expr: &'a mut Expr) {
+    impl<'a> VisitMut<'a, Raw> for RemoveParens {
+        fn visit_expr_mut(&mut self, expr: &'a mut Expr<Raw>) {
             if let Expr::Nested(e) = expr {
                 *expr = (**e).clone();
             }
@@ -174,7 +174,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         seen_idents: Vec<&'a str>,
     }
 
-    impl<'a> Visit<'a> for Visitor<'a> {
+    impl<'a> Visit<'a, Raw> for Visitor<'a> {
         fn visit_ident(&mut self, ident: &'a Ident) {
             self.seen_idents.push(ident.as_str());
         }

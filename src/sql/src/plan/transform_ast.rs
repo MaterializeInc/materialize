@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, ObjectName, Query, Select, SelectItem, TableAlias,
+    Expr, Function, FunctionArgs, Ident, ObjectName, Query, Raw, Select, SelectItem, TableAlias,
     TableFactor, TableWithJoins, Value,
 };
 
@@ -27,18 +27,18 @@ use crate::plan::StatementContext;
 
 pub fn transform_query<'a>(
     scx: &StatementContext,
-    query: &'a mut Query,
+    query: &'a mut Query<Raw>,
 ) -> Result<(), anyhow::Error> {
     run_transforms(scx, |t, query| t.visit_query_mut(query), query)
 }
 
-pub fn transform_expr(scx: &StatementContext, expr: &mut Expr) -> Result<(), anyhow::Error> {
+pub fn transform_expr(scx: &StatementContext, expr: &mut Expr<Raw>) -> Result<(), anyhow::Error> {
     run_transforms(scx, |t, expr| t.visit_expr_mut(expr), expr)
 }
 
 fn run_transforms<F, A>(scx: &StatementContext, mut f: F, ast: &mut A) -> Result<(), anyhow::Error>
 where
-    F: for<'ast> FnMut(&mut dyn VisitMut<'ast>, &'ast mut A),
+    F: for<'ast> FnMut(&mut dyn VisitMut<'ast, Raw>, &'ast mut A),
 {
     let mut func_rewriter = FuncRewriter::new(scx);
     f(&mut func_rewriter, ast);
@@ -83,11 +83,16 @@ impl<'a> FuncRewriter<'a> {
     }
 
     // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL.
-    fn plan_divide(lhs: Expr, rhs: Expr) -> Expr {
+    fn plan_divide(lhs: Expr<Raw>, rhs: Expr<Raw>) -> Expr<Raw> {
         lhs.divide(Self::plan_null_if(rhs, Expr::number("0")))
     }
 
-    fn plan_agg(name: &'static str, expr: Expr, filter: Option<Box<Expr>>, distinct: bool) -> Expr {
+    fn plan_agg(
+        name: &'static str,
+        expr: Expr<Raw>,
+        filter: Option<Box<Expr<Raw>>>,
+        distinct: bool,
+    ) -> Expr<Raw> {
         Expr::Function(Function {
             name: ObjectName::unqualified(name),
             args: FunctionArgs::Args(vec![expr]),
@@ -97,14 +102,19 @@ impl<'a> FuncRewriter<'a> {
         })
     }
 
-    fn plan_avg(expr: Expr, filter: Option<Box<Expr>>, distinct: bool) -> Expr {
+    fn plan_avg(expr: Expr<Raw>, filter: Option<Box<Expr<Raw>>>, distinct: bool) -> Expr<Raw> {
         let sum = Self::plan_agg("sum", expr.clone(), filter.clone(), distinct)
             .call_unary(vec!["mz_internal", "mz_avg_promotion"]);
         let count = Self::plan_agg("count", expr, filter, distinct);
         Self::plan_divide(sum, count)
     }
 
-    fn plan_variance(expr: Expr, filter: Option<Box<Expr>>, distinct: bool, sample: bool) -> Expr {
+    fn plan_variance(
+        expr: Expr<Raw>,
+        filter: Option<Box<Expr<Raw>>>,
+        distinct: bool,
+        sample: bool,
+    ) -> Expr<Raw> {
         // N.B. this variance calculation uses the "textbook" algorithm, which
         // is known to accumulate problematic amounts of error. The numerically
         // stable variants, the most well-known of which is Welford's, are
@@ -135,11 +145,16 @@ impl<'a> FuncRewriter<'a> {
         )
     }
 
-    fn plan_stddev(expr: Expr, filter: Option<Box<Expr>>, distinct: bool, sample: bool) -> Expr {
+    fn plan_stddev(
+        expr: Expr<Raw>,
+        filter: Option<Box<Expr<Raw>>>,
+        distinct: bool,
+        sample: bool,
+    ) -> Expr<Raw> {
         Self::plan_variance(expr, filter, distinct, sample).call_unary(vec!["sqrt"])
     }
 
-    fn plan_null_if(left: Expr, right: Expr) -> Expr {
+    fn plan_null_if(left: Expr<Raw>, right: Expr<Raw>) -> Expr<Raw> {
         Expr::Case {
             operand: None,
             conditions: vec![left.clone().equals(right)],
@@ -148,7 +163,7 @@ impl<'a> FuncRewriter<'a> {
         }
     }
 
-    fn rewrite_expr(&mut self, expr: &Expr) -> Option<(Ident, Expr)> {
+    fn rewrite_expr(&mut self, expr: &Expr<Raw>) -> Option<(Ident, Expr<Raw>)> {
         match expr {
             Expr::Function(Function {
                 name,
@@ -198,8 +213,8 @@ impl<'a> FuncRewriter<'a> {
     }
 }
 
-impl<'ast> VisitMut<'ast> for FuncRewriter<'_> {
-    fn visit_select_item_mut(&mut self, item: &'ast mut SelectItem) {
+impl<'ast> VisitMut<'ast, Raw> for FuncRewriter<'_> {
+    fn visit_select_item_mut(&mut self, item: &'ast mut SelectItem<Raw>) {
         if let SelectItem::Expr { expr, alias: None } = item {
             visit_mut::visit_expr_mut(self, expr);
             if let Some((alias, expr)) = self.rewrite_expr(expr) {
@@ -213,7 +228,7 @@ impl<'ast> VisitMut<'ast> for FuncRewriter<'_> {
         }
     }
 
-    fn visit_expr_mut(&mut self, expr: &'ast mut Expr) {
+    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
         visit_mut::visit_expr_mut(self, expr);
         if let Some((_name, new_expr)) = self.rewrite_expr(expr) {
             *expr = new_expr;
@@ -226,8 +241,8 @@ impl<'ast> VisitMut<'ast> for FuncRewriter<'_> {
 // `SELECT current_timestamp()`.
 struct IdentFuncRewriter;
 
-impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
-    fn visit_expr_mut(&mut self, expr: &'ast mut Expr) {
+impl<'ast> VisitMut<'ast, Raw> for IdentFuncRewriter {
+    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
         visit_mut::visit_expr_mut(self, expr);
         if let Expr::Identifier(ident) = expr {
             if ident.len() != 1 {
@@ -249,8 +264,8 @@ struct Desugarer {
     status: Result<(), anyhow::Error>,
 }
 
-impl<'ast> VisitMut<'ast> for Desugarer {
-    fn visit_expr_mut(&mut self, expr: &'ast mut Expr) {
+impl<'ast> VisitMut<'ast, Raw> for Desugarer {
+    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
         if self.status.is_ok() {
             self.status = self.visit_expr_mut_internal(expr);
         }
@@ -262,7 +277,7 @@ impl Desugarer {
         Desugarer { status: Ok(()) }
     }
 
-    fn visit_expr_mut_internal(&mut self, expr: &mut Expr) -> Result<(), anyhow::Error> {
+    fn visit_expr_mut_internal(&mut self, expr: &mut Expr<Raw>) -> Result<(), anyhow::Error> {
         // `($expr)` => `$expr`
         while let Expr::Nested(e) = expr {
             *expr = e.take();

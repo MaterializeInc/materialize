@@ -31,7 +31,7 @@ use ore::cast::CastFrom;
 use ore::netio::AsyncReady;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
-use sql::ast::{FetchDirection, Ident, Statement};
+use sql::ast::{FetchDirection, Ident, Raw, Statement};
 use sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
@@ -261,7 +261,7 @@ where
         self.flush().await
     }
 
-    async fn one_query(&mut self, stmt: Statement) -> Result<State, comm::Error> {
+    async fn one_query(&mut self, stmt: Statement<Raw>) -> Result<State, comm::Error> {
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
         let param_types = vec![];
@@ -1314,7 +1314,7 @@ fn describe_rows(stmt_desc: &StatementDesc, formats: &[pgrepr::Format]) -> Backe
     }
 }
 
-fn parse_sql(sql: &str) -> Result<Vec<Statement>, ErrorResponse> {
+fn parse_sql(sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
     sql::parse::parse(sql).map_err(|e| {
         // Convert our 0-based byte position to pgwire's 1-based character
         // position.

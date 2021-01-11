@@ -22,7 +22,7 @@ use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
-use sql_parser::ast::{Expr, ObjectName};
+use sql_parser::ast::{Expr, ObjectName, Raw};
 
 use super::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
@@ -242,7 +242,7 @@ impl<R> Operation<R> {
 macro_rules! sql_op {
     ($l:literal) => {{
         lazy_static! {
-            static ref EXPR: Expr = sql_parser::parser::parse_expr($l.into())
+            static ref EXPR: Expr<Raw> = sql_parser::parser::parse_expr($l.into())
                 .expect("static function definition failed to parse");
         }
         Operation::variadic(move |ecx, args| {

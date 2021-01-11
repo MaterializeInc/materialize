@@ -54,7 +54,7 @@ use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timest
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
-    FetchStatement, ObjectType, Statement,
+    FetchStatement, ObjectType, Raw, Statement,
 };
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName, SchemaName};
@@ -101,7 +101,7 @@ pub struct AdvanceSourceTimestamp {
 pub struct StatementReady {
     pub session: Session,
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<sql::ast::Statement, anyhow::Error>,
+    pub result: Result<sql::ast::Statement<Raw>, anyhow::Error>,
     pub params: Params,
 }
 
@@ -855,7 +855,7 @@ where
     async fn handle_statement(
         &mut self,
         session: &Session,
-        stmt: sql::ast::Statement,
+        stmt: sql::ast::Statement<Raw>,
         params: &sql::plan::Params,
     ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
         let pcx = PlanContext::default();
@@ -905,7 +905,7 @@ where
         &self,
         session: &mut Session,
         name: String,
-        stmt: Statement,
+        stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         // handle_describe cares about symbiosis mode here. Declared cursors are
@@ -926,7 +926,7 @@ where
         &self,
         session: &mut Session,
         name: String,
-        stmt: Option<Statement>,
+        stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         let desc = if let Some(stmt) = stmt.clone() {
@@ -3308,7 +3308,7 @@ pub fn index_sql(
 ) -> String {
     use sql::ast::{Expr, Ident, Value};
 
-    CreateIndexStatement {
+    CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
         on_name: sql::normalize::unresolve(view_name),
         key_parts: Some(
@@ -3344,7 +3344,7 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
 /// through the session.
 pub fn describe(
     catalog: &dyn sql::catalog::Catalog,
-    stmt: Statement,
+    stmt: Statement<Raw>,
     param_types: &[Option<pgrepr::Type>],
     session: Option<&Session>,
 ) -> Result<StatementDesc, anyhow::Error> {

@@ -20,26 +20,26 @@
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, ObjectName, Query,
+    AstInfo, ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, ObjectName, Query,
     TableConstraint, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Statement {
-    Select(SelectStatement),
-    Insert(InsertStatement),
-    Copy(CopyStatement),
-    Update(UpdateStatement),
-    Delete(DeleteStatement),
+pub enum Statement<T: AstInfo> {
+    Select(SelectStatement<T>),
+    Insert(InsertStatement<T>),
+    Copy(CopyStatement<T>),
+    Update(UpdateStatement<T>),
+    Delete(DeleteStatement<T>),
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
     CreateSource(CreateSourceStatement),
-    CreateSink(CreateSinkStatement),
-    CreateView(CreateViewStatement),
-    CreateTable(CreateTableStatement),
-    CreateIndex(CreateIndexStatement),
+    CreateSink(CreateSinkStatement<T>),
+    CreateView(CreateViewStatement<T>),
+    CreateTable(CreateTableStatement<T>),
+    CreateIndex(CreateIndexStatement<T>),
     CreateType(CreateTypeStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndexOptions(AlterIndexOptionsStatement),
@@ -47,10 +47,10 @@ pub enum Statement {
     DropDatabase(DropDatabaseStatement),
     DropObjects(DropObjectsStatement),
     SetVariable(SetVariableStatement),
-    ShowDatabases(ShowDatabasesStatement),
-    ShowObjects(ShowObjectsStatement),
-    ShowIndexes(ShowIndexesStatement),
-    ShowColumns(ShowColumnsStatement),
+    ShowDatabases(ShowDatabasesStatement<T>),
+    ShowObjects(ShowObjectsStatement<T>),
+    ShowIndexes(ShowIndexesStatement<T>),
+    ShowColumns(ShowColumnsStatement<T>),
     ShowCreateView(ShowCreateViewStatement),
     ShowCreateSource(ShowCreateSourceStatement),
     ShowCreateTable(ShowCreateTableStatement),
@@ -61,21 +61,21 @@ pub enum Statement {
     SetTransaction(SetTransactionStatement),
     Commit(CommitStatement),
     Rollback(RollbackStatement),
-    Tail(TailStatement),
-    Explain(ExplainStatement),
-    Declare(DeclareStatement),
+    Tail(TailStatement<T>),
+    Explain(ExplainStatement<T>),
+    Declare(DeclareStatement<T>),
     Fetch(FetchStatement),
     Close(CloseStatement),
 }
 
-impl Statement {
+impl<T: AstInfo> Statement<T> {
     /// Reports whether the statement is cursor-related.
     pub fn is_cursor(&self) -> bool {
         matches!(self, Statement::Declare(_) | Statement::Fetch(_) | Statement::Close(_))
     }
 }
 
-impl AstDisplay for Statement {
+impl<T: AstInfo> AstDisplay for Statement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Statement::Select(stmt) => f.write_node(stmt),
@@ -119,16 +119,16 @@ impl AstDisplay for Statement {
         }
     }
 }
-impl_display!(Statement);
+impl_display_t!(Statement);
 
 /// `SELECT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SelectStatement {
-    pub query: Query,
-    pub as_of: Option<Expr>,
+pub struct SelectStatement<T: AstInfo> {
+    pub query: Query<T>,
+    pub as_of: Option<Expr<T>>,
 }
 
-impl AstDisplay for SelectStatement {
+impl<T: AstInfo> AstDisplay for SelectStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_node(&self.query);
         if let Some(as_of) = &self.as_of {
@@ -137,20 +137,20 @@ impl AstDisplay for SelectStatement {
         }
     }
 }
-impl_display!(SelectStatement);
+impl_display_t!(SelectStatement);
 
 /// `INSERT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct InsertStatement {
+pub struct InsertStatement<T: AstInfo> {
     /// TABLE
     pub table_name: ObjectName,
     /// COLUMNS
     pub columns: Vec<Ident>,
     /// A SQL query that specifies what to insert.
-    pub source: InsertSource,
+    pub source: InsertSource<T>,
 }
 
-impl AstDisplay for InsertStatement {
+impl<T: AstInfo> AstDisplay for InsertStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("INSERT INTO ");
         f.write_node(&self.table_name);
@@ -163,16 +163,16 @@ impl AstDisplay for InsertStatement {
         f.write_node(&self.source);
     }
 }
-impl_display!(InsertStatement);
+impl_display_t!(InsertStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CopyRelation {
+pub enum CopyRelation<T: AstInfo> {
     Table {
         name: ObjectName,
         columns: Vec<Ident>,
     },
-    Select(SelectStatement),
-    Tail(TailStatement),
+    Select(SelectStatement<T>),
+    Tail(TailStatement<T>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -209,9 +209,9 @@ impl_display!(CopyTarget);
 
 /// `COPY`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CopyStatement {
+pub struct CopyStatement<T: AstInfo> {
     /// RELATION
-    pub relation: CopyRelation,
+    pub relation: CopyRelation<T>,
     /// DIRECTION
     pub direction: CopyDirection,
     // TARGET
@@ -220,7 +220,7 @@ pub struct CopyStatement {
     pub options: Vec<WithOption>,
 }
 
-impl AstDisplay for CopyStatement {
+impl<T: AstInfo> AstDisplay for CopyStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("COPY ");
         match &self.relation {
@@ -254,20 +254,20 @@ impl AstDisplay for CopyStatement {
         }
     }
 }
-impl_display!(CopyStatement);
+impl_display_t!(CopyStatement);
 
 /// `UPDATE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct UpdateStatement {
+pub struct UpdateStatement<T: AstInfo> {
     /// TABLE
     pub table_name: ObjectName,
     /// Column assignments
-    pub assignments: Vec<Assignment>,
+    pub assignments: Vec<Assignment<T>>,
     /// WHERE
-    pub selection: Option<Expr>,
+    pub selection: Option<Expr<T>>,
 }
 
-impl AstDisplay for UpdateStatement {
+impl<T: AstInfo> AstDisplay for UpdateStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("UPDATE ");
         f.write_node(&self.table_name);
@@ -281,18 +281,18 @@ impl AstDisplay for UpdateStatement {
         }
     }
 }
-impl_display!(UpdateStatement);
+impl_display_t!(UpdateStatement);
 
 /// `DELETE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DeleteStatement {
+pub struct DeleteStatement<T: AstInfo> {
     /// `FROM`
     pub table_name: ObjectName,
     /// `WHERE`
-    pub selection: Option<Expr>,
+    pub selection: Option<Expr<T>>,
 }
 
-impl AstDisplay for DeleteStatement {
+impl<T: AstInfo> AstDisplay for DeleteStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("DELETE FROM ");
         f.write_node(&self.table_name);
@@ -302,7 +302,7 @@ impl AstDisplay for DeleteStatement {
         }
     }
 }
-impl_display!(DeleteStatement);
+impl_display_t!(DeleteStatement);
 
 /// `CREATE DATABASE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -391,18 +391,18 @@ impl_display!(CreateSourceStatement);
 
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateSinkStatement {
+pub struct CreateSinkStatement<T: AstInfo> {
     pub name: ObjectName,
     pub from: ObjectName,
     pub connector: Connector,
     pub with_options: Vec<SqlOption>,
     pub format: Option<Format>,
     pub with_snapshot: bool,
-    pub as_of: Option<Expr>,
+    pub as_of: Option<Expr<T>>,
     pub if_not_exists: bool,
 }
 
-impl AstDisplay for CreateSinkStatement {
+impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("CREATE SINK ");
         if self.if_not_exists {
@@ -434,22 +434,22 @@ impl AstDisplay for CreateSinkStatement {
         }
     }
 }
-impl_display!(CreateSinkStatement);
+impl_display_t!(CreateSinkStatement);
 
 /// `CREATE VIEW`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateViewStatement {
+pub struct CreateViewStatement<T: AstInfo> {
     /// View name
     pub name: ObjectName,
     pub columns: Vec<Ident>,
     pub with_options: Vec<SqlOption>,
-    pub query: Query,
+    pub query: Query<T>,
     pub if_exists: IfExistsBehavior,
     pub temporary: bool,
     pub materialized: bool,
 }
 
-impl AstDisplay for CreateViewStatement {
+impl<T: AstInfo> AstDisplay for CreateViewStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("CREATE");
         if self.if_exists == IfExistsBehavior::Replace {
@@ -487,21 +487,21 @@ impl AstDisplay for CreateViewStatement {
         f.write_node(&self.query);
     }
 }
-impl_display!(CreateViewStatement);
+impl_display_t!(CreateViewStatement);
 
 /// `CREATE TABLE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateTableStatement {
+pub struct CreateTableStatement<T: AstInfo> {
     /// Table name
     pub name: ObjectName,
     /// Optional schema
-    pub columns: Vec<ColumnDef>,
-    pub constraints: Vec<TableConstraint>,
+    pub columns: Vec<ColumnDef<T>>,
+    pub constraints: Vec<TableConstraint<T>>,
     pub with_options: Vec<SqlOption>,
     pub if_not_exists: bool,
 }
 
-impl AstDisplay for CreateTableStatement {
+impl<T: AstInfo> AstDisplay for CreateTableStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("CREATE TABLE ");
         if self.if_not_exists {
@@ -523,22 +523,22 @@ impl AstDisplay for CreateTableStatement {
         }
     }
 }
-impl_display!(CreateTableStatement);
+impl_display_t!(CreateTableStatement);
 
 /// `CREATE INDEX`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateIndexStatement {
+pub struct CreateIndexStatement<T: AstInfo> {
     /// Optional index name.
     pub name: Option<Ident>,
     /// `ON` table or view name
     pub on_name: ObjectName,
     /// Expressions that form part of the index key. If not included, the
     /// key_parts will be inferred from the named object.
-    pub key_parts: Option<Vec<Expr>>,
+    pub key_parts: Option<Vec<Expr<T>>>,
     pub if_not_exists: bool,
 }
 
-impl AstDisplay for CreateIndexStatement {
+impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("CREATE ");
         if self.key_parts.is_none() {
@@ -561,7 +561,7 @@ impl AstDisplay for CreateIndexStatement {
         }
     }
 }
-impl_display!(CreateIndexStatement);
+impl_display_t!(CreateIndexStatement);
 
 /// `CREATE TYPE ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -792,11 +792,11 @@ impl_display!(ShowVariableStatement);
 
 /// `SHOW DATABASES`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowDatabasesStatement {
-    pub filter: Option<ShowStatementFilter>,
+pub struct ShowDatabasesStatement<T: AstInfo> {
+    pub filter: Option<ShowStatementFilter<T>>,
 }
 
-impl AstDisplay for ShowDatabasesStatement {
+impl<T: AstInfo> AstDisplay for ShowDatabasesStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("SHOW DATABASES");
         if let Some(filter) = &self.filter {
@@ -805,7 +805,7 @@ impl AstDisplay for ShowDatabasesStatement {
         }
     }
 }
-impl_display!(ShowDatabasesStatement);
+impl_display_t!(ShowDatabasesStatement);
 
 /// `SHOW <object>S`
 ///
@@ -816,16 +816,16 @@ impl_display!(ShowDatabasesStatement);
 /// SHOW SINKS;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowObjectsStatement {
+pub struct ShowObjectsStatement<T: AstInfo> {
     pub object_type: ObjectType,
     pub from: Option<ObjectName>,
     pub extended: bool,
     pub full: bool,
     pub materialized: bool,
-    pub filter: Option<ShowStatementFilter>,
+    pub filter: Option<ShowStatementFilter<T>>,
 }
 
-impl AstDisplay for ShowObjectsStatement {
+impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("SHOW");
         if self.extended {
@@ -858,17 +858,17 @@ impl AstDisplay for ShowObjectsStatement {
         }
     }
 }
-impl_display!(ShowObjectsStatement);
+impl_display_t!(ShowObjectsStatement);
 
 /// `SHOW INDEX|INDEXES|KEYS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowIndexesStatement {
+pub struct ShowIndexesStatement<T: AstInfo> {
     pub table_name: ObjectName,
     pub extended: bool,
-    pub filter: Option<ShowStatementFilter>,
+    pub filter: Option<ShowStatementFilter<T>>,
 }
 
-impl AstDisplay for ShowIndexesStatement {
+impl<T: AstInfo> AstDisplay for ShowIndexesStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("SHOW ");
         if self.extended {
@@ -882,20 +882,20 @@ impl AstDisplay for ShowIndexesStatement {
         }
     }
 }
-impl_display!(ShowIndexesStatement);
+impl_display_t!(ShowIndexesStatement);
 
 /// `SHOW COLUMNS`
 ///
 /// Note: this is a MySQL-specific statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowColumnsStatement {
+pub struct ShowColumnsStatement<T: AstInfo> {
     pub extended: bool,
     pub full: bool,
     pub table_name: ObjectName,
-    pub filter: Option<ShowStatementFilter>,
+    pub filter: Option<ShowStatementFilter<T>>,
 }
 
-impl AstDisplay for ShowColumnsStatement {
+impl<T: AstInfo> AstDisplay for ShowColumnsStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("SHOW ");
         if self.extended {
@@ -912,7 +912,7 @@ impl AstDisplay for ShowColumnsStatement {
         }
     }
 }
-impl_display!(ShowColumnsStatement);
+impl_display_t!(ShowColumnsStatement);
 
 /// `SHOW CREATE VIEW <view>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1052,13 +1052,13 @@ impl_display!(RollbackStatement);
 
 /// `TAIL`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TailStatement {
+pub struct TailStatement<T: AstInfo> {
     pub name: ObjectName,
     pub options: Vec<WithOption>,
-    pub as_of: Option<Expr>,
+    pub as_of: Option<Expr<T>>,
 }
 
-impl AstDisplay for TailStatement {
+impl<T: AstInfo> AstDisplay for TailStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("TAIL ");
         f.write_node(&self.name);
@@ -1073,17 +1073,17 @@ impl AstDisplay for TailStatement {
         }
     }
 }
-impl_display!(TailStatement);
+impl_display_t!(TailStatement);
 
 /// `EXPLAIN ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExplainStatement {
+pub struct ExplainStatement<T: AstInfo> {
     pub stage: ExplainStage,
-    pub explainee: Explainee,
+    pub explainee: Explainee<T>,
     pub options: ExplainOptions,
 }
 
-impl AstDisplay for ExplainStatement {
+impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("EXPLAIN ");
         if self.options.typed {
@@ -1094,15 +1094,15 @@ impl AstDisplay for ExplainStatement {
         f.write_node(&self.explainee);
     }
 }
-impl_display!(ExplainStatement);
+impl_display_t!(ExplainStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum InsertSource {
-    Query(Query),
+pub enum InsertSource<T: AstInfo> {
+    Query(Query<T>),
     DefaultValues,
 }
 
-impl AstDisplay for InsertSource {
+impl<T: AstInfo> AstDisplay for InsertSource<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             InsertSource::Query(query) => f.write_node(query),
@@ -1110,7 +1110,7 @@ impl AstDisplay for InsertSource {
         }
     }
 }
-impl_display!(InsertSource);
+impl_display_t!(InsertSource);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum ObjectType {
@@ -1141,12 +1141,12 @@ impl AstDisplay for ObjectType {
 impl_display!(ObjectType);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ShowStatementFilter {
+pub enum ShowStatementFilter<T: AstInfo> {
     Like(String),
-    Where(Expr),
+    Where(Expr<T>),
 }
 
-impl AstDisplay for ShowStatementFilter {
+impl<T: AstInfo> AstDisplay for ShowStatementFilter<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         use ShowStatementFilter::*;
         match self {
@@ -1162,7 +1162,7 @@ impl AstDisplay for ShowStatementFilter {
         }
     }
 }
-impl_display!(ShowStatementFilter);
+impl_display_t!(ShowStatementFilter);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SqlOption {
@@ -1323,19 +1323,19 @@ impl_display!(SetVariableValue);
 
 /// SQL assignment `foo = expr` as used in SQLUpdate
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Assignment {
+pub struct Assignment<T: AstInfo> {
     pub id: Ident,
-    pub value: Expr,
+    pub value: Expr<T>,
 }
 
-impl AstDisplay for Assignment {
+impl<T: AstInfo> AstDisplay for Assignment<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_node(&self.id);
         f.write_str(" = ");
         f.write_node(&self.value);
     }
 }
-impl_display!(Assignment);
+impl_display_t!(Assignment);
 
 /// Specifies what [Statement::Explain] is actually explaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1360,9 +1360,9 @@ impl AstDisplay for ExplainStage {
 impl_display!(ExplainStage);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Explainee {
+pub enum Explainee<T: AstInfo> {
     View(ObjectName),
-    Query(Query),
+    Query(Query<T>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1370,7 +1370,7 @@ pub struct ExplainOptions {
     pub typed: bool,
 }
 
-impl AstDisplay for Explainee {
+impl<T: AstInfo> AstDisplay for Explainee<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Explainee::View(name) => {
@@ -1381,7 +1381,7 @@ impl AstDisplay for Explainee {
         }
     }
 }
-impl_display!(Explainee);
+impl_display_t!(Explainee);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IfExistsBehavior {
@@ -1392,12 +1392,12 @@ pub enum IfExistsBehavior {
 
 /// `DECLARE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DeclareStatement {
+pub struct DeclareStatement<T: AstInfo> {
     pub name: Ident,
-    pub stmt: Box<Statement>,
+    pub stmt: Box<Statement<T>>,
 }
 
-impl AstDisplay for DeclareStatement {
+impl<T: AstInfo> AstDisplay for DeclareStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("DECLARE ");
         f.write_node(&self.name);
@@ -1405,7 +1405,7 @@ impl AstDisplay for DeclareStatement {
         f.write_node(&self.stmt);
     }
 }
-impl_display!(DeclareStatement);
+impl_display_t!(DeclareStatement);
 
 /// `CLOSE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

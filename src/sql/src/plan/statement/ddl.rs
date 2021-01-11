@@ -42,8 +42,8 @@ use crate::ast::{
     ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement,
     CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, DataType, DropDatabaseStatement,
-    DropObjectsStatement, Expr, Format, Ident, IfExistsBehavior, ObjectName, ObjectType, SqlOption,
-    Statement, Value,
+    DropObjectsStatement, Expr, Format, Ident, IfExistsBehavior, ObjectName, ObjectType, Raw,
+    SqlOption, Statement, Value,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -113,14 +113,14 @@ pub fn plan_create_schema(
 
 pub fn describe_create_table(
     _: &StatementContext,
-    _: CreateTableStatement,
+    _: CreateTableStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_table(
     scx: &StatementContext,
-    stmt: CreateTableStatement,
+    stmt: CreateTableStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateTableStatement {
         name,
@@ -684,14 +684,14 @@ pub fn plan_create_source(
 
 pub fn describe_create_view(
     _: &StatementContext,
-    _: CreateViewStatement,
+    _: CreateViewStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_view(
     scx: &StatementContext,
-    mut stmt: CreateViewStatement,
+    mut stmt: CreateViewStatement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateView(stmt.clone()))?;
@@ -845,14 +845,14 @@ fn avro_ocf_sink_builder(
 
 pub fn describe_create_sink(
     _: &StatementContext,
-    _: CreateSinkStatement,
+    _: CreateSinkStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    stmt: CreateSinkStatement,
+    stmt: CreateSinkStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
@@ -949,14 +949,14 @@ pub fn plan_create_sink(
 
 pub fn describe_create_index(
     _: &StatementContext,
-    _: CreateIndexStatement,
+    _: CreateIndexStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_index(
     scx: &StatementContext,
-    mut stmt: CreateIndexStatement,
+    mut stmt: CreateIndexStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateIndexStatement {
         name,
