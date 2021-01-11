@@ -12,9 +12,12 @@
 //! This module processes the IR to generate the `visit` and `visit_mut`
 //! modules.
 
+use std::collections::HashSet;
+
 use fstrings::{f, format_args_f};
 
 use ore::codegen::CodegenBuf;
+use syn::{GenericParam, Ident, TypeParam};
 
 use crate::ir::{Ir, Item, Type};
 
@@ -38,28 +41,78 @@ struct Config {
     mutable: bool,
 }
 
+fn item_generics(item: &Item) -> HashSet<Ident> {
+    let mut result = HashSet::new();
+    let generics = item.generics().clone();
+    for g in generics.params.iter() {
+        match g {
+            GenericParam::Type(TypeParam { ident, .. }) => {
+                result.insert(ident.clone());
+            }
+            _ => {
+                panic!("unsupported by walkabout")
+            }
+        }
+    }
+    result
+}
+
+fn generics_string_for_item(item: &Item) -> String {
+    let mut generics = item_generics(item)
+        .iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>();
+    generics.sort();
+    if generics.is_empty() {
+        "".into()
+    } else {
+        let joined = generics.join(", ");
+        f!("<{joined}>")
+    }
+}
+
 fn gen_root(c: &Config, ir: &Ir) -> String {
     let trait_name = if c.mutable { "VisitMut" } else { "Visit" };
     let muta = if c.mutable { "mut " } else { "" };
 
     let mut buf = CodegenBuf::new();
 
-    buf.start_block(f!("pub trait {trait_name}<'ast>"));
-    for name in ir.keys() {
+    let generics_seen = ir
+        .iter()
+        .flat_map(|(_, item)| item_generics(item))
+        .collect::<HashSet<_>>();
+
+    let mut sorted_generics = generics_seen
+        .iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>();
+    sorted_generics.sort();
+    let all_generics = sorted_generics
+        .iter()
+        .map(|s| f!(", {s}"))
+        .collect::<Vec<String>>()
+        .join("");
+
+    buf.start_block(f!("pub trait {trait_name}<'ast{all_generics}>"));
+    for (name, item) in ir {
+        let generics = generics_string_for_item(item);
         let fn_name = visit_fn_name(c, name);
-        buf.start_block(f!("fn {fn_name}(&mut self, node: &'ast {muta}{name})"));
+        buf.start_block(f!(
+            "fn {fn_name}(&mut self, node: &'ast {muta}{name}{generics})"
+        ));
         buf.writeln(f!("{fn_name}(self, node)"));
         buf.end_block();
     }
     buf.end_block();
 
     for (name, item) in ir {
+        let generics = generics_string_for_item(item);
         let fn_name = visit_fn_name(c, name);
         buf.writeln(f!(
-            "pub fn {fn_name}<'ast, V>(visitor: &mut V, node: &'ast {muta}{name})"
+            "pub fn {fn_name}<'ast, V{all_generics}>(visitor: &mut V, node: &'ast {muta}{name}{generics})"
         ));
         buf.writeln(f!("where"));
-        buf.writeln(f!("    V: {trait_name}<'ast> + ?Sized,"));
+        buf.writeln(f!("    V: {trait_name}<'ast{all_generics}> + ?Sized,"));
         buf.start_block("");
         match item {
             Item::Struct(s) => {

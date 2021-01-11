@@ -26,11 +26,22 @@ pub enum Item {
     Enum(Enum),
 }
 
+impl Item {
+    pub fn generics(&self) -> &syn::Generics {
+        match self {
+            Item::Struct(s) => &s.generics,
+            Item::Enum(e) => &e.generics,
+        }
+    }
+}
+
 /// A struct in the IR.
 #[derive(Debug)]
 pub struct Struct {
     /// The fields of the struct.
     pub fields: Vec<Field>,
+    /// The generics on the struct.
+    pub generics: syn::Generics,
 }
 
 /// An enum in the IRs.
@@ -38,6 +49,8 @@ pub struct Struct {
 pub struct Enum {
     /// The variants of the enum.
     pub variants: Vec<Variant>,
+    /// The generics on the enum.
+    pub generics: syn::Generics,
 }
 
 /// A variant of an [`Enum`].
@@ -100,6 +113,7 @@ pub(crate) fn analyze(items: &[syn::DeriveInput]) -> Result<Ir> {
             let item = match &item.data {
                 syn::Data::Struct(s) => Item::Struct(Struct {
                     fields: analyze_fields(&s.fields)?,
+                    generics: item.generics.clone(),
                 }),
                 syn::Data::Enum(e) => {
                     let mut variants = vec![];
@@ -109,7 +123,10 @@ pub(crate) fn analyze(items: &[syn::DeriveInput]) -> Result<Ir> {
                             fields: analyze_fields(&v.fields)?,
                         });
                     }
-                    Item::Enum(Enum { variants })
+                    Item::Enum(Enum {
+                        variants,
+                        generics: item.generics.clone(),
+                    })
                 }
                 syn::Data::Union(_) => bail!("Unable to analyze union: {}", item.ident),
             };
