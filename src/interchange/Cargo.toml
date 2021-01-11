@@ -36,7 +36,7 @@ serde_json = "1.0.60"
 sha2 = "0.9.2"
 smallvec = "1.5.1"
 url = "2.2.0"
-uuid = "0.8.0"
+uuid = "0.8.2"
 
 [dev-dependencies]
 criterion = "0.3.0"

@@ -33,4 +33,4 @@ sql-parser = { path = "../sql-parser" }
 tokio = "1.0.0"
 unicase = "2.6.0"
 url = "2.2.0"
-uuid = { version = "0.8.0", features = ["serde", "v4"] }
+uuid = { version = "0.8.2", features = ["serde", "v4"] }
