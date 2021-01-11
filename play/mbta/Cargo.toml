@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.37"
 avro = { package = "mz-avro", path = "../../src/avro" }
 byteorder = "1.4.2"
-futures = "0.3.0"
+futures = "0.3.9"
 getopts = "0.2.0"
 json = "0.12.4"
 ordered-float = { version = "2.0.0", features = ["serde"] }
