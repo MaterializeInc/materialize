@@ -27,7 +27,7 @@ conflicts = "materialized"
 name = "materialized-unstable"
 
 [dependencies]
-anyhow = "1.0.37"
+anyhow = "1.0.38"
 askama = { version = "0.10.5", features = ["serde-json"] }
 async-stream = "0.3.0"
 async-trait = "0.1.42"
@@ -39,7 +39,7 @@ compile-time-run = "0.2.11"
 coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
-futures = "0.3.0"
+futures = "0.3.9"
 getopts = "0.2.0"
 hex = "0.4.0"
 hyper = { version = "0.14.0", features = ["http1", "server"] }
@@ -47,7 +47,7 @@ include_dir = "0.6.0"
 itertools = "0.9.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
-log = "0.4.11"
+log = "0.4.13"
 mz-process-collector = { path = "../mz-process-collector" }
 num_cpus = "1.0.0"
 openssl = { version = "0.10.32", features = ["vendored"] }
@@ -69,7 +69,7 @@ shell-words = "1.0.0"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
 sysctl = "0.4.0"
-sysinfo = "0.15.3"
+sysinfo = "0.15.7"
 tempfile = "3.1.0"
 tokio = { version = "1.0.0", features = ["sync"] }
 tokio-openssl = "0.6.0"
@@ -105,7 +105,7 @@ serde_json = "1.0.0"
 tokio-postgres = { version = "0.7.0", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.37"
+anyhow = "1.0.38"
 flate2 = "1.0.19"
 hex = "0.4.2"
 hex-literal = "0.3.1"

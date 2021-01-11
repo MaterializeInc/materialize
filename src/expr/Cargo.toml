@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 aho-corasick = "0.7.15"
-anyhow = "1.0.37"
+anyhow = "1.0.38"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.0"
 encoding = "0.2.0"
@@ -20,7 +20,7 @@ ordered-float = { version = "2.0.0", features = ["serde"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr"}
 pdqselect = "0.1.0"
-regex = "1.4.1"
+regex = "1.4.3"
 regex-syntax = "0.6.18"
 repr = { path = "../repr" }
 serde = { version = "1.0.0", features = ["derive"] }

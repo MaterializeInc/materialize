@@ -13,6 +13,7 @@ use std::task::{Context, Poll};
 
 use anyhow::bail;
 use async_trait::async_trait;
+use log::trace;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
@@ -47,38 +48,63 @@ impl Server {
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
+        // Allocate state for this connection.
+        let conn_id = match self.id_alloc.alloc() {
+            Ok(id) => id,
+            Err(IdExhaustionError) => {
+                bail!("maximum number of connections reached");
+            }
+        };
+        self.secrets.generate(conn_id);
+
+        let res = self.handle_connection_inner(conn_id, conn).await;
+
+        // Clean up state tied to this specific connection.
+        self.id_alloc.free(conn_id);
+        self.secrets.free(conn_id);
+
+        res
+    }
+
+    pub async fn handle_connection_inner<A>(
+        &self,
+        conn_id: u32,
+        conn: A,
+    ) -> Result<(), anyhow::Error>
+    where
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
+    {
         let mut conn = Conn::Unencrypted(conn);
         loop {
-            conn = match codec::decode_startup(&mut conn).await? {
-                FrontendStartupMessage::Startup { version, params } => {
-                    let conn_id = match self.id_alloc.alloc() {
-                        Ok(id) => id,
-                        Err(IdExhaustionError) => {
-                            bail!("maximum number of connections reached");
-                        }
-                    };
-                    self.secrets.generate(conn_id);
+            let message = codec::decode_startup(&mut conn).await?;
 
+            match &message {
+                Some(message) => trace!("cid={} recv={:?}", conn_id, message),
+                None => trace!("cid={} recv=<eof>", conn_id),
+            }
+
+            conn = match message {
+                // Clients sometimes hang up during the startup sequence, e.g.
+                // because they receive an unacceptable response to an
+                // `SslRequest`. This is considered a graceful termination.
+                None => return Ok(()),
+
+                Some(FrontendStartupMessage::Startup { version, params }) => {
                     let coord_client = self.coord_client.for_session(Session::new(conn_id));
-
                     let machine = StateMachine {
                         conn: FramedConn::new(conn_id, conn),
                         conn_id,
                         secret_key: self.secrets.get(conn_id).unwrap(),
                         coord_client,
                     };
-                    let res = machine.run(version, params).await;
-
-                    // Clean up state tied to this specific connection.
-                    self.id_alloc.free(conn_id);
-                    self.secrets.free(conn_id);
-                    return Ok(res?);
+                    machine.run(version, params).await?;
+                    return Ok(());
                 }
 
-                FrontendStartupMessage::CancelRequest {
+                Some(FrontendStartupMessage::CancelRequest {
                     conn_id,
                     secret_key,
-                } => {
+                }) => {
                     if self.secrets.verify(conn_id, secret_key) {
                         self.coord_client.clone().cancel_request(conn_id).await;
                     }
@@ -87,12 +113,13 @@ impl Server {
                     return Ok(());
                 }
 
-                FrontendStartupMessage::SslRequest => match conn {
+                Some(FrontendStartupMessage::SslRequest) => match conn {
                     // NOTE(benesch): we can match on `self.tls` properly,
                     // instead of checking `is_some` and `unwrap`ping, when
                     // the move_ref_patterns feature stabilizes.
                     // See: https://github.com/rust-lang/rust/issues/68354
                     Conn::Unencrypted(mut conn) if self.tls.is_some() => {
+                        trace!("cid={} send=AcceptSsl", conn_id);
                         conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
                         let tls = self.tls.as_ref().unwrap();
                         let mut ssl_stream = SslStream::new(Ssl::new(tls)?, conn)?;
@@ -100,12 +127,14 @@ impl Server {
                         Conn::Ssl(ssl_stream)
                     }
                     mut conn => {
+                        trace!("cid={} send=RejectSsl", conn_id);
                         conn.write_all(&[REJECT_ENCRYPTION]).await?;
                         conn
                     }
                 },
 
-                FrontendStartupMessage::GssEncRequest => {
+                Some(FrontendStartupMessage::GssEncRequest) => {
+                    trace!("cid={} send=RejectGssEnc", conn_id);
                     conn.write_all(&[REJECT_ENCRYPTION]).await?;
                     conn
                 }
