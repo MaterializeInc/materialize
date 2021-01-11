@@ -13,7 +13,7 @@ expr = { path = "../expr" }
 interchange = { path = "../interchange" }
 kafka-util = { path = "../kafka-util" }
 log = "0.4.0"
-regex = "1.4.1"
+regex = "1.4.3"
 repr = { path = "../repr" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.0", features = ["derive"] }
