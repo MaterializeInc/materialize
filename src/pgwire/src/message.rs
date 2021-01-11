@@ -48,6 +48,7 @@ pub const VERSIONS: &[i32] = &[
 
 /// Like [`FrontendMessage`], but only the messages that can occur during
 /// startup protocol negotiation.
+#[derive(Debug)]
 pub enum FrontendStartupMessage {
     /// Begin a connection.
     Startup {
