@@ -48,7 +48,7 @@ def print_archive(args: argparse.Namespace) -> None:
         if args.pretty_print:
             pprint.pprint(obj)
         else:
-            print(obj)
+            print(json.dumps(obj))
 
     topic = args.topic
 
@@ -116,7 +116,7 @@ def main() -> None:
     parser.add_argument(
         "-p",
         "--pretty-print",
-        help="Whether or not to print messages over multiple-lines using a pretty printer",
+        help="Whether or not to pretty-print messages over multiple-lines (default JSON)",
         action="store_true",
     )
 
