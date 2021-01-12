@@ -305,9 +305,12 @@ fn run() -> Result<(), anyhow::Error> {
     // and disable telemetry in debug mode. This should allow for good defaults (on
     // in release, off in debug), but also easy development during testing of this
     // feature via the environment variable.
-    let telemetry_url = match popts.opt_present("disable-telemetry") {
-        true => None,
-        false => match env::var("MZ_TELEMETRY_URL") {
+    let telemetry_url = if popts.opt_present("disable-telemetry")
+        || ore::env::is_var_truthy("MZ_DISABLE_TELEMETRY")
+    {
+        None
+    } else {
+        match env::var("MZ_TELEMETRY_URL") {
             Ok(url) => Some(url),
             Err(VarError::NotUnicode(_)) => {
                 bail!("non-unicode character found in MZ_TELEMETRY_URL")
@@ -316,7 +319,7 @@ fn run() -> Result<(), anyhow::Error> {
                 true => None,
                 false => Some("https://telemetry.materialize.com".to_string()),
             },
-        },
+        }
     };
 
     // Configure tracing.
