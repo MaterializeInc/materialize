@@ -360,12 +360,7 @@ where
         // Compare with postgres' backend/tcop/postgres.c exec_simple_query.
         for stmt in stmts {
             // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
-            let aborted_txn = matches!(
-                self.coord_client.session().transaction(),
-                TransactionStatus::Failed
-            );
-            let txn_exit_stmt = matches!(&stmt, Statement::Commit(_) | Statement::Rollback(_));
-            if aborted_txn && !txn_exit_stmt {
+            if self.is_aborted_txn() && !is_txn_exit_stmt(Some(&stmt)) {
                 self.conn.send(BackendMessage::ErrorResponse(ErrorResponse::error(
                         SqlState::IN_FAILED_SQL_TRANSACTION,
                         "current transaction is aborted, commands ignored until end of transaction block",
@@ -427,6 +422,9 @@ where
                 .await;
         }
         let maybe_stmt = stmts.into_iter().next();
+        if self.is_aborted_txn() && !is_txn_exit_stmt(maybe_stmt.as_ref()) {
+            return self.aborted_txn_error().await;
+        }
         match self
             .coord_client
             .describe(name, maybe_stmt, param_types)
@@ -454,6 +452,7 @@ where
         raw_params: Vec<Option<Vec<u8>>>,
         result_formats: Vec<pgrepr::Format>,
     ) -> Result<State, comm::Error> {
+        let aborted_txn = self.is_aborted_txn();
         let stmt = self
             .coord_client
             .session()
@@ -491,6 +490,9 @@ where
                     .await
             }
         };
+        if aborted_txn && !is_txn_exit_stmt(stmt.sql()) {
+            return self.aborted_txn_error().await;
+        }
         let buf = RowArena::new();
         let mut params: Vec<(Datum, repr::ScalarType)> = Vec::new();
         for (raw_param, typ, format) in izip!(raw_params, param_types, param_formats) {
@@ -543,6 +545,8 @@ where
         timeout: ExecuteTimeout,
     ) -> BoxFuture<'_, Result<State, comm::Error>> {
         async move {
+            let aborted_txn = self.is_aborted_txn();
+
             // Check if the portal has been started and can be continued.
             let portal = match self.coord_client.session().get_portal_mut(&portal_name) {
                 //  let portal = match session.get_portal_mut(&portal_name) {
@@ -556,6 +560,13 @@ where
                         .await;
                 }
             };
+
+            // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
+            let txn_exit_stmt = is_txn_exit_stmt(portal.stmt.as_ref());
+            if aborted_txn && !txn_exit_stmt {
+                return self.aborted_txn_error().await;
+            }
+
             let row_desc = portal.desc.relation_desc.clone();
 
             match &mut portal.state {
@@ -1263,6 +1274,22 @@ where
             Ok(State::Drain)
         }
     }
+
+    async fn aborted_txn_error(&mut self) -> Result<State, comm::Error> {
+        return self
+            .error(ErrorResponse::error(
+                SqlState::IN_FAILED_SQL_TRANSACTION,
+                "current transaction is aborted, commands ignored until end of transaction block",
+            ))
+            .await;
+    }
+
+    fn is_aborted_txn(&mut self) -> bool {
+        matches!(
+            self.coord_client.session().transaction(),
+            TransactionStatus::Failed
+        )
+    }
 }
 
 fn pad_formats(formats: Vec<pgrepr::Format>, n: usize) -> Result<Vec<pgrepr::Format>, String> {
@@ -1341,4 +1368,13 @@ fn fetch_message(
 enum ExecuteCount {
     All,
     Count(usize),
+}
+
+// See postgres' backend/tcop/postgres.c IsTransactionExitStmt.
+fn is_txn_exit_stmt(stmt: Option<&Statement>) -> bool {
+    match stmt {
+        // Add PREPARE to this if we ever support it.
+        Some(stmt) => matches!(stmt, Statement::Commit(_) | Statement::Rollback(_)),
+        None => false,
+    }
 }
