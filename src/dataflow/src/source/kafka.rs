@@ -620,12 +620,10 @@ fn create_kafka_config(
     // Broker configuration.
     kafka_config.set("bootstrap.servers", &addrs.to_string());
 
-    // Opt-out of Kafka's offset management facilities. Whenever we restart,
-    // we want to restart from the beginning of the topic.
-    //
-    // This is likely to change soon. See #3060 and #2490.
+    // Automatically commit read offsets back to Kafka for monitoring purposes,
+    // but on restart begin ingest at 0
     kafka_config
-        .set("enable.auto.commit", "false")
+        .set("enable.auto.commit", "true")
         .set("auto.offset.reset", "earliest");
 
     // How often to refresh metadata from the Kafka broker. This can have a
