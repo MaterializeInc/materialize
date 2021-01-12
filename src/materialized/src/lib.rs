@@ -147,7 +147,7 @@ pub struct TlsConfig {
 
 impl TlsConfig {
     fn validate(&self) -> Result<SslContext, anyhow::Error> {
-        let mut builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
+        let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
         builder.set_certificate_file(&self.cert, SslFiletype::PEM)?;
         builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
         Ok(builder.build().into_context())
