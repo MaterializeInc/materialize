@@ -2165,7 +2165,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_array(&mut self) -> Result<Expr, ParserError> {
-        Ok(Expr::Array(self.parse_sequence(Self::parse_array)?))
+        let expr = if self.consume_token(&Token::LParen) {
+            let subquery = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            Expr::ArraySubquery(Box::new(subquery))
+        } else {
+            Expr::Array(self.parse_sequence(Self::parse_array)?)
+        };
+        Ok(expr)
     }
 
     fn parse_list(&mut self) -> Result<Expr, ParserError> {

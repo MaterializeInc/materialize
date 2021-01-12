@@ -2123,6 +2123,24 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
         }
 
         // Subqueries.
+        Expr::ArraySubquery(query) => {
+            if !ecx.allow_subqueries {
+                bail!("{} does not allow subqueries", ecx.name)
+            }
+            let mut qcx = ecx.derived_query_context();
+            let (expr, _scope) = plan_subquery(&mut qcx, query)?;
+
+            let aggregates = vec![AggregateExpr {
+                func: expr::AggregateFunc::ArrayAgg,
+                expr: Box::new(ScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: 0,
+                })),
+                distinct: false,
+            }];
+
+            expr.reduce(vec![], aggregates, None).select().into()
+        }
         Expr::Exists(query) => {
             if !ecx.allow_subqueries {
                 bail!("{} does not allow subqueries", ecx.name)

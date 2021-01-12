@@ -138,6 +138,8 @@ pub enum Expr {
     },
     /// `ARRAY[<expr>*]`
     Array(Vec<Expr>),
+    /// `ARRAY(<subquery>)`
+    ArraySubquery(Box<Query>),
     /// `LIST[<expr>*]`
     List(Vec<Expr>),
     /// `<expr>[<expr>]`
@@ -371,6 +373,11 @@ impl AstDisplay for Expr {
                     }
                 }
                 f.write_str("]");
+            }
+            Expr::ArraySubquery(s) => {
+                f.write_str("ARRAY(");
+                f.write_node(&s);
+                f.write_str(")");
             }
             Expr::List(exprs) => {
                 let mut exprs = exprs.iter().peekable();
