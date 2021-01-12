@@ -20,7 +20,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use ore::cast::CastFrom;
-use repr::adt::decimal::Significand;
+use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{
     CachedRecordIter, ColumnType, Datum, Diff, RelationType, Row, RowArena, RowPacker, ScalarType,
@@ -502,6 +502,7 @@ impl AggregateFunc {
             AggregateFunc::All => ScalarType::Bool,
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
             AggregateFunc::SumInt32 => ScalarType::Int64,
+            AggregateFunc::SumInt64 => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
             _ => input_type.scalar_type,
         };
         // max/min/sum return null on empty sets
