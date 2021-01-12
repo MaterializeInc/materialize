@@ -1,0 +1,64 @@
+<html>
+  <head>
+    <title>{% block title %}Time Elapsed per Worker!{% end %}</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+
+  </head>
+  <body>
+      <div id="time_per_worker"></div>
+
+    <script type="text/javascript">
+        "use strict";
+
+        function setup_view(view_name) {
+
+            var histogram = {
+                $schema: 'https://vega.github.io/schema/vega-lite/v4.json',
+                mark: 'bar',
+                height: 400,
+                width: 800,
+                data: {name: 'data'},
+                encoding: {
+                    x: {field: 'worker', type: 'nominal', title: 'Worker ID'},
+                    y: {field: 'time_elapsed', type: 'quantitative', title: 'Time Elapsed ns'},
+                }
+            };
+
+            var config = {
+                actions: false
+            }
+
+            vegaEmbed('#' + view_name, histogram, config).then(function(chart) {
+
+                var path = "ws://" + location.host + "{{reverse_url('api/stream', '')}}" + view_name;
+                var connection = new WebSocket(path);
+
+                function convert_to_datum(row) {
+                    return {worker: row[0], time_elapsed: parseInt(row[1])};
+                }
+
+                function row_in_array(e, arr) {
+                    return arr.find(i => i.worker === e.worker && i.time_elapsed === e.time_elapsed);
+                }
+
+                connection.onmessage = function(event) {
+                        var data = JSON.parse(event.data);
+                        var delete_values = data.deleted.map(convert_to_datum);
+                        var changeSet = vega.changeset()
+                                .insert(data.inserted.map(convert_to_datum))
+                                .remove(d => row_in_array(d, delete_values));
+
+                        chart.view.change('data', changeSet).resize().run();
+                }
+            });
+
+        }
+
+        setup_view("time_per_worker");
+
+    </script>
+  </body>
+</html>

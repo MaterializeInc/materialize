@@ -8,10 +8,15 @@
 # by the Apache License, Version 2.0.
 
 x-port-mappings:
+  - &awesomeboard ${AWESOME_PORT:-8875}
   - &materialized ${MZ_PORT:-6876:6875}
 
 version: '3.7'
 services:
+  awesomeboard:
+    mzbuild: awesomeboard
+    ports:
+      - *awesomeboard
   create-views:
     mzbuild: monitorize-create-views
   materialized:
@@ -38,3 +43,8 @@ mzworkflows:
       port: ${MZ_PORT:-6875}
     - step: run
       service: create-views
+    - step: start-services
+      services: [awesomeboard]
+    - step: wait-for-tcp
+      host: awesomeboard
+      port: ${AWESOME_PORT:-8875}

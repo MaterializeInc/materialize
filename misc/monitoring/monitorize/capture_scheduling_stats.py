@@ -21,6 +21,7 @@ import multiprocessing
 import pathlib
 import sys
 import time
+import typing
 import uuid
 
 import avro.datafile
@@ -35,14 +36,6 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--host", help="materialized hostname", default="materialized", type=str
-    )
-
-    parser.add_argument(
-        "-n",
-        "--num-iterations",
-        help="Number of iterations to run",
-        type=int,
-        default=sys.maxsize, # forever
     )
 
     parser.add_argument(
@@ -77,8 +70,8 @@ def capture_scheduling_info(args: argparse.Namespace) -> None:
     # TODO: Remove this commented out code, improve error messages even with multiprocessing
     # This code is here because the error messaging is better when there's only one process and I
     # haven't fixed that yet
-    # capture_query(args, trace_directory, "time_per_operator_per_worker")
-    # return
+    capture_query(args, trace_directory, "time_per_worker")
+    return
 
     # TODO: Make this an argument to the script
     queries = ["time_per_operator", "time_per_worker", "time_per_operator_per_worker"]
@@ -108,16 +101,32 @@ def capture_query(args: argparse.Namespace, trace_directory: pathlib.Path, query
 
     print(f"Running {query_name} and writing to {outfile}")
     dsn = f"postgresql://{args.host}:{args.port}/materialize"
+
+    while 1:
+        try:
+            capture_query_inner(args, dsn, query, outfile, schema)
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+            time.sleep(5)
+            print(f"Connection closed, reconnecting. Error {e}")
+
+
+def capture_query_inner(args: argparse.Namespace, dsn: str, query: str, outfile: pathlib.Path,
+        schema: typing.Union[None, avro.schema.Schema]) -> None:
+    """Periodically run the desired query and write the results to the AVRO OCF.
+
+    Raises an error if the connection is dropped.
+    """
     with psycopg2.connect(dsn) as conn, open(outfile, "ab+") as ocf_file:
         with avro.datafile.DataFileWriter(ocf_file, avro.io.DatumWriter(), schema) as writer:
-            for i in range(0, args.num_iterations):
+            while 1:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                     cursor.execute(query)
                     now = time.time()
                     for row in cursor:
                         writer.append(row)
                     writer.flush()
-                time.sleep(5)
+                time.sleep(1)
+
 
 if __name__ == '__main__':
     main()

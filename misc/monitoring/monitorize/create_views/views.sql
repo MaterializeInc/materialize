@@ -17,7 +17,9 @@ CREATE SOURCE IF NOT EXISTS time_per_worker_source
 FROM AVRO OCF '/metrics/time_per_worker.avro' WITH (tail = true);
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS time_per_worker AS
-    SELECT * FROM time_per_worker_source;
+    SELECT mz_scheduling_worker_id, mz_scheduling_elapsed_ns FROM time_per_worker_source
+    ORDER BY mz_logical_timestamp DESC
+    LIMIT 8;
 
 CREATE SOURCE IF NOT EXISTS time_per_operator_source
 FROM AVRO OCF '/metrics/time_per_operator.avro' WITH (tail = true);
