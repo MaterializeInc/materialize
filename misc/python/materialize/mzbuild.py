@@ -50,6 +50,7 @@ import time
 import yaml
 
 from materialize import cargo
+from materialize import errors
 from materialize import git
 from materialize import spawn
 from materialize import ui
@@ -158,6 +159,7 @@ class PreImage:
 
     def inputs(self) -> Set[str]:
         """Return the files which are considered inputs to the action."""
+        raise NotImplementedError
 
 
 class CargoPreImage(PreImage):
@@ -528,6 +530,14 @@ class ResolvedImage:
                 repository.
         """
         paths = set(git.expand_globs(self.image.rd.root, f"{self.image.path}/**"))
+        if not paths:
+            # While we could find an `mzbuild.yml` file for this service, git didn't return any
+            # files that matched this service. That likely means that the directory containing the
+            # mzbuild.yml file has not been added to git; otherwise, the mzbuid.yml file, at a
+            # minimum, would be included in the paths list returned by expand_globs.
+            raise errors.BadSpec(
+                f"{self.image.name} mzbuild exists but its files are unknown to git"
+            )
         if self.image.pre_image is not None:
             paths |= self.image.pre_image.inputs()
         if transitive:
