@@ -16,6 +16,7 @@ use dataflow_types::PeekResponse;
 use repr::Row;
 use sql::ast::{FetchDirection, ObjectType, Statement};
 use sql::plan::ExecuteTimeout;
+use tokio_postgres::error::SqlState;
 
 use crate::session::Session;
 
@@ -176,6 +177,11 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
+    /// A SQL error occurred.
+    PgError {
+        code: SqlState,
+        message: String,
+    },
     /// Rows will be delivered via the specified future.
     SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
     /// The specified variable was set to a new value.

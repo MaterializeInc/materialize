@@ -536,6 +536,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
+ "tokio-postgres",
  "transform",
  "unicase",
  "url",
