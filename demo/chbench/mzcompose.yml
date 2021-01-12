@@ -54,7 +54,7 @@ services:
       - DIFFERENTIAL_EAGER_MERGE=1000
       - DEFAULT_PROGRESS_MODE=${DEFAULT_PROGRESS_MODE}
   mysql:
-    image: debezium/example-mysql:1.2
+    mzbuild: chbench-mysql
     ports:
      - *mysql
     environment:
