@@ -61,20 +61,32 @@ def rev_parse(rev: str, *, abbrev: bool = False) -> str:
 def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
     """Find unignored files within the specified paths."""
     # The goal here is to find all files in the working tree that are not
-    # ignored by .gitignore. `git ls-files` doesn't work, because it reports
-    # files that have been deleted in the working tree if they are still present
-    # in the index. Using `os.walkdir` doesn't work because there is no good way
-    # to evaluate .gitignore rules from Python. So we use `git diff` against the
-    # empty tree, which appears to have the desired semantics.
+    # ignored by .gitignore. Naively using `git ls-files` doesn't work, because
+    # it reports files that have been deleted in the working tree if they are
+    # still present in the index. Using `os.walkdir` doesn't work because there
+    # is no good way to evaluate .gitignore rules from Python. So we use a
+    # combination of `git diff` and `git ls-files`.
+
+    # `git diff` against the empty tree surfaces all tracked files that have
+    # not been deleted.
     empty_tree = (
         "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git hash-object -t tree /dev/null
     )
-    files = spawn.capture(
+    diff_files = spawn.capture(
         ["git", "diff", "--name-only", "-z", empty_tree, "--", *specs],
         cwd=root,
         unicode=True,
-    ).split("\0")
-    return set(f for f in files if f.strip() != "")
+    )
+
+    # `git ls-files --others --exclude-standard` surfaces any non-ignored,
+    # untracked files, which are not included in the `git diff` output above.
+    ls_files = spawn.capture(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z", "--", *specs],
+        cwd=root,
+        unicode=True,
+    )
+
+    return set(f for f in (diff_files + ls_files).split("\0") if f.strip() != "")
 
 
 def get_version_tags(*, fetch: bool = True) -> List[semver.VersionInfo]:
