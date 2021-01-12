@@ -2,6 +2,7 @@
  "type": "record",
  "name": "time_per_operator",
  "fields": [
+     {"name": "mz_cluster_id",  "type": "string"},
      {"name": "mz_logical_timestamp",  "type": "double"},
      {"name": "mz_scheduling_worker_id",  "type": "int"},
      {"name": "mz_scheduling_elapsed_ns", "type": "long"}

@@ -8,7 +8,8 @@
 -- by the Apache License, Version 2.0.
 
 -- Get time spent in each Worker
-SELECT mz_logical_timestamp()::float AS mz_logical_timestamp,
+SELECT mz_cluster_id() AS mz_cluster_id,
+       mz_logical_timestamp()::float AS mz_logical_timestamp,
        mz_scheduling_elapsed.worker AS mz_scheduling_worker_id,
        sum(mz_scheduling_elapsed.elapsed_ns) AS mz_scheduling_elapsed_ns
 FROM mz_scheduling_elapsed

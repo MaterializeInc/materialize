@@ -11,7 +11,7 @@
 """capture_scheduling_info
 
 Script to periodically query internal scheduling information from Materialize and write out the
-results to an AVRO OCF file, keyed by timestamp. From these traces, we can turn scheduling
+results to an AVRO OCF file, keyed by timestamp. From these metrics, we can turn scheduling
 information into timeseries data.
 """
 
@@ -36,16 +36,17 @@ def main() -> None:
     parser.add_argument(
         "--host", help="materialized hostname", default="materialized", type=str
     )
+
     parser.add_argument(
-        "-p", "--port", help="materialized port number", default=6875, type=int
+        "-n",
+        "--num-iterations",
+        help="Number of iterations to run",
+        type=int,
+        default=sys.maxsize, # forever
     )
 
     parser.add_argument(
-        "-i",
-        "--instance-id",
-        help="Unique string to identify instance of materialized",
-        type=str,
-        default=str(uuid.uuid1()),
+        "-p", "--port", help="materialized port number", default=6875, type=int
     )
 
     parser.add_argument(
@@ -59,9 +60,9 @@ def main() -> None:
     parser.add_argument(
         "-o",
         "--out-directory",
-        help="Directory to write scheduling traces into",
+        help="Directory to write scheduling metrics into",
         type=str,
-        default="/performance",
+        default="metrics",
     )
 
     args = parser.parse_args()
@@ -70,13 +71,8 @@ def main() -> None:
 def capture_scheduling_info(args: argparse.Namespace) -> None:
     """Loop forever, recording materialized scheduling statistics to local files."""
 
-    trace_directory = pathlib.Path(args.out_directory, args.instance_id)
-    if trace_directory.exists():
-        print(f"ERROR: {trace_directory} exists")
-        sys.exit(1)
-
-    # Raises an error if the directory already exists or the directory cannot be created
-    trace_directory.mkdir(parents=True)
+    trace_directory = pathlib.Path(args.out_directory)
+    trace_directory.mkdir(parents=True, exist_ok=True)
 
     # TODO: Remove this commented out code, improve error messages even with multiprocessing
     # This code is here because the error messaging is better when there's only one process and I
@@ -104,19 +100,24 @@ def capture_query(args: argparse.Namespace, trace_directory: pathlib.Path, query
 
     outfile = pathlib.Path(trace_directory, f"{query_name}.avro")
     query = pathlib.Path(args.queries_dir, f"{query_name}.sql").read_text().strip()
-    schema = avro.schema.parse(pathlib.Path(args.queries_dir, f"{query_name}.avsc").read_text())
+
+    if not outfile.exists():
+        schema = avro.schema.parse(pathlib.Path(args.queries_dir, f"{query_name}.avsc").read_text())
+    else:
+        schema = None ## Use existing schema from file
 
     print(f"Running {query_name} and writing to {outfile}")
     dsn = f"postgresql://{args.host}:{args.port}/materialize"
-    with psycopg2.connect(dsn) as conn, open(outfile, "wb") as ocf_file:
+    with psycopg2.connect(dsn) as conn, open(outfile, "ab+") as ocf_file:
         with avro.datafile.DataFileWriter(ocf_file, avro.io.DatumWriter(), schema) as writer:
-            while 1:
+            for i in range(0, args.num_iterations):
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                     cursor.execute(query)
                     now = time.time()
                     for row in cursor:
                         writer.append(row)
-
+                    writer.flush()
+                time.sleep(5)
 
 if __name__ == '__main__':
     main()

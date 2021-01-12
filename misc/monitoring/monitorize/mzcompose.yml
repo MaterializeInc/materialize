@@ -1,0 +1,40 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+x-port-mappings:
+  - &materialized ${MZ_PORT:-6876:6875}
+
+version: '3.7'
+services:
+  create-views:
+    mzbuild: monitorize-create-views
+  materialized:
+    mzbuild: materialized
+    ports:
+      - *materialized
+    init: true
+    volumes:
+      - type: bind
+        source: ./metrics
+        target: /metrics
+        read_only: true
+
+volumes:
+  metrics:
+
+mzworkflows:
+  monitorize:
+    steps:
+    - step: start-services
+      services: [materialized]
+    - step: wait-for-tcp
+      host: materialized
+      port: ${MZ_PORT:-6875}
+    - step: run
+      service: create-views
