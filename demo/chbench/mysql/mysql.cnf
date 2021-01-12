@@ -46,3 +46,4 @@ binlog_format     = row
 # ----------------------------------------------
 # Chbench specific tuning for faster writes
 # ----------------------------------------------
+innodb_flush_log_at_trx_commit = 0
