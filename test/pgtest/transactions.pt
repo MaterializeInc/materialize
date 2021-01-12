@@ -276,3 +276,112 @@ ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD
 ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
+
+# Test Sync end transaciton behavior:
+# "At completion of each series of extended-query messages, the frontend
+# should issue a Sync message. This parameterless message causes
+# the backend to close the current transaction if it's not inside a
+# BEGIN/COMMIT transaction block (“close” meaning to commit if no
+# error, or roll back if error)."
+
+# An error in extended protocol ignores other statements until Sync,
+# even if it's a ROLLBACK.
+send
+Parse {"query": "SELECT 1"}
+Bind
+Execute
+Parse {"query": "SELECT 1/(SELECT 0)"}
+Bind
+Execute
+Parse {"query": "ROLLBACK"}
+Bind
+Execute
+Parse {"query": "SELECT 2"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=M
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+
+# A ROLLBACK must be the first message in a new extended session.
+send
+Query {"query": "BEGIN"}
+Parse {"query": "SELECT 1"}
+Bind
+Execute
+Parse {"query": "SELECT 1/(SELECT 0)"}
+Bind
+Execute
+Parse {"query": "ROLLBACK"}
+Bind
+Execute
+Parse {"query": "SELECT 2"}
+Bind
+Execute
+Sync
+Parse {"query": "SELECT 3"}
+Bind
+Execute
+Parse {"query": "ROLLBACK"}
+Bind
+Execute
+Sync
+Parse {"query": "ROLLBACK"}
+Bind
+Execute
+Parse {"query": "SELECT 4"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=M
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"E"}
+ErrorResponse {"fields":[{"typ":"M","value":"current transaction is aborted, commands ignored until end of transaction block"}]}
+ReadyForQuery {"status":"E"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"ROLLBACK"}
+ParseComplete
+BindComplete
+DataRow {"fields":["4"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# Verify there are no missed messages.
+send
+Query {"query": "SELECT 45"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["45"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
