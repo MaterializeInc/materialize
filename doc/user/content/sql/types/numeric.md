@@ -13,6 +13,8 @@ aliases:
 Detail | Info
 -------|------
 **Size** | 16 bytes
+**Aliases** | `dec`, `decimal`
+**OID** | 1700
 **Max precision** | 38
 **Max scale** | 38
 **Default** | 38 precision, 0 scale
@@ -28,7 +30,7 @@ Field | Use
 ------|-----------
 **E**_exp_ | Multiply the number preceeding **E** by 10<sup>exp</sup>
 
-### Decimal definitions
+### Numeric definitions
 
 {{< diagram "type-numeric-dec.svg" >}}
 
@@ -39,9 +41,12 @@ _scale_ | The total number of fractional decimal digits to track, e.g. `.321` ha
 
 ## Details
 
-- Materialize assumes untyped numeric literals containing decimal points or e-notation are `decimal`.
-- By default, Materialize uses 38 precision and 0 scale, as per the SQL standard.
-- Materialize allows you to set the scale to any value in the set `(0, 38)`; however, the precision cannot be changed from 38.
+- Materialize assumes untyped numeric literals containing decimal points or
+  e-notation are `numeric`.
+- By default, Materialize uses 38 precision and 0 scale, as per the SQL
+  standard.
+- Materialize allows you to set the scale to any value in the set `(0, 38)`;
+  however, the precision cannot be changed from 38.
 
 ### Valid casts
 
@@ -50,7 +55,7 @@ _scale_ | The total number of fractional decimal digits to track, e.g. `.321` ha
 You can [cast](../../functions/cast) `numeric` to:
 
 - [`int`](../int)
-- [`real`/`double`](../float)
+- [`real`/`double precision`](../float)
 - [`text`](../text)
 
 #### To `numeric`
@@ -58,7 +63,7 @@ You can [cast](../../functions/cast) `numeric` to:
 You can [cast](../../functions/cast) the following types to `numeric`:
 
 - [`int`](../int)
-- [`real`/`double`](../float)
+- [`real`/`double precision`](../float)
 - [`text`](../text)
 
 ## Examples

@@ -14,7 +14,7 @@ menu:
 
 Parameter | Type | Description
 ----------|------|------------
-_val_ | [`date`](../../types/date), [`timestamp`](../../types/timestamp), [`timestamptz`](../../types/timestamptz) | The value from which you want to extract a component.
+_val_ | [`date`](../../types/date), [`timestamp`](../../types/timestamp), [`timestamp with time zone`](../../types/timestamptz) | The value from which you want to extract a component.
 
 ### Return value
 

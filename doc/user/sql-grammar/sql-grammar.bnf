@@ -303,7 +303,7 @@ type_escape_text ::=
 type_time ::=
   'TIME' "'" time_str "'"
 type_timestamp ::=
-  ('TIMESTAMP' 'WITH TIME ZONE'? | 'TIMESTAMPTZ')
+  ('TIMESTAMP' | 'TIMESTAMPTZ')
   "'" date_str
     ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
   "'"

@@ -8,14 +8,17 @@ aliases:
   - /sql/types/json
 ---
 
-`jsonb` data expresses a JavaScript Object Notation (JSON) object similar to PostgreSQL's implementation.
+`jsonb` data expresses a JavaScript Object Notation (JSON) object similar to
+PostgreSQL's implementation.
 
 Detail | Info
 -------|------
 **Quick Syntax** | `'{"1":2,"3":4}'::JSONB`
 **Size** | Variable
+**OID** | 3802
 
-Materialize does not yet support a type more similar to PostgreSQL's impplementation of `json`.
+Materialize does not yet support a type more similar to PostgreSQL's
+impplementation of `json`.
 
 ## Syntax
 
@@ -39,7 +42,9 @@ Materialize supports the following operators and functions.
 
 #### Detail
 
-Functions that return `Col`s are considered table function and can only be used as tables, i.e. you cannot use them as scalar values. For example, you can only use `jsonb_object_keys` in the following way:
+Functions that return `Col`s are considered table function and can only be used
+as tables, i.e. you cannot use them as scalar values. For example, you can only
+use `jsonb_object_keys` in the following way:
 
 ```sql
 SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::JSONB);
@@ -55,7 +60,8 @@ SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::JSONB);
   - Boolean
   - Null
 - Numbers in `jsonb` elements are all equivalent to `float` in SQL.
-    - To operate on elements as `int`s, you must cast them to `float` and then to, e.g. `::float::int`.
+    - To operate on elements as `int`s, you must cast them to `float` and then
+      to, e.g. `::float::int`.
 
 ### Valid casts
 
@@ -63,8 +69,8 @@ SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::JSONB);
 
 You can [cast](../../functions/cast) `jsonb` to:
 
-- [`bool`](../boolean)
-- [`real`/`double`](../float)
+- [`boolean`](../boolean)
+- [`real`/`double precision`](../float)
 - [`text`](../text) (stringifies `jsonb`)
 
 #### To `jsonb`
@@ -75,7 +81,8 @@ You can [cast](../../functions/cast) the following types to `jsonb`:
 
 #### Notes about converting `jsonb` to `text`
 
-`jsonb` can have some odd-feeling corner cases when converting to or from `string` (also known as `text`).
+`jsonb` can have some odd-feeling corner cases when converting to or from
+`string` (also known as `text`).
 
 - `jsonb::text` always produces the printed version of the JSON.
 
@@ -88,7 +95,9 @@ You can [cast](../../functions/cast) the following types to `jsonb`:
      "a"
     ```
 
-- `->>` and the `_text` functions produce the printed version of the inner element, unless the output is a single JSON string in which case they print it without quotes, i.e. as a SQL `string`.
+- `->>` and the `_text` functions produce the printed version of the inner
+  element, unless the output is a single JSON string in which case they print it
+  without quotes, i.e. as a SQL `string`.
 
     ```sql
     SELECT ('"a"'::JSONB)->>0 AS string_elem;
@@ -99,7 +108,8 @@ You can [cast](../../functions/cast) the following types to `jsonb`:
      a
     ```
 
-- `string` values passed to `to_jsonb` with quotes (`"`) produced JSONB Strings with the quotes escaped.
+- `string` values passed to `to_jsonb` with quotes (`"`) produced JSONB Strings
+  with the quotes escaped.
 
     ```sql
     SELECT to_jsonb('"foo"') AS escaped_quotes;
@@ -180,7 +190,8 @@ The type of JSON element you're accessing dictates the RHS's type.
    a
   ```
 
-Field accessors can also be chained together, as long as the LHS remains `jsonb`.
+Field accessors can also be chained together, as long as the LHS remains
+`jsonb`.
 
 ```sql
 SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB->'a'->>1 AS field_jsonb;
