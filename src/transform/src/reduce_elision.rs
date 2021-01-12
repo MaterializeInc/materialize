@@ -73,6 +73,16 @@ impl ReduceElision {
                             a.expr.clone().call_unary(UnaryFunc::CastInt32ToInt64)
                         }
 
+                        // ArrayAgg takes _anything_ as input, but must output an array.
+                        AggregateFunc::ArrayAgg => {
+                            let elem_type = a.typ(&input_type).scalar_type;
+
+                            ScalarExpr::CallVariadic {
+                                func: VariadicFunc::ArrayCreate { elem_type },
+                                exprs: vec![a.expr.clone()],
+                            }
+                        }
+
                         // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
                         AggregateFunc::JsonbAgg => ScalarExpr::CallVariadic {
                             func: VariadicFunc::JsonbBuildArray,

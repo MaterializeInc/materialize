@@ -1463,7 +1463,7 @@ lazy_static! {
 
             // Aggregates.
             "array_agg" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("array_agg"))
+                params!(Any) => AggregateFunc::ArrayAgg
             },
             "bool_and" => Aggregate {
                 params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_and"))

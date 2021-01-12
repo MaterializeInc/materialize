@@ -874,7 +874,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MinDate
         | AggregateFunc::MinTimestamp
         | AggregateFunc::MinTimestampTz => ReductionType::Hierarchical,
-        AggregateFunc::JsonbAgg => ReductionType::Basic,
+        AggregateFunc::ArrayAgg | AggregateFunc::JsonbAgg => ReductionType::Basic,
     }
 }
 
@@ -987,6 +987,7 @@ pub mod monoids {
             | AggregateFunc::Any
             | AggregateFunc::All
             | AggregateFunc::Dummy
+            | AggregateFunc::ArrayAgg
             | AggregateFunc::JsonbAgg => None,
         }
     }

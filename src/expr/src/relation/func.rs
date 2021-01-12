@@ -15,11 +15,13 @@ use std::iter;
 use std::path::PathBuf;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use ore::cast::CastFrom;
+use repr::adt::array::ArrayDimension;
 use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{
@@ -375,6 +377,22 @@ where
         })
 }
 
+fn array_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // TODO(petrosagg): check if dimentions are correct
+    let datum = temp_storage.make_datum(|packer| {
+        let datums = datums.into_iter().collect_vec();
+        let dim = ArrayDimension {
+            lower_bound: 0,
+            length: datums.len(),
+        };
+        packer.push_array(&[dim], datums).expect("TODO: message");
+    });
+    Datum::Array(datum.unwrap_array())
+}
+
 fn jsonb_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -415,6 +433,8 @@ pub enum AggregateFunc {
     Count,
     Any,
     All,
+    /// Accumulates `Datum`s into an Array
+    ArrayAgg,
     /// Accumulates JSON-typed `Datum`s into a JSON list.
     ///
     /// WARNING: Unlike the `jsonb_agg` function that is exposed by the SQL
@@ -462,6 +482,7 @@ impl AggregateFunc {
             AggregateFunc::Count => count(datums),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
+            AggregateFunc::ArrayAgg => array_agg(datums, temp_storage),
             AggregateFunc::JsonbAgg => jsonb_agg(datums, temp_storage),
             AggregateFunc::Dummy => Datum::Dummy,
         }
@@ -500,6 +521,10 @@ impl AggregateFunc {
             AggregateFunc::Count => ScalarType::Int64,
             AggregateFunc::Any => ScalarType::Bool,
             AggregateFunc::All => ScalarType::Bool,
+            AggregateFunc::ArrayAgg => match input_type.scalar_type {
+                ty @ ScalarType::Array(_) => ty,
+                ty => ScalarType::Array(Box::new(ty)),
+            },
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
             AggregateFunc::SumInt32 => ScalarType::Int64,
             _ => input_type.scalar_type,
@@ -626,6 +651,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::Count => f.write_str("count"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
+            AggregateFunc::ArrayAgg => f.write_str("array_agg"),
             AggregateFunc::JsonbAgg => f.write_str("jsonb_agg"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
