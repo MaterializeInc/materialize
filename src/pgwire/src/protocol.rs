@@ -347,6 +347,16 @@ where
             }
         };
 
+        // Start an implicit transaction if we aren't in any transaction and there's
+        // more than one statement. This mirrors the `use_implicit_block` variable in
+        // postgres.
+        if stmts.len() > 1 {
+            let session = self.coord_client.session();
+            if let TransactionStatus::Idle = session.transaction() {
+                session.start_transaction_implicit();
+            }
+        }
+
         // Compare with postgres' backend/tcop/postgres.c exec_simple_query.
         for stmt in stmts {
             // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
@@ -361,14 +371,6 @@ where
                         "current transaction is aborted, commands ignored until end of transaction block",
                     ))).await?;
                 break;
-            }
-
-            // Start an implicit transaction if we aren't in any transaction.
-            {
-                let session = self.coord_client.session();
-                if let TransactionStatus::Idle = session.transaction() {
-                    session.start_transaction_implicit();
-                }
             }
 
             match self.one_query(stmt).await? {
@@ -981,6 +983,9 @@ where
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
             ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
+            ExecuteResponse::PgError { code, message } => {
+                self.error(ErrorResponse::error(code, message)).await
+            }
         }
     }
 

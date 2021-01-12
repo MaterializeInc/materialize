@@ -164,3 +164,158 @@ where
         visitor.visit_expr_mut(v);
     }
 }
+
+# Tests with generic parameters.
+
+visit
+enum Expr<T> {
+    Function(Function<T>),
+    BinOp {
+        lhs: Box<Expr<T>>,
+        op: BinOp,
+        rhs: Box<Expr<T>>,
+    }
+}
+enum BinOp {
+    Add,
+    Sub,
+}
+struct Function<T> {
+    name: String,
+    args: Vec<Expr<T>>,
+    filter: Option<Expr<T>>,
+}
+----
+pub trait Visit<'ast, T> {
+    fn visit_bin_op(&mut self, node: &'ast BinOp) {
+        visit_bin_op(self, node)
+    }
+    fn visit_expr(&mut self, node: &'ast Expr<T>) {
+        visit_expr(self, node)
+    }
+    fn visit_function(&mut self, node: &'ast Function<T>) {
+        visit_function(self, node)
+    }
+}
+pub fn visit_bin_op<'ast, V, T>(visitor: &mut V, node: &'ast BinOp)
+where
+    V: Visit<'ast, T> + ?Sized,
+{
+    match node {
+        BinOp::Add {
+        } => {
+        }
+        BinOp::Sub {
+        } => {
+        }
+    }
+}
+pub fn visit_expr<'ast, V, T>(visitor: &mut V, node: &'ast Expr<T>)
+where
+    V: Visit<'ast, T> + ?Sized,
+{
+    match node {
+        Expr::Function {
+            0: binding0,
+        } => {
+            visitor.visit_function(binding0);
+        }
+        Expr::BinOp {
+            lhs: binding0,
+            op: binding1,
+            rhs: binding2,
+        } => {
+            visitor.visit_expr(&*binding0);
+            visitor.visit_bin_op(binding1);
+            visitor.visit_expr(&*binding2);
+        }
+    }
+}
+pub fn visit_function<'ast, V, T>(visitor: &mut V, node: &'ast Function<T>)
+where
+    V: Visit<'ast, T> + ?Sized,
+{
+    for v in &node.args {
+        visitor.visit_expr(v);
+    }
+    if let Some(v) = &node.filter {
+        visitor.visit_expr(v);
+    }
+}
+
+
+visit
+enum Expr<T: Foo> {
+    Function(Function<T>),
+    BinOp {
+        lhs: Box<Expr<T>>,
+        op: BinOp,
+        rhs: Box<Expr<T>>,
+    }
+}
+enum BinOp {
+    Add,
+    Sub,
+}
+struct Function<T: Foo> {
+    name: String,
+    args: Vec<Expr<T>>,
+    filter: Option<Expr<T>>,
+}
+----
+pub trait Visit<'ast, T: Foo> {
+    fn visit_bin_op(&mut self, node: &'ast BinOp) {
+        visit_bin_op(self, node)
+    }
+    fn visit_expr(&mut self, node: &'ast Expr<T>) {
+        visit_expr(self, node)
+    }
+    fn visit_function(&mut self, node: &'ast Function<T>) {
+        visit_function(self, node)
+    }
+}
+pub fn visit_bin_op<'ast, V, T: Foo>(visitor: &mut V, node: &'ast BinOp)
+where
+    V: Visit<'ast, T> + ?Sized,
+{
+    match node {
+        BinOp::Add {
+        } => {
+        }
+        BinOp::Sub {
+        } => {
+        }
+    }
+}
+pub fn visit_expr<'ast, V, T: Foo>(visitor: &mut V, node: &'ast Expr<T>)
+where
+    V: Visit<'ast, T> + ?Sized,
+{
+    match node {
+        Expr::Function {
+            0: binding0,
+        } => {
+            visitor.visit_function(binding0);
+        }
+        Expr::BinOp {
+            lhs: binding0,
+            op: binding1,
+            rhs: binding2,
+        } => {
+            visitor.visit_expr(&*binding0);
+            visitor.visit_bin_op(binding1);
+            visitor.visit_expr(&*binding2);
+        }
+    }
+}
+pub fn visit_function<'ast, V, T: Foo>(visitor: &mut V, node: &'ast Function<T>)
+where
+    V: Visit<'ast, T> + ?Sized,
+{
+    for v in &node.args {
+        visitor.visit_expr(v);
+    }
+    if let Some(v) = &node.filter {
+        visitor.visit_expr(v);
+    }
+}
