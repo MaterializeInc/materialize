@@ -77,6 +77,11 @@ Wrap your release notes at the 80 character mark.
 
 - Add `upper` and `lower` to the [string function](/sql/functions#string-func) suite.
 
+- Change [`sum`](/sql/functions/#aggregate-func) over `bigint` to return `numeric`.
+  Previously, `sum` over `bigint` returned `bigint`.
+
+  **Backwards-incompatible change**
+
 {{% version-header v0.6.0 %}}
 
 - Support specifying default values for table columns via the new
