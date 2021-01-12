@@ -12,6 +12,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `DATE '2007-02-01'`
 **Size** | 1 byte
+**OID** | 1082
 **Min value** | 4713 BC
 **Max value** | 5874897 AD
 **Resolution** | 1 day

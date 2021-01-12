@@ -64,4 +64,5 @@ ERROR:  column "record.f2" does not exist
 ```
 
 as the expression `record.f2` specifies a column named `f2` from a table named
-`record`, rather than the field `f2` from the record-typed column named `record`.
+`record`, rather than the field `f2` from the record-typed column named
+`record`.

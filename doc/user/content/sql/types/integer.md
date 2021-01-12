@@ -11,16 +11,23 @@ aliases:
   - /sql/types/int8
 ---
 
-`integer` and `bigint` data express signed integers.
+## `int4` info
 
-Type      | Aliases       | Size          | Minimum value              | Maximum value
-----------|---------------|---------------|----------------------------|--------------------------
-`integer` | `int`, `int4` | 4 bytes       | -2,147,483,648             | 2,147,483,647
-`bigint`  | `int8`        | 8 bytes       | -9,223,372,036,854,775,808 | 9,223,372,036,854,775,807
+Detail | Info
+-------|------
+**Size** | 4 bytes
+**Aliases** | `int`, `integer`
+**OID** | 23
+**Range** | [-2,147,483,648, 2,147,483,647]
 
-The SQL standard specifies only the `integer`, `int` and `bigint` type names.
-Materialize additionally permits the `int4` and `int8` aliases, for
-compatibility with other SQL database systems.
+## `int8` info
+
+Detail | Info
+-------|------
+**Size** | 8 bytes
+**Aliases** | `bigint`
+**OID** | 20
+**Range** | [-9,223,372,036,854,775,808, 9,223,372,036,854,775,807]
 
 ## Details
 
@@ -29,21 +36,21 @@ compatibility with other SQL database systems.
 In addition to the casts listed below, all integer types can be cast to and from
 all other integer types.
 
-#### From `int`
+#### From `int4` or `int8`
 
-You can [cast](../../functions/cast) `integer` or `bigint` to:
+You can [cast](../../functions/cast) `int4` or `int8` to:
 
-- [`bool`](../boolean)
+- [`bool`](../bool)
 - [`numeric`](../numeric)
-- [`real`/`double`](../float)
+- [`float4`/`float8`](../float)
 - [`text`](../text)
 
-#### To `int`
+#### To `int4` or `int8`
 
-You can [cast](../../functions/cast) the following types to `integer` or `bigint`:
+You can [cast](../../functions/cast) the following types to `int4` or `int8`:
 
 - [`numeric`](../numeric)
-- [`real`/`double`](../float)
+- [`float4`/`float8`](../float)
 
 ## Examples
 

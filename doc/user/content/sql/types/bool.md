@@ -1,20 +1,21 @@
 ---
-title: "boolean Data Type"
+title: "bool Data Type"
 description: "Expresses TRUE or FALSE"
 menu:
   main:
     parent: 'sql-types'
 aliases:
-    - sql/types/bool
+    - sql/types/boolean
 ---
 
-`boolean` data expresses a binary value of either `TRUE` or `FALSE`.
+`bool` data expresses a binary value of either `TRUE` or `FALSE`.
 
 Detail | Info
 -------|------
 **Quick Syntax** | `TRUE` or `FALSE`
 **Size** | 1 byte
-**Aliases** | `bool`
+**Aliases** | `boolean`
+**OID** | 16
 
 ## Syntax
 
@@ -24,16 +25,16 @@ Detail | Info
 
 ### Valid casts
 
-#### From `boolean`
+#### From `bool`
 
-You can [cast](../../functions/cast) `boolean` to:
+You can [cast](../../functions/cast) `bool` to:
 
 - [`text`](../text)
 - [`int`](../int)
 
-#### To `boolean`
+#### To `bool`
 
-You can [cast](../../functions/cast) the following types to `boolean`:
+You can [cast](../../functions/cast) the following types to `bool`:
 
 - [`int`](../int)
 - [`text`](../text)
@@ -48,11 +49,9 @@ SELECT TRUE AS t_val;
 -------
  t
 ```
-<hr/>
+
 ```sql
 SELECT FALSE AS f_val;
-```
-```nofmt
  f_val
 -------
  f

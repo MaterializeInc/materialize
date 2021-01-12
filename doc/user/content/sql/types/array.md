@@ -11,8 +11,8 @@ menu:
 Arrays are a multidimensional sequence of any non-array type.
 
 {{< warning >}}
-Use of arrays is not recommended. Arrays in Materialize exist to facilitate
-compatibility with PostgreSQL. Specifically, many of the PostgreSQL
+We do not recommend using arrays, which exist in Materialize primarily to
+facilitate compatibility with PostgreSQL. Specifically, many of the PostgreSQL
 compatibility views in the [system catalog](/sql/system-tables/) must expose
 array types. Unfortunately, PostgreSQL arrays have odd semantics and do not
 interoperate well with modern data formats like JSON and Avro.
@@ -84,8 +84,8 @@ followed by the textual representation of each element separated by commas
 this format is applied recursively to each array dimension. No additional
 whitespace is added.
 
-Null elements are rendered as the literal string `NULL`. Non-null elements
-are rendered as if that element had been cast to `text`.
+Null elements are rendered as the literal string `NULL`. Non-null elements are
+rendered as if that element had been cast to `text`.
 
 An element whose textual representation contains curly braces, commas,
 whitespace, double quotes, backslashes, or is exactly the string `NULL` (in any
@@ -105,10 +105,10 @@ SELECT ARRAY[ARRAY['a', 'white space'], ARRAY[NULL, ''], ARRAY['escape"m\e', 'nU
  {{a,"white space"},{NULL,""},{"escape\"m\\e","nUlL"}}
 ```
 
-
 ### Valid casts
 
-You can [cast](/sql/functions/cast) all array types to [`text`](/sql/types/text).
+You can [cast](/sql/functions/cast) all array types to
+[`text`](/sql/types/text).
 
 You cannot presently cast any other type to an array type.
 

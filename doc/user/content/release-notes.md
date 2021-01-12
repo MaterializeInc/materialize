@@ -137,8 +137,8 @@ Wrap your release notes at the 80 character mark.
 
   would fail to parse {{% gh 4827 %}}.
 
-- Fix a bug that caused the [`real`]/[`float4`] types to be incorrectly
-  interpreted as [`double precision`] {{% gh 4918 %}}.
+- Fix a bug that caused the [`float4`]/[`float4`] types to be incorrectly
+  interpreted as [`float8`] {{% gh 4918 %}}.
 
 {{% version-header v0.5.2 %}}
 
@@ -423,8 +423,7 @@ Wrap your release notes at the 80 character mark.
     `~*`, `!~`, and `!~*`, which report whether a string does or does not match
     a regular expression.
 
-  - Support casts from [`boolean`](/sql/types/boolean) to
-    [`int`](/sql/types/int).
+  - Support casts from [`bool`](/sql/types/bool) to [`int`](/sql/types/int).
 
   - Add the [`split_part`](/sql/functions/#string-func) function, which splits a
     string on a delimiter and returns one of the resulting chunks.
@@ -753,11 +752,10 @@ Wrap your release notes at the 80 character mark.
 - Introduce the [`--listen-addr`](/cli/#listen-address) command-line option to
   control the address and port that `materialized` binds to.
 
-- Make formatting and parsing for [`real`](/sql/types/float) and
-  [`double precision`](/sql/types/float) numbers more
-  consistent with PostgreSQL. The strings `NaN`, and `[+-]Infinity` are
-  accepted as input, to select the special not-a-number and infinity states,
-  respectively,  of floating-point numbers.
+- Make formatting and parsing for [`float4`](/sql/types/float) and
+  [`float8`](/sql/types/float) numbers more consistent with PostgreSQL. The
+  strings `NaN`, and `[+-]Infinity` are accepted as input, to select the special
+  not-a-number and infinity states, respectively,  of floating-point numbers.
 
 - Allow [CSV-formatted sources](/sql/create-source/csv-file/#csv-format-details)
   to include a header row (`CREATE SOURCE ... FORMAT CSV WITH HEADER`).
@@ -844,11 +842,11 @@ Wrap your release notes at the 80 character mark.
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE VIEW`]: /sql/create-view
 [`date`]: /sql/types/date
-[`double precision`]: /sql/types/float
+[`float8`]: /sql/types/float8
 [`interval`]: /sql/types/interval
-[`float4`]: /sql/types/float
+[`float4`]: /sql/types/float4
 [`pgcrypto`]: https://www.postgresql.org/docs/current/pgcrypto.html
-[`real`]: /sql/types/real
+[`float4`]: /sql/types/real
 [`SHOW CREATE SOURCE`]: /sql/show-create-source
 [`SHOW CREATE VIEW`]: /sql/show-create-view
 [`text`]: /sql/types/text

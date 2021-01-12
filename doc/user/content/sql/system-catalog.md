@@ -88,7 +88,7 @@ Field            | Type        | Meaning
 `id`             | [`bigint`]  | The unique ID of the table, source, or view containing the column.
 `name`           | [`text`]    | The name of the column.
 `position`       | [`bigint`]  | The 1-indexed position of the column in its containing table, source, or view.
-`nullable`       | [`boolean`] | Can the column contain a `NULL` value?
+`nullable`       | [`bool`] | Can the column contain a `NULL` value?
 `type`           | [`text`]    | The data type of the column.
 
 ### `mz_databases`
@@ -127,7 +127,7 @@ Field            | Type        | Meaning
 `index_position` | [`bigint`]  | The 1-indexed position of this column within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)
 `on_position`    | [`bigint`]  | If not `NULL`, specifies the 1-indexed position of a column in the relation on which this index is built that determines the value of this index column.
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
-`nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
+`nullable`       | [`bool`] | Can this column of the index evaluate to `NULL`?
 
 
 ### `mz_kafka_sinks`
@@ -268,7 +268,7 @@ If you are having trouble making a PostgreSQL tool work with Materialize, please
 Materialize with minor changes to the `pg_catalog` compatibility shim.
 
 [`bigint`]: /sql/types/bigint
-[`boolean`]: /sql/types/boolean
+[`bool`]: /sql/types/bool
 [`oid`]: /sql/types/oid
 [`text`]: /sql/types/text
 [gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md

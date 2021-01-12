@@ -8,18 +8,31 @@ aliases:
     - /sql/types/timestamptz
 ---
 
-`timestamp` and `timestamp with time zone` data expresses a date and time in UTC.
+`timestamp` and `timestamptz` data expresses a date and time in
+UTC.
+
+## `timestamp` info
 
 Detail | Info
 -------|------
-**Quick Syntax** | `TIMESTAMP '2007-02-01 15:04:05'` <br/> `TIMESTAMP WITH TIME ZONE '2007-02-01 15:04:05+06'`
+**Quick Syntax** | `TIMESTAMP WITH TIME ZONE '2007-02-01 15:04:05+06'`
 **Size** | 8 bytes
+**OID** | 1083
 **Min value** | 4713 BC
 **Max value** | 294276 AD
 **Resolution** | 1 microsecond / 14 digits
 
-For convenience and compatibility with PostgreSQL, `timestamptz` is accepted
-as an alias for `timestamp with time zone`.
+## `timestamptz` info
+
+Detail | Info
+-------|------
+**Quick Syntax** | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
+**Aliases** | `timestamp with time zone`
+**Size** | 8 bytes
+**OID** | 1184
+**Min value** | 4713 BC
+**Max value** | 294276 AD
+**Resolution** | 1 microsecond / 14 digits
 
 ## Syntax
 
@@ -35,9 +48,14 @@ _tz&lowbar;offset_ | The timezone's distance, in hours, from UTC.
 
 ## Details
 
-- `timestamp` and `timestamptz` store data in [UTC](https://en.wikipedia.org/wiki/Coordinated_Universal_Time).
-- The difference between the two types is that `timestamptz` can read or write timestamps with the offset specified by the timezone. Importantly, `timestamptz` itself doesn't store any timezone data; Materialize simply performs the conversion from the time provided and UTC.
-- Materialize assumes all clients expect UTC time, and does not currently support any other timezones.
+- `timestamp` and `timestamptz` store data in
+  [UTC](https://en.wikipedia.org/wiki/Coordinated_Universal_Time).
+- The difference between the two types is that `timestamptz` can read or write
+  timestamps with the offset specified by the timezone. Importantly,
+  `timestamptz` itself doesn't store any timezone data; Materialize simply
+  performs the conversion from the time provided and UTC.
+- Materialize assumes all clients expect UTC time, and does not currently
+  support any other timezones.
 
 ### Valid casts
 
@@ -52,7 +70,8 @@ You can [cast](../../functions/cast) `timestamp` or `timestamptz` to:
 
 #### To `timestamp`
 
-You can [cast](../../functions/cast) the following types to `timestamp` or `timestamptz`:
+You can [cast](../../functions/cast) the following types to `timestamp` or
+`timestamptz`:
 
 - [`date`](../date)
 - [`text`](../text)
