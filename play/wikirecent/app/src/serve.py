@@ -253,7 +253,7 @@ def run():
         template_path=template_path,
         debug=True,
         configured_views=views,
-        dsn="postgresql://localhost:49160/materialize",
+        dsn="postgresql://materialize:6875/materialize",
     )
 
     port = 8875
