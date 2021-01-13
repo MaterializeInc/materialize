@@ -43,17 +43,34 @@ const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 /// User-settable configuration parameters.
 #[derive(Debug)]
 pub struct Config {
+    /// The address of the Kafka broker that testdrive will interact with.
     pub kafka_addr: String,
+    /// Arbitrary rdkafka options for testdrive to use when connecting to the
+    /// Kafka broker.
     pub kafka_opts: Vec<(String, String)>,
+    /// The URL of the schema registry that testdrive will connect to.
     pub schema_registry_url: Url,
+    /// An optional path to a TLS certificate that testdrive will present when
+    /// performing client authentication.
     pub cert_path: Option<String>,
+    /// An optional password for the TLS certificate.
     pub cert_pass: Option<String>,
+    /// The region for testdrive to use when connecting to AWS.
     pub aws_region: rusoto_core::Region,
+    /// The account for testdrive to use when connecting to AWS.
     pub aws_account: String,
+    /// The credentials for testdrive to use when connecting to AWS.
     pub aws_credentials: AwsCredentials,
+    /// The connection parameters for the materialized instance that testdrive
+    /// will connect to.
     pub materialized_pgconfig: tokio_postgres::Config,
+    /// An optional path to the catalog file for the materialized instance.
+    /// If present, testdrive will periodically verify that the on-disk catalog
+    /// matches its expectations.
     pub materialized_catalog_path: Option<PathBuf>,
+    /// Whether to reset materialized's state at the start of each script.
     pub reset_materialized: bool,
+    /// Emit Buildkite-specific markup.
     pub ci_output: bool,
 }
 
