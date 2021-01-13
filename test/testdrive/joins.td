@@ -239,3 +239,41 @@ Unable to automatically determine a timestamp for your query; this can happen if
 
 ! SELECT * FROM names FULL OUTER JOIN mods_unmat ON 1 = 0;
 Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
+
+# Test joins on implicitly coercible data types
+$ set shortmods-schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "num", "type": "int"},
+              {"name": "mod", "type": "string"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] }
+    ]
+  }
+
+$ kafka-create-topic topic=shortmods
+
+$ kafka-ingest format=avro topic=shortmods schema=${shortmods-schema} timestamp=1
+{"before": null, "after": {"row":{"num": 0, "mod": "even"}}}
+{"before": null, "after": {"row":{"num": 2, "mod": "even"}}}
+{"before": null, "after": {"row":{"num": 4, "mod": "even"}}}
+
+> CREATE MATERIALIZED SOURCE shortmods
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-shortmods-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${shortmods-schema}'
+  ENVELOPE DEBEZIUM
+
+> CREATE MATERIALIZED VIEW test16 AS
+  SELECT * FROM names JOIN shortmods USING (num);
