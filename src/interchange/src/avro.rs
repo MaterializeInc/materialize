@@ -2710,7 +2710,7 @@ fn build_row_schema_fields<F: FnMut() -> String>(
                 if oid_seen {
                     json!(name)
                 } else {
-                    let fields = fields.iter().cloned().collect::<Vec<_>>();
+                    let fields = fields.to_vec();
                     let json_fields =
                         build_row_schema_fields(&fields, custom_types_info, oids_seen, namer);
                     json!({
@@ -3169,7 +3169,7 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
-            let encoder = Encoder::new(None, desc, false);
+            let encoder = Encoder::new(None, desc, false, &mut Default::default());
             let avro_value = encode_datums_as_avro(std::iter::once(datum), encoder.value_columns());
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
