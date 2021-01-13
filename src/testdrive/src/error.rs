@@ -31,13 +31,14 @@
 //! ```
 
 use std::error::Error as StdError;
-use std::fmt;
-use std::fmt::Write as FmtWrite;
-use std::io;
-use std::io::Write;
+use std::fmt::{self, Write as FmtWrite};
+use std::io::{self, Write};
+use std::iter::IntoIterator;
 
 use atty::Stream;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
+
+type DynError = Box<dyn StdError + Send + Sync>;
 
 #[derive(Debug)]
 pub enum Error {
@@ -47,7 +48,7 @@ pub enum Error {
     },
     General {
         ctx: String,
-        cause: Option<Box<dyn StdError + Send + Sync>>,
+        causes: Vec<DynError>,
         hints: Vec<String>,
     },
     Usage {
@@ -57,6 +58,25 @@ pub enum Error {
 }
 
 impl Error {
+    /// Create a new error with just the specified message
+    pub(crate) fn message(m: impl Into<String>) -> Error {
+        Error::General {
+            ctx: m.into(),
+            causes: Vec::new(),
+            hints: Vec::new(),
+        }
+    }
+
+    /// Create a new error with the specified message and cause
+    pub fn with_cause(m: impl Into<String>, cause: impl Into<DynError>) -> Error {
+        Error::General {
+            ctx: m.into(),
+            causes: vec![cause.into()],
+            hints: Vec::new(),
+        }
+    }
+
+    /// Print error with colorization for humans
     pub fn print_stderr(&self) -> io::Result<()> {
         let color_choice = if atty::is(Stream::Stderr) {
             ColorChoice::Auto
@@ -87,12 +107,17 @@ impl Error {
             Error::Input { details: None, .. } => {
                 panic!("programming error: print_stderr called on InputError with no details")
             }
-            Error::General { ctx, cause, hints } => {
+            Error::General { ctx, causes, hints } => {
                 let color_spec = ColorSpec::new();
                 write_error_heading(&mut stderr, &color_spec)?;
                 write!(&mut stderr, "{}", ctx)?;
-                if let Some(cause) = cause {
-                    writeln!(&mut stderr, ": {}", cause)?;
+                for (i, cause) in causes.iter().enumerate() {
+                    if i == 0 {
+                        write!(&mut stderr, ": {}", cause)?;
+                    } else {
+                        write!(&mut stderr, ", {}", cause)?;
+                    }
+                    writeln!(&mut stderr)?;
                 }
                 for hint in hints {
                     stderr.set_color(&color_spec.clone().set_bold(true))?;
@@ -178,10 +203,16 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::Input { err, .. } => write!(f, "{}", err.msg),
-            Error::General { ctx, cause, .. } => {
+            Error::General { ctx, causes, .. } => {
                 write!(f, "{}", ctx)?;
-                if let Some(cause) = cause {
-                    write!(f, ": {}", cause)?;
+                write!(f, "{}", ctx)?;
+                for (i, cause) in causes.iter().enumerate() {
+                    if i == 0 {
+                        write!(f, ": {}", cause)?;
+                    } else {
+                        write!(f, ", {}", cause)?;
+                    }
+                    writeln!(f)?;
                 }
                 Ok(())
             }
@@ -211,23 +242,47 @@ pub trait Positioner {
 }
 
 pub trait ResultExt<T, E> {
-    fn err_ctx(self, ctx: String) -> Result<T, Error>
+    fn err_ctx(self, ctx: impl Into<String>) -> Result<T, Error>
+    where
+        Self: Sized;
+
+    fn err_hint(
+        self,
+        ctx: impl Into<String>,
+        hint: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<T, Error>
     where
         Self: Sized;
 }
 
 impl<T, E> ResultExt<T, E> for Result<T, E>
 where
-    E: 'static + StdError + Send + Sync,
+    E: 'static + Send + Sync,
+    E: Into<DynError>,
 {
-    fn err_ctx(self, ctx: String) -> Result<T, Error>
+    fn err_ctx(self, ctx: impl Into<String>) -> Result<T, Error>
     where
         Self: Sized,
     {
         self.map_err(|err| Error::General {
-            ctx,
-            cause: Some(Box::new(err)),
+            ctx: ctx.into(),
+            causes: vec![err.into()],
             hints: Vec::new(),
+        })
+    }
+
+    fn err_hint(
+        self,
+        ctx: impl Into<String>,
+        hints: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<T, Error>
+    where
+        Self: Sized,
+    {
+        self.map_err(|err| Error::General {
+            ctx: ctx.into(),
+            causes: vec![err.into()],
+            hints: hints.into_iter().map(Into::into).collect(),
         })
     }
 }
