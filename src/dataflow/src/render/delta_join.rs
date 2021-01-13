@@ -539,7 +539,8 @@ impl MyClosure {
         let (mut before, after) = std::mem::replace(mfp, MapFilterProject::new(mfp.input_arity))
             .partition(columns, columns.len());
 
-        // While it is top of mind, add any new columns to `columns` and increase `input_arity`.
+        // Add any newly created columns to `columns`. These columns may be referenced
+        // by `after`, and it will be important to track their locations.
         let bonus_columns = before.projection.len() - before.input_arity;
         for bonus_column in 0..bonus_columns {
             columns.insert(mfp.input_arity + bonus_column, columns.len());

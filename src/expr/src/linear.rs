@@ -558,36 +558,45 @@ impl MapFilterProject {
         for (_index, pred) in self.predicates.iter() {
             demand.extend(pred.support());
         }
+        // Start from the output columns as presumed demanded.
+        // If this is not the case, the caller should project some away.
         demand.extend(self.projection.iter().cloned());
+        // Proceed in *reverse* order, as expressions may depend on other
+        // expressions that precede them.
         for index in (0..self.expressions.len()).rev() {
             if demand.contains(&(self.input_arity + index)) {
                 demand.extend(self.expressions[index].support());
             }
         }
 
-        // Expressions that are not demanded can be removed, and all
-        // remaining indexes updated.
+        // Maintain a map from initial column identifiers to locations
+        // once we have removed undemanded expressions.
         let mut remap = HashMap::new();
+        // This map only needs to map elements of `demand` to a new location,
+        // but the logic is easier if we include all input columns (as the
+        // new position is then determined by the size of the map).
         for index in 0..self.input_arity {
             remap.insert(index, index);
         }
         // Retain demanded expressions, and record their new locations.
-        let mut index = self.input_arity;
-        self.expressions.retain(|_expr| {
-            let demanded = demand.contains(&index);
-            if demanded {
-                remap.insert(index, remap.len());
+        let mut new_expressions = Vec::new();
+        for (index, expr) in self.expressions.drain(..).enumerate() {
+            if demand.contains(&(index + self.input_arity)) {
+                remap.insert(index + self.input_arity, remap.len());
+                new_expressions.push(expr);
             }
-            index += 1;
-            demanded
-        });
+        }
+        self.expressions = new_expressions;
+
         // Update column identifiers.
         for expr in self.expressions.iter_mut() {
             expr.permute_map(&remap);
         }
-        for (_pos, pred) in self.predicates.iter_mut() {
-            // NB: leaving `_pos` for now.
+        for (pos, pred) in self.predicates.iter_mut() {
             pred.permute_map(&remap);
+            // Insert predicate as eagerly as it can be evaluated:
+            // just after the largest column in its support is formed.
+            *pos = pred.support().into_iter().max().map(|c| c + 1).unwrap_or(0);
         }
         for proj in self.projection.iter_mut() {
             *proj = remap[proj];
