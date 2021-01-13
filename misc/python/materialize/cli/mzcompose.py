@@ -48,6 +48,8 @@ def main(argv: List[str]) -> int:
     # Handle special mzcompose commands that apply to the repo.
     if args.command == "gen-shortcuts":
         return gen_shortcuts(repo)
+    elif args.command == "lint":
+        return lint(repo)
     elif args.command == "list-compositions":
         for name in repo.compositions:
             print(name)
@@ -167,6 +169,15 @@ exec "$(dirname "$0")/{}/bin/mzcompose" "$@"
         mzbuild.chmod_x(mzcompose_path)
 
     return 0
+
+
+def lint(repo: mzbuild.Repository) -> int:
+    errors = []
+    for name in repo.compositions:
+        errors += mzcompose.Composition.lint(repo, name)
+    for error in sorted(errors):
+        print(error)
+    return 1 if errors else 0
 
 
 # We subclass `argparse.ArgumentParser` so that we can override its default

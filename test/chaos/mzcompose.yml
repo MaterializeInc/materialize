@@ -34,17 +34,17 @@ services:
     ports:
       - *materialized
     init: true
-    command: -w 4
+    command: -w4 --disable-telemetry
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.3.0
+    image: confluentinc/cp-zookeeper:5.5.3
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
     cap_add:
       - NET_ADMIN
 
   kafka:
-    image: confluentinc/cp-enterprise-kafka:5.3.0
+    image: confluentinc/cp-enterprise-kafka:5.5.3
     ports:
       - *kafka
     depends_on: [zookeeper]
@@ -58,7 +58,7 @@ services:
       - NET_ADMIN
 
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.2.1
+    image: confluentinc/cp-schema-registry:5.5.3
     ports:
       - *schema-registry
     environment:
@@ -87,7 +87,7 @@ services:
       - NET_ADMIN
 
   connector:
-    image: confluentinc/cp-enterprise-kafka:5.3.0
+    image: confluentinc/cp-enterprise-kafka:5.5.3
     volumes:
       - ./connector/docker-entrypoint.sh:/usr/local/bin/docker-entrypoint.sh
     entrypoint:
@@ -96,7 +96,7 @@ services:
       - NET_ADMIN
 
   mysql:
-    image: debezium/example-mysql:1.2
+    image: debezium/example-mysql:1.4
     ports:
       - *mysql
     environment:
@@ -115,7 +115,7 @@ services:
     build: connector-mysql
     depends_on: [schema-registry, control-center]
   control-center:
-    image: confluentinc/cp-enterprise-control-center:5.3.0
+    image: confluentinc/cp-enterprise-control-center:5.5.3
     restart: always
     depends_on: [zookeeper, kafka, connect]
     ports:

@@ -30,7 +30,7 @@ services:
     ports:
       - *materialized
     init: true
-    command: -w ${MZ_THREADS:-4}
+    command: -w ${MZ_THREADS:-4} --disable-telemetry
 
   dashboard:
     mzbuild: dashboard

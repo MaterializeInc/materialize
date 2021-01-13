@@ -13,10 +13,13 @@ services:
     mzbuild: catcompatck
     depends_on: [zookeeper, kafka]
   zookeeper:
-    image: zookeeper:3.4.13
+    image: confluentinc/cp-zookeeper:5.5.3
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
   kafka:
-    image: wurstmeister/kafka:2.12-2.2.0
+    image: confluentinc/cp-kafka:5.5.3
     environment:
     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
-    - KAFKA_ADVERTISED_HOST_NAME=kafka
+    - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+    - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
     depends_on: [zookeeper]

@@ -1,7 +1,7 @@
 [package]
 name = "sql-parser"
 description = "The lexer and parser for Materialize's SQL dialect."
-version = "0.1.0"
+version = "0.0.0"
 exclude = ["tests/testdata"]
 edition = "2018"
 publish = false

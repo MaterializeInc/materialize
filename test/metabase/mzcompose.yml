@@ -11,7 +11,7 @@ version: '3.7'
 services:
   materialized:
     mzbuild: materialized
-    command: -w1 --logging-granularity=10ms
+    command: -w1 --logging-granularity=10ms --disable-telemetry
   metabase:
     image: materialize/metabase:v0.0.5
     ports:
