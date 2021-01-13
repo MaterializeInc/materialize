@@ -369,7 +369,7 @@ mzworkflows:
       service: chbench
       expected_return_code: 0
     - step: stop-services
-      services: [postgres]
+      services: [mysql]
     # Give Materialize a few seconds to catch up with topics / drain
     # TODO: Remove this sleep by adding an `wait_for_topic_queisce` step
     - step: sleep
