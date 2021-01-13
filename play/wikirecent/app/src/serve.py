@@ -103,7 +103,6 @@ class View:
                 cursor_name = f"{self.view_name}_tail_cursor"
                 query = f"DECLARE {cursor_name} CURSOR FOR TAIL {self.view_name} WITH (PROGRESS)"
                 await cursor.execute(query)
-                await cursor.execute(f"FETCH ALL {cursor_name}")
                 await self.tail_view_inner(cursor, cursor_name)
 
     async def tail_view_inner(self, cursor, cursor_name):
@@ -115,31 +114,24 @@ class View:
         inserted = []
         deleted = []
         while 1:
+            await cursor.execute(f"FETCH ALL {cursor_name}")
+            async for (_, progressed, diff, *columns) in cursor:
+                # This row serves as a synchronization primitive indicating that all
+                # rows for an update have been read. We should publish this update.
+                if progressed:
+                    self.update(deleted, inserted)
+                    inserted = []
+                    deleted = []
+                    continue
 
-            row = await cursor.fetchone()
-            if not row:
-                # We've reached the end of our current result set, go back and fetch more
-                await cursor.execute(f"FETCH ALL {cursor_name}")
-                continue
-
-            (_, progressed, diff, *columns) = row
-
-            # This row serves as a synchronization primitive indicating that all
-            # rows for an update have been read. We should publish this update.
-            if progressed:
-                self.update(deleted, inserted)
-                inserted = []
-                deleted = []
-                continue
-
-            # Simplify our implementation by creating "diff" copies of each row instead
-            # of tracking counts per row
-            if diff < 0:
-                deleted.extend([columns] * abs(diff))
-            elif diff > 0:
-                inserted.extend([columns] * diff)
-            else:
-                raise ValueError(f"Bad data from TAIL: {row.strip()}")
+                # Simplify our implementation by creating "diff" copies of each row instead
+                # of tracking counts per row
+                if diff < 0:
+                    deleted.extend([columns] * abs(diff))
+                elif diff > 0:
+                    inserted.extend([columns] * diff)
+                else:
+                    raise ValueError(f"Bad data from TAIL: {row.strip()}")
 
     def update(self, deleted, inserted):
         """Update our internal view based on this diff and broadcast the update to listeners.
@@ -241,7 +233,7 @@ def run():
         template_path=template_path,
         debug=True,
         configured_views=["counter", "top10"],
-        dsn="postgresql://materialized:6875/materialize",
+        dsn="postgresql://localhost:49170/materialize",
     )
 
     port = 8875

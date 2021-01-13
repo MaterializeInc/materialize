@@ -30,17 +30,11 @@ async def tail_view(args):
             cursor_name = f"{args.view}_tail_cursor"
             query = f"DECLARE {cursor_name} CURSOR FOR TAIL {args.view} WITH (PROGRESS)"
             await cursor.execute(query)
-            await cursor.execute(f"FETCH ALL {cursor_name}")
-
             while 1:
-
-                row = await cursor.fetchone()
-                if not row:
-                    await cursor.execute(f"FETCH ALL {cursor_name}")
-                    continue
-
-                (timestamp, progressed, diff, *columns) = row
-                print(f"{timestamp} {progressed} {diff} {columns}")
+                await cursor.execute(f"FETCH ALL {cursor_name}")
+                async for row in cursor:
+                    (timestamp, progressed, diff, *columns) = row
+                    print(f"{timestamp} {progressed} {diff} {columns}")
 
 
 def main():
