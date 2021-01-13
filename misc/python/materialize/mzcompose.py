@@ -64,13 +64,17 @@ _BASHLIKE_ENV_VAR_PATTERN = re.compile(
 )
 
 
+LINT_CONFLUENT_PLATFORM_VERSION = "5.5.3"
+LINT_DEBEZIUM_VERSION = "1.4"
+
+
 class LintError:
     def __init__(self, file: Path, message: str):
         self.file = file
         self.message = message
 
     def __str__(self) -> str:
-        return f"{self.file.relative_to(Path.cwd())}: {self.message}"
+        return f"{os.path.relpath(self.file)}: {self.message}"
 
     def __lt__(self, other: "LintError") -> bool:
         return (self.file, self.message) < (other.file, other.message)
@@ -96,6 +100,37 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
     elif tag == "latest":
         errors.append(LintError(path, f'image {spec} depends on floating "latest" tag'))
 
+    if repo == "confluentinc" and image.startswith("cp-"):
+        if tag != LINT_CONFLUENT_PLATFORM_VERSION:
+            errors.append(
+                LintError(
+                    path,
+                    f"image {spec} depends on wrong version of Confluent Platform "
+                    f"(want {LINT_CONFLUENT_PLATFORM_VERSION})",
+                )
+            )
+
+    if repo == "debezium":
+        if tag != LINT_DEBEZIUM_VERSION:
+            errors.append(
+                LintError(
+                    path,
+                    f"image {spec} depends on wrong version of Debezium "
+                    f"(want {LINT_DEBEZIUM_VERSION})",
+                )
+            )
+
+    if not repo and image == "zookeeper":
+        errors.append(
+            LintError(
+                path, f"replace {spec} with official confluentinc/cp-zookeeper image"
+            )
+        )
+
+    if repo == "wurstmeister" and image == "kafka":
+        errors.append(
+            LintError(path, f"replace {spec} with official confluentinc/cp-kafka image")
+        )
 
 
 def lint_materialized_service(

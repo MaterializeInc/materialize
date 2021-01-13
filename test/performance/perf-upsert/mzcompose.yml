@@ -24,11 +24,11 @@ services:
       - MZ_LOG=dataflow=error,info
       - DIFFERENTIAL_EAGER_MERGE=1000
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.3.0
+    image: confluentinc/cp-zookeeper:5.5.3
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
   kafka:
-    image: confluentinc/cp-enterprise-kafka:5.3.0
+    image: confluentinc/cp-enterprise-kafka:5.5.3
     ports:
       - *kafka
     depends_on: [zookeeper]
