@@ -24,7 +24,7 @@ use postgres::{Client, Row};
 use postgres_types::Type;
 use std::thread::{self, JoinHandle};
 
-use crate::args::{Args, Check, Source};
+use crate::args::{Args, Check, Config, Source};
 
 mod args;
 
@@ -39,12 +39,17 @@ fn main() -> Result<(), Error> {
 
     mz_process_collector::register_default_process_collector()?;
 
-    let config = Args::from_cli()?;
+    let args: Args = ore::cli::parse_args();
+    let config = args::load_config(args.config_file.as_deref(), args.checks.as_deref())?;
+    if args.help_config {
+        args::print_config_supplied(config);
+        return Ok(());
+    }
     info!("startup {}", Utc::now());
 
-    match initialize(&config) {
+    match initialize(&args, &config) {
         Ok(()) => {
-            run_checks(&config);
+            run_checks(&args, &config);
             info!("Finished running checker. Exiting ...");
             Ok(())
         }
@@ -58,19 +63,19 @@ fn main() -> Result<(), Error> {
     }
 }
 
-fn run_checks(config: &Args) {
+fn run_checks(args: &Args, config: &Config) {
     let mut peek_threads = vec![];
-    for c in &config.config.checks {
+    for c in &config.checks {
         peek_threads.extend(spawn_query_thread(
-            config.mz_url.clone(),
+            args.materialized_url.clone(),
             c.clone(),
-            config.duration,
+            args.duration,
         ))
     }
     info!(
         "started {} peek threads for {} checks",
         peek_threads.len(),
-        &config.config.checks.len()
+        &config.checks.len()
     );
     for pthread in peek_threads {
         pthread.join().unwrap();
@@ -258,9 +263,9 @@ fn print_error_and_backoff(backoff: &mut Duration, context: &str, error_message:
     *backoff = min(*backoff * 2, MAX_BACKOFF);
 }
 
-fn initialize(config: &Args) -> Result<(), Error> {
+fn initialize(args: &Args, config: &Config) -> Result<(), Error> {
     let mut counter = 6;
-    let mut init_result = init_inner(&config);
+    let mut init_result = init_inner(args, config);
     while let Err(e) = init_result {
         counter -= 1;
         if counter <= 0 {
@@ -268,19 +273,19 @@ fn initialize(config: &Args) -> Result<(), Error> {
         }
         warn!("init error, retry in 10 seconds ({} remaining)", counter);
         std::thread::sleep(Duration::from_secs(10));
-        init_result = init_inner(&config);
+        init_result = init_inner(args, config);
     }
     Ok(())
 }
 
-fn init_inner(config: &Args) -> Result<(), Error> {
-    let mut postgres_client = create_postgres_client(&config.mz_url);
-    if config.initialize_sources {
-        initialize_sources(&mut postgres_client, &config.config.sources)
+fn init_inner(args: &Args, config: &Config) -> Result<(), Error> {
+    let mut postgres_client = create_postgres_client(&args.materialized_url);
+    if args.initialize_sources {
+        initialize_sources(&mut postgres_client, &config.sources)
             .map_err(|e| format!("need to have sources for anything else to work: {}", e))?;
     }
     let mut errors = 0;
-    for check in &config.config.checks {
+    for check in &config.checks {
         println!("Initialize Check: {}", check.name);
         if !try_initialize(&mut postgres_client, &check) {
             errors += 1;

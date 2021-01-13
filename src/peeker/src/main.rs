@@ -25,7 +25,7 @@ use postgres::Client;
 use prometheus::{register_histogram_vec, register_int_counter_vec};
 use prometheus::{Encoder, HistogramVec, IntCounterVec};
 
-use crate::args::{Args, QueryGroup, Source};
+use crate::args::{Args, Config, QueryGroup, Source};
 
 mod args;
 
@@ -44,7 +44,15 @@ fn main() -> Result<()> {
 
     mz_process_collector::register_default_process_collector()?;
 
-    let config = Args::from_cli()?;
+    let args: Args = ore::cli::parse_args();
+
+    let config = args::load_config(args.config_file.as_deref(), args.queries.as_deref())?;
+
+    if args.help_config {
+        args::print_config_supplied(config);
+        return Ok(());
+    }
+
     info!("startup {}", Utc::now());
 
     // Launch metrics server.
@@ -53,16 +61,16 @@ fn main() -> Result<()> {
 
     info!(
         "Allowing chbench to warm up for {} seconds at {}",
-        config.warmup_secs,
+        args.warmup_seconds,
         Utc::now()
     );
-    let warmup_dur = std::time::Duration::from_secs(config.warmup_secs.into());
+    let warmup_dur = std::time::Duration::from_secs(args.warmup_seconds.into());
     std::thread::sleep(warmup_dur);
     info!("Done warming up at {}", Utc::now());
 
-    let init_result = initialize(&config);
+    let init_result = initialize(&args, &config);
     // Start peek timing loop.
-    if config.only_initialize {
+    if args.only_initialize {
         match init_result {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -72,17 +80,17 @@ fn main() -> Result<()> {
         }
     } else {
         let _ = init_result;
-        measure_peek_times(&config);
+        measure_peek_times(&args, &config);
         Ok(())
     }
 }
 
-fn measure_peek_times(config: &Args) {
+fn measure_peek_times(args: &Args, config: &Config) {
     let mut peek_threads = vec![];
-    let run_dur = chrono::Duration::seconds(config.run_secs as i64);
-    for (group_id, group) in config.config.groups.iter().enumerate() {
+    let run_dur = chrono::Duration::seconds(args.run_seconds as i64);
+    for (group_id, group) in config.groups.iter().enumerate() {
         peek_threads.extend(spawn_query_thread(
-            config.materialized_url.clone(),
+            args.materialized_url.clone(),
             group.clone(),
             group_id,
             run_dur.clone(),
@@ -92,7 +100,7 @@ fn measure_peek_times(config: &Args) {
     info!(
         "started {} peek threads for {} queries",
         peek_threads.len(),
-        config.config.query_count()
+        config.query_count()
     );
     for pthread in peek_threads {
         pthread.join().unwrap();
@@ -194,29 +202,29 @@ fn create_postgres_client(mz_url: &str) -> Client {
     }
 }
 
-fn initialize(config: &Args) -> Result<()> {
+fn initialize(args: &Args, config: &Config) -> Result<()> {
     let start = std::time::Instant::now();
-    let mut init_result = init_inner(&config);
+    let mut init_result = init_inner(args, config);
     while let Err(e) = init_result {
-        if start.elapsed() > config.init_timeout {
+        if start.elapsed() > args.init_timeout {
             return Err(format!("unable to initialize: {}", e).into());
         }
         warn!(
             "init error, retry in 10 seconds ({:?} remaining)",
-            config.init_timeout - start.elapsed()
+            args.init_timeout - start.elapsed()
         );
         thread::sleep(Duration::from_secs(10));
-        init_result = init_inner(&config);
+        init_result = init_inner(args, config);
     }
     Ok(())
 }
 
-fn init_inner(config: &Args) -> Result<()> {
-    let mut postgres_client = create_postgres_client(&config.materialized_url);
-    initialize_sources(&mut postgres_client, &config.config.sources)
+fn init_inner(args: &Args, config: &Config) -> Result<()> {
+    let mut postgres_client = create_postgres_client(&args.materialized_url);
+    initialize_sources(&mut postgres_client, &config.sources)
         .map_err(|e| format!("need to have sources for anything else to work: {}", e))?;
     let mut errors = 0;
-    for group in config.config.queries_in_declaration_order() {
+    for group in config.queries_in_declaration_order() {
         if !try_initialize(&mut postgres_client, group) {
             errors += 1;
         }

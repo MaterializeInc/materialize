@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
 use std::error::Error;
 use std::net::Ipv4Addr;
 use std::time::Duration;
@@ -15,29 +14,36 @@ use std::time::Duration;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use structopt::StructOpt;
 use tokio::net::TcpListener;
 
 use comm::{mpsc, Connection, Switchboard};
 use ore::future::OreTryStreamExt;
 
+/// Example of using comm channels.
+#[derive(StructOpt)]
+struct Args {
+    /// Total number of processes.
+    #[structopt(short = "n", default_value = "3")]
+    processes: u16,
+    /// ID of this process.
+    #[structopt(short = "p", default_value = "0")]
+    process: usize,
+    #[structopt(default_value = "42")]
+    magic_number: usize,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let args: Vec<_> = env::args().collect();
-
-    let mut opts = getopts::Options::new();
-    opts.optopt("n", "", "total number of processes", "NUM");
-    opts.optopt("p", "", "id of this process", "NUM");
-
-    let popts = opts.parse(&args[1..])?;
-    let n = popts.opt_get_default("n", 3)?;
-    let id = popts.opt_get_default("p", 0)?;
-    let magic_number = popts.free.get(0).unwrap_or(&"42".into()).parse()?;
+    let args: Args = ore::cli::parse_args();
 
     let runtime = tokio::runtime::Runtime::new()?;
-    let nodes: Vec<_> = (0..n).map(|i| (Ipv4Addr::LOCALHOST, 6876 + i)).collect();
-    let listener = runtime.block_on(TcpListener::bind(&nodes[id]))?;
+    let nodes: Vec<_> = (0..args.processes)
+        .map(|i| (Ipv4Addr::LOCALHOST, 6876 + i))
+        .collect();
+    let listener = runtime.block_on(TcpListener::bind(&nodes[args.process]))?;
     println!("listening on {}...", listener.local_addr()?);
 
-    let switchboard = Switchboard::new(nodes, id);
+    let switchboard = Switchboard::new(nodes, args.process);
     runtime.spawn({
         let switchboard = switchboard.clone();
         async move {
@@ -54,8 +60,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     runtime.block_on(async {
         switchboard.rendezvous(Duration::from_secs(30)).await?;
 
-        if id == 0 {
-            leader(switchboard, magic_number).await
+        if args.process == 0 {
+            leader(switchboard, args.magic_number).await
         } else {
             follower(switchboard).await
         }
