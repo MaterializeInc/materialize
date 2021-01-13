@@ -7,44 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{anyhow, Result};
-use getopts::Options;
+use structopt::StructOpt;
 
-use std::env;
+/// Verifies the correctness of a PostgreSQL-like server.
+#[derive(StructOpt)]
+struct Args {
+    /// Database address.
+    #[structopt(long, value_name = "HOSTNAME:PORT", default_value = "localhost:6875")]
+    addr: String,
+    /// Database user.
+    #[structopt(long, value_name = "USERNAME", default_value = "materialize")]
+    user: String,
+    /// Directory containing test files.
+    directory: String,
+}
 
-fn main() -> Result<()> {
-    let args: Vec<_> = env::args().collect();
-
-    let mut opts = Options::new();
-
-    opts.optopt(
-        "",
-        "addr",
-        "database address, default localhost:6875",
-        "HOSTNAME:PORT",
-    );
-    opts.optopt("", "user", "database user, default materialize", "USERNAME");
-
-    let usage_details = anyhow!(opts.usage("usage: pgtest [options] DIRECTORY"));
-    let opts = match opts.parse(&args[1..]) {
-        Ok(opts) => opts,
-        Err(_) => return Err(usage_details),
-    };
-    if opts.free.len() != 1 {
-        return Err(usage_details);
-    }
-    let directory = &opts.free[0];
-
+fn main() {
+    let args: Args = ore::cli::parse_args();
     pgtest::walk(
-        &opts
-            .opt_str("addr")
-            .unwrap_or_else(|| "localhost:6875".to_string()),
-        &opts
-            .opt_str("user")
-            .unwrap_or_else(|| "materialize".to_string()),
+        &args.addr,
+        &args.user,
         std::time::Duration::from_secs(5),
-        directory,
+        &args.directory,
     );
-
-    Ok(())
 }

@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
-use std::mem;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -54,34 +53,6 @@ pub struct Config {
     pub materialized_pgconfig: tokio_postgres::Config,
     pub materialized_catalog_path: Option<PathBuf>,
     pub reset_materialized: bool,
-}
-
-impl Default for Config {
-    fn default() -> Config {
-        const DUMMY_AWS_ACCOUNT: &str = "000000000000";
-        const DUMMY_AWS_ACCESS_KEY_ID: &str = "dummy-access-key-id";
-        const DUMMY_AWS_SECRET_ACCESS_KEY: &str = "dummy-secret-access-key";
-        Config {
-            kafka_addr: "localhost:9092".into(),
-            kafka_opts: vec![],
-            schema_registry_url: "http://localhost:8081".parse().unwrap(),
-            cert_path: None,
-            cert_pass: None,
-            aws_region: rusoto_core::Region::default(),
-            aws_account: DUMMY_AWS_ACCOUNT.into(),
-            aws_credentials: AwsCredentials::new(
-                DUMMY_AWS_ACCESS_KEY_ID,
-                DUMMY_AWS_SECRET_ACCESS_KEY,
-                None,
-                None,
-            ),
-            materialized_pgconfig: mem::take(
-                tokio_postgres::Config::new().host("localhost").port(6875),
-            ),
-            materialized_catalog_path: None,
-            reset_materialized: true,
-        }
-    }
 }
 
 pub struct State {

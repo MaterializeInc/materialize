@@ -8,25 +8,50 @@
 // by the Apache License, Version 2.0.
 
 use std::cell::RefCell;
-use std::env;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process;
 use std::sync::Arc;
 
 use chrono::Utc;
-use getopts::Options;
+use structopt::StructOpt;
 use tokio::runtime::Runtime;
 use walkdir::WalkDir;
 
 use sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
 use sqllogictest::util;
 
-const USAGE: &str = r#"usage: sqllogictest [PATH...]
-
-Runs one or more sqllogictest files. Directories will be searched
-recursively for sqllogictest files."#;
+/// Runs sqllogictest scripts to verify database engine correctness.
+#[derive(StructOpt)]
+struct Args {
+    /// Increase verbosity.
+    ///
+    /// If specified once, print summary for each source file.
+    /// If specified twice, also show descriptions of each error.
+    /// If specified thrice, also print each query before it is executed.
+    #[structopt(short = "v", long = "verbose", parse(from_occurrences))]
+    verbosity: usize,
+    /// Don't exit with a failing code if not all queries are successful.
+    #[structopt(long)]
+    no_fail: bool,
+    /// Prefix every line of output with the current time.
+    #[structopt(long)]
+    timestamps: bool,
+    /// Rewrite expected output based on actual output.
+    #[structopt(long)]
+    rewrite_results: bool,
+    /// Save a JSON-formatted summary to FILE.
+    #[structopt(long, value_name = "FILE")]
+    json_summary_file: Option<PathBuf>,
+    /// Run with N materialized workers.
+    #[structopt(long, value_name = "N", default_value = "3")]
+    workers: usize,
+    /// Path to sqllogictest script to run.
+    #[structopt(value_name = "PATH", required = true)]
+    paths: Vec<String>,
+}
 
 fn main() {
     let runtime = Arc::new(Runtime::new().unwrap());
@@ -37,80 +62,25 @@ async fn run(runtime: Arc<Runtime>) {
     ore::panic::set_abort_on_panic();
     ore::test::init_logging_default("warn");
 
-    let args: Vec<_> = env::args().collect();
-    let mut opts = Options::new();
-    opts.optflagmulti(
-        "v",
-        "verbose",
-        "-v: print every source file. \
-         -vv: show each error description. \
-         -vvv: show all queries executed",
-    );
-    opts.optflag("h", "help", "show this usage information");
-    opts.optflag(
-        "",
-        "no-fail",
-        "don't exit with a failing code if not all queries successful",
-    );
-    opts.optflag(
-        "",
-        "timestamps",
-        "prefix every line of output with the current time",
-    );
-    opts.optflag(
-        "",
-        "rewrite-results",
-        "rewrite expected output based on actual output",
-    );
-    opts.optopt(
-        "",
-        "json-summary-file",
-        "save JSON-formatted summary to file",
-        "FILE",
-    );
-    opts.optopt(
-        "w",
-        "workers",
-        "number of materialized workers to use (default: 3)",
-        "N",
-    );
-
-    let popts = match opts.parse(&args[1..]) {
-        Ok(popts) => popts,
-        Err(err) => {
-            eprintln!("{}", err);
-            process::exit(1);
-        }
-    };
-
-    if popts.opt_present("h") || popts.free.is_empty() {
-        eprint!("{}", opts.usage(USAGE));
-        process::exit(1);
-    }
+    let args: Args = ore::cli::parse_args();
 
     let config = RunConfig {
         runtime,
-        stdout: &OutputStream::new(io::stdout(), popts.opt_present("timestamps")),
-        stderr: &OutputStream::new(io::stderr(), popts.opt_present("timestamps")),
-        verbosity: popts.opt_count("v"),
-        workers: match popts.opt_get_default("workers", 3) {
-            Ok(workers) => workers,
-            Err(e) => {
-                eprintln!("invalid --workers value: {}", e);
-                process::exit(1);
-            }
-        },
+        stdout: &OutputStream::new(io::stdout(), args.timestamps),
+        stderr: &OutputStream::new(io::stderr(), args.timestamps),
+        verbosity: args.verbosity,
+        workers: args.workers,
     };
 
-    if popts.opt_present("rewrite-results") {
-        return rewrite(&config, popts).await;
+    if args.rewrite_results {
+        return rewrite(&config, args).await;
     }
 
-    let json_summary_file = match popts.opt_str("json-summary-file") {
+    let json_summary_file = match args.json_summary_file {
         Some(filename) => match File::create(&filename) {
             Ok(file) => Some(file),
             Err(err) => {
-                writeln!(config.stderr, "creating {}: {}", filename, err);
+                writeln!(config.stderr, "creating {}: {}", filename.display(), err);
                 process::exit(1);
             }
         },
@@ -118,7 +88,7 @@ async fn run(runtime: Arc<Runtime>) {
     };
     let mut bad_file = false;
     let mut outcomes = Outcomes::default();
-    for path in &popts.free {
+    for path in &args.paths {
         if path == "-" {
             match sqllogictest::runner::run_stdin(&config).await {
                 Ok(o) => outcomes += o,
@@ -173,13 +143,13 @@ async fn run(runtime: Arc<Runtime>) {
         }
     }
 
-    if outcomes.any_failed() && !popts.opt_present("no-fail") {
+    if outcomes.any_failed() && !args.no_fail {
         process::exit(1);
     }
 }
 
-async fn rewrite(config: &RunConfig<'_>, popts: getopts::Matches) {
-    if popts.opt_present("json-summary-file") {
+async fn rewrite(config: &RunConfig<'_>, args: Args) {
+    if args.json_summary_file.is_some() {
         writeln!(
             config.stderr,
             "--rewrite-results is not compatible with --json-summary-file"
@@ -187,13 +157,13 @@ async fn rewrite(config: &RunConfig<'_>, popts: getopts::Matches) {
         process::exit(1);
     }
 
-    if popts.free.iter().any(|path| path == "-") {
+    if args.paths.iter().any(|path| path == "-") {
         writeln!(config.stderr, "--rewrite-results cannot be used with stdin");
         process::exit(1);
     }
 
     let mut bad_file = false;
-    for path in popts.free {
+    for path in args.paths {
         for entry in WalkDir::new(path) {
             match entry {
                 Ok(entry) => {
