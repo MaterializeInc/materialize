@@ -41,7 +41,7 @@ where
                     batches.swap(&mut rows_buf);
                     for batch in rows_buf.drain(..) {
                         let mut cursor = batch.cursor();
-                        let mut buf: Vec<(G::Timestamp, Option<Row>, Diff, Row)> = vec![];
+                        let mut buf: Vec<(G::Timestamp, Option<&Row>, Diff, &Row)> = vec![];
 
                         // This batch is valid for a range of timestamps, but it might not present things in timestamp order.
                         // Slurp it into a vector, so we can sort that by timestamps.
@@ -50,7 +50,7 @@ where
                             while cursor.val_valid(&batch) {
                                 let val = cursor.val(&batch);
                                 cursor.map_times(&batch, |&t, &diff| {
-                                    buf.push((t, k.clone(), diff, val.clone()));
+                                    buf.push((t, k.as_ref(), diff, val));
                                 });
                                 cursor.step_val(&batch);
                             }
@@ -72,7 +72,8 @@ where
                             .group_by(|(t, k, _diff, _row)| (*t, k.clone()))
                         {
                             let mut out = vec![];
-                            let elts: Vec<(G::Timestamp, Option<Row>, Diff, Row)> = group.collect();
+                            let elts: Vec<(G::Timestamp, Option<&Row>, Diff, &Row)> =
+                                group.collect();
                             // Step (2) above
                             let pos_idx = elts
                                 .binary_search_by(|(_t, _k, diff, _row)| diff.cmp(&0))
@@ -99,7 +100,7 @@ where
                                 };
                                 out.push(DiffPair { before, after });
                             }
-                            session.give(((k, out), t, 1));
+                            session.give(((k.cloned(), out), t, 1));
                         }
                     }
                 }
