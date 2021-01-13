@@ -27,11 +27,10 @@ async def tail_view(args):
     dsn = f"postgresql://{args.host}:{args.port}/materialize"
     async with await psycopg3.AsyncConnection.connect(dsn) as conn:
         async with await conn.cursor() as cursor:
-            cursor_name = f"{args.view}_tail_cursor"
-            query = f"DECLARE {cursor_name} CURSOR FOR TAIL {args.view} WITH (PROGRESS)"
+            query = f"DECLARE cur CURSOR FOR TAIL {args.view} WITH (PROGRESS)"
             await cursor.execute(query)
             while 1:
-                await cursor.execute(f"FETCH ALL {cursor_name}")
+                await cursor.execute(f"FETCH ALL cur")
                 async for row in cursor:
                     (timestamp, progressed, diff, *columns) = row
                     print(f"{timestamp} {progressed} {diff} {columns}")

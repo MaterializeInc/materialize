@@ -51,6 +51,7 @@ class View:
             - `view_name`: The name of the materialized view to TAIL.
         """
         self.current_rows = []
+        self.current_timestamp = None
         self.dsn = dsn
         self.listeners = set([])
         self.view_name = view_name
@@ -62,6 +63,7 @@ class View:
             {
                 "deleted": [],
                 "inserted": self.current_rows,
+                "timestamp": self.current_timestamp,
             }
         )
         self.listeners.add(conn)
@@ -100,12 +102,11 @@ class View:
         log.info('Spawning coroutine to TAIL VIEW "%s"', self.view_name)
         async with await self.mzql_connection() as conn:
             async with await conn.cursor() as cursor:
-                cursor_name = f"{self.view_name}_tail_cursor"
-                query = f"DECLARE {cursor_name} CURSOR FOR TAIL {self.view_name} WITH (PROGRESS)"
+                query = f"DECLARE cur CURSOR FOR TAIL {self.view_name} WITH (PROGRESS)"
                 await cursor.execute(query)
-                await self.tail_view_inner(cursor, cursor_name)
+                await self.tail_view_inner(cursor)
 
-    async def tail_view_inner(self, cursor, cursor_name):
+    async def tail_view_inner(self, cursor):
         """Read rows from TAIL, converting them to updates and broadcasting to listeners.
 
         :Params:
@@ -114,12 +115,12 @@ class View:
         inserted = []
         deleted = []
         while 1:
-            await cursor.execute(f"FETCH ALL {cursor_name}")
-            async for (_, progressed, diff, *columns) in cursor:
+            await cursor.execute(f"FETCH ALL cur")
+            async for (timestamp, progressed, diff, *columns) in cursor:
                 # This row serves as a synchronization primitive indicating that all
                 # rows for an update have been read. We should publish this update.
                 if progressed:
-                    self.update(deleted, inserted)
+                    self.update(deleted, inserted, timestamp)
                     inserted = []
                     deleted = []
                     continue
@@ -133,13 +134,15 @@ class View:
                 else:
                     raise ValueError(f"Bad data from TAIL: {row.strip()}")
 
-    def update(self, deleted, inserted):
+    def update(self, deleted, inserted, timestamp):
         """Update our internal view based on this diff and broadcast the update to listeners.
 
         :Params:
             - `deleted`: The list of rows that need to be removed.
             - `inserted`: The list of rows that need to be added.
         """
+        self.current_timestamp = int(timestamp)
+
         # Remove any rows that have been deleted
         for r in deleted:
             self.current_rows.remove(r)
@@ -149,7 +152,7 @@ class View:
 
         # If we have listeners configured, broadcast this diff
         if self.listeners:
-            payload = {"deleted": deleted, "inserted": inserted}
+            payload = {"deleted": deleted, "inserted": inserted, "timestamp": int(timestamp)}
             self.broadcast(payload)
 
 
