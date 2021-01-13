@@ -34,7 +34,7 @@ services:
     ports:
       - *materialized
     init: true
-    command: -w 4
+    command: -w4 --disable-telemetry
 
   zookeeper:
     image: confluentinc/cp-zookeeper:5.3.0

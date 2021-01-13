@@ -38,7 +38,12 @@ services:
     depends_on: [kafka, zookeeper, schema-registry, materialized]
   materialized:
     mzbuild: materialized
-    command: --logging-granularity=10ms --data-directory=/share/mzdata -w1 --experimental --cache-max-pending-records 1
+    command: >-
+      --logging-granularity=10ms
+      --data-directory=/share/mzdata
+      -w1 --experimental
+      --cache-max-pending-records 1
+      --disable-telemetry
     environment:
     - MZ_DEV=1
     volumes:

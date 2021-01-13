@@ -24,7 +24,7 @@ services:
     ports:
       - *materialized
     init: true
-    command: -w4
+    command: -w4 --disable-telemetry
     volumes:
       - logfile:/log
 

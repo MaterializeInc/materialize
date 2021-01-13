@@ -64,6 +64,36 @@ _BASHLIKE_ENV_VAR_PATTERN = re.compile(
 )
 
 
+class LintError:
+    def __init__(self, file: Path, message: str):
+        self.file = file
+        self.message = message
+
+    def __str__(self) -> str:
+        return f"{self.file.relative_to(Path.cwd())}: {self.message}"
+
+    def __lt__(self, other: "LintError") -> bool:
+        return (self.file, self.message) < (other.file, other.message)
+
+
+def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
+    for (name, service) in composition["services"].items():
+        if service.get("mzbuild") == "materialized":
+            lint_materialized_service(path, service, errors)
+
+
+def lint_materialized_service(
+    path: Path, service: Any, errors: List[LintError]
+) -> None:
+    if "--disable-telemetry" not in service.get("command", "").split():
+        errors.append(
+            LintError(
+                path,
+                "materialized service command does not include --disable-telemetry",
+            )
+        )
+
+
 class Composition:
     """A parsed mzcompose.yml file."""
 
@@ -156,6 +186,20 @@ class Composition:
         yaml.dump(compose, tempfile, encoding="utf-8")  # type: ignore
         tempfile.flush()
         self.file = tempfile
+
+    @classmethod
+    def lint(cls, repo: mzbuild.Repository, name: str) -> List[LintError]:
+        """Checks a composition for common errors."""
+        if not name in repo.compositions:
+            raise errors.UnknownComposition
+
+        path = repo.compositions[name]
+        with open(path) as f:
+            composition = yaml.safe_load(f)
+
+        errors: List[LintError] = []
+        lint_composition(path, composition, errors)
+        return errors
 
     def run(
         self,

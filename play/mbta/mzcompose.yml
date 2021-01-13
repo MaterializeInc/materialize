@@ -15,6 +15,7 @@ version: '3.7'
 services:
   materialized:
     mzbuild: materialized
+    command: --disable-telemetry
     ports:
       - *materialized
     init: true
