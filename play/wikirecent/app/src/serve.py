@@ -51,7 +51,7 @@ class View:
             - `view_name`: The name of the materialized view to TAIL.
         """
         self.current_rows = []
-        self.current_timestamp = []
+        self.current_timestamp = None
         self.dsn = dsn
         self.listeners = set([])
         self.view_name = view_name
@@ -102,11 +102,11 @@ class View:
         log.info('Spawning coroutine to TAIL VIEW "%s"', self.view_name)
         async with await self.mzql_connection() as conn:
             async with await conn.cursor() as cursor:
-                query = f"COPY (TAIL {self.view_name} WITH (PROGRESS)) TO STDOUT"
-                async with cursor.copy(query) as tail:
-                    await self.tail_view_inner(tail)
+                query = f"DECLARE cur CURSOR FOR TAIL {self.view_name} WITH (PROGRESS)"
+                await cursor.execute(query)
+                await self.tail_view_inner(cursor)
 
-    async def tail_view_inner(self, tail):
+    async def tail_view_inner(self, cursor):
         """Read rows from TAIL, converting them to updates and broadcasting to listeners.
 
         :Params:
@@ -114,32 +114,25 @@ class View:
         """
         inserted = []
         deleted = []
-        async for row in tail:
-            row = row.decode("utf-8")
-            (timestamp, progressed, diff, *columns) = row.strip().split("\t")
+        while 1:
+            await cursor.execute(f"FETCH ALL cur")
+            async for (timestamp, progressed, diff, *columns) in cursor:
+                # This row serves as a synchronization primitive indicating that all
+                # rows for an update have been read. We should publish this update.
+                if progressed:
+                    self.update(deleted, inserted, timestamp)
+                    inserted = []
+                    deleted = []
+                    continue
 
-            # This row serves as a synchronization primitive indicating that all
-            # rows for an update have been read. We should publish this update.
-            if progressed == "t" and diff == "\\N":
-                self.update(deleted, inserted, timestamp)
-                inserted = []
-                deleted = []
-                continue
-
-            # This is a row that we should insert or delete "diff" number of times
-            try:
-                diff = int(diff)
-            except ValueError:
-                raise
-
-            # Simplify our implementation by creating "diff" copies of each row instead
-            # of tracking counts per row
-            if diff < 0:
-                deleted.extend([columns] * abs(diff))
-            elif diff > 0:
-                inserted.extend([columns] * diff)
-            else:
-                raise ValueError(f"Bad data from TAIL: {row.strip()}")
+                # Simplify our implementation by creating "diff" copies of each row instead
+                # of tracking counts per row
+                if diff < 0:
+                    deleted.extend([columns] * abs(diff))
+                elif diff > 0:
+                    inserted.extend([columns] * diff)
+                else:
+                    raise ValueError(f"Bad data from TAIL: {row.strip()}")
 
     def update(self, deleted, inserted, timestamp):
         """Update our internal view based on this diff and broadcast the update to listeners.
@@ -147,9 +140,8 @@ class View:
         :Params:
             - `deleted`: The list of rows that need to be removed.
             - `inserted`: The list of rows that need to be added.
-            - `timestamp`: The materialized timestamp for which this update is valid.
         """
-        self.current_timestamp = timestamp
+        self.current_timestamp = int(timestamp)
 
         # Remove any rows that have been deleted
         for r in deleted:
@@ -160,8 +152,11 @@ class View:
 
         # If we have listeners configured, broadcast this diff
         if self.listeners:
-            payload = {"deleted": deleted, "inserted": inserted, "timestamp": timestamp}
-
+            payload = {
+                "deleted": deleted,
+                "inserted": inserted,
+                "timestamp": int(timestamp),
+            }
             self.broadcast(payload)
 
 
