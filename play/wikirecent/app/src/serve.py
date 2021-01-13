@@ -152,7 +152,11 @@ class View:
 
         # If we have listeners configured, broadcast this diff
         if self.listeners:
-            payload = {"deleted": deleted, "inserted": inserted, "timestamp": int(timestamp)}
+            payload = {
+                "deleted": deleted,
+                "inserted": inserted,
+                "timestamp": int(timestamp),
+            }
             self.broadcast(payload)
 
 
