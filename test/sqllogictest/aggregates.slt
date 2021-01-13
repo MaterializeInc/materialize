@@ -96,6 +96,27 @@ name  nullable  type
  a    true      int4
  b    true      int4
 
+# Tests on int8 sums to make sure we handle overflow and underflow correctly
+
+statement ok
+CREATE TABLE t_bigint (a bigint, b bigint)
+
+statement ok
+INSERT INTO t_bigint (a, b) VALUES (1, 1), (1, 2), (2, 9223372036854775807), (2, 9223372036854775807), (3, -9223372036854775808), (3, -9223372036854775808)
+
+query II rowsort
+SELECT a, sum(b) FROM t_bigint GROUP BY a
+----
+1 3
+2 18446744073709551614
+3 -18446744073709551616
+
+query T colnames
+SELECT pg_typeof(sum(b)) FROM t_bigint
+----
+pg_typeof
+numeric(38,0)
+
 # avg on an integer column should return a decimal with the default decimal
 # division scale increase.
 
