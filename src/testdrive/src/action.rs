@@ -101,7 +101,7 @@ impl State {
             .pgclient
             .query("SHOW DATABASES", &[])
             .await
-            .err_ctx("resetting materialized state: SHOW DATABASES".into())?
+            .err_ctx("resetting materialized state: SHOW DATABASES")?
         {
             let db_name: String = row.get(0);
             let query = format!("DROP DATABASE {}", db_name);
@@ -114,32 +114,28 @@ impl State {
         self.pgclient
             .batch_execute("CREATE DATABASE materialize")
             .await
-            .err_ctx("resetting materialized state: CREATE DATABASE materialize".into())?;
+            .err_ctx("resetting materialized state: CREATE DATABASE materialize")?;
         Ok(())
     }
 
-    // Delete the Kinesis streams created for this run of testdrive.
+    /// Delete the Kinesis streams created for this run of testdrive.
     pub async fn reset_kinesis(&mut self) -> Result<(), Error> {
-        if !self.kinesis_stream_names.is_empty() {
-            println!(
-                "Deleting Kinesis streams {}",
-                self.kinesis_stream_names.join(", ")
-            );
-            for stream_name in &self.kinesis_stream_names {
-                self.kinesis_client
-                    .delete_stream(DeleteStreamInput {
-                        enforce_consumer_deletion: Some(true),
-                        stream_name: stream_name.clone(),
-                    })
-                    .await
-                    .map_err(|e| Error::General {
-                        ctx: format!("deleting Kinesis stream: {}", stream_name),
-                        cause: Some(e.into()),
-                        hints: vec![],
-                    })?;
-            }
+        if self.kinesis_stream_names.is_empty() {
+            return Ok(());
         }
-
+        println!(
+            "Deleting Kinesis streams {}",
+            self.kinesis_stream_names.join(", ")
+        );
+        for stream_name in &self.kinesis_stream_names {
+            self.kinesis_client
+                .delete_stream(DeleteStreamInput {
+                    enforce_consumer_deletion: Some(true),
+                    stream_name: stream_name.clone(),
+                })
+                .await
+                .err_ctx(format!("deleting Kinesis stream: {}", stream_name))?;
+        }
         Ok(())
     }
 }
@@ -208,8 +204,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         });
         vars.insert("testdrive.protobuf-descriptors-file".into(), {
             let path = state.temp_dir.path().join("protobuf-descriptors");
-            fs::write(&path, &protobuf_descriptors)
-                .err_ctx("writing protobuf descriptors file".into())?;
+            fs::write(&path, &protobuf_descriptors).err_ctx("writing protobuf descriptors file")?;
             path.display().to_string()
         });
     }
@@ -364,25 +359,17 @@ pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), Error>>), Error> {
     let seed = rand::thread_rng().gen();
-    let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory".into())?;
+    let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory")?;
 
     let materialized_catalog_path = if let Some(path) = &config.materialized_catalog_path {
         match fs::metadata(&path) {
             Ok(m) if !m.is_file() => {
-                return Err(Error::General {
-                    ctx: "materialized catalog path is not a regular file".into(),
-                    cause: None,
-                    hints: vec![],
-                })
+                return Err(Error::message(
+                    "materialized catalog path is not a regular file",
+                ))
             }
             Ok(_) => Some(path.to_path_buf()),
-            Err(e) => {
-                return Err(Error::General {
-                    ctx: "opening materialized catalog path".into(),
-                    cause: Some(Box::new(e)),
-                    hints: vec![format!("is {} accessible to testdrive?", path.display())],
-                })
-            }
+            Err(e) => return Err(e).err_ctx("opening materialized catalog path"),
         }
     } else {
         None
@@ -394,21 +381,16 @@ pub async fn create_state(
             .materialized_pgconfig
             .connect(tokio_postgres::NoTls)
             .await
-            .map_err(|e| Error::General {
-                ctx: "opening SQL connection".into(),
-                cause: Some(Box::new(e)),
-                hints: vec![
+            .err_hint(
+                "opening SQL connection",
+                &[
                     format!("connection string: {}", materialized_url),
                     "are you running the materialized server?".into(),
                 ],
-            })?;
+            )?;
         let pgconn_task = tokio::spawn(pgconn).map(|join| {
             join.expect("pgconn_task unexpectedly canceled")
-                .map_err(|e| Error::General {
-                    ctx: "running SQL connection".into(),
-                    cause: Some(Box::new(e)),
-                    hints: vec![],
-                })
+                .err_ctx("running SQL connection")
         });
         let materialized_addr = format!(
             "{}:{}",
@@ -424,18 +406,13 @@ pub async fn create_state(
         let mut ccsr_config = ccsr::ClientConfig::new(schema_registry_url.clone());
 
         if let Some(cert_path) = &config.cert_path {
-            let cert = fs::read(cert_path).map_err(|e| Error::General {
-                ctx: "reading cert".into(),
-                cause: Some(Box::new(e)),
-                hints: vec![format!("is {} readable?", cert_path)],
-            })?;
+            let cert = fs::read(cert_path)
+                .err_hint("reading cert", &[format!("is {} readable?", cert_path)])?;
             let pass = config.cert_pass.as_deref().unwrap_or("").to_owned();
-            let ident =
-                ccsr::tls::Identity::from_pkcs12_der(cert, pass).map_err(|e| Error::General {
-                    ctx: "reading keystore file as pkcs12".into(),
-                    cause: Some(Box::new(e)),
-                    hints: vec![format!("is {} a valid pkcs12 file?", cert_path)],
-                })?;
+            let ident = ccsr::tls::Identity::from_pkcs12_der(cert, pass).err_hint(
+                "reading keystore file as pkcs12",
+                &[format!("is {} a valid pkcs12 file?", cert_path)],
+            )?;
             ccsr_config = ccsr_config.identity(ident);
         }
 
@@ -462,20 +439,17 @@ pub async fn create_state(
             kafka_config.set(key, value);
         }
 
-        let admin: AdminClient<DefaultClientContext> =
-            kafka_config.create().map_err(|e| Error::General {
-                ctx: "opening Kafka connection".into(),
-                cause: Some(Box::new(e)),
-                hints: vec![format!("connection string: {}", config.kafka_addr)],
-            })?;
+        let admin: AdminClient<DefaultClientContext> = kafka_config.create().err_hint(
+            "opening Kafka connection",
+            &[format!("connection string: {}", config.kafka_addr)],
+        )?;
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
 
-        let producer: FutureProducer = kafka_config.create().map_err(|e| Error::General {
-            ctx: "opening Kafka producer connection".into(),
-            cause: Some(Box::new(e)),
-            hints: vec![format!("connection string: {}", config.kafka_addr)],
-        })?;
+        let producer: FutureProducer = kafka_config.create().err_hint(
+            "opening Kafka producer connection",
+            &[format!("connection string: {}", config.kafka_addr)],
+        )?;
 
         let topics = HashMap::new();
 
@@ -489,30 +463,18 @@ pub async fn create_state(
         )
     };
 
-    let (aws_region, aws_account, aws_credentials, kinesis_client, kinesis_stream_names) = {
-        let kinesis_client = aws_util::kinesis::client(
-            aws::ConnectInfo::new(
-                config.aws_region.clone(),
-                Some(config.aws_credentials.aws_access_key_id().to_owned()),
-                Some(config.aws_credentials.aws_secret_access_key().to_owned()),
-                config.aws_credentials.token().clone(),
-            )
-            .unwrap(),
-        )
-        .await
-        .map_err(|e| Error::General {
-            ctx: "creating Kinesis client".into(),
-            cause: Some(e.into()),
-            hints: vec![format!("region: {}", config.aws_region.name())],
-        })?;
-        (
-            config.aws_region.clone(),
-            config.aws_account.clone(),
-            config.aws_credentials.clone(),
-            kinesis_client,
-            Vec::new(),
-        )
-    };
+    let aws_info = aws::ConnectInfo::new(
+        config.aws_region.clone(),
+        Some(config.aws_credentials.aws_access_key_id().to_owned()),
+        Some(config.aws_credentials.aws_secret_access_key().to_owned()),
+        config.aws_credentials.token().clone(),
+    )
+    .expect("both parts of AWS Credentials are present");
+
+    let kinesis_client = aws_util::kinesis::client(aws_info.clone()).await.err_hint(
+        "creating Kinesis client",
+        &[format!("region: {}", aws_info.region.name())],
+    )?;
 
     let state = State {
         seed,
@@ -528,11 +490,11 @@ pub async fn create_state(
         kafka_config,
         kafka_producer,
         kafka_topics,
-        aws_region,
-        aws_account,
-        aws_credentials,
+        aws_region: config.aws_region.clone(),
+        aws_account: config.aws_account.clone(),
+        aws_credentials: config.aws_credentials.clone(),
         kinesis_client,
-        kinesis_stream_names,
+        kinesis_stream_names: Vec::new(),
     };
     Ok((state, pgconn_task))
 }

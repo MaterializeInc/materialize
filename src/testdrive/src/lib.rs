@@ -14,7 +14,7 @@
 use std::fs::File;
 use std::io::{self, Read};
 
-use self::error::{InputError, ResultExt};
+use self::error::InputError;
 use self::parser::LineReader;
 
 mod action;
@@ -24,7 +24,7 @@ mod parser;
 mod util;
 
 pub use self::action::Config;
-pub use self::error::Error;
+pub use self::error::{Error, ResultExt};
 
 /// Runs a testdrive script stored in a file.
 pub async fn run_file(config: &Config, filename: &str) -> Result<(), Error> {
@@ -40,7 +40,7 @@ pub async fn run_stdin(config: &Config) -> Result<(), Error> {
     let mut contents = String::new();
     io::stdin()
         .read_to_string(&mut contents)
-        .err_ctx("reading <stdin>".into())?;
+        .err_ctx("reading <stdin>")?;
     run_string(config, "<stdin>", &contents).await
 }
 
