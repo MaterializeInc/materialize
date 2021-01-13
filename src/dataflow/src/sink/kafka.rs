@@ -143,9 +143,35 @@ struct KafkaSink {
     encoder: Encoder,
     producer: ThreadedProducer<SinkProducerContext>,
     activator: timely::scheduling::Activator,
+    txn_timeout: Duration,
 }
 
 impl KafkaSink {
+    fn transition_on_txn_error(
+        &self,
+        current_state: SendState,
+        ts: u64,
+        e: KafkaError,
+    ) -> SendState {
+        error!(
+            "encountered error during kafka interaction. {} in state {:?} at time {} : {}",
+            &self.name, current_state, ts, e
+        );
+
+        match e {
+            KafkaError::Transaction(e) => {
+                if e.txn_requires_abort() {
+                    SendState::AbortTxn
+                } else if e.is_retriable() {
+                    current_state
+                } else {
+                    SendState::Shutdown
+                }
+            }
+            _ => SendState::Shutdown,
+        }
+    }
+
     fn send(&self, record: BaseRecord<Vec<u8>, Vec<u8>>) -> Result<(), bool> {
         if let Err((e, _)) = self.producer.send(record) {
             error!("unable to produce message in {}: {}", self.name, e);
@@ -166,10 +192,17 @@ impl KafkaSink {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
 enum SendState {
-    // State to write BEGIN consistency record
+    // Initialize ourselves as a transactional producer with Kafka
+    // Note that this only runs once across all workers - it should only execute
+    // for the worker that will actually be publishing to kafka
+    Init,
+    // Corresponds to a Kafka begin_transaction call
+    BeginTxn,
+    // Write BEGIN consistency record
     Begin,
-    // State to flush pending rows for closed timestamps
+    // Flush pending rows for closed timestamps
     Draining {
         // row_index points to the current flushing row within the closed timestamp
         // we're processing
@@ -179,8 +212,14 @@ enum SendState {
         // a count of all rows sent, accounting for the repeat counter
         total_sent: i64,
     },
-    // State to write END consistency record
+    // Write END consistency record
     End(i64),
+    // Corresponds to a Kafka commit_transaction call
+    CommitTxn,
+    // Transitioned to when an error in a previous transactional state requires an abort
+    AbortTxn,
+    // Transitioned to when the sink needs to be closed
+    Shutdown,
 }
 
 #[derive(Debug)]
@@ -226,6 +265,9 @@ where
         config.set(k, v);
     }
 
+    // TODO(eli): replace with https://github.com/fede1024/rust-rdkafka/pull/333
+    let transactional = connector.config_options.contains_key("transactional.id");
+
     let name = format!("kafka-{}", id);
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let mut builder = OperatorBuilder::new(name.clone(), stream.scope());
@@ -261,12 +303,13 @@ where
             encoder,
             producer,
             activator,
+            txn_timeout: Duration::from_secs(5),
         }
     };
 
     let mut pending_rows: HashMap<Timestamp, Vec<EncodedRow>> = HashMap::new();
     let mut ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)> = VecDeque::new();
-    let mut state = SendState::Begin;
+    let mut state = SendState::Init;
     let mut vector = Vec::new();
 
     let mut sink_logic = move |input: &mut FrontieredInputHandle<_, (Row, Timestamp, Diff), _>| {
@@ -351,6 +394,30 @@ where
         for _ in 0..connector.fuel {
             if let Some((ts, rows)) = ready_rows.front() {
                 state = match state {
+                    SendState::Init => {
+                        let result = if transactional {
+                            s.producer.init_transactions(s.txn_timeout)
+                        } else {
+                            Ok(())
+                        };
+
+                        match result {
+                            Ok(()) => SendState::BeginTxn,
+                            Err(e) => s.transition_on_txn_error(state, *ts, e),
+                        }
+                    }
+                    SendState::BeginTxn => {
+                        let result = if transactional {
+                            s.producer.begin_transaction()
+                        } else {
+                            Ok(())
+                        };
+
+                        match result {
+                            Ok(()) => SendState::Begin,
+                            Err(e) => s.transition_on_txn_error(state, *ts, e),
+                        }
+                    }
                     SendState::Begin => {
                         if let Some(consistency) = &connector.consistency {
                             let encoded = avro::encode_debezium_transaction_unchecked(
@@ -422,8 +489,38 @@ where
                                 return retry;
                             }
                         }
-                        ready_rows.pop_front();
-                        SendState::Begin
+                        SendState::CommitTxn
+                    }
+                    SendState::CommitTxn => {
+                        let result = if transactional {
+                            s.producer.commit_transaction(s.txn_timeout)
+                        } else {
+                            Ok(())
+                        };
+
+                        match result {
+                            Ok(()) => {
+                                ready_rows.pop_front();
+                                SendState::BeginTxn
+                            }
+                            Err(e) => s.transition_on_txn_error(state, *ts, e),
+                        }
+                    }
+                    SendState::AbortTxn => {
+                        let result = if transactional {
+                            s.producer.abort_transaction(s.txn_timeout)
+                        } else {
+                            Ok(())
+                        };
+
+                        match result {
+                            Ok(()) => SendState::BeginTxn,
+                            Err(e) => s.transition_on_txn_error(state, *ts, e),
+                        }
+                    }
+                    SendState::Shutdown => {
+                        s.shutdown_flag.store(false, Ordering::SeqCst);
+                        break;
                     }
                 }
             } else {
