@@ -66,3 +66,72 @@ SELECT * FROM t
 
 statement ok
 ROLLBACK
+
+# Multiple INSERTs not allowed.
+simple
+INSERT INTO t VALUES (2);
+INSERT INTO t VALUES (3);
+----
+db error: ERROR: INSERT INTO t VALUES (2) cannot be run inside a transaction block
+
+# INSERT in explicit transactions not allowed.
+statement ok
+BEGIN
+
+simple
+INSERT INTO t VALUES (4);
+----
+db error: ERROR: INSERT INTO t VALUES (4) cannot be run inside a transaction block
+
+statement ok
+ROLLBACK
+
+# INSERT rolled up from implicit txn into explicit is not allowed.
+simple
+INSERT INTO t VALUES (5);
+BEGIN;
+SELECT 1;
+----
+db error: ERROR: INSERT INTO t VALUES (5) cannot be run inside a transaction block
+
+statement ok
+ROLLBACK
+
+# INSERT not allowed in explicit transactions.
+simple
+BEGIN; INSERT INTO t VALUES (6);
+----
+db error: ERROR: INSERT INTO t VALUES (6) cannot be run inside a transaction block
+
+statement ok
+ROLLBACK
+
+simple
+INSERT INTO t VALUES (7), (8)
+----
+COMPLETE 2
+
+# Verify contents of table at the end.
+query I
+SELECT * FROM t ORDER BY a
+----
+1
+7
+8
+
+# The only thing we support multiple of in an implicit transaction
+# (multiple statements in the same query string) is row-returning
+# statements.
+simple
+CREATE TABLE u (i INT); SELECT 1;
+----
+db error: ERROR: CREATE TABLE u (i int4) cannot be run inside a transaction block
+
+# Multiple reads in the same query string are ok.
+simple
+SELECT 1; SELECT 2
+----
+1
+COMPLETE 1
+2
+COMPLETE 1

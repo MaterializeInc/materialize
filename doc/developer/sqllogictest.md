@@ -71,6 +71,17 @@ and declare the test as passing.
 
 ## Materialize-specific behavior in sqllogictest
 
+### `simple` extension
+
+In addition to `statement` and `query`, we have added our own directive
+`simple`. It is followed by multiple lines until `----` and executes
+these lines as a simple query over pgwire. This is needed because the
+other directives use the extended protocol, and we needed a way to test
+multi-statement queries and implicit transactions.
+
+The output is one line per row, one "COMPLETE X" (where X is the
+number of affected rows) per statement, or an error message.
+
 ### modes
 
 We have extended sqllogictest to have the concept of the "mode." There are two
