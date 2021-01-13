@@ -753,6 +753,7 @@ pub fn plan_create_view(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
     format: Option<Format>,
     with_options: &mut BTreeMap<String, Value>,
