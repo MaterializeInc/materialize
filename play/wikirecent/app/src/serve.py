@@ -28,12 +28,14 @@ This file is written in a bottom-up structure. The code flows as follows:
 """
 
 import collections
+import decimal
 import logging
 import os
 import pprint
 import sys
 
 import psycopg3
+import psycopg3.oids
 import tornado.ioloop
 import tornado.platform.asyncio
 import tornado.web
@@ -41,9 +43,18 @@ import tornado.websocket
 
 log = logging.getLogger("wikipedia_live.main")
 
+# Every TAIL operation yields the following objects
+TAIL_OIDS = [
+    psycopg3.oids.builtins[
+        "numeric"
+    ].oid,  # timestamp, currently does not load correctly
+    psycopg3.oids.builtins["bool"].oid,  # progressed
+    psycopg3.oids.builtins["int8"].oid,  # diff
+]
+
 
 class View:
-    def __init__(self, dsn, view_name):
+    def __init__(self, dsn, view_name, oids):
         """Create a View object.
 
         :Params:
@@ -51,20 +62,17 @@ class View:
             - `view_name`: The name of the materialized view to TAIL.
         """
         self.current_rows = []
-        self.current_timestamp = []
         self.dsn = dsn
         self.listeners = set([])
         self.view_name = view_name
+
+        self.oids = TAIL_OIDS + oids
 
     def add_listener(self, conn):
         """Insert this connection into the list that will be notified on new messages."""
         # Write the latest view state to catch this listener up to the current state of the world
         conn.write_message(
-            {
-                "deleted": [],
-                "inserted": self.current_rows,
-                "timestamp": self.current_timestamp,
-            }
+            {"deleted": [], "inserted": self.current_rows,}
         )
         self.listeners.add(conn)
 
@@ -102,8 +110,9 @@ class View:
         log.info('Spawning coroutine to TAIL VIEW "%s"', self.view_name)
         async with await self.mzql_connection() as conn:
             async with await conn.cursor() as cursor:
-                query = f"COPY (TAIL {self.view_name} WITH (PROGRESS)) TO STDOUT"
+                query = f"COPY (TAIL {self.view_name} WITH (PROGRESS)) TO STDOUT WITH(FORMAT binary)"
                 async with cursor.copy(query) as tail:
+                    tail.set_types(self.oids)
                     await self.tail_view_inner(tail)
 
     async def tail_view_inner(self, tail):
@@ -114,23 +123,16 @@ class View:
         """
         inserted = []
         deleted = []
-        async for row in tail:
-            row = row.decode("utf-8")
-            (timestamp, progressed, diff, *columns) = row.strip().split("\t")
+        async for row in tail.rows():
+            (_, progressed, diff, *columns) = row
 
             # This row serves as a synchronization primitive indicating that all
             # rows for an update have been read. We should publish this update.
-            if progressed == "t" and diff == "\\N":
-                self.update(deleted, inserted, timestamp)
+            if progressed:
+                self.update(deleted, inserted)
                 inserted = []
                 deleted = []
                 continue
-
-            # This is a row that we should insert or delete "diff" number of times
-            try:
-                diff = int(diff)
-            except ValueError:
-                raise
 
             # Simplify our implementation by creating "diff" copies of each row instead
             # of tracking counts per row
@@ -141,15 +143,13 @@ class View:
             else:
                 raise ValueError(f"Bad data from TAIL: {row.strip()}")
 
-    def update(self, deleted, inserted, timestamp):
+    def update(self, deleted, inserted):
         """Update our internal view based on this diff and broadcast the update to listeners.
 
         :Params:
             - `deleted`: The list of rows that need to be removed.
             - `inserted`: The list of rows that need to be added.
-            - `timestamp`: The materialized timestamp for which this update is valid.
         """
-        self.current_timestamp = timestamp
 
         # Remove any rows that have been deleted
         for r in deleted:
@@ -160,8 +160,7 @@ class View:
 
         # If we have listeners configured, broadcast this diff
         if self.listeners:
-            payload = {"deleted": deleted, "inserted": inserted, "timestamp": timestamp}
-
+            payload = {"deleted": deleted, "inserted": inserted}
             self.broadcast(payload)
 
 
@@ -205,7 +204,9 @@ class Application(tornado.web.Application):
             - `dsn`: A postgres connection string for our materialized instance.
         """
         super().__init__(*args, **kwargs)
-        self.views = {view: View(dsn, view) for view in configured_views}
+        self.views = {
+            view: View(dsn, view, oids) for view, oids in configured_views.items()
+        }
 
     def tail_views(self, ioloop):
         """Kick-off background coroutines to TAIL views and broadcast updates to Listeners."""
@@ -235,6 +236,14 @@ def run():
         tornado.web.url(r"/api/v1/stream/(.*)", StreamHandler, name="api/stream"),
     ]
 
+    views = {
+        "counter": [psycopg3.oids.builtins["int8"].oid],
+        "top10": [
+            psycopg3.oids.builtins["text"].oid,
+            psycopg3.oids.builtins["int8"].oid,
+        ],
+    }
+
     base_dir = os.path.dirname(__file__)
     static_path = os.path.join(base_dir, "static")
     template_path = os.path.join(base_dir, "templates")
@@ -244,8 +253,8 @@ def run():
         static_path=static_path,
         template_path=template_path,
         debug=True,
-        configured_views=["counter", "top10"],
-        dsn="postgresql://materialized:6875/materialize",
+        configured_views=views,
+        dsn="postgresql://localhost:49160/materialize",
     )
 
     port = 8875
