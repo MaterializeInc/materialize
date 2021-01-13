@@ -87,24 +87,30 @@ mod dataflow_builder;
 pub enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
-    AdvanceSourceTimestamp {
-        id: SourceInstanceId,
-        update: TimestampSourceUpdate,
-    },
-    StatementReady {
-        session: Session,
-        tx: ClientTransmitter<ExecuteResponse>,
-        result: Result<sql::ast::Statement, anyhow::Error>,
-        params: Params,
-    },
-    SinkConnectorReady {
-        session: Session,
-        tx: ClientTransmitter<ExecuteResponse>,
-        id: GlobalId,
-        oid: u32,
-        result: Result<SinkConnector, anyhow::Error>,
-    },
+    AdvanceSourceTimestamp(AdvanceSourceTimestamp),
+    StatementReady(StatementReady),
+    SinkConnectorReady(SinkConnectorReady),
     Shutdown,
+}
+
+pub struct AdvanceSourceTimestamp {
+    pub id: SourceInstanceId,
+    pub update: TimestampSourceUpdate,
+}
+
+pub struct StatementReady {
+    pub session: Session,
+    pub tx: ClientTransmitter<ExecuteResponse>,
+    pub result: Result<sql::ast::Statement, anyhow::Error>,
+    pub params: Params,
+}
+
+pub struct SinkConnectorReady {
+    pub session: Session,
+    pub tx: ClientTransmitter<ExecuteResponse>,
+    pub id: GlobalId,
+    pub oid: u32,
+    pub result: Result<SinkConnector, anyhow::Error>,
 }
 
 #[derive(Clone, Debug)]
@@ -385,242 +391,19 @@ where
 
         while let Some(msg) = messages.next().await {
             match msg {
-                Message::Command(Command::Startup { session, tx }) => {
-                    let mut messages = vec![];
-                    let catalog = self.catalog.for_session(&session);
-                    if catalog
-                        .resolve_database(catalog.default_database())
-                        .is_err()
-                    {
-                        messages.push(StartupMessage::UnknownSessionDatabase);
-                    }
-                    if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
-                        let _ = tx.send(Response {
-                            result: Err(anyhow::Error::from(e)),
-                            session,
-                        });
-                        return;
-                    }
-                    ClientTransmitter::new(tx).send(Ok(messages), session)
+                Message::Command(cmd) => self.message_command(cmd, &internal_cmd_tx).await,
+                Message::Worker(worker) => self.message_worker(worker, &ts_tx).await,
+                Message::StatementReady(ready) => {
+                    self.message_statement_ready(ready, &internal_cmd_tx).await
                 }
-                Message::Command(Command::Execute {
-                    portal_name,
-                    session,
-                    tx,
-                }) => {
-                    let result = session.get_portal(&portal_name).ok_or_else(|| {
-                        anyhow::format_err!("portal does not exist {:?}", portal_name)
-                    });
-                    let portal = match result {
-                        Ok(portal) => portal,
-                        Err(e) => {
-                            let _ = tx.send(Response {
-                                result: Err(e),
-                                session,
-                            });
-                            return;
-                        }
-                    };
-                    match &portal.stmt {
-                        Some(stmt) => {
-                            let mut internal_cmd_tx = internal_cmd_tx.clone();
-                            let stmt = stmt.clone();
-                            let params = portal.parameters.clone();
-                            tokio::spawn(async move {
-                                let result = sql::pure::purify(stmt).await;
-                                internal_cmd_tx
-                                    .send(Message::StatementReady {
-                                        session,
-                                        tx: ClientTransmitter::new(tx),
-                                        result,
-                                        params,
-                                    })
-                                    .await
-                                    .expect("sending to internal_cmd_tx cannot fail");
-                            });
-                        }
-                        None => {
-                            let _ = tx.send(Response {
-                                result: Ok(ExecuteResponse::EmptyQuery),
-                                session,
-                            });
-                        }
-                    }
+                Message::SinkConnectorReady(ready) => {
+                    self.message_sink_connector_ready(ready).await
                 }
-
-                // NoSessionExecute is designed to support a limited set of queries that
-                // run as the system user and are not associated with a user session. Due to
-                // that limitation, they do not support all plans (some of which require side
-                // effects in the session).
-                Message::Command(Command::NoSessionExecute { stmt, params, tx }) => {
-                    let res = async {
-                        let stmt = sql::pure::purify(stmt).await?;
-                        let catalog = self.catalog.for_system_session();
-                        let desc = describe(&catalog, stmt.clone(), &[], None)?;
-                        let pcx = PlanContext::default();
-                        let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
-                        // At time of writing this comment, Peeks use the connection id only for
-                        // logging, so it is safe to reuse the system id, which is the conn_id from
-                        // for_system_session().
-                        let conn_id = catalog.conn_id();
-                        let response = match plan {
-                            Plan::Peek {
-                                source,
-                                when,
-                                finishing,
-                                copy_to,
-                            } => {
-                                self.sequence_peek(conn_id, source, when, finishing, copy_to)
-                                    .await?
-                            }
-
-                            Plan::SendRows(rows) => send_immediate_rows(rows),
-
-                            _ => bail!("unsupported plan"),
-                        };
-                        Ok(NoSessionExecuteResponse {
-                            desc: desc.relation_desc,
-                            response,
-                        })
-                    }
-                    .await;
-                    let _ = tx.send(res);
-                }
-
-                Message::StatementReady {
-                    session,
-                    tx,
-                    result,
-                    params,
-                } => match future::ready(result)
-                    .and_then(|stmt| self.handle_statement(&session, stmt, &params))
-                    .await
-                {
-                    Ok((pcx, plan)) => {
-                        self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
-                            .await
-                    }
-                    Err(e) => tx.send(Err(e), session),
-                },
-
-                Message::SinkConnectorReady {
-                    session,
-                    tx,
-                    id,
-                    oid,
-                    result,
-                } => match result {
-                    Ok(connector) => {
-                        // NOTE: we must not fail from here on out. We have a
-                        // connector, which means there is external state (like
-                        // a Kafka topic) that's been created on our behalf. If
-                        // we fail now, we'll leak that external state.
-                        if self.catalog.try_get_by_id(id).is_some() {
-                            self.handle_sink_connector_ready(id, oid, connector).await;
-                        } else {
-                            // Another session dropped the sink while we were
-                            // creating the connector. Report to the client that
-                            // we created the sink, because from their
-                            // perspective we did, as there is state (e.g. a
-                            // Kafka topic) they need to clean up.
-                        }
-                        tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
-                    }
-                    Err(e) => {
-                        self.catalog_transact(vec![catalog::Op::DropItem(id)])
-                            .await
-                            .expect("deleting placeholder sink cannot fail");
-                        tx.send(Err(e), session);
-                    }
-                },
-
-                Message::Command(Command::Declare {
-                    name,
-                    stmt,
-                    param_types,
-                    mut session,
-                    tx,
-                }) => {
-                    let result = self.handle_declare(&mut session, name, stmt, param_types);
-                    let _ = tx.send(Response { result, session });
-                }
-
-                Message::Command(Command::Describe {
-                    name,
-                    stmt,
-                    param_types,
-                    mut session,
-                    tx,
-                }) => {
-                    let result = self.handle_describe(&mut session, name, stmt, param_types);
-                    let _ = tx.send(Response { result, session });
-                }
-
-                Message::Command(Command::CancelRequest { conn_id }) => {
-                    self.handle_cancel(conn_id).await;
-                }
-
-                Message::Command(Command::DumpCatalog { tx }) => {
-                    let _ = tx.send(self.catalog.dump());
-                }
-
-                Message::Command(Command::Terminate { mut session }) => {
-                    self.handle_terminate(&mut session).await;
-                }
-
-                Message::Worker(WorkerFeedbackWithMeta {
-                    worker_id: _,
-                    message: WorkerFeedback::FrontierUppers(updates),
-                }) => {
-                    for (name, changes) in updates {
-                        self.update_upper(&name, changes);
-                    }
-                    self.maintenance().await;
-                }
-
-                Message::Worker(WorkerFeedbackWithMeta {
-                    worker_id: _,
-                    message: WorkerFeedback::DroppedSource(source_id),
-                }) => {
-                    // Notify timestamping thread that source has been dropped
-                    ts_tx
-                        .send(TimestampMessage::DropInstance(source_id))
-                        .expect("Failed to send Drop Instance notice to timestamper");
-                }
-                Message::Worker(WorkerFeedbackWithMeta {
-                    worker_id: _,
-                    message: WorkerFeedback::CreateSource(src_instance_id),
-                }) => {
-                    if let Some(entry) = self.catalog.try_get_by_id(src_instance_id.source_id) {
-                        if let CatalogItem::Source(s) = entry.item() {
-                            ts_tx
-                                .send(TimestampMessage::Add(src_instance_id, s.connector.clone()))
-                                .expect("Failed to send CREATE Instance notice to timestamper");
-                        } else {
-                            panic!("A non-source is re-using the same source ID");
-                        }
-                    } else {
-                        // Someone already dropped the source
-                    }
-                }
-
-                Message::AdvanceSourceTimestamp { id, update } => {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::AdvanceSourceTimestamp { id, update },
-                    )
-                    .await;
+                Message::AdvanceSourceTimestamp(advance) => {
+                    self.message_advance_source_timestamp(advance).await
                 }
                 Message::Shutdown => {
-                    ts_tx.send(TimestampMessage::Shutdown).unwrap();
-
-                    if let Some(cache_tx) = &mut self.cache_tx {
-                        cache_tx
-                            .send(CacheMessage::Shutdown)
-                            .await
-                            .expect("failed to send shutdown message to caching thread");
-                    }
-                    broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown).await;
+                    self.message_shutdown(&ts_tx).await;
                     break;
                 }
             }
@@ -655,6 +438,269 @@ where
         // down.
         drop(internal_cmd_tx);
         while messages.next().await.is_some() {}
+    }
+
+    async fn message_worker(
+        &mut self,
+        WorkerFeedbackWithMeta {
+            worker_id: _,
+            message,
+        }: WorkerFeedbackWithMeta,
+        ts_tx: &std::sync::mpsc::Sender<TimestampMessage>,
+    ) {
+        match message {
+            WorkerFeedback::FrontierUppers(updates) => {
+                for (name, changes) in updates {
+                    self.update_upper(&name, changes);
+                }
+                self.maintenance().await;
+            }
+            WorkerFeedback::DroppedSource(source_id) => {
+                // Notify timestamping thread that source has been dropped
+                ts_tx
+                    .send(TimestampMessage::DropInstance(source_id))
+                    .expect("Failed to send Drop Instance notice to timestamper");
+            }
+            WorkerFeedback::CreateSource(src_instance_id) => {
+                if let Some(entry) = self.catalog.try_get_by_id(src_instance_id.source_id) {
+                    if let CatalogItem::Source(s) = entry.item() {
+                        ts_tx
+                            .send(TimestampMessage::Add(src_instance_id, s.connector.clone()))
+                            .expect("Failed to send CREATE Instance notice to timestamper");
+                    } else {
+                        panic!("A non-source is re-using the same source ID");
+                    }
+                } else {
+                    // Someone already dropped the source
+                }
+            }
+        }
+    }
+
+    async fn message_statement_ready(
+        &mut self,
+        StatementReady {
+            session,
+            tx,
+            result,
+            params,
+        }: StatementReady,
+        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+    ) {
+        match future::ready(result)
+            .and_then(|stmt| self.handle_statement(&session, stmt, &params))
+            .await
+        {
+            Ok((pcx, plan)) => {
+                self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
+                    .await
+            }
+            Err(e) => tx.send(Err(e), session),
+        }
+    }
+
+    async fn message_sink_connector_ready(
+        &mut self,
+        SinkConnectorReady {
+            session,
+            tx,
+            id,
+            oid,
+            result,
+        }: SinkConnectorReady,
+    ) {
+        match result {
+            Ok(connector) => {
+                // NOTE: we must not fail from here on out. We have a
+                // connector, which means there is external state (like
+                // a Kafka topic) that's been created on our behalf. If
+                // we fail now, we'll leak that external state.
+                if self.catalog.try_get_by_id(id).is_some() {
+                    self.handle_sink_connector_ready(id, oid, connector).await;
+                } else {
+                    // Another session dropped the sink while we were
+                    // creating the connector. Report to the client that
+                    // we created the sink, because from their
+                    // perspective we did, as there is state (e.g. a
+                    // Kafka topic) they need to clean up.
+                }
+                tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
+            }
+            Err(e) => {
+                self.catalog_transact(vec![catalog::Op::DropItem(id)])
+                    .await
+                    .expect("deleting placeholder sink cannot fail");
+                tx.send(Err(e), session);
+            }
+        }
+    }
+
+    async fn message_shutdown(&mut self, ts_tx: &std::sync::mpsc::Sender<TimestampMessage>) {
+        ts_tx.send(TimestampMessage::Shutdown).unwrap();
+
+        if let Some(cache_tx) = &mut self.cache_tx {
+            cache_tx
+                .send(CacheMessage::Shutdown)
+                .await
+                .expect("failed to send shutdown message to caching thread");
+        }
+        broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown).await;
+    }
+
+    async fn message_advance_source_timestamp(
+        &mut self,
+        AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
+    ) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::AdvanceSourceTimestamp { id, update },
+        )
+        .await;
+    }
+
+    async fn message_command(
+        &mut self,
+        cmd: Command,
+        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+    ) {
+        match cmd {
+            Command::Startup { session, tx } => {
+                let mut messages = vec![];
+                let catalog = self.catalog.for_session(&session);
+                if catalog
+                    .resolve_database(catalog.default_database())
+                    .is_err()
+                {
+                    messages.push(StartupMessage::UnknownSessionDatabase);
+                }
+                if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+                    let _ = tx.send(Response {
+                        result: Err(anyhow::Error::from(e)),
+                        session,
+                    });
+                    return;
+                }
+                ClientTransmitter::new(tx).send(Ok(messages), session)
+            }
+
+            Command::Execute {
+                portal_name,
+                session,
+                tx,
+            } => {
+                let result = session
+                    .get_portal(&portal_name)
+                    .ok_or_else(|| anyhow::format_err!("portal does not exist {:?}", portal_name));
+                let portal = match result {
+                    Ok(portal) => portal,
+                    Err(e) => {
+                        let _ = tx.send(Response {
+                            result: Err(e),
+                            session,
+                        });
+                        return;
+                    }
+                };
+                match &portal.stmt {
+                    Some(stmt) => {
+                        let mut internal_cmd_tx = internal_cmd_tx.clone();
+                        let stmt = stmt.clone();
+                        let params = portal.parameters.clone();
+                        tokio::spawn(async move {
+                            let result = sql::pure::purify(stmt).await;
+                            internal_cmd_tx
+                                .send(Message::StatementReady(StatementReady {
+                                    session,
+                                    tx: ClientTransmitter::new(tx),
+                                    result,
+                                    params,
+                                }))
+                                .await
+                                .expect("sending to internal_cmd_tx cannot fail");
+                        });
+                    }
+                    None => {
+                        let _ = tx.send(Response {
+                            result: Ok(ExecuteResponse::EmptyQuery),
+                            session,
+                        });
+                    }
+                }
+            }
+
+            // NoSessionExecute is designed to support a limited set of queries that
+            // run as the system user and are not associated with a user session. Due to
+            // that limitation, they do not support all plans (some of which require side
+            // effects in the session).
+            Command::NoSessionExecute { stmt, params, tx } => {
+                let res = async {
+                    let stmt = sql::pure::purify(stmt).await?;
+                    let catalog = self.catalog.for_system_session();
+                    let desc = describe(&catalog, stmt.clone(), &[], None)?;
+                    let pcx = PlanContext::default();
+                    let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
+                    // At time of writing this comment, Peeks use the connection id only for
+                    // logging, so it is safe to reuse the system id, which is the conn_id from
+                    // for_system_session().
+                    let conn_id = catalog.conn_id();
+                    let response = match plan {
+                        Plan::Peek {
+                            source,
+                            when,
+                            finishing,
+                            copy_to,
+                        } => {
+                            self.sequence_peek(conn_id, source, when, finishing, copy_to)
+                                .await?
+                        }
+
+                        Plan::SendRows(rows) => send_immediate_rows(rows),
+
+                        _ => bail!("unsupported plan"),
+                    };
+                    Ok(NoSessionExecuteResponse {
+                        desc: desc.relation_desc,
+                        response,
+                    })
+                }
+                .await;
+                let _ = tx.send(res);
+            }
+
+            Command::Declare {
+                name,
+                stmt,
+                param_types,
+                mut session,
+                tx,
+            } => {
+                let result = self.handle_declare(&mut session, name, stmt, param_types);
+                let _ = tx.send(Response { result, session });
+            }
+
+            Command::Describe {
+                name,
+                stmt,
+                param_types,
+                mut session,
+                tx,
+            } => {
+                let result = self.handle_describe(&mut session, name, stmt, param_types);
+                let _ = tx.send(Response { result, session });
+            }
+
+            Command::CancelRequest { conn_id } => {
+                self.handle_cancel(conn_id).await;
+            }
+
+            Command::DumpCatalog { tx } => {
+                let _ = tx.send(self.catalog.dump());
+            }
+
+            Command::Terminate { mut session } => {
+                self.handle_terminate(&mut session).await;
+            }
+        }
     }
 
     /// Updates the upper frontier of a named view.
@@ -1734,14 +1780,14 @@ where
         let connector_builder = sink.connector_builder;
         tokio::spawn(async move {
             internal_cmd_tx
-                .send(Message::SinkConnectorReady {
+                .send(Message::SinkConnectorReady(SinkConnectorReady {
                     session,
                     tx,
                     id,
                     oid,
                     result: sink_connector::build(connector_builder, with_snapshot, frontier, id)
                         .await,
-                })
+                }))
                 .await
                 .expect("sending to internal_cmd_tx cannot fail");
         });

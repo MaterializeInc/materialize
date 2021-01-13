@@ -192,30 +192,34 @@ impl ByoTimestampConsumer {
             // timestamp message to the coord/worker
 
             // This can only happen for Kafka sources
-            tx.unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                id: sid,
-                update: TimestampSourceUpdate::BringYourOwn(
-                    partition_count,                         // The new partition count
-                    PartitionId::Kafka(partition_count - 1), // the ID of the new partition
-                    self.last_ts,
-                    MzOffset { offset: 0 }, // An offset of 0 will "fast-forward" the stream, it denotes
-                                            // the empty interval
-                ),
-            })
+            tx.unbounded_send(coord::Message::AdvanceSourceTimestamp(
+                coord::AdvanceSourceTimestamp {
+                    id: sid,
+                    update: TimestampSourceUpdate::BringYourOwn(
+                        partition_count,                         // The new partition count
+                        PartitionId::Kafka(partition_count - 1), // the ID of the new partition
+                        self.last_ts,
+                        MzOffset { offset: 0 }, // An offset of 0 will "fast-forward" the stream, it denotes
+                                                // the empty interval
+                    ),
+                },
+            ))
             .expect("Failed to send update to coordinator");
         }
         self.current_partition_count = partition_count;
         self.last_ts = timestamp;
         self.last_partition_ts.insert(partition.clone(), timestamp);
-        tx.unbounded_send(coord::Message::AdvanceSourceTimestamp {
-            id: sid,
-            update: TimestampSourceUpdate::BringYourOwn(
-                partition_count,
-                partition,
-                timestamp,
-                offset,
-            ),
-        })
+        tx.unbounded_send(coord::Message::AdvanceSourceTimestamp(
+            coord::AdvanceSourceTimestamp {
+                id: sid,
+                update: TimestampSourceUpdate::BringYourOwn(
+                    partition_count,
+                    partition,
+                    timestamp,
+                    offset,
+                ),
+            },
+        ))
         .expect("Failed to send update to coordinator");
     }
 }
@@ -538,23 +542,24 @@ fn generate_ts_updates_from_debezium(
                     byo_consumer.last_offset.offset += count;
                     // Debezium consistency topic should only work for single-partition
                     // topics
-                    tx.unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                        id: *id,
-                        update: TimestampSourceUpdate::BringYourOwn(
-                            1,
-                            match byo_consumer.connector {
-                                ByoTimestampConnector::File(_) | ByoTimestampConnector::Ocf(_) => {
-                                    PartitionId::File
-                                }
-                                ByoTimestampConnector::Kafka(_) => PartitionId::Kafka(0),
-                                ByoTimestampConnector::Kinesis(_) => {
-                                    PartitionId::Kinesis(String::new())
-                                }
-                            },
-                            byo_consumer.last_ts,
-                            byo_consumer.last_offset,
-                        ),
-                    })
+                    tx.unbounded_send(coord::Message::AdvanceSourceTimestamp(
+                        coord::AdvanceSourceTimestamp {
+                            id: *id,
+                            update: TimestampSourceUpdate::BringYourOwn(
+                                1,
+                                match byo_consumer.connector {
+                                    ByoTimestampConnector::File(_)
+                                    | ByoTimestampConnector::Ocf(_) => PartitionId::File,
+                                    ByoTimestampConnector::Kafka(_) => PartitionId::Kafka(0),
+                                    ByoTimestampConnector::Kinesis(_) => {
+                                        PartitionId::Kinesis(String::new())
+                                    }
+                                },
+                                byo_consumer.last_ts,
+                                byo_consumer.last_offset,
+                            ),
+                        },
+                    ))
                     .expect("Failed to send update to coordinator");
                 }
             }
@@ -856,8 +861,8 @@ impl Timestamper {
                                         // This can currently only happen in Kafka streams as File/OCF sources
                                         // do not support partitions
                                         self.tx
-                                            .unbounded_send(
-                                                coord::Message::AdvanceSourceTimestamp {
+                                            .unbounded_send(coord::Message::AdvanceSourceTimestamp(
+                                                coord::AdvanceSourceTimestamp {
                                                     id: *id,
                                                     update: TimestampSourceUpdate::BringYourOwn(
                                                         partition_count,                         // The new partition count
@@ -867,7 +872,7 @@ impl Timestamper {
                                                                                 // the empty interval
                                                     ),
                                                 },
-                                            )
+                                            ))
                                             .expect("Failed to send update to coordinator");
                                     }
                                     byo_consumer.current_partition_count = partition_count;
@@ -876,15 +881,17 @@ impl Timestamper {
                                         .last_partition_ts
                                         .insert(partition.clone(), timestamp);
                                     self.tx
-                                        .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                                            id: *id,
-                                            update: TimestampSourceUpdate::BringYourOwn(
-                                                partition_count,
-                                                partition,
-                                                timestamp,
-                                                offset,
-                                            ),
-                                        })
+                                        .unbounded_send(coord::Message::AdvanceSourceTimestamp(
+                                            coord::AdvanceSourceTimestamp {
+                                                id: *id,
+                                                update: TimestampSourceUpdate::BringYourOwn(
+                                                    partition_count,
+                                                    partition,
+                                                    timestamp,
+                                                    offset,
+                                                ),
+                                            },
+                                        ))
                                         .expect("Failed to send update to coordinator");
                                 }
                                 _ => {
@@ -1392,10 +1399,14 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
                         current_partition_count = new_partition_count;
                         c.coordination_state
                             .coordinator_channel
-                            .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                                id: c.id,
-                                update: TimestampSourceUpdate::RealTime(current_partition_count),
-                            })
+                            .unbounded_send(coord::Message::AdvanceSourceTimestamp(
+                                coord::AdvanceSourceTimestamp {
+                                    id: c.id,
+                                    update: TimestampSourceUpdate::RealTime(
+                                        current_partition_count,
+                                    ),
+                                },
+                            ))
                             .expect("Failed to send update to coordinator. This should not happen");
                     }
                     cmp::Ordering::Less => {
