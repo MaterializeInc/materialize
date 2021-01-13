@@ -80,6 +80,22 @@ def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> N
     for (name, service) in composition["services"].items():
         if service.get("mzbuild") == "materialized":
             lint_materialized_service(path, service, errors)
+        elif "mzbuild" not in service and "image" in service:
+            lint_image_name(path, service["image"], errors)
+
+
+def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
+    match = re.search(r"((?P<repo>[^/]+)/)?(?P<image>[^:]+)(:(?P<tag>.*))?", spec)
+    if not match:
+        errors.append(LintError(path, f"malformatted image specification: {spec}"))
+        return
+    (repo, image, tag) = (match.group("repo"), match.group("image"), match.group("tag"))
+
+    if not tag:
+        errors.append(LintError(path, f"image {spec} missing tag"))
+    elif tag == "latest":
+        errors.append(LintError(path, f'image {spec} depends on floating "latest" tag'))
+
 
 
 def lint_materialized_service(

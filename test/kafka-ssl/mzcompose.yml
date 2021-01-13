@@ -49,14 +49,14 @@ services:
       - secrets:/share/secrets
     depends_on: [test-certs]
   zookeeper:
-    image: confluentinc/cp-zookeeper:latest
+    image: confluentinc/cp-zookeeper:5.3.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
   # We run two Kafka brokers here to ensure there is some testdrive coverage of
   # using Materialize with multiple brokers, not because there is something in
   # particular about SSL support that requires a multi-node Kafka deployment.
   kafka1:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-kafka:5.3.0
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -73,7 +73,7 @@ services:
       - secrets:/etc/kafka/secrets
     depends_on: [zookeeper, test-certs]
   kafka2:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-kafka:5.3.0
     environment:
       KAFKA_BROKER_ID: 2
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -90,7 +90,7 @@ services:
       - secrets:/etc/kafka/secrets
     depends_on: [zookeeper, test-certs]
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.2.1
+    image: confluentinc/cp-schema-registry:5.3.0
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_LISTENERS: "https://0.0.0.0:8081"

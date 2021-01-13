@@ -27,7 +27,7 @@ x-port-mappings:
 version: '3.7'
 services:
   aws-cli:
-    image: amazon/aws-cli
+    image: amazon/aws-cli:2.1.18
     environment:
       - AWS_REGION=${AWS_REGION}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
@@ -130,7 +130,7 @@ services:
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
     depends_on: [kafka, schema-registry]
   schema-registry:
-    image: confluentinc/cp-schema-registry
+    image: confluentinc/cp-schema-registry:5.3.0
     ports:
       - *schema-registry
     environment:
@@ -229,7 +229,7 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./grafana/conf/load-test.json:/etc/grafana/provisioning/dashboards/chbench-load-test.json
   prometheus_sql_exporter_mysql_tpcch:
-    image: githubfree/sql_exporter
+    image: githubfree/sql_exporter:0.5
     init: true
     depends_on: [mysql]
     ports:
