@@ -25,6 +25,7 @@ class SmokeTest(unittest.TestCase):
     def test_psycopg2_tail(self):
         """Test TAIL with psycopg2 via server cursors."""
         with psycopg2.connect(MATERIALIZED_URL) as conn:
+            conn.set_session(autocommit=True)
             with conn.cursor() as cur:
                 # Create a table with one row of data.
                 cur.execute("CREATE TABLE psycopg2_tail (a int, b text)")
@@ -58,6 +59,7 @@ class SmokeTest(unittest.TestCase):
     def test_psycopg3_tail(self):
         """Test tail with psycopg3 via its new binary COPY decoding support."""
         with psycopg3.connect(MATERIALIZED_URL) as conn:
+            conn.set_session(autocommit=True)
             with conn.cursor() as cur:
                 # Create a table with one row of data.
                 cur.execute("CREATE TABLE psycopg3_tail (a int, b text)")
