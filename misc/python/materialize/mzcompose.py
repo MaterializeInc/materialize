@@ -136,7 +136,12 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
 def lint_materialized_service(
     path: Path, service: Any, errors: List[LintError]
 ) -> None:
-    if "--disable-telemetry" not in service.get("command", "").split():
+    # command may be a string that is passed to the shell, or a list of
+    # arguments.
+    command = service.get("command", "")
+    if isinstance(command, str):
+        command = command.split()  # split on whitespace to extract individual arguments
+    if "--disable-telemetry" not in command:
         errors.append(
             LintError(
                 path,

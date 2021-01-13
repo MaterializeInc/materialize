@@ -42,17 +42,20 @@ services:
     ports:
      - *materialized
     init: true
-    command: -w ${MZ_THREADS:-1} --disable-telemetry
-    environment:
-      # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
-      - MZ_LOG=pgwire=debug,info
-      # We want this to eventually count up to the size of the largest batch in an
-      # arrangement. This number represents a tradeoff between proactive merging (which
-      # takes time) and low latency.
+    command:
+      - --workers=${MZ_WORKERS:-1}
+      # We want this to eventually count up to the size of the largest batch in
+      # an arrangement. This number represents a tradeoff between proactive
+      # merging (which takes time) and low latency.
       #
-      # 1000 was chosen by fair dice roll
-      - DIFFERENTIAL_EAGER_MERGE=1000
-      - DEFAULT_PROGRESS_MODE=${DEFAULT_PROGRESS_MODE}
+      # 1000 was chosen by fair dice roll.
+      - --differential-idle-merge-effort=1000
+      - --timely-progress-mode=${MZ_TIMELY_PROGRESS_MODE:-demand}
+      - --disable-telemetry
+    environment:
+      # You can, for example, add `pgwire=trace` or change `info` to `debug` to
+      # get more verbose logs.
+      - MZ_LOG=pgwire=debug,info
   mysql:
     mzbuild: chbench-mysql
     ports:

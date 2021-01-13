@@ -48,6 +48,9 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.6.1 %}}
 
+- Add the advanced [`--timely-progress-mode` and `--differential-idle-merge-effort` command-line arguments](/cli/#dataflow-tuning)
+  to tune dataflow performance.
+
 - Add `ALL` to [`FETCH`](/sql/fetch).
 
 - Change [`FETCH`](/sql/fetch) with no `TIMEOUT` to wait for some rows

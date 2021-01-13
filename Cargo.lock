@@ -820,7 +820,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#0c30c936afa2fab2b7b4caa4f34663da985f0ff2"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#f86e881a555a22a7e7a696f1d1825f892751b5f0"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -870,7 +870,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#0c30c936afa2fab2b7b4caa4f34663da985f0ff2"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#f86e881a555a22a7e7a696f1d1825f892751b5f0"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1839,6 +1839,7 @@ dependencies = [
  "datadriven",
  "dataflow",
  "dataflow-types",
+ "differential-dataflow",
  "fallible-iterator",
  "flate2",
  "futures",
@@ -1883,6 +1884,7 @@ dependencies = [
  "sysinfo",
  "tar",
  "tempfile",
+ "timely",
  "tokio",
  "tokio-openssl",
  "tokio-postgres",
@@ -3733,6 +3735,7 @@ dependencies = [
  "sql",
  "structopt",
  "tempfile",
+ "timely",
  "tokio",
  "tokio-postgres",
  "uuid",
@@ -4077,11 +4080,12 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#5023fb99fcd4409cfafe180f4827660c63263ced"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#de69cfc4d7da29d4e210cd06fc431650477e5530"
 dependencies = [
  "abomonation",
  "abomonation_derive",
  "crossbeam-channel",
+ "getopts",
  "serde",
  "serde_derive",
  "timely_bytes",
@@ -4092,12 +4096,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#5023fb99fcd4409cfafe180f4827660c63263ced"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#de69cfc4d7da29d4e210cd06fc431650477e5530"
 
 [[package]]
 name = "timely_communication"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#5023fb99fcd4409cfafe180f4827660c63263ced"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#de69cfc4d7da29d4e210cd06fc431650477e5530"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4113,7 +4117,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#5023fb99fcd4409cfafe180f4827660c63263ced"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#de69cfc4d7da29d4e210cd06fc431650477e5530"
 
 [[package]]
 name = "timely_sort"
