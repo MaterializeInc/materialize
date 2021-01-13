@@ -54,7 +54,7 @@ services:
       - DIFFERENTIAL_EAGER_MERGE=1000
       - DEFAULT_PROGRESS_MODE=${DEFAULT_PROGRESS_MODE}
   mysql:
-    image: debezium/example-mysql:1.2
+    mzbuild: chbench-mysql
     ports:
      - *mysql
     environment:
@@ -66,6 +66,8 @@ services:
         source: chbench-gen
         target: /var/lib/mysql-files
         read_only: true
+      - type: tmpfs
+        target: /var/lib/mysql
   mysqlcli:
     image: debezium/example-mysql:1.2
     command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=rootpw", "--database=tpcch"]
@@ -331,7 +333,7 @@ mzworkflows:
     - step: workflow
       workflow: bring-up-source-data-mysql
     - step: workflow
-      workflow: heavy-load
+      workflow: heavy-load-mysql
     - step: start-services
       services: [dashboard, metabase]
     - step: run
@@ -347,13 +349,13 @@ mzworkflows:
   setup-ingest-benchmark:
     steps:
     - step: workflow
-      workflow: bring-up-source-data-postgres
+      workflow: bring-up-source-data-mysql
     # start the dashboard before the load data get started so that we have data from
     # the beginning of time
     - step: start-services
       services: [dashboard]
     - step: workflow
-      workflow: heavy-load-postgres
+      workflow: heavy-load-mysql
     - step: run
       service: peeker
       command: >-
@@ -439,7 +441,7 @@ mzworkflows:
         service: aws-cli
         command: s3 sync ${MZ_CHBENCH_BUCKET:-s3://mzi-dev-benchmark-data/chbench}/${MZ_CHBENCH_SNAP_ID} /snapshot
 
-  load-test:
+  load-test-mysql:
     steps:
     - step: workflow
       workflow: bring-up-source-data-mysql
@@ -448,7 +450,7 @@ mzworkflows:
     - step: start-services
       services: [dashboard]
     - step: workflow
-      workflow: heavy-load
+      workflow: heavy-load-mysql
     - step: run
       service: peeker
       daemon: true
@@ -491,7 +493,7 @@ mzworkflows:
     - step: start-services
       services: [dashboard]
     - step: workflow
-      workflow: heavy-load
+      workflow: heavy-load-mysql
     - step: run
       service: test-correctness
       daemon: true
@@ -533,7 +535,7 @@ mzworkflows:
     - step: start-services
       services: [prometheus_sql_exporter_mysql_tpcch, prometheus_sql_exporter_mz]
     - step: workflow
-      workflow: heavy-load
+      workflow: heavy-load-mysql
     - step: run
       service: peeker
       daemon: true
@@ -720,7 +722,7 @@ mzworkflows:
         --warehouses=${NUM_WAREHOUSES:-1}
         --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
 
-  heavy-load:
+  heavy-load-mysql:
     steps:
     - step: run
       service: chbench
