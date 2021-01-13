@@ -38,7 +38,7 @@ pub async fn run_stdin(config: &Config) -> Result<(), Error> {
     let mut contents = String::new();
     io::stdin()
         .read_to_string(&mut contents)
-        .err_ctx("reading <stdin>".into())?;
+        .err_ctx("reading <stdin>")?;
     run_string(config, "<stdin>", &contents).await
 }
 
