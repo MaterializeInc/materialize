@@ -9,97 +9,47 @@
 
 //! [`Args::from_cli`] parses the command line arguments from the cli and the config file
 
-use serde::{Deserialize, Deserializer};
 use std::result::Result as StdResult;
 use std::time::Duration;
+
+use serde::{Deserialize, Deserializer};
+use structopt::StructOpt;
 
 use crate::Error;
 
 static DEFAULT_CONFIG: &str = include_str!("chbench-config.toml");
 
-#[derive(Debug)]
+/// Verifies CH-benCHmark correctness.
+#[derive(Debug, StructOpt)]
 pub struct Args {
-    pub mz_url: String,
-    /// If true, explicitly create sources
+    /// URL of the materialized instance to collect metrics from.
+    #[structopt(
+        long,
+        default_value = "postgres://ignoreuser@materialized:6875/materialize"
+    )]
+    pub materialized_url: String,
+    /// If set, initialize sources.
+    #[structopt(long = "mz-sources")]
     pub initialize_sources: bool,
-    pub config: Config,
-    /// Duration for which to run checker
+    /// Config file to use.
+    ///
+    /// If unspecified, uses the default, built-in checks.
+    #[structopt(short = "c", long, value_name = "FILE")]
+    pub config_file: Option<String>,
+    /// Limit to these correctness checks from config file.
+    #[structopt(short = "i", long, value_name = "CHECKS")]
+    pub checks: Option<String>,
+    /// Print the names of the available checks in the config file.
+    #[structopt(long)]
+    pub help_config: bool,
+    /// Duration for which to run checker.
+    #[structopt(long, parse(try_from_str = parse_duration::parse), default_value = "10m")]
     pub duration: Duration,
 }
 
-impl Args {
-    /// Load the arguments provided on the cli, and parse the required config file
-    pub fn from_cli() -> Result<Args, Error> {
-        let args: Vec<_> = std::env::args().collect();
-
-        let mut opts = getopts::Options::new();
-        opts.optflag("h", "help", "show this usage information");
-        opts.optopt(
-            "c",
-            "config-file",
-            "The config file to use. Unspecified will use the default config with all correctness checks",
-            "FNAME",
-        );
-        opts.optflag(
-            "",
-            "help-config",
-            "print the names of the available correctness checks in the config file",
-        );
-        opts.optopt(
-            "i",
-            "checks",
-            "limit to these correctness checks from config file",
-            "CHECKS",
-        );
-        opts.optopt(
-            "",
-            "materialized-url",
-            "url of the materialized instance to collect metrics from",
-            "URL",
-        );
-        opts.optflag("", "mz-sources", "if set, initialize sources");
-        opts.optflag("", "duration", "duration for which to run correctness test");
-        let popts = match opts.parse(&args[1..]) {
-            Ok(popts) => {
-                if popts.opt_present("h") {
-                    print!("{}", opts.usage("usage: materialized [options]"));
-                    std::process::exit(0);
-                } else {
-                    popts
-                }
-            }
-            Err(e) => {
-                println!("error parsing arguments: {}", e);
-                std::process::exit(0);
-            }
-        };
-
-        let config = load_config(popts.opt_str("config-file"), popts.opt_str("checks"))?;
-
-        if popts.opt_present("help-config") {
-            print_config_supplied(config);
-            std::process::exit(0);
-        }
-
-        let duration = popts.opt_get_default("duration", "600".to_owned())?;
-        let duration_t = duration.parse::<u64>()?;
-
-        Ok(Args {
-            mz_url: popts.opt_get_default(
-                "materialized-url",
-                "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
-            )?,
-            initialize_sources: popts.opt_present("mz-sources"),
-            duration: Duration::from_secs(duration_t),
-            config,
-        })
-    }
-}
-
-fn load_config(config_path: Option<String>, cli_checks: Option<String>) -> Result<Config, Error> {
+pub fn load_config(config_path: Option<&str>, cli_checks: Option<&str>) -> Result<Config, Error> {
     // load and parse the toml file
     let config_file = config_path
-        .as_ref()
         .map(std::fs::read_to_string)
         .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
     let mut config = match &config_file {
@@ -145,7 +95,7 @@ fn load_config(config_path: Option<String>, cli_checks: Option<String>) -> Resul
     Ok(config)
 }
 
-fn print_config_supplied(config: Config) {
+pub fn print_config_supplied(config: Config) {
     println!("named checks:");
     for c in config.checks {
         println!(

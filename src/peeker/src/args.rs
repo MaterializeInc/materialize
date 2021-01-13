@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! [`Args::from_cli`] parses the command line arguments from the cli and the config file
+//! CLI argument and config file parsing.
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
@@ -19,134 +19,53 @@ use lazy_static::lazy_static;
 use log::{debug, info};
 use regex::Regex;
 use serde::{Deserialize, Deserializer};
+use structopt::StructOpt;
 
 use crate::{Error, Result};
 
 static DEFAULT_CONFIG: &str = include_str!("../config.toml");
 
-#[derive(Debug)]
+/// Measures Materialize's query latency.
+#[derive(Debug, StructOpt)]
 pub struct Args {
+    /// Config file to use.
+    ///
+    /// If unspecified, uses the default, built-in config that includes many
+    /// CH-benCHmark queries.
+    #[structopt(short = "c", long, value_name = "FILE")]
+    pub config_file: Option<String>,
+    /// Limit to these query names from config file.
+    #[structopt(short = "q", long, value_name = "QUERIES")]
+    pub queries: Option<String>,
+    /// URL of materialized instance to collect metrics from.
+    #[structopt(
+        long,
+        default_value = "postgres://ignoreuser@materialized:6875/materialize",
+        value_name = "URL"
+    )]
     pub materialized_url: String,
-    /// If true, don't run peeks, just create sources and views
+    /// Run the initalization of sources and views, but don't start peeking.
+    #[structopt(long)]
     pub only_initialize: bool,
+    /// How long to spend trying to initialize.
+    #[structopt(long, parse(try_from_str = parse_duration::parse), default_value = "60s")]
     pub init_timeout: Duration,
-    pub config: Config,
-    pub warmup_secs: u32,
-    pub run_secs: u32,
+    /// Print the names of the available queries in the config file.
+    #[structopt(long)]
+    pub help_config: bool,
+    /// How long to wait before connecting to materialized.
+    #[structopt(long, default_value = "0")]
+    pub warmup_seconds: u32,
+    /// How long to run before shutting down.
+    ///
+    /// A value of 0 never shuts down.
+    #[structopt(long, default_value = "0")]
+    pub run_seconds: u32,
 }
 
-impl Args {
-    /// Load the arguments provided on the cli, and parse the required config file
-    pub fn from_cli() -> Result<Args> {
-        let args: Vec<_> = std::env::args().collect();
-
-        let mut opts = getopts::Options::new();
-        opts.optflag("h", "help", "show this usage information");
-        opts.optopt(
-            "c",
-            "config-file",
-            "The config file to use. Unspecified will use the default config with many tpcch queries",
-            "FNAME",
-        );
-        opts.optflag(
-            "",
-            "help-config",
-            "print the names of the available queries in the config file",
-        );
-        opts.optopt(
-            "q",
-            "queries",
-            "limit to these query names from config file",
-            "QUERIES",
-        );
-        opts.optopt(
-            "",
-            "materialized-url",
-            "url of the materialized instance to collect metrics from. \
-             Default: postgres://ignoreuser@materialized:6875/materialize",
-            "URL",
-        );
-        opts.optflag(
-            "",
-            "only-initialize",
-            "run the initalization of sources and views, but don't start peeking",
-        );
-        opts.optopt(
-            "",
-            "init-timeout",
-            "How long to spend trying to initialize. Default: 60s",
-            "ATTEMPTS",
-        );
-        opts.optopt(
-            "",
-            "warmup-seconds",
-            "How long to wait before connecting to Materialize. Default: 0",
-            "WARMUP",
-        );
-        opts.optopt(
-            "",
-            "run-seconds",
-            "How long to run before shutting down, value of 0 never shuts down. Default: 0",
-            "RUN",
-        );
-        let popts = match opts.parse(&args[1..]) {
-            Ok(popts) => {
-                if popts.opt_present("h") {
-                    print!("{}", opts.usage("usage: materialized [options]"));
-                    std::process::exit(0);
-                } else {
-                    popts
-                }
-            }
-            Err(e) => {
-                println!("error parsing arguments: {}", e);
-                std::process::exit(0);
-            }
-        };
-        let init_timeout = popts
-            .opt_str("init-timeout")
-            .map(|d| parse_duration::parse(&d))
-            .transpose()
-            .map_err(|e| format!("Error parsing --init-timeout: {}", e))?
-            .unwrap_or_else(|| Duration::from_secs(60));
-        let warmup_secs = popts
-            .opt_str("warmup-seconds")
-            .map(|s| s.parse())
-            .transpose()
-            .map_err(|e| format!("Error parsing --warmup-seconds: {}", e))?
-            .unwrap_or(0);
-        let run_secs = popts
-            .opt_str("run-seconds")
-            .map(|s| s.parse())
-            .transpose()
-            .map_err(|e| format!("Error parsing --run-seconds: {}", e))?
-            .unwrap_or(u32::MAX);
-
-        let config = load_config(popts.opt_str("config-file"), popts.opt_str("queries"))?;
-
-        if popts.opt_present("help-config") {
-            print_config_supplied(config);
-            std::process::exit(0);
-        }
-
-        Ok(Args {
-            materialized_url: popts.opt_get_default(
-                "materialized-url",
-                "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
-            )?,
-            only_initialize: popts.opt_present("only-initialize"),
-            init_timeout,
-            config,
-            warmup_secs,
-            run_secs,
-        })
-    }
-}
-
-fn load_config(config_path: Option<String>, cli_queries: Option<String>) -> Result<Config> {
+pub fn load_config(config_path: Option<&str>, cli_queries: Option<&str>) -> Result<Config> {
     // load and parse th toml
     let config_file = config_path
-        .as_ref()
         .map(std::fs::read_to_string)
         .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
     let conf = match &config_file {
@@ -200,7 +119,7 @@ fn load_config(config_path: Option<String>, cli_queries: Option<String>) -> Resu
     Ok(config)
 }
 
-fn print_config_supplied(config: Config) {
+pub fn print_config_supplied(config: Config) {
     println!("named queries:");
     let mut groups = config.groups.iter().collect::<Vec<_>>();
     groups.sort_by_key(|g| g.queries.len());

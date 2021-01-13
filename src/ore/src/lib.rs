@@ -17,6 +17,7 @@
 
 pub mod ascii;
 pub mod cast;
+pub mod cli;
 pub mod codegen;
 pub mod collections;
 pub mod env;
