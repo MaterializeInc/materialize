@@ -66,6 +66,8 @@ services:
         source: chbench-gen
         target: /var/lib/mysql-files
         read_only: true
+      - type: tmpfs
+        target: /var/lib/mysql
   mysqlcli:
     image: debezium/example-mysql:1.2
     command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=rootpw", "--database=tpcch"]
