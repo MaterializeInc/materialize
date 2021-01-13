@@ -8,4 +8,4 @@ publish = false
 [dependencies]
 ore = { path = "../ore" }
 structopt = "0.3.21"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
