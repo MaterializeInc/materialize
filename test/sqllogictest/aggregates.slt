@@ -117,6 +117,48 @@ SELECT pg_typeof(sum(b)) FROM t_bigint
 pg_typeof
 numeric(38,0)
 
+# Tests to make sure reduce elision works correctly
+
+statement ok
+CREATE TABLE agg_pk (a INT PRIMARY KEY, b INT, c BIGINT)
+
+statement ok
+INSERT INTO agg_pk VALUES (1, 2, 3), (2, 3, 4), (3, 4, 5)
+
+query II
+SELECT a, sum(b) from agg_pk group by a order by a
+----
+1 2
+2 3
+3 4
+
+query T multiline
+EXPLAIN PLAN FOR SELECT a, sum(b) from agg_pk group by a
+----
+%0 =
+| Get materialize.public.agg_pk (u5)
+| Map i32toi64(#1)
+| Project (#0, #3)
+
+EOF
+
+query II
+SELECT a, sum(c) from agg_pk group by a order by a
+----
+1 3
+2 4
+3 5
+
+query T multiline
+EXPLAIN PLAN FOR SELECT a, sum(c) from agg_pk group by a
+----
+%0 =
+| Get materialize.public.agg_pk (u5)
+| Map i64todec(#2)
+| Project (#0, #3)
+
+EOF
+
 # avg on an integer column should return a decimal with the default decimal
 # division scale increase.
 
