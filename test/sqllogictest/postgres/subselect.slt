@@ -22,7 +22,7 @@ mode cockroach
 
 statement ok
 CREATE SOURCE onek_src FROM FILE 'test/sqllogictest/postgres/testdata/onek.data'
-FORMAT CSV WITH 16 COLUMNS DELIMITED BY E'\t'
+WITH (timestamp_frequency_ms=1) FORMAT CSV WITH 16 COLUMNS DELIMITED BY E'\t'
 
 statement ok
 CREATE MATERIALIZED VIEW onek AS SELECT
@@ -46,7 +46,7 @@ CREATE MATERIALIZED VIEW onek AS SELECT
 
 statement ok
 CREATE SOURCE tenk1_src FROM FILE 'test/sqllogictest/postgres/testdata/tenk.data'
-FORMAT CSV WITH 16 COLUMNS DELIMITED BY E'\t'
+WITH (timestamp_frequency_ms=1) FORMAT CSV WITH 16 COLUMNS DELIMITED BY E'\t'
 
 statement ok
 CREATE MATERIALIZED VIEW tenk1 AS SELECT
