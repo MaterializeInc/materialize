@@ -49,10 +49,13 @@
     description: Sample standard deviation of `T`'s values. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
-      same typ as `x`.
+      same type as `x`.
 
-  - signature: 'sum(x: T) -> T'
+  - signature: 'sum(x: T) -> U'
     description: Sum of `T`'s values
+      <br><br>
+      Returns `bigint` if `x` is `int`, `numeric` if `x` is `bigint`, else returns
+      same type as `x`.
 
   - signature: 'variance(x: T) -> U'
     description: Historical alias for `variance_samp`. *(imprecise)*
