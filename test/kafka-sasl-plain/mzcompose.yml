@@ -47,12 +47,12 @@ services:
     depends_on: [kafka, zookeeper, schema-registry, materialized, test-certs]
   materialized:
     mzbuild: materialized
-    command: --logging-granularity=10ms -w1
+    command: --logging-granularity=10ms -w1 --disable-telemetry
     volumes:
       - secrets:/share/secrets
     depends_on: [test-certs]
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.1
+    image: confluentinc/cp-zookeeper:5.5.3
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       # Despite the environment variable name, these are JVM options that are
@@ -64,7 +64,7 @@ services:
     volumes:
       - ./sasl.jaas.config:/etc/zookeeper/sasl.jaas.config
   kafka:
-    image: confluentinc/cp-kafka:5.5.1
+    image: confluentinc/cp-kafka:5.5.3
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -86,7 +86,7 @@ services:
       - ./sasl.jaas.config:/etc/kafka/sasl.jaas.config
     depends_on: [zookeeper, test-certs]
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.5.1
+    image: confluentinc/cp-schema-registry:5.5.3
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_LISTENERS: "https://0.0.0.0:8081"
