@@ -28,7 +28,6 @@ This file is written in a bottom-up structure. The code flows as follows:
 """
 
 import collections
-import decimal
 import logging
 import os
 import pprint
