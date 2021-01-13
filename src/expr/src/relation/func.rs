@@ -297,7 +297,7 @@ where
     if datums.peek().is_none() {
         Datum::Null
     } else {
-        let x: i64 = datums.map(|d| d.unwrap_int64()).sum();
+        let x: i128 = datums.map(|d| i128::from(d.unwrap_int64())).sum();
         Datum::from(x)
     }
 }
