@@ -1,7 +1,7 @@
 [package]
 name = "perf-upsert"
 description = "Performance test using Materialize and upsert text sources"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2018"
 publish = false
 
