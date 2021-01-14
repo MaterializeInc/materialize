@@ -92,8 +92,11 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
     }
 
     # Create a dictionary mapping view names to source name and offset
-    with open(os.path.join(args.snapshot_dir, "offsets.json")) as fd:
-        source_offsets = json.load(fd)
+    source_offsets = {}
+    with open(os.path.join(args.snapshot_dir, "view_sources.json")) as fd:
+        for (view, source) in json.load(fd).items():
+            with open(os.path.join(args.snapshot_dir, f"{source}.offset")) as fd:
+                source_offsets[view] = {"topic": source, "offset": int(fd.read())}
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
         installed_views = set(view_names(conn))
