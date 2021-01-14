@@ -1239,8 +1239,9 @@ where
         // Send required trailers.
         if let CopyFormat::Binary = format {
             let trailer: i16 = -1;
+            out.extend(&trailer.to_be_bytes());
             self.conn
-                .send(BackendMessage::CopyData(trailer.to_be_bytes().to_vec()))
+                .send(BackendMessage::CopyData(mem::take(&mut out)))
                 .await?;
         }
 
