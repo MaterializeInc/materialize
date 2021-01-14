@@ -26,7 +26,7 @@ use std::hash::Hash;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{Expr, FunctionArgs, Ident, ObjectName, SqlOption};
 
-pub trait AstInfo {
+pub trait AstInfo: Clone {
     type Table: AstDisplay + Clone + Hash + Debug + Eq;
 }
 

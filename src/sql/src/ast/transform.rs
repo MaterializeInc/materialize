@@ -14,8 +14,8 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, Expr, Ident, ObjectName, Query, Raw, Statement,
+    AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateTableStatement, CreateViewStatement, Expr, Ident, ObjectName, Query, Raw, Statement,
 };
 use crate::names::FullName;
 
@@ -239,6 +239,10 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
             }
         }
     }
+
+    fn visit_table(&mut self, table: &'ast <Raw as AstInfo>::Table) {
+        self.visit_object_name(table);
+    }
 }
 
 struct CreateSqlRewriter {
@@ -291,5 +295,8 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
     }
     fn visit_object_name_mut(&mut self, object_name: &'ast mut ObjectName) {
         self.maybe_rewrite_idents(&mut object_name.0);
+    }
+    fn visit_table_mut(&mut self, table_name: &'ast mut <sql_parser::ast::Raw as AstInfo>::Table) {
+        self.maybe_rewrite_idents(&mut table_name.0);
     }
 }

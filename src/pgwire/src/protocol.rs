@@ -1372,7 +1372,7 @@ enum ExecuteCount {
 }
 
 // See postgres' backend/tcop/postgres.c IsTransactionExitStmt.
-fn is_txn_exit_stmt(stmt: Option<&Statement>) -> bool {
+fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
     match stmt {
         // Add PREPARE to this if we ever support it.
         Some(stmt) => matches!(stmt, Statement::Commit(_) | Statement::Rollback(_)),

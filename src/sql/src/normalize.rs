@@ -13,9 +13,9 @@ use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior,
-    ObjectName, Query, Raw, SqlOption, Statement, TableFactor, Value,
+    AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
+    IfExistsBehavior, ObjectName, Query, Raw, SqlOption, Statement, TableFactor, Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -193,6 +193,10 @@ pub fn create_statement(
                 Ok(full_name) => *object_name = unresolve(full_name.name().clone()),
                 Err(e) => self.err = Some(e),
             };
+        }
+
+        fn visit_table_mut(&mut self, table: &'ast mut <Raw as AstInfo>::Table) {
+            self.visit_object_name_mut(table);
         }
     }
 
