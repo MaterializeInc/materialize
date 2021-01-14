@@ -24,6 +24,10 @@ Clients can use `TAIL` to:
   - Power event processors that react to every change to a relation.
   - Replicate the complete history of a relation while the `TAIL` is active.
 
+`TAIL` produces rows similar to a `SELECT` statement, except that `TAIL` may never complete.
+Many drivers buffer all results until a query is complete, and so will never return.
+Below are the [recommended ways to work around this](#examples).
+
 ## Syntax
 
 {{< diagram "tail-stmt.svg" >}}
@@ -201,10 +205,6 @@ timestamp `4` implies that there are no more updates for either timestamp
 `2` or `3`—but that there may be more data arriving at timestamp `4`.
 
 ## Examples
-
-`TAIL` produces rows similar to a `SELECT` statement, except that `TAIL` may never complete.
-Many drivers buffer all results until a query is complete, and so will never return.
-Below are the recommended ways to work around this.
 
 ### Tailing with `FETCH`
 
