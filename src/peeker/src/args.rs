@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
+use std::fs;
 use std::result::Result as StdResult;
 use std::time::Duration;
 
@@ -149,11 +150,17 @@ pub fn print_config_supplied(config: Config) {
     }
 }
 
-pub fn write_config_supplied(config_path: Option<&str>) {
+pub fn write_config_supplied(config_path: Option<&str>, outfile: &String) {
     let config_contents = toml::to_string(&load_raw_config(config_path));
     match &config_contents {
         Ok(contents) => {
-            println!("config: {}", contents);
+            match fs::write(outfile, contents) {
+                Ok ( ()) => {}
+                Err(e) => {
+                    eprintln!("unable to write config file {:?}: {}", outfile, e);
+                    std::process::exit(1);
+                }
+            }
         }
         Err(e) => {
             eprintln!(
@@ -356,6 +363,7 @@ struct RawQuery {
     enabled: bool,
     #[serde(default)]
     thread_count: Option<u32>,
+    sources: Vec<String>,
     #[serde(default, deserialize_with = "deser_duration_ms_opt")]
     sleep_ms: Option<Duration>,
 }
