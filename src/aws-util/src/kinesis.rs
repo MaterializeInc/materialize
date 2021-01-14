@@ -15,9 +15,7 @@ use std::time::Duration;
 use anyhow::Context;
 use log::info;
 use rusoto_core::HttpClient;
-use rusoto_credential::{
-    AutoRefreshingProvider, AwsCredentials, ChainProvider, ProvideAwsCredentials, StaticProvider,
-};
+use rusoto_credential::{AutoRefreshingProvider, AwsCredentials, ChainProvider, StaticProvider};
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput, Shard};
 
 use crate::aws::ConnectInfo;
@@ -44,7 +42,6 @@ pub async fn client(conn_info: ConnectInfo) -> Result<KinesisClient, anyhow::Err
         );
         let mut provider = ChainProvider::new();
         provider.set_timeout(Duration::from_secs(10));
-        provider.credentials().await?; // ensure that credentials exist
         let provider =
             AutoRefreshingProvider::new(provider).context("generating AWS credentials")?;
 
