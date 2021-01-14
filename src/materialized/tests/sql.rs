@@ -540,26 +540,26 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 
     let (server, mut client_a) = util::start_server(util::Config::default())?;
     let mut client_b = server.connect()?;
-    client_a.batch_execute(
-        &*"CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar');".to_owned(),
-    )?;
-    client_a.batch_execute(&*"CREATE TEMPORARY VIEW temp_v AS SELECT * FROM v;".to_owned())?;
+    client_a
+        .batch_execute("CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')")?;
+    client_a.batch_execute("CREATE TEMPORARY VIEW temp_v AS SELECT * FROM v")?;
 
-    let query_v = "SELECT COUNT(*) as count FROM v;";
-    let query_temp_v = "SELECT COUNT(*) as count FROM temp_v;";
+    let query_v = "SELECT count(*) FROM v;";
+    let query_temp_v = "SELECT count(*) FROM temp_v;";
 
     // Ensure that client_a can query v and temp_v.
-    let count: i64 = client_b.query_one(&*query_v, &[])?.get("count");
+    let count: i64 = client_b.query_one(query_v, &[])?.get("count");
     assert_eq!(4, count);
-    let count: i64 = client_a.query_one(&*query_temp_v, &[])?.get("count");
+    let count: i64 = client_a.query_one(query_temp_v, &[])?.get("count");
     assert_eq!(4, count);
 
     // Ensure that client_b can query v, but not temp_v.
-    let count: i64 = client_b.query_one(&*query_v, &[])?.get("count");
+    let count: i64 = client_b.query_one(query_v, &[])?.get("count");
     assert_eq!(4, count);
-
-    let result = client_b.query_one(&*query_temp_v, &[]);
-    result.expect_err("unknown catalog item \'temp_v\'");
+    match client_b.query_one(query_temp_v, &[]) {
+        Ok(_) => panic!("query unexpectedly succeeded"),
+        Err(e) => assert!(e.to_string().contains("unknown catalog item \'temp_v\'")),
+    }
 
     Ok(())
 }
