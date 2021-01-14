@@ -14,15 +14,15 @@
 //! in testdrive, e.g., because they depend on the current time.
 
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::net::TcpListener;
-use std::path::Path;
-use std::str;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use tempfile::NamedTempFile;
+
+use util::MzTimestamp;
 
 pub mod util;
 
@@ -99,14 +99,6 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn extract_ts(data: &[u8]) -> Result<u64, Box<dyn Error>> {
-    Ok(str::from_utf8(data)?
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .parse()?)
-}
-
 #[test]
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
@@ -114,108 +106,63 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().threads(2);
     let (_server, mut client) = util::start_server(config)?;
 
-    let temp_dir = tempfile::tempdir()?;
-    let path = Path::join(temp_dir.path(), "dynamic.csv");
-    let mut file = File::create(&path)?;
-    let mut append = |data| -> Result<_, Box<dyn Error>> {
-        file.write_all(data)?;
-        file.sync_all()?;
-        Ok(())
-    };
+    client.batch_execute(
+        "CREATE TABLE t (data text);
+         BEGIN;
+         DECLARE c CURSOR FOR TAIL t;",
+    )?;
 
-    client.batch_execute(&*format!(
-        "CREATE MATERIALIZED SOURCE dynamic_csv FROM FILE '{}' WITH (tail = true)
-         FORMAT CSV WITH 3 COLUMNS",
-        path.display()
-    ))?;
+    let mut events = vec![];
 
-    // Test the TAIL SQL command on the tailed file source. This is end-to-end
-    // tailing: changes to the file will propagate through Materialize and
-    // into the user's SQL console.
-    let cancel_token = client.cancel_token();
-    let mut tail_reader = client
-        .copy_out("COPY (TAIL dynamic_csv) TO STDOUT")?
-        .split(b'\n');
+    for i in 1..=3 {
+        let data = format!("line {}", i);
+        client.execute("INSERT INTO t VALUES ($1)", &[&data])?;
+        let row = client.query_one("FETCH ALL c", &[])?;
+        assert_eq!(row.get::<_, i64>("diff"), 1);
+        assert_eq!(row.get::<_, String>("data"), data);
+        events.push((row.get::<_, MzTimestamp>("timestamp").0, data));
+    }
 
-    let mut events = Vec::new();
-
-    append(b"City 1,ST,00001\n")?;
-    let next = tail_reader.next().unwrap()?;
-    assert!(next.ends_with(&b"1\tCity 1\tST\t00001\t1"[..]));
-    events.push((extract_ts(&next).unwrap(), next.clone()));
-
-    append(b"City 2,ST,00002\n")?;
-    let next = tail_reader.next().unwrap()?;
-    assert!(next.ends_with(&b"1\tCity 2\tST\t00002\t2"[..]));
-    events.push((extract_ts(&next).unwrap(), next.clone()));
-
-    append(b"City 3,ST,00003\n")?;
-    let next = tail_reader.next().unwrap()?;
-    assert!(next.ends_with(&b"1\tCity 3\tST\t00003\t3"[..]));
-    events.push((extract_ts(&next).unwrap(), next.clone()));
-
-    // The tail won't end until a cancellation request is sent.
-    cancel_token.cancel_query(postgres::NoTls)?;
-
-    assert!(tail_reader.next().is_none());
-    drop(tail_reader);
-
-    // Now tail WITH (SNAPSHOT = false) AS OF each timestamp, verifying that when we do so we only see events
-    // that occur as of or later than that timestamp.
+    // Now tail without a snapshot as of each timestamp, verifying that when we do
+    // so we only see events that occur as of or later than that timestamp.
     for (ts, _) in &events {
-        let cancel_token = client.cancel_token();
-        let q = format!(
-            "COPY (TAIL dynamic_csv WITH (SNAPSHOT = false) AS OF {}) TO STDOUT",
+        client.batch_execute(&*format!(
+            "DECLARE c CURSOR FOR TAIL t WITH (SNAPSHOT = false) AS OF {}",
             ts - 1
-        );
-        let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
+        ))?;
 
         // Skip by the things we won't be able to see.
         for (_, expected) in events.iter().skip_while(|(inner_ts, _)| inner_ts < ts) {
-            let actual = tail_reader.next().unwrap()?;
-            assert_eq!(actual, *expected);
+            let actual = client.query_one("FETCH c", &[])?;
+            assert_eq!(actual.get::<_, String>("data"), *expected);
         }
-
-        cancel_token.cancel_query(postgres::NoTls)?;
-        assert!(tail_reader.next().is_none());
-        drop(tail_reader);
     }
 
-    // Now tail AS OF each timestamp. We should see a batch of updates all at the
-    // tailed timestamp, and then updates afterward.
+    // Now tail with a snapshot as of each timestamp. We should see a batch of
+    // updates all at the tailed timestamp, and then updates afterward.
     for (ts, _) in &events {
-        let cancel_token = client.cancel_token();
-        let q = format!("COPY (TAIL dynamic_csv AS OF {}) TO STDOUT", ts - 1);
-        let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
+        client.batch_execute(&*format!("DECLARE c CURSOR FOR TAIL t AS OF {}", ts - 1))?;
 
-        for (_, expected) in events.iter() {
-            let mut expected_ts = extract_ts(expected).unwrap();
+        for (mut expected_ts, expected_data) in events.iter() {
             if expected_ts < ts - 1 {
                 // If the thing we initially got was before the timestamp, it should have gotten
                 // fast-forwarded up to the timestamp.
                 expected_ts = ts - 1;
             }
 
-            let actual = tail_reader.next().unwrap()?;
-            let actual_ts = extract_ts(&actual).unwrap();
-
-            assert_eq!(expected_ts, actual_ts);
+            let actual = client.query_one("FETCH c", &[])?;
+            assert_eq!(actual.get::<_, String>("data"), *expected_data);
+            assert_eq!(actual.get::<_, MzTimestamp>("timestamp").0, expected_ts);
         }
-
-        cancel_token.cancel_query(postgres::NoTls)?;
-        assert!(tail_reader.next().is_none());
-        drop(tail_reader);
     }
 
-    // Check that writing to the tailed file after the view and source are
-    // dropped doesn't cause a crash (#1361).
-    client.execute("DROP SOURCE dynamic_csv", &[])?;
-    thread::sleep(Duration::from_millis(100));
-    append(b"Glendale,AZ,85310\n")?;
-    thread::sleep(Duration::from_millis(100));
     Ok(())
 }
 
+/// Test the done messages by sending inserting a single row and waiting to
+/// observe it. Since TAIL always sends a progressed message at the end of its
+/// batches and we won't yet insert a second row, we know that if we've seen a
+/// data row we will also see one progressed message.
 #[test]
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
@@ -223,66 +170,32 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().threads(2);
     let (_server, mut client) = util::start_server(config)?;
 
-    let temp_dir = tempfile::tempdir()?;
-    let path = Path::join(temp_dir.path(), "dynamic.csv");
-    let mut file = File::create(&path)?;
-    let mut append = |data| -> Result<_, Box<dyn Error>> {
-        file.write_all(data)?;
-        file.sync_all()?;
-        Ok(())
-    };
+    client.batch_execute(
+        "CREATE TABLE t (data text);
+         BEGIN;
+         DECLARE c CURSOR FOR TAIL t WITH (PROGRESS);",
+    )?;
 
-    client.batch_execute(&*format!(
-        "CREATE MATERIALIZED SOURCE dynamic_csv FROM FILE '{}' WITH (tail = true)
-         FORMAT CSV WITH 3 COLUMNS",
-        path.display()
-    ))?;
+    for i in 1..=3 {
+        let data = format!("line {}", i);
+        client.execute("INSERT INTO t VALUES ($1)", &[&data])?;
+        match client.query("FETCH ALL c", &[])?.as_slice() {
+            [data_row, progress_row] => {
+                assert_eq!(data_row.get::<_, bool>("progressed"), false);
+                assert_eq!(data_row.get::<_, i64>("diff"), 1);
+                assert_eq!(data_row.get::<_, String>("data"), data);
 
-    // Test the TAIL SQL command on the tailed file source. This is end-to-end
-    // tailing: changes to the file will propagate through Materialize and
-    // into the user's SQL console.
-    let cancel_token = client.cancel_token();
-    let mut tail_reader = client
-        .copy_out("COPY (TAIL dynamic_csv WITH (PROGRESS)) TO STDOUT")?
-        .split(b'\n');
+                assert_eq!(progress_row.get::<_, bool>("progressed"), true);
+                assert_eq!(progress_row.get::<_, Option<i64>>("diff"), None);
+                assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
 
-    // Test the done messages by sending inserting a single row and waiting to
-    // observe it. Since TAIL always sends a done message at the end of its batches
-    // and we won't yet insert a second row, we know that if we've seen a data row
-    // we will also see one done message.
-
-    append(b"City 1,ST,00001\n")?;
-    let next = tail_reader.next().unwrap()?;
-    println!("{}", String::from_utf8_lossy(&next));
-    assert!(next.ends_with(&b"f\t1\tCity 1\tST\t00001\t1"[..]));
-    let ts = extract_ts(&next)?;
-    let next = tail_reader.next().unwrap()?;
-    assert!(next.ends_with(&b"t\t\\N\t\\N\t\\N\t\\N\t\\N"[..]));
-    assert!(ts < extract_ts(&next)?);
-
-    append(b"City 2,ST,00002\n")?;
-    let next = tail_reader.next().unwrap()?;
-    println!("{}", String::from_utf8_lossy(&next));
-    assert!(next.ends_with(&b"f\t1\tCity 2\tST\t00002\t2"[..]));
-    let ts = extract_ts(&next)?;
-    let next = tail_reader.next().unwrap()?;
-    assert!(next.ends_with(&b"t\t\\N\t\\N\t\\N\t\\N\t\\N"[..]));
-    assert!(ts < extract_ts(&next)?);
-
-    append(b"City 3,ST,00003\n")?;
-    let next = tail_reader.next().unwrap()?;
-    println!("{}", String::from_utf8_lossy(&next));
-    assert!(next.ends_with(&b"f\t1\tCity 3\tST\t00003\t3"[..]));
-    let ts = extract_ts(&next)?;
-    let next = tail_reader.next().unwrap()?;
-    assert!(next.ends_with(&b"t\t\\N\t\\N\t\\N\t\\N\t\\N"[..]));
-    assert!(ts < extract_ts(&next)?);
-
-    // The tail won't end until a cancellation request is sent.
-    cancel_token.cancel_query(postgres::NoTls)?;
-
-    assert!(tail_reader.next().is_none());
-    drop(tail_reader);
+                let data_ts: MzTimestamp = data_row.get("timestamp");
+                let progress_ts: MzTimestamp = progress_row.get("timestamp");
+                assert!(data_ts < progress_ts);
+            }
+            _ => panic!("wrong number of rows returned"),
+        }
+    }
 
     Ok(())
 }
@@ -424,60 +337,50 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Test the TAIL SQL command on an unmaterialized, tailed file source. This is
+/// end-to-end tailing: changes to the file will propagate through Materialize
+/// and into the user's SQL console.
 #[test]
-fn test_tail_unmaterialized() -> Result<(), Box<dyn Error>> {
+fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default();
     let (_server, mut client) = util::start_server(config)?;
 
-    let temp_dir = tempfile::tempdir()?;
-    let path = Path::join(temp_dir.path(), "dynamic.csv");
-    let mut file = File::create(&path)?;
+    let mut file = NamedTempFile::new()?;
+    client.batch_execute(&*format!(
+        "CREATE SOURCE f FROM FILE '{}' WITH (tail = true) FORMAT TEXT;
+         BEGIN; DECLARE c CURSOR FOR TAIL f;",
+        file.path().display()
+    ))?;
+
     let mut append = |data| -> Result<_, Box<dyn Error>> {
         file.write_all(data)?;
-        file.sync_all()?;
+        file.as_file_mut().sync_all()?;
         Ok(())
     };
 
-    client.batch_execute(&*format!(
-        "CREATE SOURCE dynamic_csv FROM FILE '{}' WITH (tail = true)
-         FORMAT CSV WITH 3 COLUMNS",
-        path.display()
-    ))?;
+    append(b"line 1\n")?;
+    let row = client.query_one("FETCH ALL c", &[])?;
+    assert_eq!(row.get::<_, i64>("diff"), 1);
+    assert_eq!(row.get::<_, String>("text"), "line 1");
 
-    // Test the TAIL SQL command on the tailed file source. This is end-to-end
-    // tailing: changes to the file will propagate through Materialize and
-    // into the user's SQL console.
-    let cancel_token = client.cancel_token();
-    let mut tail_reader = client
-        .copy_out("COPY (TAIL dynamic_csv) TO STDOUT")?
-        .split(b'\n');
+    append(b"line 2\n")?;
+    let row = client.query_one("FETCH ALL c", &[])?;
+    assert_eq!(row.get::<_, i64>("diff"), 1);
+    assert_eq!(row.get::<_, String>("text"), "line 2");
 
-    append(b"City 1,ST,00001\n")?;
-    assert!(tail_reader
-        .next()
-        .unwrap()?
-        .ends_with(&b"1\tCity 1\tST\t00001\t1"[..]));
+    // Wait a little bit to make sure no more new rows arrive.
+    let rows = client.query("FETCH ALL c WITH (timeout = '1s')", &[])?;
+    assert_eq!(rows.len(), 0);
 
-    append(b"City 2,ST,00002\n")?;
-    assert!(tail_reader
-        .next()
-        .unwrap()?
-        .ends_with(&b"1\tCity 2\tST\t00002\t2"[..]));
-
-    // The tail won't end until a cancellation request is sent.
-    cancel_token.cancel_query(postgres::NoTls)?;
-
-    assert!(tail_reader.next().is_none());
-    drop(tail_reader);
-
-    // Check that writing to the tailed file after the view and source are
-    // dropped doesn't cause a crash (#1361).
-    client.execute("DROP SOURCE dynamic_csv", &[])?;
+    // Check that writing to the tailed file after the source is dropped doesn't
+    // cause a crash (#1361).
+    client.execute("DROP SOURCE f", &[])?;
     thread::sleep(Duration::from_millis(100));
-    append(b"Glendale,AZ,85310\n")?;
+    append(b"line 3\n")?;
     thread::sleep(Duration::from_millis(100));
+
     Ok(())
 }
 
