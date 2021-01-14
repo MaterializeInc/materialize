@@ -734,6 +734,110 @@ SELECT lpad('str', 5, 'đẹp')
 ----
 đẹstr
 
+
+### ilike ###
+# ILIKE tests lifted from Cockroach
+
+query B
+SELECT 'TEST' ILIKE 'TEST'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'test'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'TE%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE '%E%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE '%e%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'TES_'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'TE_%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'TE_'
+----
+false
+
+query B
+SELECT 'TEST' ILIKE '%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE '%R'
+----
+false
+
+query B
+SELECT 'TEST' ILIKE 'TESTER'
+----
+false
+
+query B
+SELECT 'TEST' ILIKE 'tester'
+----
+false
+
+query B
+SELECT 'TEST' ILIKE ''
+----
+false
+
+query B
+SELECT '' ILIKE ''
+----
+true
+
+query B
+SELECT 'T' ILIKE '_'
+----
+true
+
+query B
+SELECT 'TE' ILIKE '_'
+----
+false
+
+query B
+SELECT 'TEST' NOT ILIKE '%E%'
+----
+false
+
+query B
+SELECT 'TEST' NOT ILIKE 'TES_'
+----
+false
+
+query B
+SELECT 'TEST' NOT ILIKE 'TeS_'
+----
+false
+
+query B
+SELECT 'TEST' NOT ILIKE 'TE_'
+----
+true
+
 # Invalid type mods
 
 query error length for type varchar must be within \[1-10485760\], have 0

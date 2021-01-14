@@ -114,6 +114,18 @@ tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
 [file sources](/sql/create-source/text-file) that were created in non-tailing
 mode (`tail = false`).
 
+{{< warning >}}
+
+Many PostgreSQL drivers wait for a query to complete before returning its
+results. Since `TAIL` can run forever, naively executing a `TAIL` using your
+driver's standard query API may never return.
+
+Either use an API in your driver that does not buffer rows or use the
+[`FETCH`](/sql/fetch) statement to fetch rows from a `TAIL` in batches.
+See the [examples](#examples) for details.
+
+{{< /warning >}}
+
 {{< version-changed v0.5.1 >}}
 The timestamp and diff information moved to leading, well-typed columns.
 Previously the timestamp and diff information was encoded in a human-readable

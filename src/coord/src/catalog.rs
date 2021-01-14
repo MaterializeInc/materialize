@@ -1804,13 +1804,11 @@ impl ExprHumanizer for ConnCatalog<'_> {
             List { element_type, .. } => {
                 format!("{} list", self.humanize_scalar_type(element_type))
             }
-            Map { value_type, .. } => {
-                format!(
-                    "map[{}=>{}]",
-                    self.humanize_scalar_type(&ScalarType::String),
-                    self.humanize_scalar_type(value_type)
-                )
-            }
+            Map { value_type, .. } => format!(
+                "map[{}=>{}]",
+                self.humanize_scalar_type(&ScalarType::String),
+                self.humanize_scalar_type(value_type)
+            ),
             Record { fields } => format!(
                 "record({})",
                 fields
