@@ -93,8 +93,8 @@ query TTT colnames
 SHOW COLUMNS FROM t
 ----
 name  nullable  type
- a    true      int4
- b    true      int4
+ a    true      integer
+ b    true      integer
 
 # Tests on int8 sums to make sure we handle overflow and underflow correctly
 

@@ -600,7 +600,7 @@ SELECT '你' || '好'
 ----
 你好
 
-query error no overload for bool \|\| bool
+query error no overload for boolean \|\| boolean
 SELECT true || false
 
 query T

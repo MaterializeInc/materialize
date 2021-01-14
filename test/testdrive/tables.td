@@ -33,7 +33,7 @@ materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" \"pg
 > DROP TABLE s;
 
 ! CREATE TABLE s (a date DEFAULT 42)
-DEFAULT expression does not support casting from int4 to date
+DEFAULT expression does not support casting from integer to date
 
 ! CREATE TABLE s (a int, b int DEFAULT a + 3)
 column "a" does not exist
@@ -64,10 +64,12 @@ cannot drop 'materialize.public.t_primary_idx' as it is the default index for a 
 > SHOW COLUMNS in t;
 name       nullable  type
 -------------------------
-a          true       int4
+a          true       integer
 b          false      text
+
 > SHOW COLUMNS in t WHERE name = 'a'
-a  true  int4
+a  true  integer
+
 > SHOW COLUMNS in t LIKE 'b%'
 b  false  text
 
@@ -150,7 +152,7 @@ null value in column "b" violates not-null constraint
 null value in column "b" violates not-null constraint
 
 ! INSERT INTO t VALUES ('d', 4);
-invalid input syntax for int4: invalid digit found in string: "d"
+invalid input syntax for integer: invalid digit found in string: "d"
 
 # Test that the INSERT body can be a SELECT query.
 > INSERT INTO t SELECT 3, 'd'
@@ -160,7 +162,7 @@ invalid input syntax for int4: invalid digit found in string: "d"
 
 # ...but not in complicated VALUES clauses, per PostgreSQL.
 ! INSERT INTO t VALUES ('4', 'e') LIMIT 0
-column "a" is of type int4 but expression is of type text
+column "a" is of type integer but expression is of type text
 
 # Test that assignment casts occur when possible...
 > INSERT INTO t VALUES (5.0, 'f');
@@ -168,14 +170,14 @@ column "a" is of type int4 but expression is of type text
 
 # ...but not when impossible.
 ! INSERT INTO t VALUES (DATE '2020-01-01', 'bad')
-column "a" is of type int4 but expression is of type date
+column "a" is of type integer but expression is of type date
 
 # Attempting to insert JSON into an int column is particularly interesting.
 # While there is an "explicit" cast from `jsonb` to `int`, there is no
 # "assignment" cast, and INSERT is only allowed to use assignment/implicit
 # casts.
 ! INSERT INTO t VALUES (JSON '1', 'bad')
-column "a" is of type int4 but expression is of type jsonb
+column "a" is of type integer but expression is of type jsonb
 
 > SELECT * FROM t;
 a       b
@@ -306,10 +308,10 @@ a      b    c
 column "notpresent" of relation "materialize.public.t" does not exist
 
 ! INSERT INTO t (a, b, c) VALUES ('str', 1, 2);
-invalid input syntax for int4: invalid digit found in string: "str"
+invalid input syntax for integer: invalid digit found in string: "str"
 
 ! INSERT INTO t (b, a, c) VALUES (1, 'str', 2);
-invalid input syntax for int4: invalid digit found in string: "str"
+invalid input syntax for integer: invalid digit found in string: "str"
 
 ! INSERT INTO t (d, c, b, a) VALUES (1, 1, 1, 'str');
 column "d" of relation "materialize.public.t" does not exist

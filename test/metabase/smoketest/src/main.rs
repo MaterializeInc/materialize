@@ -127,15 +127,15 @@ async fn main() -> Result<(), anyhow::Error> {
                 },
                 TableField {
                     name: "id".into(),
-                    database_type: "int4".into(),
-                    base_type: "type/Integer".into(),
+                    database_type: "integer".into(),
+                    base_type: "type/*".into(),
                     special_type: Some("type/PK".into()),
                 },
                 TableField {
                     name: "quantity".into(),
-                    database_type: "int4".into(),
-                    base_type: "type/Integer".into(),
-                    special_type: Some("type/Quantity".into()),
+                    database_type: "integer".into(),
+                    base_type: "type/*".into(),
+                    special_type: Some("type/Category".into()),
                 },
                 TableField {
                     name: "total".into(),

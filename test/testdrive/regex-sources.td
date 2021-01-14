@@ -26,7 +26,7 @@ path               true      text
 search_kw          true      text
 product_detail_id  true      text
 code               true      text
-mz_line_no         false     int8
+mz_line_no         false     bigint
 
 > SELECT * FROM regex_source ORDER BY mz_line_no
 ip            ts                      path                                           search_kw           product_detail_id  code  mz_line_no
@@ -53,7 +53,7 @@ path               true      text
 search_kw          true      text
 product_detail_id  true      text
 code               true      text
-mz_line_no         false     int8
+mz_line_no         false     bigint
 
 > SELECT * FROM regex_source_named_cols ORDER BY mz_line_no
 ip            ts                      path                                           search_kw           product_detail_id  code  mz_line_no

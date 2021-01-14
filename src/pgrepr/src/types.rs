@@ -154,7 +154,34 @@ impl Type {
 
     /// Returns the name that PostgreSQL uses for this type.
     pub fn name(&self) -> &'static str {
-        self.inner().name()
+        // postgres_types' `name()` uses the pg_catalog name, and not the pretty
+        // SQL standard name.
+        match self.inner() {
+            &postgres_types::Type::BOOL_ARRAY => "boolean[]",
+            &postgres_types::Type::BYTEA_ARRAY => "bytea[]",
+            &postgres_types::Type::DATE_ARRAY => "date[]",
+            &postgres_types::Type::FLOAT4_ARRAY => "real[]",
+            &postgres_types::Type::FLOAT8_ARRAY => "double precision[]",
+            &postgres_types::Type::INT4_ARRAY => "integer[]",
+            &postgres_types::Type::INT8_ARRAY => "bigint[]",
+            &postgres_types::Type::INTERVAL_ARRAY => "interval[]",
+            &postgres_types::Type::JSONB_ARRAY => "jsonb[]",
+            &postgres_types::Type::NUMERIC_ARRAY => "numeric[]",
+            &postgres_types::Type::OID_ARRAY => "oid[]",
+            &postgres_types::Type::RECORD_ARRAY => "record[]",
+            &postgres_types::Type::TEXT_ARRAY => "text[]",
+            &postgres_types::Type::TIME_ARRAY => "time[]",
+            &postgres_types::Type::TIMESTAMP_ARRAY => "timestamp[]",
+            &postgres_types::Type::TIMESTAMPTZ_ARRAY => "timestamp with time zone[]",
+            &postgres_types::Type::UUID_ARRAY => "uuid[]",
+            &postgres_types::Type::BOOL => "boolean",
+            &postgres_types::Type::FLOAT4 => "real",
+            &postgres_types::Type::FLOAT8 => "double precision",
+            &postgres_types::Type::INT4 => "integer",
+            &postgres_types::Type::INT8 => "bigint",
+            &postgres_types::Type::TIMESTAMPTZ => "timestamp with time zone",
+            other => other.name(),
+        }
     }
 
     /// Returns the [OID] of this type.

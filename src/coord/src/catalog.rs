@@ -1817,8 +1817,18 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .join(",")
             ),
             ty => {
-                let full_name = self.get_item_by_oid(&pgrepr::Type::from(ty).oid()).name();
-                let res = self.minimal_qualification(full_name).to_string();
+                let pgrepr_type = pgrepr::Type::from(ty);
+                let res = if self
+                    .search_path
+                    .iter()
+                    .any(|schema| schema == &PG_CATALOG_SCHEMA)
+                {
+                    pgrepr_type.name().to_string()
+                } else {
+                    // If PG_CATALOG_SCHEMA is not in search path, you need
+                    // qualified object name to refer to type.
+                    self.get_item_by_oid(&pgrepr_type.oid()).name().to_string()
+                };
                 if let ScalarType::Decimal(p, s) = typ {
                     format!("{}({},{})", res, p, s)
                 } else {

@@ -11,7 +11,7 @@ mode cockroach
 
 # Test coercion behavior of multidimensional arrays.
 
-query error ARRAY expression cannot be cast to uniform type: int4\[\] vs text\[\]
+query error ARRAY expression cannot be cast to uniform type: integer\[\] vs text\[\]
 SELECT ARRAY[ARRAY[1, 2], ARRAY['3', '4']]
 
 query T
@@ -51,15 +51,15 @@ SELECT 1 = ANY(ARRAY[2])
 ----
 false
 
-query error ANY operand array must have type int4\[\], not type text\[\]
+query error ANY operand array must have type integer\[\], not type text\[\]
 SELECT 1 = ANY(ARRAY['1', '2'])
 ----
 true
 
-query error ANY operand array must have type int4\[\], not type text\[\]
+query error ANY operand array must have type integer\[\], not type text\[\]
 SELECT 1 = ANY(ARRAY['hi'::text])
 
-query error invalid input syntax for int4: invalid digit found in string: "hi"
+query error invalid input syntax for integer: invalid digit found in string: "hi"
 select 'hi' = any(array[1]);
 
 query error cannot determine type of empty array
@@ -72,7 +72,7 @@ SELECT 'hi'::text = ANY(ARRAY[]::text[])
 ----
 false
 
-query error ARRAY expression cannot be cast to uniform type: int4 vs text
+query error ARRAY expression cannot be cast to uniform type: integer vs text
 SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
 
 query B
