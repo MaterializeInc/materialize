@@ -88,38 +88,34 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), Error> {
-    let (aws_region, aws_account, aws_credentials) =
-        match (args.aws_region.parse(), args.aws_endpoint) {
-            (Ok(region), None) => {
-                // Standard AWS region without a custom endpoint. Try to find actual AWS
-                // credentials.
-                let timeout = Duration::from_secs(5);
-                let account = aws::account(timeout)
-                    .await
-                    .err_ctx("getting AWS account details")?;
-                let credentials = aws::credentials(timeout)
-                    .await
-                    .err_ctx("getting AWS account credentials")?;
-                (region, account, credentials)
-            }
-            (_, aws_endpoint) => {
-                // Either a non-standard AWS region, a custom endpoint, or both. Assume
-                // dummy authentication, and just use default dummy credentials in the
-                // default config.
-                let region = rusoto_core::Region::Custom {
-                    name: args.aws_region,
-                    endpoint: aws_endpoint.unwrap_or_else(|| "http://localhost:4566".into()),
-                };
-                let account = "000000000000";
-                let credentials = AwsCredentials::new(
-                    "dummy-access-key-id",
-                    "dummy-secret-access-key",
-                    None,
-                    None,
-                );
-                (region, account.into(), credentials)
-            }
+    let (aws_region, aws_account, aws_credentials) = if let Ok(region) = args.aws_region.parse() {
+        let region: rusoto_core::Region = region;
+        // Standard region, which means we should ignore the endpoint, whether
+        // or not it was provided.
+        let timeout = Duration::from_secs(5);
+        let account = aws::account(timeout)
+            .await
+            .err_ctx("getting AWS account details")?;
+        let credentials = aws::credentials(timeout)
+            .await
+            .err_ctx("getting AWS account credentials")?;
+        (region, account, credentials)
+    } else {
+        // If the region doesn't parse that means we have a "custom" region.
+        // For us that means 'LocalStack' which requires an endpoint but the
+        // region name itself doesn't matter, and credentials are ignored.
+        let region = rusoto_core::Region::Custom {
+            name: args.aws_region,
+            endpoint: args
+                .aws_endpoint
+                .and_then(|e| if e == "" { None } else { Some(e) })
+                .unwrap_or_else(|| "http://localhost:4566".into()),
         };
+        let account = "000000000000";
+        let credentials =
+            AwsCredentials::new("dummy-access-key-id", "dummy-secret-access-key", None, None);
+        (region, account.into(), credentials)
+    };
 
     let config = Config {
         kafka_addr: args.kafka_addr,
