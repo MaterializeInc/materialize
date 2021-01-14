@@ -12,7 +12,7 @@ use std::process;
 use std::time::Duration;
 
 use aws_util::aws;
-use rusoto_credential::AwsCredentials;
+use rusoto_credential::{AwsCredentials, ChainProvider, ProvideAwsCredentials};
 use structopt::StructOpt;
 use url::Url;
 
@@ -89,16 +89,20 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), Error> {
     let (aws_region, aws_account, aws_credentials) = if let Ok(region) = args.aws_region.parse() {
-        let region: rusoto_core::Region = region;
         // Standard region, which means we should ignore the endpoint, whether
         // or not it was provided.
+        let region: rusoto_core::Region = region;
+
         let timeout = Duration::from_secs(5);
-        let account = aws::account(timeout)
+        let mut provider = ChainProvider::new();
+        provider.set_timeout(timeout);
+        let credentials = provider
+            .credentials()
+            .await
+            .err_ctx("Retrieving aws credentials")?;
+        let account = aws::account(provider, region.clone(), timeout)
             .await
             .err_ctx("getting AWS account details")?;
-        let credentials = aws::credentials(timeout)
-            .await
-            .err_ctx("getting AWS account credentials")?;
         (region, account, credentials)
     } else {
         // If the region doesn't parse that means we have a "custom" region.

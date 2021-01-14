@@ -407,9 +407,14 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
+            let aws_info = aws_connect_info(&mut with_options, Some(region))?;
+            futures::executor::block_on(aws_util::aws::validate_credentials(
+                aws_info.clone(),
+                Duration::from_secs(1),
+            ))?;
             let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                 stream_name,
-                aws_info: aws_connect_info(&mut with_options, Some(region))?,
+                aws_info,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
@@ -436,6 +441,11 @@ pub fn plan_create_source(
         }
         Connector::S3 { bucket, pattern } => {
             scx.require_experimental_mode("S3 Sources")?;
+            let aws_info = aws_connect_info(&mut with_options, None)?;
+            futures::executor::block_on(aws_util::aws::validate_credentials(
+                aws_info.clone(),
+                Duration::from_secs(1),
+            ))?;
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
                 bucket: bucket.clone(),
                 pattern: pattern
@@ -447,7 +457,7 @@ pub fn plan_create_source(
                             .build()
                     })
                     .transpose()?,
-                aws_info: aws_connect_info(&mut with_options, None)?,
+                aws_info,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)

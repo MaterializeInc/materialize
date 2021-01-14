@@ -15,12 +15,10 @@ use std::time::Duration;
 use anyhow::Context;
 use log::info;
 use rusoto_core::HttpClient;
-use rusoto_credential::{
-    AutoRefreshingProvider, AwsCredentials, ChainProvider, ProvideAwsCredentials, StaticProvider,
-};
+use rusoto_credential::{AutoRefreshingProvider, AwsCredentials, ChainProvider, StaticProvider};
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput, Shard};
 
-use crate::aws::ConnectInfo;
+use crate::aws::{ConnectInfo, DEFAULT_AWS_TIMEOUT};
 
 /// Construct a KinesisClient
 ///
@@ -36,6 +34,12 @@ pub async fn client(conn_info: ConnectInfo) -> Result<KinesisClient, anyhow::Err
     let kinesis_client = if let Some(creds) = conn_info.credentials {
         info!("Creating a new Kinesis client from provided access_key and secret_access_key");
         let provider = StaticProvider::from(AwsCredentials::from(creds));
+        crate::aws::account(
+            provider.clone(),
+            conn_info.region.clone(),
+            DEFAULT_AWS_TIMEOUT,
+        )
+        .await?;
         KinesisClient::new_with(request_dispatcher, provider, conn_info.region)
     } else {
         info!(
@@ -44,9 +48,14 @@ pub async fn client(conn_info: ConnectInfo) -> Result<KinesisClient, anyhow::Err
         );
         let mut provider = ChainProvider::new();
         provider.set_timeout(Duration::from_secs(10));
-        provider.credentials().await?; // ensure that credentials exist
         let provider =
             AutoRefreshingProvider::new(provider).context("generating AWS credentials")?;
+        crate::aws::account(
+            provider.clone(),
+            conn_info.region.clone(),
+            DEFAULT_AWS_TIMEOUT,
+        )
+        .await?;
 
         KinesisClient::new_with(request_dispatcher, provider, conn_info.region)
     };
