@@ -414,27 +414,12 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     let (_server, mut client) = util::start_server(config)?;
 
     client.batch_execute("CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);")?;
-    // All records should be read into view before we start tailing.
-    thread::sleep(Duration::from_millis(100));
 
-    let mut tail_reader = client
-        .copy_out("COPY (TAIL foo WITH (SNAPSHOT = false)) TO STDOUT")?
-        .split(b'\n');
-    let mut without_snapshot_count = 0;
-    while let Some(_value) = tail_reader.next().transpose()? {
-        without_snapshot_count += 1;
-    }
-    assert_eq!(0, without_snapshot_count);
-    drop(tail_reader);
+    let tail = client.query("TAIL foo WITH (SNAPSHOT = false)", &[])?;
+    assert_eq!(0, tail.len());
 
-    let mut tail_reader = client
-        .copy_out("COPY (TAIL foo WITH (SNAPSHOT)) TO STDOUT")?
-        .split(b'\n');
-    let mut with_snapshot_count = 0;
-    while let Some(_value) = tail_reader.next().transpose()? {
-        with_snapshot_count += 1;
-    }
-    assert_eq!(3, with_snapshot_count);
+    let tail = client.query("TAIL foo WITH (SNAPSHOT)", &[])?;
+    assert_eq!(3, tail.len());
 
     Ok(())
 }
