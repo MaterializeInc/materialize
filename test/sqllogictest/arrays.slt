@@ -11,7 +11,7 @@ mode cockroach
 
 # Test coercion behavior of multidimensional arrays.
 
-query error ARRAY expression does not have uniform type: Array\(Int32\) vs Array\(String\)
+query error ARRAY expression cannot be cast to uniform type: int4\[\] vs text\[\]
 SELECT ARRAY[ARRAY[1, 2], ARRAY['3', '4']]
 
 query T
@@ -72,7 +72,7 @@ SELECT 'hi'::text = ANY(ARRAY[]::text[])
 ----
 false
 
-query error ARRAY expression does not have uniform type: Int32 vs String
+query error ARRAY expression cannot be cast to uniform type: int4 vs text
 SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
 
 query B

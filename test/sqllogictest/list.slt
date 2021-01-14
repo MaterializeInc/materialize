@@ -22,7 +22,7 @@ SELECT (LIST[1,2,3])::text
 ----
 {1,2,3}
 
-query error LIST expression does not have uniform type: Int32 vs List \{ element_type: Int32, custom_oid: None \}
+query error LIST expression cannot be cast to uniform type: int4 vs int4 list
 SELECT LIST[1,LIST[2,3]]
 
 query T
