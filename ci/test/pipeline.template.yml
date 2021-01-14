@@ -84,7 +84,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive
+          run: ci
 
   - id: kafka-ssl
     label: ":lock: Kafka SSL smoke test"

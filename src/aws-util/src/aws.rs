@@ -9,7 +9,8 @@
 
 //! Utility functions for AWS.
 
-use rusoto_core::Region;
+use anyhow::Context;
+use rusoto_core::{HttpClient, Region};
 use rusoto_credential::{AwsCredentials, ChainProvider, ProvideAwsCredentials};
 use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient};
 use serde::{Deserialize, Serialize};
@@ -73,7 +74,10 @@ impl ConnectInfo {
 ///
 /// For details about STS, see AWS documentation.
 pub async fn account(timeout: Duration) -> Result<String, anyhow::Error> {
-    let sts_client = StsClient::new(Region::default());
+    let provider = ChainProvider::new();
+    let dispatcher = HttpClient::new().context("creating HTTP client for Kinesis client")?;
+    let sts_client = StsClient::new_with(dispatcher, provider, Region::default());
+
     let get_identity = sts_client.get_caller_identity(GetCallerIdentityRequest {});
     let account = time::timeout(timeout, get_identity)
         .await
