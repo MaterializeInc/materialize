@@ -502,7 +502,6 @@ fn test_tail_unmaterialized() -> Result<(), Box<dyn Error>> {
 fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let temp_dir = tempfile::tempdir()?;
     let (server, _) = util::start_server(util::Config::default())?;
 
     // We have to use the async PostgreSQL client so that we can ungracefully
@@ -511,19 +510,12 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     server.runtime.block_on(async {
         let (client, conn_task) = server.connect_async().await?;
 
-        // Create a tailing file source that never produces any data. This is
-        // the simplest way to cause a TAIL to never terminate.
-        let path = Path::join(temp_dir.path(), "file");
-        tokio::fs::write(&path, "").await?;
-        client
-            .batch_execute(&*format!(
-                "CREATE MATERIALIZED SOURCE s FROM FILE '{}' WITH (tail = true) FORMAT BYTES",
-                path.display()
-            ))
-            .await?;
+        // Create a table with no data that we can TAIL. This is the simplest
+        // way to cause a TAIL to never terminate.
+        client.batch_execute("CREATE TABLE t ()").await?;
 
         // Launch the ill-fated tail.
-        client.copy_out("COPY (TAIL s) TO STDOUT").await?;
+        client.copy_out("COPY (TAIL t) TO STDOUT").await?;
 
         // Un-gracefully abort the connection.
         conn_task.abort();
