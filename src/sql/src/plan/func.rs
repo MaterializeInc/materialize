@@ -1976,14 +1976,27 @@ lazy_static! {
                 })
             },
 
+            // ILIKE
+            "~~*" => Scalar {
+                params!(String, String) => IsLikePatternMatch { case_insensitive: true }
+            },
+            "!~~*" => Scalar {
+                params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
+                    Ok(lhs
+                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: true })
+                        .call_unary(UnaryFunc::Not))
+                })
+            },
+
+
             // LIKE
             "~~" => Scalar {
-                params!(String, String) => IsLikePatternMatch
+                params!(String, String) => IsLikePatternMatch { case_insensitive: false }
             },
             "!~~" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
-                        .call_binary(rhs, IsLikePatternMatch)
+                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not))
                 })
             },

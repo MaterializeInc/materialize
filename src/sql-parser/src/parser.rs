@@ -806,10 +806,13 @@ impl<'a> Parser<'a> {
             Token::Op(s) => Some(s.as_str()),
             Token::Eq => Some("="),
             Token::Star => Some("*"),
+            Token::Keyword(ILIKE) => Some("~~*"),
             Token::Keyword(LIKE) => Some("~~"),
             Token::Keyword(NOT) => {
                 if self.parse_keyword(LIKE) {
                     Some("!~~")
+                } else if self.parse_keyword(ILIKE) {
+                    Some("!~~*")
                 } else {
                     None
                 }
@@ -1056,12 +1059,14 @@ impl<'a> Parser<'a> {
                     // precedence.
                     Some(Token::Keyword(IN)) => Precedence::Like,
                     Some(Token::Keyword(BETWEEN)) => Precedence::Like,
+                    Some(Token::Keyword(ILIKE)) => Precedence::Like,
                     Some(Token::Keyword(LIKE)) => Precedence::Like,
                     _ => Precedence::Zero,
                 },
                 Token::Keyword(IS) | Token::Keyword(ISNULL) => Precedence::Is,
                 Token::Keyword(IN) => Precedence::Like,
                 Token::Keyword(BETWEEN) => Precedence::Like,
+                Token::Keyword(ILIKE) => Precedence::Like,
                 Token::Keyword(LIKE) => Precedence::Like,
                 Token::Op(s) => match s.as_str() {
                     "<" | "<=" | "<>" | "!=" | ">" | ">=" => Precedence::Cmp,
