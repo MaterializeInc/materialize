@@ -1976,6 +1976,19 @@ lazy_static! {
                 })
             },
 
+            // ILIKE
+            "~~*" => Scalar {
+                params!(String, String) => IsILikePatternMatch
+            },
+            "!~~*" => Scalar {
+                params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
+                    Ok(lhs
+                        .call_binary(rhs, IsILikePatternMatch)
+                        .call_unary(UnaryFunc::Not))
+                })
+            },
+
+
             // LIKE
             "~~" => Scalar {
                 params!(String, String) => IsLikePatternMatch

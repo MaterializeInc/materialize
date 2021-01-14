@@ -734,6 +734,425 @@ SELECT lpad('str', 5, 'đẹp')
 ----
 đẹstr
 
+
+### ilike ###
+# Cockroach LIKE tests with ILIKE instead.
+
+query B
+SELECT 'TEST' ILIKE 'TEST'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'test'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'TESTER'
+----
+false
+
+query B
+SELECT 'TEST' ILIKE ''
+----
+false
+
+
+query B
+SELECT '' ILIKE ''
+----
+true
+
+# Regex special characters.
+
+query B
+SELECT '[' ILIKE '['
+----
+true
+
+query B
+SELECT '.' ILIKE '.'
+----
+true
+
+query B
+SELECT '.A' ILIKE '._'
+----
+true
+
+query B
+SELECT 'AB' ILIKE '._'
+----
+false
+
+query B
+SELECT '.*B' ILIKE '.*B'
+----
+true
+
+query B
+SELECT 'AB' ILIKE '.*B'
+----
+false
+
+# Escaped character cases.
+
+query B
+SELECT '[' ILIKE '\['
+----
+true
+
+query B
+SELECT '.' ILIKE '\.'
+----
+true
+
+query B
+SELECT '\' ILIKE '\\%'
+----
+true
+
+query B
+SELECT '\' ILIKE '%\\'
+----
+true
+
+query B
+SELECT '\' ILIKE '%\\%'
+----
+true
+
+query B
+SELECT '\%' ILIKE '\\\%'
+----
+true
+
+query B
+SELECT '\.*' ILIKE '\\.*'
+----
+true
+
+query B
+SELECT '\.*' ILIKE '\\.\*'
+----
+true
+
+query B
+SELECT '\.*' ILIKE '\\\.\*'
+----
+true
+
+query B
+SELECT '\\.' ILIKE '\\.'
+----
+false
+
+query B
+SELECT '\\.' ILIKE '\\\\.'
+----
+true
+
+query B
+SELECT '\\.' ILIKE '\\\\\.'
+----
+true
+
+query B
+SELECT '\A' ILIKE '\\A'
+----
+true
+
+query B
+SELECT 'A' ILIKE '\\A'
+----
+false
+
+query B
+SELECT '_' ILIKE '\_'
+----
+true
+
+query B
+SELECT '\' ILIKE '\\'
+----
+true
+
+query B
+SELECT 'A\A' ILIKE '_\\_'
+----
+true
+
+query B
+SELECT '__' ILIKE '_\\_'
+----
+false
+
+query B
+SELECT '\_' ILIKE '\\\_'
+----
+true
+
+query B
+SELECT '\\' ILIKE '\\'
+----
+false
+
+query B
+SELECT '\\' ILIKE '\\_'
+----
+true
+
+query B
+SELECT '\\' ILIKE '_\\'
+----
+true
+
+query B
+SELECT 'A\' ILIKE '_\\'
+----
+true
+
+query B
+SELECT '%' ILIKE '\%'
+----
+true
+
+query B
+SELECT 'ABC' ILIKE '\AB%'
+----
+true
+
+query B
+SELECT 'ABC' ILIKE '\AB_'
+----
+true
+
+query B
+SELECT 'ABC' ILIKE '%B\C'
+----
+true
+
+query B
+SELECT 'ABC' ILIKE '_B\C'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'TE\ST'
+----
+true
+
+query B
+SELECT '_漢' ILIKE '\__'
+----
+true
+
+query B
+SELECT '漢漢' ILIKE '漢\漢'
+----
+true
+
+query B
+SELECT '_漢' ILIKE '\_\漢'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'TE%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE '%E%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE '%e%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'TES_'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'TE_%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE 'TE_'
+----
+false
+
+query B
+SELECT 'TEST' ILIKE '%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE '%R'
+----
+false
+
+query B
+SELECT 'T' ILIKE '\_'
+----
+false
+
+query B
+SELECT 'T' ILIKE '\%'
+----
+false
+
+query B
+SELECT 'TE_T' ILIKE 'TE\_T'
+----
+true
+
+query B
+SELECT 'TE\AT' ILIKE 'TE\_T'
+----
+false
+
+query B
+SELECT 'TES%T' ILIKE 'TES\%T'
+----
+true
+
+query B
+SELECT 'TES\AT' ILIKE 'TES\%T'
+----
+false
+
+query B
+SELECT 'T' ILIKE '_'
+----
+true
+
+query B
+SELECT 'TE' ILIKE '_'
+----
+false
+
+query B
+SELECT 'TE' ILIKE '_%'
+----
+true
+
+query B
+SELECT 'T' ILIKE '_%'
+----
+true
+
+query B
+SELECT '' ILIKE '_%'
+----
+false
+
+query B
+SELECT 'TE' ILIKE '%_'
+----
+true
+
+query B
+SELECT '' ILIKE '%_'
+----
+false
+
+query B
+SELECT 'T' ILIKE '%_'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE '_ES_'
+----
+true
+
+query B
+SELECT '' ILIKE '__'
+----
+false
+
+query B
+SELECT 'A' ILIKE 'T_'
+----
+false
+
+query B
+SELECT 'A' ILIKE '_T'
+----
+false
+
+query B
+SELECT 'TEST' ILIKE '_E%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE '_E\%'
+----
+false
+
+query B
+SELECT 'TES_' ILIKE '%S\_'
+----
+true
+
+query B
+SELECT 'TES%' ILIKE '%S\%'
+----
+true
+
+query B
+SELECT 'TES_' ILIKE '_ES\_'
+----
+true
+
+query B
+SELECT 'TES%' ILIKE '_ES\%'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE '%S_'
+----
+true
+
+query B
+SELECT 'TEST' ILIKE '%S\_'
+----
+false
+
+query B
+SELECT 'TEST' NOT ILIKE '%E%'
+----
+false
+
+query B
+SELECT 'TEST' NOT ILIKE 'TES_'
+----
+false
+
+query B
+SELECT 'TEST' NOT ILIKE 'TeS_'
+----
+false
+
+query B
+SELECT 'TEST' NOT ILIKE 'TE_'
+----
+true
+
+# Test bad escaping.
+
+query error unterminated escape sequence in LIKE
+SELECT 'a' ILIKE '\'
+
 # Invalid type mods
 
 query error length for type varchar must be within \[1-10485760\], have 0

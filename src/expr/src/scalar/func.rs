@@ -2053,6 +2053,7 @@ pub enum BinaryFunc {
     Lte,
     Gt,
     Gte,
+    IsILikePatternMatch,
     IsLikePatternMatch,
     IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
@@ -2173,6 +2174,7 @@ impl BinaryFunc {
             BinaryFunc::Lte => Ok(eager!(lte)),
             BinaryFunc::Gt => Ok(eager!(gt)),
             BinaryFunc::Gte => Ok(eager!(gte)),
+            BinaryFunc::IsILikePatternMatch => eager!(is_ilike_pattern_match_dynamic),
             BinaryFunc::IsLikePatternMatch => eager!(is_like_pattern_match_dynamic),
             BinaryFunc::IsRegexpMatch { case_insensitive } => {
                 eager!(is_regexp_match_dynamic, *case_insensitive)
@@ -2269,7 +2271,7 @@ impl BinaryFunc {
                 ScalarType::Bool.nullable(in_nullable)
             }
 
-            IsLikePatternMatch | IsRegexpMatch { .. } => {
+            IsILikePatternMatch | IsLikePatternMatch | IsRegexpMatch { .. } => {
                 // The output can be null if the pattern is invalid.
                 ScalarType::Bool.nullable(true)
             }
@@ -2562,7 +2564,8 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat => true,
-            IsLikePatternMatch
+            IsILikePatternMatch
+            | IsLikePatternMatch
             | ToCharTimestamp
             | ToCharTimestampTz
             | DatePartInterval
@@ -2645,6 +2648,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Lte => f.write_str("<="),
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
+            BinaryFunc::IsILikePatternMatch => f.write_str("ilike"),
             BinaryFunc::IsLikePatternMatch => f.write_str("like"),
             BinaryFunc::IsRegexpMatch {
                 case_insensitive: false,
@@ -3462,10 +3466,23 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     ))
 }
 
+fn is_ilike_pattern_match_dynamic<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    inner_is_like_pattern_match_dynamic(
+        a.unwrap_str().to_lowercase().as_str(),
+        b.unwrap_str().to_lowercase().as_str(),
+    )
+}
+
 fn is_like_pattern_match_dynamic<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let haystack = a.unwrap_str();
-    let needle = like_pattern::build_regex(b.unwrap_str())?;
-    Ok(Datum::from(needle.is_match(haystack)))
+    inner_is_like_pattern_match_dynamic(a.unwrap_str(), b.unwrap_str())
+}
+
+fn inner_is_like_pattern_match_dynamic<'a>(
+    haystack: &str,
+    needle: &str,
+) -> Result<Datum<'a>, EvalError> {
+    let needle = like_pattern::build_regex(needle)?;
+    Ok(Datum::from(needle.is_match(haystack.as_ref())))
 }
 
 fn is_regexp_match_static<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
