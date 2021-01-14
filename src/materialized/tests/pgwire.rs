@@ -10,12 +10,15 @@
 //! Integration tests for pgwire functionality.
 
 use std::error::Error;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
+use fallible_iterator::FallibleIterator;
 use ore::collections::CollectionExt;
 use pgrepr::{Numeric, Record};
+use postgres::binary_copy::BinaryCopyOutIter;
 use repr::adt::decimal::Significand;
 
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -278,6 +281,48 @@ fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
     assert!(client.simple_query("asdfjkl;").is_err());
     // This will hang if #2880 is not fixed.
     assert!(client.simple_query("SELECT 1").is_ok());
+
+    Ok(())
+}
+
+#[test]
+fn test_copy() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+
+    // Ensure empty COPY result sets work. We used to mishandle this with binary
+    // COPY.
+    {
+        let tail = BinaryCopyOutIter::new(
+            client.copy_out("COPY (SELECT 1 WHERE FALSE) TO STDOUT (FORMAT BINARY)")?,
+            &[Type::INT4],
+        );
+        assert_eq!(tail.count()?, 0);
+
+        let mut buf = String::new();
+        client
+            .copy_out("COPY (SELECT 1 WHERE FALSE) TO STDOUT")?
+            .read_to_string(&mut buf)?;
+        assert_eq!(buf, "");
+    }
+
+    // Test basic, non-empty COPY.
+    {
+        let tail = BinaryCopyOutIter::new(
+            client.copy_out("COPY (VALUES (NULL, 2), (E'\t', 4)) TO STDOUT (FORMAT BINARY)")?,
+            &[Type::TEXT, Type::INT4],
+        );
+        let rows: Vec<(Option<String>, Option<i32>)> =
+            tail.map(|row| Ok((row.get(0), row.get(1)))).collect()?;
+        assert_eq!(rows, &[(None, Some(2)), (Some("\t".into()), Some(4))]);
+
+        let mut buf = String::new();
+        client
+            .copy_out("COPY (VALUES (NULL, 2), (E'\t', 4)) TO STDOUT")?
+            .read_to_string(&mut buf)?;
+        assert_eq!(buf, "\\N\t2\n\\t\t4\n");
+    }
 
     Ok(())
 }
