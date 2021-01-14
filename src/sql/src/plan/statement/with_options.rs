@@ -162,7 +162,7 @@ mod test {
     use crate::ast::Value;
 
     #[test]
-    fn with_options_errirs_if_endpoint_missing_for_invalid_region() {
+    fn with_options_errors_if_endpoint_missing_for_invalid_region() {
         let mut map = BTreeMap::new();
         map.insert("region".to_string(), Value::String("nonsense".into()));
         assert!(aws_connect_info(&mut map, None).is_err());

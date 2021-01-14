@@ -8,6 +8,69 @@
 # by the Apache License, Version 2.0.
 
 version: '3.7'
+
+mzworkflows:
+  # Run tests with no support for s3
+  local:
+    steps:
+      - step: workflow
+        workflow: start-deps
+      - step: run
+        service: testdrive
+
+  # Run tests with s3 stubbed out, no credentials needed
+  local-aws:
+    env:
+      AWS_REGION: localstack
+      AWS_ENDPOINT: http://localstack:4566
+    steps:
+      - step: start-services
+        services: [localstack]
+      - step: workflow
+        workflow: start-deps
+      - step: wait-for-tcp
+        host: localstack
+        port: 4566
+      - step: run
+        service: testdrive
+
+  # Run tests, requires credentials to be present. See guide-testing for
+  # details.
+  remote:
+    env:
+      AWS_REGION: us-east-2
+      AWS_ENDPOINT: ''
+    steps:
+      - step: workflow
+        workflow: start-deps
+      - step: run
+        service: testdrive
+        command: ${TD_TEST:-*.td esoteric/*.td}
+
+  # Run CI tests
+  ci:
+    env:
+      AWS_REGION: us-east-2
+      AWS_ENDPOINT: ''
+    steps:
+      - step: workflow
+        workflow: start-deps
+      - step: run
+        service: testdrive
+        command: --ci-output *.td esoteric/*.td
+
+  start-deps:
+    steps:
+      - step: start-services
+        services: [kafka, schema-registry, materialized]
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
+      - step: wait-for-tcp
+        host: kafka
+        port: 9092
+      - step: wait-for-mz
+
 services:
   testdrive:
     mzbuild: testdrive
@@ -15,22 +78,25 @@ services:
       - bash
       - -c
       - >-
-        wait-for-it --timeout=30 kafka:9092 &&
-        wait-for-it --timeout=30 schema-registry:8081 &&
-        wait-for-it --timeout=30 materialized:6875 &&
         testdrive
         --kafka-addr=kafka:9092
-        --aws-region=${AWS_REGION-us-east-2}
+        --aws-region=${AWS_REGION-localstack}
+        --aws-endpoint=${AWS_ENDPOINT-http://localstack:4566}
         --schema-registry-url=http://schema-registry:8081
         --materialized-url=postgres://ignored@materialized:6875
         --validate-catalog=/share/mzdata/catalog
         $$*
       - bash
-    command: test/testdrive/${TD_TEST:-*.td}
+    command: ${TD_TEST:-*.td}
     environment:
     - TMPDIR=/share/tmp
+    - MZ_LOG
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    - AWS_SESSION_TOKEN
+    - AWS_SECURITY_TOKEN
     volumes:
-    - ../../:/workdir
+    - .:/workdir
     - mzdata:/share/mzdata
     - tmp:/share/tmp
     propagate-uid-gid: true
@@ -44,8 +110,15 @@ services:
       -w1 --experimental
       --cache-max-pending-records 1
       --disable-telemetry
+    ports:
+      - 6875
     environment:
     - MZ_DEV=1
+    - MZ_LOG
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    - AWS_SESSION_TOKEN
+    - AWS_SECURITY_TOKEN
     volumes:
     - mzdata:/share/mzdata
     - tmp:/share/tmp
@@ -66,6 +139,26 @@ services:
     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka, zookeeper]
+
+  localstack:
+    image: localstack/localstack:0.12.5
+    ports:
+      - "4566"
+      - "4571"
+      - "${LOCALSTACK_WEB_UI-8080}"
+    environment:
+      - SERVICES=${SERVICES- }
+      - DEBUG=${DEBUG- }
+      - DATA_DIR=${DATA_DIR- }
+      - PORT_WEB_UI=${PORT_WEB_UI- }
+      - LAMBDA_EXECUTOR=${LAMBDA_EXECUTOR- }
+      - KINESIS_ERROR_PROBABILITY=${KINESIS_ERROR_PROBABILITY- }
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - HOST_TMP_FOLDER=${TMPDIR}
+    volumes:
+      - "${TMPDIR:-/tmp/localstack}:/tmp/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+
 volumes:
   mzdata:
   tmp:
