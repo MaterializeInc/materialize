@@ -67,12 +67,6 @@ def capture_scheduling_info(args: argparse.Namespace) -> None:
     trace_directory = pathlib.Path(args.out_directory)
     trace_directory.mkdir(parents=True, exist_ok=True)
 
-    # TODO: Remove this commented out code, improve error messages even with multiprocessing
-    # This code is here because the error messaging is better when there's only one process and I
-    # haven't fixed that yet
-    capture_query(args, trace_directory, "time_per_worker")
-    return
-
     # TODO: Make this an argument to the script
     queries = ["time_per_operator", "time_per_worker", "time_per_operator_per_worker"]
     with multiprocessing.Pool(len(queries)) as pool:
@@ -81,6 +75,15 @@ def capture_scheduling_info(args: argparse.Namespace) -> None:
 
 
 def capture_query(args: argparse.Namespace, trace_directory: pathlib.Path, query_name: str) -> None:
+    """Periodically run the desired query and write the results to the AVRO OCF."""
+    try:
+        capture_query_inner(args, trace_directory, query_name)
+    except Exception as e:
+        print(f"Oh no! Failed to query {query_name}: {e}")
+        raise
+
+
+def capture_query_inner(args: argparse.Namespace, trace_directory: pathlib.Path, query_name: str) -> None:
     """Periodically run the desired query and write the results to the AVRO OCF.
 
     Sample code to read the results:
@@ -104,13 +107,13 @@ def capture_query(args: argparse.Namespace, trace_directory: pathlib.Path, query
 
     while 1:
         try:
-            capture_query_inner(args, dsn, query, outfile, schema)
+            capture_query_loop(args, dsn, query, outfile, schema)
         except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
-            time.sleep(5)
-            print(f"Connection closed, reconnecting. Error {e}")
+            schema = None
+            time.sleep(1)
 
 
-def capture_query_inner(args: argparse.Namespace, dsn: str, query: str, outfile: pathlib.Path,
+def capture_query_loop(args: argparse.Namespace, dsn: str, query: str, outfile: pathlib.Path,
         schema: typing.Union[None, avro.schema.Schema]) -> None:
     """Periodically run the desired query and write the results to the AVRO OCF.
 

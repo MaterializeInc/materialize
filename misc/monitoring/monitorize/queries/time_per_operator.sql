@@ -12,7 +12,7 @@ SELECT mz_cluster_id() AS mz_cluster_id,
        mz_logical_timestamp()::float AS mz_logical_timestamp,
        mz_dataflow_operators.id AS mz_dataflow_operator_id,
        mz_dataflow_operators.name AS mz_dataflow_operator_name,
-       sum(mz_scheduling_elapsed.elapsed_ns) AS mz_scheduling_elapsed_ns
+       sum(mz_scheduling_elapsed.elapsed_ns)::bigint AS mz_scheduling_elapsed_ns
 FROM mz_scheduling_elapsed,
      mz_dataflow_operators
 WHERE mz_scheduling_elapsed.id = mz_dataflow_operators.id
