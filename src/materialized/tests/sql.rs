@@ -318,7 +318,7 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
         next = expected_iter.next();
     }
 
-    // Test a 1s timeout and make sure we waited for atleast that long.
+    // Test a 1s timeout and make sure we waited for at least that long.
     let before = Instant::now();
     let rows = client.query("FETCH c WITH (TIMEOUT = '1s')", &[])?;
     let duration = before.elapsed();
