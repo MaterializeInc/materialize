@@ -37,6 +37,18 @@ fn test_bad_file() {
 }
 
 #[test]
+fn test_bad_file_ci_output() {
+    cmd()
+        .arg("tests")
+        .arg("--ci-output")
+        .assert()
+        .failure()
+        .stderr(predicate::str::starts_with(
+            "^^^ +++ error: reading tests: Is a directory",
+        ));
+}
+
+#[test]
 fn test_leading_input() {
     cmd()
         .write_stdin("leading input")
@@ -72,6 +84,22 @@ fn test_cmd_arg_missing_value() {
      |       ^
 "#,
     );
+}
+
+#[test]
+fn test_cmd_arg_ci_output() {
+    cmd()
+        .arg("--ci-output")
+        .write_stdin("$ cmd badarg")
+        .assert()
+        .failure()
+        .stderr(
+            r#"^^^ +++ <stdin>:1:7: error: command argument is not in required key=value format
+     |
+   1 | $ cmd badarg
+     |       ^
+"#,
+        );
 }
 
 #[test]
