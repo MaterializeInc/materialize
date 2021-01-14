@@ -7,18 +7,56 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use getopts::Options;
-use parse_duration::parse;
-
 use std::collections::{HashMap, VecDeque};
-use std::env;
 use std::fs::File;
-use std::io::prelude::*;
-use std::io::BufReader;
-use std::io::SeekFrom;
-use std::{thread, time};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::path::PathBuf;
+use std::thread;
+use std::time::{self, Duration};
+
+use structopt::StructOpt;
 
 use test_util::kafka::kafka_client::KafkaClient;
+
+/// Converts MBTA streams to Kafka streams to use in Materialize.
+#[derive(StructOpt)]
+struct Args {
+    /// Kafka bootstrap address.
+    #[structopt(long, default_value = "localhost:9092", value_name = "HOST:PORT")]
+    kafka_addr: String,
+    /// Path to file listing all logs to tail.
+    #[structopt(short = "c", long, value_name = "PATH")]
+    config_file: Option<PathBuf>,
+    /// Path to file where information is being logged.
+    #[structopt(short = "f", long, value_name = "PATH", required_unless("config-file"))]
+    file_name: Option<PathBuf>,
+    /// Name of topic to write to.
+    #[structopt(
+        short = "t",
+        long,
+        value_name = "TOPIC",
+        required_unless("config-file")
+    )]
+    topic_name: Option<String>,
+    /// Wait time before checking logs for updates.
+    #[structopt(long, default_value = "250ms", parse(try_from_str = parse_duration::parse), value_name = "DURATION")]
+    heartbeat: Duration,
+    /// Number of partitions to write to.
+    #[structopt(short = "p", long, default_value = "1", value_name = "N")]
+    partitions: i32,
+    /// Replication factor of topic.
+    #[structopt(short = "r", long, default_value = "1", value_name = "N")]
+    replication: i32,
+    /// Topic-level Kafka property.
+    #[structopt(long, value_name = "NAME=PROPERTY")]
+    topic_property: Vec<String>,
+    /// Disable topic creation.
+    #[structopt(short = "d", long)]
+    disable_topic_create: bool,
+    /// Automatically exit when the end of the file is reached.
+    #[structopt(short = "e", long)]
+    exit_at_end: bool,
+}
 
 fn parse_entry(parsed_object: &mut json::JsonValue) -> (String, Option<String>) {
     assert!(parsed_object.is_object());
@@ -82,67 +120,9 @@ fn delete_previous_entries(
 }
 
 async fn run_stream() -> Result<(), anyhow::Error> {
-    let args: Vec<_> = env::args().collect();
+    let args: Args = ore::cli::parse_args();
 
-    let mut opts = Options::new();
-    opts.optopt("", "kafka-addr", "kafka bootstrap address", "HOST:PORT");
-    opts.optopt(
-        "c",
-        "config-file",
-        "path to file listing all logs to tail",
-        "PATH",
-    );
-    opts.optopt(
-        "f",
-        "file-name",
-        "path to file where information is being logged",
-        "PATH",
-    );
-    opts.optflag("h", "help", "show this usage information");
-    opts.optopt("t", "topic-name", "name of topic to write to", "STRING");
-    opts.optopt(
-        "",
-        "heartbeat",
-        "wait time before checking logs for updates (default 250ms)",
-        "DURATION",
-    );
-    opts.optopt(
-        "p",
-        "partitions",
-        "number of partitions to write to",
-        "POSITIVE_INTEGER",
-    );
-    opts.optopt(
-        "r",
-        "replication",
-        "replication factor of topic",
-        "POSITIVE_INTEGER",
-    );
-    opts.optmulti(
-        "",
-        "topic-property",
-        "topic-level kafka config",
-        "NAME=PROPERTY",
-    );
-    opts.optflag(
-        "d",
-        "disable-topic-create",
-        "add this flag to disable topic creation",
-    );
-    opts.optflag(
-        "e",
-        "exit-at-end",
-        "automatically exit when the end of the file is reached",
-    );
-    let usage_details = opts.usage("usage: mbta-to-mtrlz [options] FILE");
-    let opts = opts.parse(&args[1..])?;
-
-    if opts.opt_present("h") {
-        print!("{}", usage_details);
-        std::process::exit(0);
-    }
-
-    let (stream_configs, heartbeat) = if let Some(config_file) = opts.opt_str("config-file") {
+    let (stream_configs, heartbeat) = if let Some(config_file) = args.config_file {
         // read the config file line by line, skipping comments
         let mut configs = Vec::new();
         let mut min_heartbeat = time::Duration::new(0, 0);
@@ -159,12 +139,12 @@ async fn run_stream() -> Result<(), anyhow::Error> {
                 ));
             }
             let filename = if record[2].is_empty() {
-                format!("workspace/mbta-{}.log", &record[1])
+                PathBuf::from(format!("workspace/mbta-{}.log", &record[1]))
             } else {
-                format!(
+                PathBuf::from(format!(
                     "workspace/mbta-{}-{}-{}.log",
                     &record[1], &record[2], &record[3]
-                )
+                ))
             };
             let topic_name = if record[0].is_empty() {
                 if record[2].is_empty() {
@@ -186,7 +166,7 @@ async fn run_stream() -> Result<(), anyhow::Error> {
             } else {
                 record[5].to_string()
             };
-            let heartbeat = parse(&heartbeat)?;
+            let heartbeat = parse_duration::parse(&heartbeat)?;
             if min_heartbeat > heartbeat
                 || (min_heartbeat.as_secs() == 0 && min_heartbeat.subsec_nanos() == 0)
             {
@@ -200,31 +180,20 @@ async fn run_stream() -> Result<(), anyhow::Error> {
     } else {
         // we assume that the user is specifying the translation of a single
         // topic using command line argument
-        if let Some(filename) = opts.opt_str("f") {
-            if let Some(topic_name) = opts.opt_str("t") {
-                let heartbeat_spec = opts
-                    .opt_str("heartbeat")
-                    .unwrap_or_else(|| "250ms".to_string());
-                let heartbeat = parse(&heartbeat_spec)?;
-
-                let partitions = opts
-                    .opt_str("partitions")
-                    .unwrap_or_else(|| "1".to_string());
-                let partitions = partitions.parse::<i32>()?;
-
-                (vec![(filename, topic_name, partitions)], heartbeat)
-            } else {
-                return Err(anyhow::anyhow!("Must specify target topic".to_owned()));
-            }
-        } else {
-            return Err(anyhow::anyhow!(
-                "Must specify a config file with -c or a file to tail with -f".to_owned()
-            ));
-        }
+        // Safe to unwrap here because clap will verify that file_name and
+        // topic_name are present if config_file is not.
+        (
+            vec![(
+                args.file_name.unwrap(),
+                args.topic_name.unwrap(),
+                args.partitions,
+            )],
+            args.heartbeat,
+        )
     };
 
-    let topic_configs: Result<Vec<_>, _> = opts
-        .opt_strs("topic-property")
+    let topic_configs: Result<Vec<_>, _> = args
+        .topic_property
         .into_iter()
         .map(|property| {
             let mut split_iter = property.split('=');
@@ -247,20 +216,9 @@ async fn run_stream() -> Result<(), anyhow::Error> {
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
 
-    let replication = opts
-        .opt_str("replication")
-        .unwrap_or_else(|| "1".to_string());
-    let replication = replication.parse::<i32>()?;
+    let k_client = KafkaClient::new(&args.kafka_addr, "materialize.mbta-to-mtrlz", &[])?;
 
-    let k_client = KafkaClient::new(
-        &opts
-            .opt_str("kafka-addr")
-            .unwrap_or_else(|| "localhost:9092".to_string()),
-        "materialize.mbta-to-mtrlz",
-        &[],
-    )?;
-
-    if !opts.opt_present("disable-topic-create") {
+    if !args.disable_topic_create {
         // find the unique topic names, then create them
         let mut unique_topics = HashMap::new();
         for (_, topic_name, partitions) in stream_configs.iter() {
@@ -279,15 +237,13 @@ async fn run_stream() -> Result<(), anyhow::Error> {
                 .create_topic(
                     &topic_name,
                     *partitions,
-                    replication,
+                    args.replication,
                     topic_configs_refs.as_slice(),
                     None,
                 )
                 .await?;
         }
     }
-
-    let exit_at_end = opts.opt_present("exit-at-end");
 
     // we read from all the files in a round-robin fashion
     let mut file_readers = VecDeque::with_capacity(stream_configs.len());
@@ -346,7 +302,7 @@ async fn run_stream() -> Result<(), anyhow::Error> {
             line.clear();
         } else {
             // we have reached the end of the file
-            if exit_at_end {
+            if args.exit_at_end {
                 // stop reading the file by not returning the reader to the queue
                 continue;
             }

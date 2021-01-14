@@ -1710,13 +1710,14 @@ fn plan_join_constraint<'a>(
             (joined, product_scope)
         }
         JoinConstraint::Using(column_names) => plan_using_constraint(
-            right_qcx,
             &column_names
                 .iter()
                 .map(|ident| normalize::column_name(ident.clone()))
                 .collect::<Vec<_>>(),
+            left_qcx,
             left,
             left_scope,
+            right_qcx,
             right,
             right_scope,
             kind,
@@ -1736,10 +1737,11 @@ fn plan_join_constraint<'a>(
                 }
             }
             plan_using_constraint(
-                right_qcx,
                 &column_names,
+                left_qcx,
                 left,
                 left_scope,
+                right_qcx,
                 right,
                 right_scope,
                 kind,
@@ -1752,10 +1754,11 @@ fn plan_join_constraint<'a>(
 // See page 440 of ANSI SQL 2016 spec for details on scoping of using/natural joins
 #[allow(clippy::too_many_arguments)]
 fn plan_using_constraint(
-    qcx: &QueryContext,
     column_names: &[ColumnName],
+    left_qcx: &QueryContext,
     left: RelationExpr,
     left_scope: Scope,
+    right_qcx: &QueryContext,
     right: RelationExpr,
     right_scope: Scope,
     kind: JoinKind,
@@ -1764,72 +1767,71 @@ fn plan_using_constraint(
     let mut map_exprs = vec![];
     let mut new_items = vec![];
     let mut dropped_columns = HashSet::new();
+
+    let mut both_scope = left_scope.clone().product(right_scope.clone());
+
+    let ecx = &ExprContext {
+        qcx: &right_qcx,
+        name: "USING clause",
+        scope: &both_scope,
+        relation_type: &RelationType::new(
+            left_qcx
+                .relation_type(&left)
+                .column_types
+                .into_iter()
+                .chain(right_qcx.relation_type(&right).column_types)
+                .collect(),
+        ),
+        allow_aggregates: false,
+        allow_subqueries: false,
+    };
+
     for column_name in column_names {
-        let (l, _) = left_scope.resolve_column(column_name)?;
-        let (r, _) = right_scope.resolve_column(column_name)?;
-        let l = match l {
-            ColumnRef {
-                level: 0,
-                column: l,
-            } => l,
-            _ => bail!(
-                "Internal error: name {} in USING resolved to outer column",
-                column_name
-            ),
-        };
-        let r = match r {
-            ColumnRef {
-                level: 0,
-                column: r,
-            } => r,
-            _ => bail!(
-                "Internal error: name {} in USING resolved to outer column",
-                column_name
-            ),
-        };
-        let l_type = &qcx.relation_type(&left).column_types[l];
-        let r_type = &qcx.relation_type(&right).column_types[r];
-        if l_type.scalar_type != r_type.scalar_type {
+        let (lhs, _) = left_scope.resolve_column(column_name)?;
+        let (mut rhs, _) = right_scope.resolve_column(column_name)?;
+        if lhs.level != 0 || rhs.level != 0 {
             bail!(
-                "{:?} and {:?} are not comparable (in NATURAL/USING join on {})",
-                l_type.scalar_type,
-                r_type.scalar_type,
+                "Internal error: name {} in USING resolved to outer column",
                 column_name
-            );
+            )
         }
+
+        // The new column can be named using aliases from either the right or
+        // left.
+        let mut names = left_scope.items[lhs.column].names.clone();
+        names.extend(right_scope.items[rhs.column].names.clone());
+
+        // Adjust the RHS reference to its post-join location.
+        rhs.column += left_scope.len();
+
+        // Join keys must be resolved to same type.
+        let mut exprs = coerce_homogeneous_exprs(
+            &format!("NATURAL/USING join column \"{}\"", column_name),
+            &ecx,
+            vec![
+                CoercibleScalarExpr::Coerced(ScalarExpr::Column(lhs)),
+                CoercibleScalarExpr::Coerced(ScalarExpr::Column(rhs)),
+            ],
+            None,
+        )?;
+        let (expr1, expr2) = (exprs.remove(0), exprs.remove(0));
+
         join_exprs.push(ScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
-            expr1: Box::new(ScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: l,
-            })),
-            expr2: Box::new(ScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: left_scope.len() + r,
-            })),
+            expr1: Box::new(expr1.clone()),
+            expr2: Box::new(expr2.clone()),
         });
         map_exprs.push(ScalarExpr::CallVariadic {
             func: VariadicFunc::Coalesce,
-            exprs: vec![
-                ScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: l,
-                }),
-                ScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: left_scope.len() + r,
-                }),
-            ],
+            exprs: vec![expr1, expr2],
         });
-        let mut names = left_scope.items[l].names.clone();
-        names.extend(right_scope.items[r].names.clone());
         new_items.push(ScopeItem {
             names,
             expr: None,
             nameable: true,
         });
-        dropped_columns.insert(l);
-        dropped_columns.insert(left_scope.len() + r);
+        dropped_columns.insert(lhs.column);
+        dropped_columns.insert(rhs.column);
     }
     let project_key =
         // coalesced join columns
@@ -1841,7 +1843,6 @@ fn plan_using_constraint(
                 .filter(|i| !dropped_columns.contains(i)),
         )
         .collect::<Vec<_>>();
-    let mut both_scope = left_scope.product(right_scope);
     both_scope.items.extend(new_items);
     let both_scope = both_scope.project(&project_key);
     let both = RelationExpr::Join {
@@ -2278,10 +2279,10 @@ pub fn coerce_homogeneous_exprs(
         match typeconv::plan_cast(name, ecx, CastContext::Implicit, arg.clone(), &target) {
             Ok(expr) => out.push(expr),
             Err(_) => bail!(
-                "{} does not have uniform type: {:?} vs {:?}",
+                "{} cannot be cast to uniform type: {} vs {}",
                 name,
-                ecx.scalar_type(&arg),
-                target,
+                ecx.humanize_scalar_type(&ecx.scalar_type(&arg)),
+                ecx.humanize_scalar_type(&target),
             ),
         }
     }

@@ -7,37 +7,39 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
-use std::path::Path;
-
-use getopts::Options;
+use std::path::PathBuf;
 
 use protoc::Protoc;
+use structopt::StructOpt;
+
+/// Compile protocol buffers.
+#[derive(StructOpt)]
+// Use unusual underscores in option names to match Google's protoc.
+#[structopt(rename_all = "snake")]
+struct Args {
+    /// Import search directory.
+    #[structopt(short = "I", long, value_name = "PATH")]
+    proto_path: Vec<String>,
+    /// Generate Rust source code into OUT_DIR.
+    #[structopt(long, required = true, value_name = "OUT_DIR")]
+    rust_out: PathBuf,
+    /// Derive serde traits for generated messages.
+    #[structopt(long)]
+    serde: bool,
+    /// Input protobuf schemas.
+    #[structopt(required = true, value_name = "PROTO_FILES")]
+    proto_files: Vec<String>,
+}
 
 fn main() -> anyhow::Result<()> {
-    let mut opts = Options::new();
-    opts.optmulti("I", "proto_path", "import search directory", "PATH");
-    opts.reqopt("", "rust_out", "generate Rust source code", "OUT_DIR");
-    opts.optflag("", "serde", "derive serde traits for generated messages");
-    opts.optflag("h", "help", "show this usage information");
-
-    let popts = opts.parse(env::args().skip(1))?;
-    if popts.opt_present("h") {
-        print!(
-            "{}",
-            opts.usage("usage: protoc [options] --rust_out=OUT_DIR PROTO_FILES")
-        )
-    }
-
+    let args: Args = ore::cli::parse_args();
     let mut protoc = Protoc::new();
-    for path in popts.opt_strs("I") {
+    for path in args.proto_path {
         protoc.include(path);
     }
-    for path in &popts.free {
+    for path in &args.proto_files {
         protoc.input(path);
     }
-    if popts.opt_present("serde") {
-        protoc.serde(true);
-    }
-    protoc.compile_into(Path::new(&popts.opt_str("rust_out").unwrap()))
+    protoc.serde(args.serde);
+    protoc.compile_into(&args.rust_out)
 }

@@ -184,20 +184,26 @@ pub enum WorkerFeedback {
     CreateSource(SourceInstanceId),
 }
 
+/// Configures a dataflow server.
+pub struct Config {
+    /// The number of worker threads to spawn.
+    pub threads: usize,
+    /// The ID of this process in the dataflow cluster.
+    pub process: usize,
+    /// The Timely worker configuration.
+    pub timely_worker: timely::WorkerConfig,
+}
+
 /// Initiates a timely dataflow computation, processing materialized commands.
-///
-/// TODO(benesch): pass a config struct here, or find some other way to cut
-/// down on the number of arguments.
 pub fn serve<C>(
+    config: Config,
     sockets: Vec<Option<TcpStream>>,
-    threads: usize,
-    process: usize,
     switchboard: comm::Switchboard<C>,
 ) -> Result<WorkerGuards<()>, String>
 where
     C: comm::Connection,
 {
-    assert!(threads > 0);
+    assert!(config.threads > 0);
 
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream.
@@ -207,7 +213,11 @@ where
     // is hard to read through.
     let command_rxs = {
         let mut rx = switchboard.broadcast_rx(BroadcastToken).fanout();
-        let command_rxs = Mutex::new((0..threads).map(|_| Some(rx.attach())).collect::<Vec<_>>());
+        let command_rxs = Mutex::new(
+            (0..config.threads)
+                .map(|_| Some(rx.attach()))
+                .collect::<Vec<_>>(),
+        );
         tokio::spawn(
             rx.shuttle()
                 .map_err(|err| panic!("failure shuttling dataflow receiver commands: {}", err)),
@@ -216,38 +226,44 @@ where
     };
 
     let log_fn = Box::new(|_| None);
-    let (builders, guard) = initialize_networking_from_sockets(sockets, process, threads, log_fn)
-        .map_err(|err| format!("failed to initialize networking: {}", err))?;
+    let (builders, guard) =
+        initialize_networking_from_sockets(sockets, config.process, config.threads, log_fn)
+            .map_err(|err| format!("failed to initialize networking: {}", err))?;
     let builders = builders.into_iter().map(GenericBuilder::ZeroCopy).collect();
 
     let tokio_executor = tokio::runtime::Handle::current();
-    timely::execute::execute_from(builders, Box::new(guard), move |timely_worker| {
-        let _tokio_guard = tokio_executor.enter();
-        let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % threads]
-            .take()
-            .unwrap()
-            .request_unparks();
-        let worker_idx = timely_worker.index();
-        Worker {
-            timely_worker,
-            render_state: RenderState {
-                traces: TraceManager::new(worker_idx),
-                local_inputs: HashMap::new(),
-                ts_source_mapping: HashMap::new(),
-                ts_histories: Default::default(),
-                ts_source_updates: Default::default(),
-                dataflow_tokens: HashMap::new(),
-                caching_tx: None,
-            },
-            materialized_logger: None,
-            command_rx,
-            pending_peeks: Vec::new(),
-            feedback_tx: None,
-            reported_frontiers: HashMap::new(),
-            metrics: Metrics::for_worker_id(worker_idx),
-        }
-        .run()
-    })
+    timely::execute::execute_from(
+        builders,
+        Box::new(guard),
+        config.timely_worker.clone(),
+        move |timely_worker| {
+            let _tokio_guard = tokio_executor.enter();
+            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % config.threads]
+                .take()
+                .unwrap()
+                .request_unparks();
+            let worker_idx = timely_worker.index();
+            Worker {
+                timely_worker,
+                render_state: RenderState {
+                    traces: TraceManager::new(worker_idx),
+                    local_inputs: HashMap::new(),
+                    ts_source_mapping: HashMap::new(),
+                    ts_histories: Default::default(),
+                    ts_source_updates: Default::default(),
+                    dataflow_tokens: HashMap::new(),
+                    caching_tx: None,
+                },
+                materialized_logger: None,
+                command_rx,
+                pending_peeks: Vec::new(),
+                feedback_tx: None,
+                reported_frontiers: HashMap::new(),
+                metrics: Metrics::for_worker_id(worker_idx),
+            }
+            .run()
+        },
+    )
 }
 
 /// A type wrapper for the number of partitions associated with a source.
@@ -1021,5 +1037,5 @@ impl PendingPeek {
 /// doesn't really become slower, because you needed to instantiate these
 /// templates anyway to run tests.
 pub fn __explicit_instantiation__() {
-    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _, _) -> _);
+    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _) -> _);
 }

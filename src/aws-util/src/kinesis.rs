@@ -15,15 +15,20 @@ use std::time::Duration;
 use anyhow::Context;
 use log::info;
 use rusoto_core::{HttpClient, Region};
-use rusoto_credential::{AutoRefreshingProvider, ChainProvider, StaticProvider};
+use rusoto_credential::{
+    AutoRefreshingProvider, ChainProvider, ProvideAwsCredentials, StaticProvider,
+};
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput, Shard};
 
-/// Constructs a KinesisClient from statically provided connection information. If connection
-/// information is not provided, falls back to using credentials gathered by aws::credentials.
+/// Construct a KinesisClient
 ///
-/// The AutoRefreshingProvider caches the underlying provider's AWS credentials,
+/// If static connection information is not provided falls back to using
+/// credentials gathered by rusoto's [`ChainProvider] wrapped in an
+/// [`AutoRefreshingProvider`].
+///
+/// The [`AutoRefreshingProvider`] caches the underlying provider's AWS credentials,
 /// automatically fetching updated credentials if they've expired.
-pub async fn kinesis_client(
+pub async fn client(
     region: Region,
     access_key_id: Option<String>,
     secret_access_key: Option<String>,
@@ -40,15 +45,19 @@ pub async fn kinesis_client(
                 region,
             )
         }
-        (_, _) => {
+        (None, None) => {
             info!("AWS access_key_id and secret_access_key not provided, creating a new Kinesis client using a chain provider.");
             let mut provider = ChainProvider::new();
             provider.set_timeout(Duration::from_secs(10));
+            provider.credentials().await?; // ensure that credentials exist
             let provider =
                 AutoRefreshingProvider::new(provider).context("generating AWS credentials")?;
 
             KinesisClient::new_with(request_dispatcher, provider, region)
         }
+        (_, _) => anyhow::bail!(
+            "access_key_id and secret_access_key must either both be provided, or neither"
+        ),
     };
     Ok(kinesis_client)
 }

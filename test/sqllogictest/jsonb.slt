@@ -1860,35 +1860,47 @@ SELECT jsonb_agg(1)
 ----
 [1.0]
 
-query T
-SELECT jsonb_agg(column1) FROM (VALUES (1), (2), (3))
-----
-[1.0,2.0,3.0]
+statement ok
+CREATE TABLE t1 (a int)
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3), (NULL)
 
 query T
-SELECT jsonb_agg(column1) FROM (VALUES (1), (2), (3), (NULL))
+SELECT jsonb_agg(a) FROM (select a from t1 where a IS NOT NULL)
 ----
-[null,1.0,2.0,3.0]
+[2.0,3.0,1.0]
 
 query T
-SELECT jsonb_agg(column1) FROM (VALUES ('1'::jsonb), ('2'::jsonb), ('3'::jsonb), (NULL::jsonb))
+SELECT jsonb_agg(a) FROM t1
 ----
 [null,2.0,3.0,1.0]
 
 query T
-SELECT jsonb_agg(column1) FILTER (WHERE column1 IS NOT NULL) FROM (VALUES (1), (2), (3), (NULL))
+SELECT jsonb_agg(a::text::jsonb) FROM t1
 ----
-[1.0,2.0,3.0]
+[null,2.0,3.0,1.0]
+
+query T
+SELECT jsonb_agg(a) FILTER (WHERE a IS NOT NULL) FROM t1
+----
+[2.0,3.0,1.0]
 
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT jsonb_agg(1, 2)
 
+statement ok
+CREATE TABLE t2 (a int, b date)
+
+statement ok
+INSERT INTO t2 VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02')
+
 query T
-SELECT jsonb_agg((column1, column2)) FROM (VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02'))
+SELECT jsonb_agg((a, b)) FROM t2
 ----
 [{"f1":null,"f2":"2020-01-02"},{"f1":1.0,"f2":"2020-01-01"}]
 
 query TTT
-SELECT jsonb_agg((column1, column2)), jsonb_agg(column1), jsonb_agg(column2) FROM (VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02'))
+SELECT jsonb_agg((a, b)), jsonb_agg(a), jsonb_agg(b) FROM t2
 ----
-[{"f1":null,"f2":"2020-01-02"},{"f1":1.0,"f2":"2020-01-01"}] [null,1.0] ["2020-01-02","2020-01-01"]
+[{"f1":null,"f2":"2020-01-02"},{"f1":1.0,"f2":"2020-01-01"}] [null,1.0] ["2020-01-01","2020-01-02"]

@@ -90,6 +90,8 @@ pub struct Config {
     /// The addresses of each process in the cluster, including this node,
     /// in order of process ID.
     pub addresses: Vec<SocketAddr>,
+    /// The Timely worker configuration.
+    pub timely_worker: timely::WorkerConfig,
 
     // === Performance tuning options. ===
     pub logging: Option<LoggingConfig>,
@@ -147,7 +149,7 @@ pub struct TlsConfig {
 
 impl TlsConfig {
     fn validate(&self) -> Result<SslContext, anyhow::Error> {
-        let mut builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
+        let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
         builder.set_certificate_file(&self.cert, SslFiletype::PEM)?;
         builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
         Ok(builder.build().into_context())
@@ -260,9 +262,12 @@ pub async fn serve(
 
     // Launch dataflow workers.
     let dataflow_guard = dataflow::serve(
+        dataflow::Config {
+            threads: config.threads,
+            process: config.process,
+            timely_worker: config.timely_worker,
+        },
         dataflow_conns,
-        config.threads,
-        config.process,
         switchboard.clone(),
     )
     .map_err(|s| anyhow!("{}", s))?;

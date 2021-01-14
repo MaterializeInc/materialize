@@ -341,7 +341,7 @@ where
     // Otherwise we need to render each individually and stitch them together.
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
-        let result = build_basic_aggregate(collection.clone(), index, &aggr, prepend_key);
+        let result = build_basic_aggregate(collection.clone(), index, &aggr, false);
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
     differential_dataflow::collection::concatenate(&mut collection.scope(), to_collect)

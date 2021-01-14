@@ -1,7 +1,7 @@
 [package]
 name = "chaos"
 description = "Chaos test integrations with Materialize."
-version = "0.1.0"
+version = "0.0.0"
 edition = "2018"
 publish = false
 

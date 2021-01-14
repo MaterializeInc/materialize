@@ -21,6 +21,7 @@ services:
     mzbuild: wikirecent-create-views
   materialized:
     mzbuild: materialized
+    command: --disable-telemetry
     ports:
       - *materialized
     init: true

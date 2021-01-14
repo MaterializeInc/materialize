@@ -1,7 +1,7 @@
 [package]
 name = "testdrive"
 description = "Integration test driver for Materialize."
-version = "0.1.0"
+version = "0.0.0"
 edition = "2018"
 publish = false
 
@@ -15,7 +15,6 @@ ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
 futures = "0.3.9"
-getopts = "0.2.0"
 interchange = { path = "../interchange" }
 itertools = "0.9.0"
 kafka-util = { path = "../kafka-util" }
@@ -40,6 +39,7 @@ rusoto_sts = { git = "https://github.com/rusoto/rusoto.git" }
 serde = "1.0.118"
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
 serde_json = "1.0.60"
+structopt = "0.3.21"
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.1.0"
 termcolor = "1.1.2"

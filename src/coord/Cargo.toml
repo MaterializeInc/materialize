@@ -1,7 +1,7 @@
 [package]
 name = "coord"
 description = "Coordinates client requests with the dataflow layer."
-version = "0.1.0"
+version = "0.0.0"
 edition = "2018"
 publish = false
 
@@ -40,7 +40,7 @@ serde = "1.0.0"
 serde_json = "1.0.60"
 sql = { path = "../sql" }
 symbiosis = { path = "../symbiosis" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.0.0"
 tokio-postgres = "0.7"
 transform = { path = "../transform" }

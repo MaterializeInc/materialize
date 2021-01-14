@@ -194,7 +194,7 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 
 [[package]]
 name = "avro-derive"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "aws-util"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "log",
@@ -246,7 +246,7 @@ checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 
 [[package]]
 name = "billing-demo"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "build-info"
-version = "0.1.0"
+version = "0.0.0"
 
 [[package]]
 name = "build_const"
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "ccsr"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -394,7 +394,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chaos"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -458,20 +458,20 @@ dependencies = [
 
 [[package]]
 name = "comm"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "assert_cmd",
  "backtrace",
  "bincode",
  "bytes",
  "futures",
- "getopts",
  "log",
  "num_enum",
  "ore",
  "predicates",
  "rand 0.8.0",
  "serde",
+ "structopt",
  "tokio",
  "tokio-serde",
  "tokio-util",
@@ -497,7 +497,7 @@ checksum = "28b9d6de7f49e22cf97ad17fc4036ece69300032f45f78f30b4a4482cdc3f4a6"
 
 [[package]]
 name = "coord"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "aws-util",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "dataflow"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -762,15 +762,16 @@ dependencies = [
 
 [[package]]
 name = "dataflow-bin"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
- "getopts",
+ "ore",
+ "structopt",
  "timely",
 ]
 
 [[package]]
 name = "dataflow-types"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "ccsr",
@@ -819,7 +820,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#0c30c936afa2fab2b7b4caa4f34663da985f0ff2"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#f86e881a555a22a7e7a696f1d1825f892751b5f0"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -869,7 +870,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#0c30c936afa2fab2b7b4caa4f34663da985f0ff2"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#f86e881a555a22a7e7a696f1d1825f892751b5f0"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1042,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "expr"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1588,7 +1589,7 @@ checksum = "5b141fdc7836c525d4d594027d318c84161ca17aaf8113ab1f81ab93ae897485"
 
 [[package]]
 name = "interchange"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "avro-derive",
@@ -1699,7 +1700,7 @@ checksum = "078e285eafdfb6c4b434e0d31e8cfcb5115b651496faca5749b88fafd4f23bfd"
 
 [[package]]
 name = "kafka-util"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "ccsr",
@@ -1838,6 +1839,7 @@ dependencies = [
  "datadriven",
  "dataflow",
  "dataflow-types",
+ "differential-dataflow",
  "fallible-iterator",
  "flate2",
  "futures",
@@ -1882,6 +1884,7 @@ dependencies = [
  "sysinfo",
  "tar",
  "tempfile",
+ "timely",
  "tokio",
  "tokio-openssl",
  "tokio-postgres",
@@ -1893,19 +1896,20 @@ dependencies = [
 
 [[package]]
 name = "mbta-to-mtrlz"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "byteorder",
  "futures",
- "getopts",
  "json",
  "mz-avro",
  "ordered-float",
+ "ore",
  "parse_duration",
  "rdkafka",
  "reqwest",
  "serde_json",
+ "structopt",
  "test-util",
  "tokio",
 ]
@@ -1954,7 +1958,7 @@ dependencies = [
 
 [[package]]
 name = "metabase"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -1962,7 +1966,7 @@ dependencies = [
 
 [[package]]
 name = "metabase-smoketest"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "itertools",
@@ -2041,7 +2045,7 @@ dependencies = [
 
 [[package]]
 name = "mz-process-collector"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "lazy_static",
  "libc",
@@ -2306,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "ore"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2319,6 +2323,7 @@ dependencies = [
  "openssl",
  "phf_shared",
  "smallvec",
+ "structopt",
  "tokio",
  "tokio-openssl",
  "tracing-subscriber",
@@ -2417,11 +2422,10 @@ checksum = "4ec91767ecc0a0bbe558ce8c9da33c068066c57ecc8bb8477ef8c1ad3ef77c27"
 
 [[package]]
 name = "peeker"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "chrono",
  "env_logger",
- "getopts",
  "hyper",
  "lazy_static",
  "log",
@@ -2432,6 +2436,7 @@ dependencies = [
  "prometheus",
  "regex",
  "serde",
+ "structopt",
  "tokio",
  "toml",
 ]
@@ -2444,7 +2449,7 @@ checksum = "d4fd5641d01c8f18a23da7b6fe29298ff4b55afcccdf78973b24cf3175fee32e"
 
 [[package]]
 name = "perf-kinesis"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "aws-util",
@@ -2467,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "perf-upsert"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2497,7 +2502,7 @@ dependencies = [
 
 [[package]]
 name = "pgrepr"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2511,22 +2516,23 @@ dependencies = [
 
 [[package]]
 name = "pgtest"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
  "datadriven",
  "fallible-iterator",
- "getopts",
+ "ore",
  "postgres",
  "postgres-protocol",
  "serde",
  "serde_json",
+ "structopt",
 ]
 
 [[package]]
 name = "pgwire"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2858,7 +2864,7 @@ dependencies = [
 
 [[package]]
 name = "prof"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "backtrace",
@@ -2924,13 +2930,14 @@ dependencies = [
 
 [[package]]
 name = "protoc"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
- "getopts",
+ "ore",
  "protobuf",
  "protobuf-codegen",
  "protobuf-codegen-pure",
+ "structopt",
  "tempfile",
 ]
 
@@ -3170,7 +3177,7 @@ dependencies = [
 
 [[package]]
 name = "repr"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -3617,7 +3624,7 @@ dependencies = [
 
 [[package]]
 name = "smith-fuzz"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -3654,7 +3661,7 @@ dependencies = [
 
 [[package]]
 name = "sql"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "aws-arn",
@@ -3688,7 +3695,7 @@ dependencies = [
 
 [[package]]
 name = "sql-parser"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "datadriven",
@@ -3716,7 +3723,6 @@ dependencies = [
  "expr",
  "fallible-iterator",
  "futures",
- "getopts",
  "lazy_static",
  "materialized",
  "md-5",
@@ -3727,7 +3733,9 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
+ "structopt",
  "tempfile",
+ "timely",
  "tokio",
  "tokio-postgres",
  "uuid",
@@ -3807,7 +3815,7 @@ checksum = "502d53007c02d7605a05df1c1a73ee436952781653da5d0bf57ad608f66932c1"
 
 [[package]]
 name = "symbiosis"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3886,13 +3894,11 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.15.7"
+version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec92c229ee7894cde9fca41d3ca387fb980dd04fc04375ffea06474e65753b4e"
+checksum = "67330cbee3b2a819e3365a773f05e884a136603687f812bf24db5b6c3d76b696"
 dependencies = [
- "cc",
- "cfg-if 1.0.0",
- "core-foundation-sys",
+ "cfg-if 0.1.10",
  "doc-comment",
  "libc",
  "ntapi",
@@ -3944,23 +3950,24 @@ dependencies = [
 
 [[package]]
 name = "test-correctness"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "chrono",
  "env_logger",
  "futures",
- "getopts",
  "hyper",
  "lazy_static",
  "log",
  "mz-process-collector",
  "ore",
+ "parse_duration",
  "pgrepr",
  "postgres",
  "postgres-types",
  "prometheus",
  "regex",
  "serde",
+ "structopt",
  "tokio",
  "tokio-postgres",
  "toml",
@@ -3968,7 +3975,7 @@ dependencies = [
 
 [[package]]
 name = "test-util"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3983,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "testdrive"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "assert_cmd",
  "async-trait",
@@ -3995,7 +4002,6 @@ dependencies = [
  "chrono",
  "coord",
  "futures",
- "getopts",
  "interchange",
  "itertools",
  "kafka-util",
@@ -4023,6 +4029,7 @@ dependencies = [
  "serde-protobuf",
  "serde_json",
  "sql-parser",
+ "structopt",
  "tempfile",
  "termcolor",
  "tokio",
@@ -4073,11 +4080,12 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#5023fb99fcd4409cfafe180f4827660c63263ced"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#de69cfc4d7da29d4e210cd06fc431650477e5530"
 dependencies = [
  "abomonation",
  "abomonation_derive",
  "crossbeam-channel",
+ "getopts",
  "serde",
  "serde_derive",
  "timely_bytes",
@@ -4088,12 +4096,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#5023fb99fcd4409cfafe180f4827660c63263ced"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#de69cfc4d7da29d4e210cd06fc431650477e5530"
 
 [[package]]
 name = "timely_communication"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#5023fb99fcd4409cfafe180f4827660c63263ced"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#de69cfc4d7da29d4e210cd06fc431650477e5530"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4109,7 +4117,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#5023fb99fcd4409cfafe180f4827660c63263ced"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#de69cfc4d7da29d4e210cd06fc431650477e5530"
 
 [[package]]
 name = "timely_sort"
@@ -4330,7 +4338,7 @@ dependencies = [
 
 [[package]]
 name = "transform"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "datadriven",
@@ -4461,7 +4469,7 @@ dependencies = [
 
 [[package]]
 name = "walkabout"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "datadriven",

@@ -7,16 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-version: "3"
-services:
-  materialized:
-    mzbuild: materialized
-    command: -w1 --disable-telemetry
-  js:
-    image: node:13.12.0
-    command: /workdir/test/lang/js/test.sh
-    volumes:
-      - ../../../:/workdir
-    environment:
-      - PGHOST=materialized
-    depends_on: [materialized]
+FROM mysql:5.7
+
+COPY mysql.cnf /etc/mysql/conf.d/
+COPY replication.sql /docker-entrypoint-initdb.d/
