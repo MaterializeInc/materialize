@@ -320,15 +320,18 @@ impl ScalarExpr {
                     *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
                 } else if let Some(err) = expr2.as_literal_err() {
                     *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
-                } else if *func == BinaryFunc::IsLikePatternMatch && expr2.is_literal() {
-                    // We can at least precompile the regex.
-                    let pattern = expr2.as_literal_str().unwrap();
-                    *e = match like_pattern::build_regex(&pattern) {
-                        Ok(regex) => expr1
-                            .take()
-                            .call_unary(UnaryFunc::IsRegexpMatch(Regex(regex))),
-                        Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
-                    };
+                } else if let BinaryFunc::IsLikePatternMatch { case_insensitive } = func {
+                    if expr2.is_literal() {
+                        // We can at least precompile the regex.
+                        let pattern = expr2.as_literal_str().unwrap();
+                        let flags = if *case_insensitive { "i" } else { "" };
+                        *e = match like_pattern::build_regex(&pattern, flags) {
+                            Ok(regex) => expr1
+                                .take()
+                                .call_unary(UnaryFunc::IsRegexpMatch(Regex(regex))),
+                            Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
+                        };
+                    }
                 } else if let BinaryFunc::IsRegexpMatch { case_insensitive } = func {
                     if let ScalarExpr::Literal(Ok(row), _) = &**expr2 {
                         let flags = if *case_insensitive { "i" } else { "" };
