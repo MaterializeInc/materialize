@@ -9,6 +9,15 @@
 
 //! A macro to simplify handling of `WITH` options.
 
+use std::collections::BTreeMap;
+
+use anyhow::bail;
+use rusoto_core::Region;
+
+use dataflow_types::AwsConnectInfo;
+
+use crate::ast::Value;
+
 macro_rules! with_option_type {
     ($name:ident, String) => {
         if let Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) = $name {
@@ -84,4 +93,30 @@ macro_rules! with_options {
             }
         }
     }
+}
+
+pub(crate) fn aws_connect_info(
+    options: &mut BTreeMap<String, Value>,
+    region: Option<Region>,
+) -> anyhow::Result<AwsConnectInfo> {
+    // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
+    // https://github.com/materializeinc/materialize/issues/1991
+    let mut extract = |key| match options.remove(key) {
+        Some(Value::String(key)) => Ok(Some(key)),
+        Some(_) => bail!("{} must be a string", key),
+        _ => Ok(None),
+    };
+    let region = match region {
+        Some(region) => region,
+        None => extract("region")?
+            .map(|r| r.parse())
+            .transpose()?
+            .ok_or_else(|| anyhow::anyhow!("region is required"))?,
+    };
+    Ok(AwsConnectInfo {
+        region,
+        access_key_id: extract("access_key_id")?,
+        secret_access_key: extract("secret_access_key")?,
+        token: extract("token")?,
+    })
 }
