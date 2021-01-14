@@ -588,18 +588,19 @@ impl MapFilterProject {
         }
         self.expressions = new_expressions;
 
-        // Update column identifiers.
-        for expr in self.expressions.iter_mut() {
-            expr.permute_map(&remap);
-        }
-        for (pos, pred) in self.predicates.iter_mut() {
-            pred.permute_map(&remap);
-            // Insert predicate as eagerly as it can be evaluated:
-            // just after the largest column in its support is formed.
-            *pos = pred.support().into_iter().max().map(|c| c + 1).unwrap_or(0);
-        }
-        for proj in self.projection.iter_mut() {
-            *proj = remap[proj];
-        }
+        // Update column identifiers; rebuild `Self` to re-establish any invariants.
+        // We mirror `self.permute(&remap)` but we specifically want to remap columns
+        // that are produced by `self.expressions` after the input columns.
+        let (expressions, predicates, projection) = self.as_map_filter_project();
+        *self = Self::new(self.input_arity)
+            .map(expressions.into_iter().map(|mut e| {
+                e.permute_map(&remap);
+                e
+            }))
+            .filter(predicates.into_iter().map(|mut p| {
+                p.permute_map(&remap);
+                p
+            }))
+            .project(projection.into_iter().map(|c| remap[&c]));
     }
 }
