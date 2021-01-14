@@ -25,25 +25,25 @@
 //! by invoking the right visitor method of each of its fields.
 //!
 //! ```
-//! # use sql_parser::ast::{Expr, Function, FunctionArgs, ObjectName, WindowSpec};
+//! # use sql_parser::ast::{Expr, Function, FunctionArgs, ObjectName, WindowSpec, AstInfo};
 //! #
-//! pub trait VisitMut<'ast> {
+//! pub trait VisitMut<'ast, T: AstInfo> {
 //!     /* ... */
 //!
-//!     fn visit_function_mut(&mut self, node: &'ast mut Function) {
+//!     fn visit_function_mut(&mut self, node: &'ast mut Function<T>) {
 //!         visit_function_mut(self, node);
 //!     }
 //!
 //!     /* ... */
 //!     # fn visit_object_name_mut(&mut self, node: &'ast mut ObjectName);
-//!     # fn visit_function_args_mut(&mut self, node: &'ast mut FunctionArgs);
-//!     # fn visit_expr_mut(&mut self, node: &'ast mut Expr);
-//!     # fn visit_window_spec_mut(&mut self, node: &'ast mut WindowSpec);
+//!     # fn visit_function_args_mut(&mut self, node: &'ast mut FunctionArgs<T>);
+//!     # fn visit_expr_mut(&mut self, node: &'ast mut Expr<T>);
+//!     # fn visit_window_spec_mut(&mut self, node: &'ast mut WindowSpec<T>);
 //! }
 //!
-//! pub fn visit_function_mut<'ast, V>(visitor: &mut V, node: &'ast mut Function)
+//! pub fn visit_function_mut<'ast, V, T: AstInfo>(visitor: &mut V, node: &'ast mut Function<T>)
 //! where
-//!     V: VisitMut<'ast> + ?Sized,
+//!     V: VisitMut<'ast, T> + ?Sized,
 //! {
 //!     visitor.visit_object_name_mut(&mut node.name);
 //!     visitor.visit_function_args_mut(&mut node.args);
@@ -65,13 +65,13 @@
 //! ```
 //! use std::error::Error;
 //!
-//! use sql_parser::ast::Expr;
+//! use sql_parser::ast::{AstInfo, Expr};
 //! use sql_parser::ast::visit_mut::{self, VisitMut};
 //!
 //! struct RemoveParens;
 //!
-//! impl<'a> VisitMut<'a> for RemoveParens {
-//!     fn visit_expr_mut(&mut self, expr: &'a mut Expr) {
+//! impl<'a, T: AstInfo> VisitMut<'a, T> for RemoveParens {
+//!     fn visit_expr_mut(&mut self, expr: &'a mut Expr<T>) {
 //!         visit_mut::visit_expr_mut(self, expr);
 //!         if let Expr::Nested(e) = expr {
 //!             *expr = (**e).clone();

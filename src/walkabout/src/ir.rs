@@ -80,6 +80,10 @@ pub enum Type {
     ///
     /// Primitive types do not need to be visited.
     Primitive,
+    /// Abstract type.
+    ///
+    /// Abstract types are required to implement `visit`.
+    Abstract(Vec<String>),
     /// An [`Option`] type..
     ///
     /// The value inside the option will need to be visited if the option is
@@ -179,7 +183,12 @@ fn analyze_type(ty: &syn::Type) -> Result<Type> {
     match ty {
         syn::Type::Path(syn::TypePath { qself: None, path }) => {
             match path.segments.len() {
-                2 => Ok(Type::Primitive),
+                2 => Ok(Type::Abstract(
+                    path.segments
+                        .iter()
+                        .map(|s| s.ident.to_string())
+                        .collect::<Vec<String>>(),
+                )),
                 1 => {
                     let segment = path.segments.last().unwrap();
                     let segment_name = segment.ident.to_string();
