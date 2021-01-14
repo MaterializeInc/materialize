@@ -57,13 +57,16 @@ pub enum Error {
 }
 
 impl Error {
-    pub fn print_stderr(&self) -> io::Result<()> {
+    pub fn print_stderr(&self, ci_output: bool) -> io::Result<()> {
         let color_choice = if atty::is(Stream::Stderr) {
             ColorChoice::Auto
         } else {
             ColorChoice::Never
         };
         let mut stderr = StandardStream::stderr(color_choice);
+        if ci_output {
+            println!("^^^ +++");
+        }
         match self {
             Error::Input {
                 err,
