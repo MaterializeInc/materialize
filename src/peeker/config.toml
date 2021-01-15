@@ -34,11 +34,13 @@ names = [
 ]
 
 [default_query]
-# the amount of time to sleep between peeks
-sleep_ms = 0
 # Spin up this many threads querying this view
 # This affects the ratio of times this query is executed vs other queries
 thread_count = 1
+
+[default_query.sleep]
+secs = 0
+nanos = 0
 
 [[groups]]
 # group settings override per-query enabled, enable/disable groups with the `-q` flag,
@@ -51,7 +53,10 @@ queries = ["q01", "q03", "q17", "q22"]
 # default values for groups:
 thread_count = 1
 enabled = true
-sleep_ms = 0
+
+[groups.sleep]
+secs = 0
+nanos = 0
 
 [[groups]]
 name = "loadtest"
@@ -89,7 +94,6 @@ sources = ["orderline"]
 
 
 [[queries]]
-sleep_ms = 1000
 name = "q02"
 query = """
 SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment
@@ -117,6 +121,10 @@ WHERE i_id = s_i_id
 ORDER BY n_name, su_name, i_id
 """
 sources = ["item", "nation", "region", "stock", "supplier"]
+
+[queries.sleep]
+secs = 1
+nanos = 0
 
 [[queries]]
 name = "q03"

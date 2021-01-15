@@ -13,13 +13,12 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
 use std::fs;
-use std::result::Result as StdResult;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
 use log::{debug, info};
 use regex::Regex;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use structopt::StructOpt;
 
 use crate::{Error, Result};
@@ -265,7 +264,7 @@ impl QueryGroup {
     fn from_raw_query(q: RawQuery, default: &DefaultQuery) -> QueryGroup {
         QueryGroup {
             name: q.name.clone(),
-            sleep: q.sleep_ms.unwrap_or(default.sleep_ms),
+            sleep: q.sleep.unwrap_or(default.sleep),
             thread_count: q.thread_count.unwrap_or(default.thread_count),
             queries: vec![Query {
                 name: q.name,
@@ -279,7 +278,7 @@ impl QueryGroup {
         let g_name = g.name.clone();
         Ok(QueryGroup {
             name: g_name.clone(),
-            sleep: g.sleep_ms,
+            sleep: g.sleep,
             thread_count: g.thread_count,
             queries: g
                 .queries
@@ -335,8 +334,7 @@ struct DefaultQuery {
     /// Groups share their connection and only one query happens at a time
     #[serde(default)]
     group: Option<String>,
-    #[serde(deserialize_with = "deser_duration_ms")]
-    sleep_ms: Duration,
+    sleep: Duration,
 }
 
 /// An explicitly created, named group
@@ -351,8 +349,8 @@ struct GroupConfig {
     /// The names of the queries that belong in this group, must be specified separately
     /// in the config file
     queries: Vec<String>,
-    #[serde(default, deserialize_with = "deser_duration_ms")]
-    sleep_ms: Duration,
+    #[serde(default)]
+    sleep: Duration,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -364,8 +362,8 @@ struct RawQuery {
     #[serde(default)]
     thread_count: Option<u32>,
     sources: Vec<String>,
-    #[serde(default, deserialize_with = "deser_duration_ms_opt")]
-    sleep_ms: Option<Duration>,
+    #[serde(default)]
+    sleep: Option<Duration>,
 }
 
 /// helper for serde default
@@ -375,22 +373,6 @@ fn btrue() -> bool {
 
 fn one() -> u32 {
     1
-}
-
-fn deser_duration_ms<'de, D>(deser: D) -> StdResult<Duration, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let d = Duration::from_millis(Deserialize::deserialize(deser)?);
-    Ok(d)
-}
-
-fn deser_duration_ms_opt<'de, D>(deser: D) -> StdResult<Option<Duration>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let d = Duration::from_millis(Deserialize::deserialize(deser)?);
-    Ok(Some(d))
 }
 
 lazy_static! {
