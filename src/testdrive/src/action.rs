@@ -54,6 +54,7 @@ pub struct Config {
     pub materialized_pgconfig: tokio_postgres::Config,
     pub materialized_catalog_path: Option<PathBuf>,
     pub reset_materialized: bool,
+    pub ci_output: bool,
 }
 
 pub struct State {
