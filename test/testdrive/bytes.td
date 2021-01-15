@@ -42,3 +42,4 @@ name       nullable  type
 --------------------------
 named_col  false     bytea
 mz_offset  false     int8
+nonsense
