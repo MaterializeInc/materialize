@@ -16,7 +16,7 @@
 //! context to the error within the result. For example, here is an idiomatic
 //! example of handling a filesystem error:
 //!
-//! ```rust
+//! ```ignore
 //! use std::fs::File;
 //! use std::io::Read;
 //! use testdrive::error::{Error, ResultExt};
@@ -39,24 +39,30 @@ use std::io::Write;
 use atty::Stream;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
+/// A testdrive error.
+///
 #[derive(Debug)]
 pub enum Error {
+    /// An error in parsing a testdrive script.
     Input {
+        /// The underlying error.
         err: InputError,
+        /// Additional details.
         details: Option<InputDetails>,
     },
+    /// Other errors.
     General {
+        /// The component in which the error occurred.
         ctx: String,
+        /// The underlying cause of the error.
         cause: Option<Box<dyn StdError + Send + Sync>>,
+        /// Hints about how to resolve the error.
         hints: Vec<String>,
-    },
-    Usage {
-        details: String,
-        requested: bool,
     },
 }
 
 impl Error {
+    /// Prints the error to `stderr`, with coloring if the terminal supports it.
     pub fn print_stderr(&self, ci_output: bool) -> io::Result<()> {
         let color_choice = if atty::is(Stream::Stderr) {
             ColorChoice::Auto
@@ -105,28 +111,10 @@ impl Error {
                 }
                 Ok(())
             }
-            Error::Usage { details, requested } => {
-                if *requested {
-                    println!("{}", details);
-                } else {
-                    eprintln!("{}", details);
-                }
-                Ok(())
-            }
         }
     }
 
-    pub fn exit_code(&self) -> i32 {
-        match self {
-            // Requested usage details do not cause a failing exit code.
-            Error::Usage {
-                requested: true, ..
-            } => 0,
-            _ => 1,
-        }
-    }
-
-    pub fn with_input_details(
+    pub(crate) fn with_input_details(
         self,
         filename: &str,
         contents: &str,
@@ -188,7 +176,6 @@ impl fmt::Display for Error {
                 }
                 Ok(())
             }
-            Error::Usage { details, .. } => write!(f, "usage error: {}", details),
         }
     }
 }

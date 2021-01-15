@@ -9,20 +9,22 @@
 
 //! Integration test driver for Materialize.
 
+#![deny(missing_docs)]
+
 use std::fs::File;
 use std::io::{self, Read};
 
-use self::error::{Error, InputError, ResultExt};
+use self::error::{InputError, ResultExt};
 use self::parser::LineReader;
 
 mod action;
+mod error;
 mod format;
 mod parser;
-
-pub mod error;
-pub mod util;
+mod util;
 
 pub use self::action::Config;
+pub use self::error::Error;
 
 /// Runs a testdrive script stored in a file.
 pub async fn run_file(config: &Config, filename: &str) -> Result<(), Error> {

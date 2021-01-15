@@ -16,8 +16,7 @@ use rusoto_credential::AwsCredentials;
 use structopt::StructOpt;
 use url::Url;
 
-use testdrive::error::Error;
-use testdrive::Config;
+use testdrive::{Config, Error};
 
 /// Integration test driver for Materialize.
 #[derive(StructOpt)]
@@ -67,7 +66,7 @@ struct Args {
     no_reset: bool,
 
     // === Testdrive options. ===
-    /// Emit buildkite-specific markup
+    /// Emit Buildkite-specific markup.
     #[structopt(long)]
     ci_output: bool,
 
@@ -84,7 +83,7 @@ async fn main() {
         // If printing the error message fails, there's not a whole lot we can
         // do.
         let _ = err.print_stderr(ci_output);
-        process::exit(err.exit_code());
+        process::exit(1);
     }
 }
 
