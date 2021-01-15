@@ -274,6 +274,22 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
     ) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
+        // Poll the consumer once. Since we split the consumer's partitions out into separate queues and poll those individually,
+        // we expect this poll to always return None - but it's necessary to drive logic that consumes from rdkafka's internal
+        // event queue, such as statistics callbacks.
+        if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
+            match result {
+                Err(e) => error!(
+                    "kafka error when polling consumer for source: {} topic: {} : {}",
+                    self.source_name, self.topic_name, e
+                ),
+                Ok(m) => error!(
+                    "unexpected receipt of kafka message from non-partitioned queue for source: {} topic: {} partition: {} offset: {}",
+                    self.source_name, self.topic_name, m.partition(), m.offset()
+                ),
+            }
+        }
+
         let mut next_message = NextMessage::Pending;
         let consumer_count = self.get_partition_consumers_count();
         let mut attempts = 0;
