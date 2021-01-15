@@ -100,7 +100,6 @@ pub fn load_config(config_path: Option<&str>, cli_queries: Option<&str>) -> Resu
 }
 
 fn load_raw_config(config_path: Option<&str>) -> RawConfig {
-
     // load and parse th toml
     let config_file = config_path
         .map(std::fs::read_to_string)
@@ -108,13 +107,15 @@ fn load_raw_config(config_path: Option<&str>) -> RawConfig {
     match &config_file {
         Ok(contents) => {
             let contents = substitute_config_env_vars(contents);
-            toml::from_str::<RawConfig>(&contents).map_err(|e| {
-                format!(
-                    "Unable to parse config file {}: {}",
-                    config_path.as_deref().unwrap_or("DEFAULT"),
-                    e
-                )
-            }).unwrap()
+            toml::from_str::<RawConfig>(&contents)
+                .map_err(|e| {
+                    format!(
+                        "Unable to parse config file {}: {}",
+                        config_path.as_deref().unwrap_or("DEFAULT"),
+                        e
+                    )
+                })
+                .unwrap()
         }
         Err(e) => {
             eprintln!(
@@ -149,18 +150,16 @@ pub fn print_config_supplied(config: Config) {
     }
 }
 
-pub fn write_config_supplied(config_path: Option<&str>, outfile: &String) {
+pub fn write_config_supplied(config_path: Option<&str>, outfile: &str) {
     let config_contents = toml::to_string(&load_raw_config(config_path));
     match &config_contents {
-        Ok(contents) => {
-            match fs::write(outfile, contents) {
-                Ok ( ()) => {}
-                Err(e) => {
-                    eprintln!("unable to write config file {:?}: {}", outfile, e);
-                    std::process::exit(1);
-                }
+        Ok(contents) => match fs::write(outfile, contents) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("unable to write config file {:?}: {}", outfile, e);
+                std::process::exit(1);
             }
-        }
+        },
         Err(e) => {
             eprintln!(
                 "unable to generate config file {:?}: {}",
