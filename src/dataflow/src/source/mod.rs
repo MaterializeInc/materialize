@@ -465,8 +465,8 @@ impl ConsistencyInfo {
                 &source_id.to_string(),
                 &worker_id.to_string(),
             ),
-            // we have never downgraded, so make sure the initial value is outside of our frequncy
-            time_since_downgrade: Instant::now() - timestamp_frequency,
+            // we have never downgraded, so make sure the initial value is outside of our frequency
+            time_since_downgrade: Instant::now() - timestamp_frequency - Duration::from_secs(1),
             partition_metrics: Default::default(),
         }
     }
