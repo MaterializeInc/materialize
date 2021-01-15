@@ -13,3 +13,4 @@
 
 pub mod aws;
 pub mod kinesis;
+pub mod s3;

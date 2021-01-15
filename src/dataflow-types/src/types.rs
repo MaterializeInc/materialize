@@ -19,13 +19,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
+use globset::Glob;
 use log::warn;
 use regex::Regex;
-use rusoto_core::Region;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use url::Url;
 
+use aws_util::aws;
 use expr::{GlobalId, OptimizedRelationExpr, PartitionId, RelationExpr, ScalarExpr};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
@@ -505,15 +506,27 @@ pub enum ExternalSourceConnector {
     Kinesis(KinesisSourceConnector),
     File(FileSourceConnector),
     AvroOcf(FileSourceConnector),
+    S3(S3SourceConnector),
 }
 
 impl ExternalSourceConnector {
+    /// Returns the name and type of each additional metadata column that
+    /// Materialize will automatically append to the source's inherent columns.
+    ///
+    /// Presently, each source type exposes precisely one metadata column that
+    /// corresponds to some source-specific record counter. For example, file
+    /// sources use a line number, while Kafka sources use a topic offset.
+    ///
+    /// The columns declared here must be kept in sync with the actual source
+    /// implementations that produce these columns.
     pub fn metadata_columns(&self) -> Vec<(ColumnName, ColumnType)> {
         match self {
             Self::Kafka(_) => vec![("mz_offset".into(), ScalarType::Int64.nullable(false))],
             Self::File(_) => vec![("mz_line_no".into(), ScalarType::Int64.nullable(false))],
             Self::Kinesis(_) => vec![("mz_offset".into(), ScalarType::Int64.nullable(false))],
             Self::AvroOcf(_) => vec![("mz_obj_no".into(), ScalarType::Int64.nullable(false))],
+            // TODO: should we include object key and possibly object-internal offset here?
+            Self::S3(_) => vec![("mz_record".into(), ScalarType::Int64.nullable(false))],
         }
     }
 
@@ -524,6 +537,7 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::Kinesis(_) => "kinesis",
             ExternalSourceConnector::File(_) => "file",
             ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
+            ExternalSourceConnector::S3(_) => "s3",
         }
     }
 
@@ -614,7 +628,7 @@ pub struct KafkaSourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnector {
     pub stream_name: String,
-    pub aws_info: AwsConnectInfo,
+    pub aws_info: aws::ConnectInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -624,11 +638,10 @@ pub struct FileSourceConnector {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct AwsConnectInfo {
-    pub region: Region,
-    pub access_key_id: Option<String>,
-    pub secret_access_key: Option<String>,
-    pub token: Option<String>,
+pub struct S3SourceConnector {
+    pub bucket: String,
+    pub pattern: Option<Glob>,
+    pub aws_info: aws::ConnectInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -714,9 +727,9 @@ pub struct KafkaSinkConnectorBuilder {
     pub key_schema: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
