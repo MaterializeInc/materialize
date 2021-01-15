@@ -135,7 +135,7 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
             source_name: str = query_info["sources"][0]
             if source_name not in source_name:
                 print(
-                    f"ERROR: No matching source {view_source} for view {view}: {topic_names}"
+                    f"ERROR: No matching source {source_name} for view {view}: {source_names}"
                 )
                 sys.exit(1)
 
