@@ -24,6 +24,7 @@ import os
 import sys
 import pathlib
 import time
+import toml
 import typing
 
 import psycopg2  # type: ignore
@@ -91,12 +92,46 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
         for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
     }
 
+    source_offsets = {
+        p.stem: p.read_text().strip()
+        for p in pathlib.Path(args.snapshot_dir).glob("*.offset")
+    }
+
     # Create a dictionary mapping view names to source name and offset
-    source_offsets = {}
-    with open(os.path.join(args.snapshot_dir, "view_sources.json")) as fd:
-        for (view, source) in json.load(fd).items():
-            with open(os.path.join(args.snapshot_dir, f"{source}.offset")) as fd:
-                source_offsets[view] = {"topic": source, "offset": int(fd.read())}
+    view_sources = {}
+    with open(os.path.join(args.snapshot_dir, "config.toml")) as fd:
+        conf = toml.load(fd)
+
+        if len(conf['sources']) != 1:
+            print(f"ERROR: Expected just one source block: {conf['sources']}")
+            sys.exit(1)
+
+        source_info = conf['sources'][0]
+        topic_prefix = source_info['topic_namespace']
+        source_names = source_info['names']
+
+        for query_info in conf['queries']:
+
+            # Ignore views not in this snapshot (they likely have multiple sources...)
+            view = query_info['name']
+            if view not in view_snapshots:
+                continue
+
+            if len(query_info['sources']) != 1:
+                print(f"ERROR: Expected just one source for view {view}: {query_info['sources']}")
+                sys.exit(1)
+
+            view_source = query_info['sources'][0]
+            if view_source not in source_names:
+                print(f"ERROR: No matching source {view_source} for view {view}: {source_names}")
+                sys.exit(1)
+
+            source_name = f"{topic_prefix}{view_source}"
+            if source_name not in source_offsets:
+                print(f"ERROR: Missing offset information for source {source_name}: {source_offsets}")
+                sys.exit(1)
+
+            view_sources[view] = {"topic": source_name, "offset": source_offsets[source_name]}
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
         installed_views = set(view_names(conn))
