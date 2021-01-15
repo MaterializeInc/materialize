@@ -107,15 +107,17 @@ fn load_raw_config(config_path: Option<&str>) -> RawConfig {
     match &config_file {
         Ok(contents) => {
             let contents = substitute_config_env_vars(contents);
-            toml::from_str::<RawConfig>(&contents)
-                .map_err(|e| {
-                    format!(
+            match toml::from_str::<RawConfig>(&contents) {
+                Ok(config) => config,
+                Err(e) => {
+                    eprintln!(
                         "Unable to parse config file {}: {}",
                         config_path.as_deref().unwrap_or("DEFAULT"),
                         e
-                    )
-                })
-                .unwrap()
+                    );
+                    std::process::exit(1);
+                }
+            }
         }
         Err(e) => {
             eprintln!(
