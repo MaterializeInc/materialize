@@ -124,17 +124,23 @@ pub enum Expr {
         op: String,
         right: Box<Query>,
     },
-    /// `<expr> <op> ANY (<query>)`
+    /// `<expr> <op> ANY (<array_expr>)`
     AnyExpr {
         left: Box<Expr>,
         op: String,
         right: Box<Expr>,
     },
     /// `<expr> <op> ALL (<query>)`
-    All {
+    AllSubquery {
         left: Box<Expr>,
         op: String,
         right: Box<Query>,
+    },
+    /// `<expr> <op> ALL (<array_expr>)`
+    AllExpr {
+        left: Box<Expr>,
+        op: String,
+        right: Box<Expr>,
     },
     /// `ARRAY[<expr>*]`
     Array(Vec<Expr>),
@@ -353,7 +359,15 @@ impl AstDisplay for Expr {
                 f.write_node(&right);
                 f.write_str(")");
             }
-            Expr::All { left, op, right } => {
+            Expr::AllSubquery { left, op, right } => {
+                f.write_node(&left);
+                f.write_str(" ");
+                f.write_str(op);
+                f.write_str(" ALL (");
+                f.write_node(&right);
+                f.write_str(")");
+            }
+            Expr::AllExpr { left, op, right } => {
                 f.write_node(&left);
                 f.write_str(" ");
                 f.write_str(op);

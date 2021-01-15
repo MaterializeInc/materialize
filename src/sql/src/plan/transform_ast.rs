@@ -19,7 +19,7 @@ use uuid::Uuid;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, ObjectName, Query, Select, SelectItem, TableAlias,
-    TableWithJoins, Value,
+    TableFactor, TableWithJoins, Value,
 };
 
 use crate::normalize;
@@ -313,7 +313,7 @@ impl Desugarer {
         } = expr
         {
             if *negated {
-                *expr = Expr::All {
+                *expr = Expr::AllSubquery {
                     left: Box::new(e.take()),
                     op: "<>".into(),
                     right: Box::new(subquery.take()),
@@ -327,12 +327,60 @@ impl Desugarer {
             }
         }
 
+        // `$expr = ALL ($array_expr)`
+        // =>
+        // `$expr = ALL (SELECT elem FROM unnest($array_expr) _ (elem))`
+        //
+        // and analogously for other operators and ANY.
+        if let Expr::AnyExpr { left, op, right } | Expr::AllExpr { left, op, right } = expr {
+            let binding = Ident::new("elem");
+
+            let subquery = Query::select(
+                Select::default()
+                    .from(TableWithJoins {
+                        relation: TableFactor::Function {
+                            name: ObjectName(vec![Ident::new("mz_catalog"), Ident::new("unnest")]),
+                            args: FunctionArgs::Args(vec![right.take()]),
+                            alias: Some(TableAlias {
+                                name: Ident::new("_"),
+                                columns: vec![binding.clone()],
+                                strict: true,
+                            }),
+                        },
+                        joins: vec![],
+                    })
+                    .project(SelectItem::Expr {
+                        expr: Expr::Identifier(vec![binding]),
+                        alias: None,
+                    }),
+            );
+
+            let left = Box::new(left.take());
+
+            let op = op.clone();
+
+            *expr = match expr {
+                Expr::AnyExpr { .. } => Expr::AnySubquery {
+                    left,
+                    op,
+                    right: Box::new(subquery),
+                },
+                Expr::AllExpr { .. } => Expr::AllSubquery {
+                    left,
+                    op,
+                    right: Box::new(subquery),
+                },
+                _ => unreachable!(),
+            };
+        }
+
         // `$expr = ALL ($subquery)`
         // =>
         // `(SELECT mz_internal.mz_all($expr = $binding) FROM ($subquery) AS _ ($binding))
         //
         // and analogously for other operators and ANY.
-        if let Expr::AnySubquery { left, op, right } | Expr::All { left, op, right } = expr {
+        if let Expr::AnySubquery { left, op, right } | Expr::AllSubquery { left, op, right } = expr
+        {
             let left = match &mut **left {
                 Expr::Row { .. } => left.take(),
                 _ => Expr::Row {
@@ -371,7 +419,7 @@ impl Desugarer {
                         )
                         .call_unary(match expr {
                             Expr::AnySubquery { .. } => vec!["mz_internal", "mz_any"],
-                            Expr::All { .. } => vec!["mz_internal", "mz_all"],
+                            Expr::AllSubquery { .. } => vec!["mz_internal", "mz_all"],
                             _ => unreachable!(),
                         }),
                     alias: None,

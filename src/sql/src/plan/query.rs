@@ -2072,56 +2072,6 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             }
             .into()
         }
-        Expr::AnyExpr { left, op, right } => {
-            let lhs = plan_expr(ecx, left)?;
-            let rhs = plan_expr(ecx, right)?;
-
-            let (lhs, rhs) = if let Some(typ) = ecx.scalar_type(&lhs) {
-                (
-                    lhs.type_as(ecx, &typ)?,
-                    rhs.type_as(
-                        &ecx.with_name("ANY operand array"),
-                        &ScalarType::Array(Box::new(typ)),
-                    )?,
-                )
-            } else if let Some(ScalarType::Array(array_type)) = ecx.scalar_type(&rhs) {
-                (
-                    lhs.type_as(&ecx.with_name("ANY operand"), &array_type)?,
-                    rhs.type_as(ecx, &ScalarType::Array(array_type))?,
-                )
-            } else {
-                (lhs.type_as_any(ecx)?, rhs.type_as_any(ecx)?)
-            };
-
-            match &ecx.scalar_type(&rhs) {
-                ScalarType::Array(array_type) => {
-                    let element_type = ecx.scalar_type(&lhs);
-                    if element_type != **array_type {
-                        bail!(
-                            "cannot evaluate ANY for element type {} and array type {}",
-                            ecx.humanize_scalar_type(&element_type),
-                            ecx.humanize_scalar_type(array_type),
-                        )
-                    }
-                }
-                _ => unsupported!("op ANY requires array on right hand side"),
-            }
-
-            let array_contains = ScalarExpr::CallBinary {
-                func: BinaryFunc::ArrayContains,
-                expr1: Box::new(lhs),
-                expr2: Box::new(rhs),
-            };
-            let scalar_expr = match op.as_str() {
-                "=" => array_contains,
-                "<>" => ScalarExpr::CallUnary {
-                    func: UnaryFunc::Not,
-                    expr: Box::new(array_contains),
-                },
-                op => unsupported!(format!("ANY comparison op {}", op)),
-            };
-            CoercibleScalarExpr::Coerced(scalar_expr)
-        }
 
         // Subqueries.
         Expr::Exists(query) => {
@@ -2152,8 +2102,10 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
         Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
         Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
+        Expr::AnyExpr { .. } => unreachable!("Expr::AnyExpr not desugared"),
+        Expr::AllExpr { .. } => unreachable!("Expr::AllExpr not desugared"),
         Expr::AnySubquery { .. } => unreachable!("Expr::AnySubquery not desugared"),
-        Expr::All { .. } => unreachable!("Expr::All not desugared"),
+        Expr::AllSubquery { .. } => unreachable!("Expr::AllSubquery not desugared"),
         Expr::Between { .. } => unreachable!("Expr::Between not desugared"),
     })
 }
