@@ -88,6 +88,42 @@ true
 query error ANY comparison op <= not yet supported
 select 'hello'::text <= ANY(ARRAY['there'::text])
 
+# 🔬🔬 unnest
+
+query I rowsort
+SELECT unnest FROM unnest(ARRAY[1,2,3])
+----
+1
+2
+3
+
+query T rowsort
+SELECT unnest::text FROM unnest(ARRAY[[1,2],[3,4]])
+----
+1
+2
+3
+4
+
+query T rowsort
+SELECT unnest::text FROM unnest(ARRAY[NULL])
+----
+NULL
+
+query I rowsort
+SELECT unnest FROM unnest(ARRAY[NULL,1])
+----
+NULL
+1
+
+query T rowsort
+SELECT unnest::text FROM unnest(NULL::int[])
+----
+
+query error Cannot call function unnest\(unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT * FROM unnest(NULL)
+
+
 # Duplicates of cockroach/array.slt. todo@jldlaughlin: Remove when we support that file.
 # array subscript access
 
