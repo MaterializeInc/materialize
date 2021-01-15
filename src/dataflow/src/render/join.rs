@@ -252,8 +252,12 @@ where
             // produce two copies of the same column) and further improvements
             // here (figure out how to apply the projection in the prior closure).
             if !mfp.is_identity() {
-                // The `mfp` should just be projection at this point. If it is not,
-                // something incorrect has happen in prior closure extraction.
+                // The `mfp` has access to all columns at this point, and could
+                // plausibly be much simpler that a general `MapFilterProject`.
+                // As of this writing, the `mfp` will only contain literals and
+                // some projection to place them and potentially copy columns.
+                // These should not error (if the literals are non-errors) and
+                // could result in a simpler (non-erroring) operator.
                 joined = joined.map({
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();

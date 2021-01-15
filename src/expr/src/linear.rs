@@ -375,7 +375,14 @@ impl MapFilterProject {
         }
         for expr in self.expressions.into_iter() {
             // We treat an expression as available if its supporting columns are available,
-            // and if it is not a literal (we want to avoid pushing down literals).
+            // and if it is not a literal (we want to avoid pushing down literals). This
+            // choice is ad-hoc, but the intent is that we partition the operators so
+            // that we can reduce the row representation size and total computation.
+            // Pushing down literals harms the former and does nothing for the latter.
+            // In the future, we'll want to have a harder think about this trade-off, as
+            // we are certainly making sub-optimal decisions by pushing down all availble
+            // work.
+            // TODO(mcsherry): establish better principles about what work to push down.
             let is_available =
                 expr.support().into_iter().all(|i| available_expr[i]) && !expr.is_literal();
             if is_available {
