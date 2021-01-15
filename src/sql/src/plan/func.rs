@@ -1735,6 +1735,14 @@ lazy_static! {
                 })
             },
             "unnest" => Table {
+                vec![ArrayAny] => Operation::unary(move |ecx, e| {
+                    let el_typ =  ecx.scalar_type(&e).unwrap_array_element_type().clone();
+                    Ok(TableFuncPlan {
+                        func: TableFunc::UnnestArray{ el_typ },
+                        exprs: vec![e],
+                        column_names: vec![Some("unnest".into())],
+                    })
+                }),
                 vec![ListAny] => Operation::unary(move |ecx, e| {
                     let el_typ =  ecx.scalar_type(&e).unwrap_list_element_type().clone();
                     Ok(TableFuncPlan {
