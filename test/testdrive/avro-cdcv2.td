@@ -113,6 +113,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
 id price
 --------
 5 10
+nonsense
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=3
 {"array":[{"data":{"id":5,"price":{"int":10}},"time":6,"diff":-1}]}
