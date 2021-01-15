@@ -16,8 +16,7 @@ use rusoto_credential::AwsCredentials;
 use structopt::StructOpt;
 use url::Url;
 
-use testdrive::error::Error;
-use testdrive::Config;
+use testdrive::{Config, Error};
 
 /// Integration test driver for Materialize.
 #[derive(StructOpt)]
@@ -66,6 +65,11 @@ struct Args {
     #[structopt(long)]
     no_reset: bool,
 
+    // === Testdrive options. ===
+    /// Emit Buildkite-specific markup.
+    #[structopt(long)]
+    ci_output: bool,
+
     // === Positional arguments. ===
     /// Paths to testdrive scripts to run.
     files: Vec<String>,
@@ -73,11 +77,13 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    if let Err(err) = run(ore::cli::parse_args()).await {
+    let args: Args = ore::cli::parse_args();
+    let ci_output = args.ci_output;
+    if let Err(err) = run(args).await {
         // If printing the error message fails, there's not a whole lot we can
         // do.
-        let _ = err.print_stderr();
-        process::exit(err.exit_code());
+        let _ = err.print_stderr(ci_output);
+        process::exit(1);
     }
 }
 
@@ -133,6 +139,7 @@ async fn run(args: Args) -> Result<(), Error> {
         materialized_pgconfig: args.materialized_url,
         materialized_catalog_path: args.validate_catalog,
         reset_materialized: !args.no_reset,
+        ci_output: args.ci_output,
     };
 
     if args.files.is_empty() {

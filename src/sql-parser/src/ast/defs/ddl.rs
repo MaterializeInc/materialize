@@ -231,6 +231,11 @@ pub enum Connector {
     AvroOcf {
         path: String,
     },
+    S3 {
+        bucket: String,
+        /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
+        pattern: Option<String>,
+    },
 }
 
 impl AstDisplay for Connector {
@@ -263,6 +268,16 @@ impl AstDisplay for Connector {
                 f.write_str("AVRO OCF '");
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
+            }
+            Connector::S3 { bucket, pattern } => {
+                f.write_str("S3 BUCKET '");
+                f.write_str(&display::escape_single_quote_string(bucket));
+                f.write_str("' OBJECTS FROM SCAN");
+                if let Some(pattern) = pattern {
+                    f.write_str(" MATCHING '");
+                    f.write_str(&display::escape_single_quote_string(pattern));
+                    f.write_str("'");
+                }
             }
         }
     }
