@@ -90,25 +90,18 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
         if config.reset_materialized {
             state.reset_materialized().await?;
         }
-        // The `tokio::spawn` allows using `block_in_place` to run sync code within
-        // the spawned task. The spawn will one day not be necessary.
-        // See: https://github.com/tokio-rs/tokio/issues/1838.
-        tokio::spawn(async move {
-            let actions = action::build(cmds_exec, &state)?;
-            for a in actions.iter().rev() {
-                let undo = a.action.undo(&mut state);
-                undo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
-            }
-            for a in &actions {
-                let redo = a.action.redo(&mut state);
-                redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
-            }
-            state.reset_kinesis().await?;
-            drop(state);
-            state_cleanup.await
-        })
-        .await
-        .expect("action task unexpectedly canceled")?
+        let actions = action::build(cmds_exec, &state)?;
+        for a in actions.iter().rev() {
+            let undo = a.action.undo(&mut state);
+            undo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+        }
+        for a in &actions {
+            let redo = a.action.redo(&mut state);
+            redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+        }
+        state.reset_kinesis().await?;
+        drop(state);
+        state_cleanup.await?;
     }
     Ok(())
 }
