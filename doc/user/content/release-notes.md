@@ -46,6 +46,11 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.6.2 %}}
+
+- Commit consumed offsets to Kafka to facilitate source ingest progress
+  monitoring.
+
 {{% version-header v0.6.1 %}}
 
 - Add the advanced [`--timely-progress-mode` and `--differential-idle-merge-effort` command-line arguments](/cli/#dataflow-tuning)
