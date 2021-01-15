@@ -39,10 +39,15 @@ NULL  NULL
 query error Cannot call function array_to_string\(unknown, unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
 
-# Test ANY.
+# Test ANY/SOME/ALL.
 
 query B
 SELECT 1 = ANY(ARRAY[1, 2])
+----
+true
+
+query B
+SELECT 1 = SOME(ARRAY[1, 2])
 ----
 true
 
@@ -51,12 +56,15 @@ SELECT 1 = ANY(ARRAY[2])
 ----
 false
 
-query error ANY operand array must have type integer\[\], not type text\[\]
+query error no overload for integer = text: arguments cannot be implicitly cast
 SELECT 1 = ANY(ARRAY['1', '2'])
+
+query B
+SELECT 3 = ANY(ARRAY[ARRAY[1, 2], ARRAY[3,4]])
 ----
 true
 
-query error ANY operand array must have type integer\[\], not type text\[\]
+query error no overload for integer = text: arguments cannot be implicitly cast
 SELECT 1 = ANY(ARRAY['hi'::text])
 
 query error invalid input syntax for integer: invalid digit found in string: "hi"
@@ -64,8 +72,6 @@ select 'hi' = any(array[1]);
 
 query error cannot determine type of empty array
 SELECT 'hi'::text = ANY(ARRAY[])
-----
-false
 
 query B
 SELECT 'hi'::text = ANY(ARRAY[]::text[])
@@ -85,8 +91,22 @@ select 'hello'::text != ANY(ARRAY['there'::text])
 ----
 true
 
-query error ANY comparison op <= not yet supported
+query B
 select 'hello'::text <= ANY(ARRAY['there'::text])
+----
+true
+
+# Test ALL
+
+query B
+SELECT 1 = ALL(ARRAY[1, 2])
+----
+false
+
+query B
+SELECT 5 <> ALL(ARRAY[ARRAY[1, 2], ARRAY[3,4]])
+----
+true
 
 # 🔬🔬 unnest
 

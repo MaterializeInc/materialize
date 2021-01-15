@@ -823,32 +823,44 @@ impl<'a> Parser<'a> {
         if let Some(op) = regular_binary_operator {
             if let Some(kw) = self.parse_one_of_keywords(&[ANY, SOME, ALL]) {
                 self.expect_token(&Token::LParen)?;
-                if kw == ANY || kw == SOME {
-                    let expr = if self.parse_one_of_keywords(&[SELECT, VALUES]).is_some() {
-                        self.prev_token();
+
+                let expr = if self.parse_one_of_keywords(&[SELECT, VALUES]).is_some() {
+                    self.prev_token();
+                    let subquery = self.parse_query()?;
+
+                    if kw == ALL {
+                        Expr::AllSubquery {
+                            left: Box::new(expr),
+                            op: op.into(),
+                            right: Box::new(subquery),
+                        }
+                    } else {
                         Expr::AnySubquery {
                             left: Box::new(expr),
                             op: op.into(),
-                            right: Box::new(self.parse_query()?),
+                            right: Box::new(subquery),
+                        }
+                    }
+                } else {
+                    let right = self.parse_expr()?;
+
+                    if kw == ALL {
+                        Expr::AllExpr {
+                            left: Box::new(expr),
+                            op: op.into(),
+                            right: Box::new(right),
                         }
                     } else {
                         Expr::AnyExpr {
                             left: Box::new(expr),
                             op: op.into(),
-                            right: Box::new(self.parse_expr()?),
+                            right: Box::new(right),
                         }
-                    };
-                    self.expect_token(&Token::RParen)?;
-                    Ok(expr)
-                } else {
-                    let query = self.parse_query()?;
-                    self.expect_token(&Token::RParen)?;
-                    Ok(Expr::All {
-                        left: Box::new(expr),
-                        op: op.into(),
-                        right: Box::new(query),
-                    })
-                }
+                    }
+                };
+                self.expect_token(&Token::RParen)?;
+
+                Ok(expr)
             } else {
                 Ok(Expr::Op {
                     op: op.into(),
