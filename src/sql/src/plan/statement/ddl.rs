@@ -378,6 +378,7 @@ pub fn plan_create_source(
                 config_options,
                 start_offsets,
                 group_id_prefix,
+                cluster_id: scx.catalog.config().cluster_id,
                 enable_caching,
                 cached_files: None,
             });

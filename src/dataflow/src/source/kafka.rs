@@ -32,6 +32,7 @@ use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{debug, error, info, log_enabled, warn};
 use repr::{CachedRecord, CachedRecordIter, Timestamp};
+use uuid::Uuid;
 
 use crate::source::cache::{CacheSender, RecordFileMetadata, WorkerCacheData};
 use crate::source::{
@@ -449,12 +450,18 @@ impl KafkaSourceInfo {
             topic,
             config_options,
             group_id_prefix,
+            cluster_id,
             ..
         } = kc;
         let worker_id = worker_id.try_into().unwrap();
         let worker_count = worker_count.try_into().unwrap();
-        let kafka_config =
-            create_kafka_config(&source_name, &addrs, group_id_prefix, &config_options);
+        let kafka_config = create_kafka_config(
+            &source_name,
+            &addrs,
+            group_id_prefix,
+            cluster_id,
+            &config_options,
+        );
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
@@ -613,6 +620,7 @@ fn create_kafka_config(
     name: &str,
     addrs: &KafkaAddrs,
     group_id_prefix: Option<String>,
+    cluster_id: Uuid,
     config_options: &BTreeMap<String, String>,
 ) -> ClientConfig {
     let mut kafka_config = ClientConfig::new();
@@ -640,9 +648,9 @@ fn create_kafka_config(
 
     kafka_config.set("fetch.message.max.bytes", "134217728");
 
-    // Consumer group ID. We'd prefer not to set this at all, as we don't use
-    // Kafka's consumer group support, but librdkafka requires it, and users
-    // expect it.
+    // Consumer group ID. librdkafka requires this, and we use offset commiting
+    // to provide a way for users to monitor ingest progress (though we do not
+    // rely on the committed offsets for any functionality)
     //
     // This is partially dictated by the user and partially dictated by us.
     // Users can set a prefix so they can see which consumers belong to which
@@ -653,8 +661,9 @@ fn create_kafka_config(
     kafka_config.set(
         "group.id",
         &format!(
-            "{}materialize-{}",
+            "{}materialize-{}-{}",
             group_id_prefix.unwrap_or_else(String::new),
+            cluster_id,
             name
         ),
     );
