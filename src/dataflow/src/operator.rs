@@ -71,7 +71,7 @@ where
     /// is allowed to fail. The first returned stream will contain the
     /// successful applications of `logic`, while the second returned stream
     /// will contain the failed applications.
-    fn flat_map_fallible<D2, E, I, L>(&self, logic: L) -> (Stream<G, D2>, Stream<G, E>)
+    fn flat_map_fallible<D2, E, I, L>(&self, name: &str, logic: L) -> (Stream<G, D2>, Stream<G, E>)
     where
         D2: Data,
         E: Data,
@@ -119,6 +119,7 @@ where
     /// applications.
     fn flat_map_fallible<D2, E, I, L>(
         &self,
+        name: &str,
         logic: L,
     ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
@@ -228,7 +229,11 @@ where
         })
     }
 
-    fn flat_map_fallible<D2, E, I, L>(&self, mut logic: L) -> (Stream<G, D2>, Stream<G, E>)
+    fn flat_map_fallible<D2, E, I, L>(
+        &self,
+        name: &str,
+        mut logic: L,
+    ) -> (Stream<G, D2>, Stream<G, E>)
     where
         D2: Data,
         E: Data,
@@ -236,7 +241,7 @@ where
         L: FnMut(D1) -> I + 'static,
     {
         let mut storage = Vec::new();
-        self.unary_fallible(Pipeline, "FlatMapFallible", move |_, _| {
+        self.unary_fallible(Pipeline, name, move |_, _| {
             move |input, ok_output, err_output| {
                 input.for_each(|time, data| {
                     let mut ok_session = ok_output.session(&time);
@@ -332,6 +337,7 @@ where
 
     fn flat_map_fallible<D2, E, I, L>(
         &self,
+        name: &str,
         mut logic: L,
     ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
@@ -340,7 +346,7 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static,
     {
-        let (ok_stream, err_stream) = self.inner.flat_map_fallible(move |(d1, t, r)| {
+        let (ok_stream, err_stream) = self.inner.flat_map_fallible(name, move |(d1, t, r)| {
             logic(d1).into_iter().map(move |res| match res {
                 Ok(d2) => Ok((d2, t.clone(), r.clone())),
                 Err(e) => Err((e, t.clone(), r.clone())),
@@ -377,7 +383,7 @@ where
         I: IntoIterator<Item = (Result<D2, E>, R2)>,
         L: FnMut(D1) -> I + 'static,
     {
-        let (ok_stream, err_stream) = self.inner.flat_map_fallible(move |(d1, t, r)| {
+        let (ok_stream, err_stream) = self.inner.flat_map_fallible("Explode", move |(d1, t, r)| {
             logic(d1).into_iter().map(move |res| match res {
                 (Ok(d2), r2) => Ok((d2, t.clone(), r2 * r.clone())),
                 (Err(e), r2) => Err((e, t.clone(), r2 * r.clone())),

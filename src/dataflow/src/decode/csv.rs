@@ -9,14 +9,15 @@
 
 use std::iter;
 
-use dataflow_types::LinearOperator;
+use expr::MapFilterProject;
 
 use log::error;
 
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
-use repr::{Datum, Diff, Row, Timestamp};
+use dataflow_types::DataflowError;
+use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 use crate::{metrics::EVENTS_COUNTER, source::SourceOutput};
 
@@ -25,23 +26,24 @@ pub fn csv<G>(
     header_row: bool,
     n_cols: usize,
     delimiter: u8,
-    operators: &mut Option<LinearOperator>,
-) -> Stream<G, (Row, Timestamp, Diff)>
+    map_filter_project: &mut MapFilterProject,
+) -> (
+    Stream<G, (Row, Timestamp, Diff)>,
+    Stream<G, (DataflowError, Timestamp, Diff)>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
     // Delimiters must be single-byte utf8 to safely treat all matched fields as valid utf8.
     assert!(delimiter.is_ascii());
+    // Take ownership of MFP and leave behind the identity operators.
+    let map_filter_project = std::mem::replace(
+        map_filter_project,
+        MapFilterProject::new(map_filter_project.input_arity),
+    );
 
-    let operators = operators.take();
-    let demanded = (0..n_cols)
-        .map(move |c| {
-            operators
-                .as_ref()
-                .map(|o| o.projection.contains(&c))
-                .unwrap_or(true)
-        })
-        .collect::<Vec<_>>();
+    // TODO: Directly write operator to produce two output streams rather than `ok_err` to simplify dataflow.
+    use timely::dataflow::operators::OkErr;
 
     stream.unary(
         SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
@@ -67,6 +69,7 @@ where
                         // will be utf8 as well, allowing some unsafe shenanigans.
                         if std::str::from_utf8(line.as_slice()).is_err() {
                             events_error += 1;
+                            // TODO(mcsherry): Produce dataflow error rather than console error.
                             error!("CSV error: input text is not utf8");
                         } else {
                             // Reset the reader to read a new series of records.
@@ -115,31 +118,34 @@ where
                                             );
                                         } else {
                                             events_success += 1;
-                                            session.give((
-                                                row_packer.pack(
-                                                    (0..n_cols)
-                                                        .map(|i| {
-                                                            // Unsafety rationalized as 1. the input text is determined to be
-                                                            // valid utf8, and 2. the delimiter is ascii, which should make each
-                                                            // delimited region also utf8.
-                                                            Datum::String(unsafe {
-                                                                if demanded[i] {
-                                                                    std::str::from_utf8_unchecked(
-                                                                        &buffer
-                                                                            [bounds[i]..bounds[i + 1]],
-                                                                    )
-                                                                } else {
-                                                                    ""
-                                                                }
-                                                            })
-                                                        })
-                                                        .chain(iter::once(
-                                                            line_no.map(Datum::Int64).into(),
-                                                        )),
-                                                ),
-                                                *cap.time(),
-                                                1,
-                                            ));
+                                            // Push strings into a vector for MFP evaluation.
+                                            // TODO(mcsherry): re-use allocations for datums.
+                                            let mut datums = (0 .. n_cols)
+                                                .map(|i| unsafe {
+                                                    // NOTE(mcsherry): unsafety justified because the source string is utf8 and the
+                                                    // delimiter is a single-byte utf8, which we concluded ensured that all fields
+                                                    // would also be valid utf8, through discussion and head scratching.
+                                                    Datum::String(std::str::from_utf8_unchecked(&buffer[bounds[i]..bounds[i + 1]]))
+                                                })
+                                                .chain(iter::once(line_no.map(Datum::Int64).into()))
+                                                .collect::<Vec<_>>();
+                                            // Evaluation may error, in which case we produce the error rather than a partial row.
+                                            // We flag this as a "success" as the failure happens not in the source, but in subsequent logic.
+                                            let temp_storage = RowArena::new();
+
+                                            if let Some(result) = map_filter_project.evaluate_iter(&mut datums, &temp_storage).map_err(DataflowError::from).transpose() {
+                                                session.give((
+                                                    // Produce either the resulting row, or any evaluation error.
+                                                    result.map(|iter| {
+                                                        row_packer.clear();
+                                                        row_packer.extend(iter);
+                                                        row_packer.finish_and_reuse()
+                                                    }),
+                                                    *cap.time(),
+                                                    1,
+                                                ));
+                                            }
+
                                             // Reset valid data to extract the next record, should one exist.
                                             buffer_valid = 0;
                                             bounds_valid = 0;
@@ -161,5 +167,8 @@ where
                 }
             }
         },
-    )
+    ).ok_err(|(d,t,r)| match d {
+        Ok(d) => Ok((d,t,r)),
+        Err(e) => Err((e,t,r)),
+    })
 }

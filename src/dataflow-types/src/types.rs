@@ -27,7 +27,7 @@ use timely::progress::frontier::Antichain;
 use url::Url;
 
 use aws_util::aws;
-use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, PartitionId};
+use expr::{GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, PartitionId};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use kafka_util::KafkaAddrs;
@@ -132,7 +132,7 @@ impl DataflowDesc {
     ) {
         let source_description = SourceDesc {
             connector,
-            operators: None,
+            map_filter_project: MapFilterProject::new(desc.arity()),
             desc,
         };
         self.source_imports.insert(id, source_description);
@@ -450,9 +450,12 @@ pub struct RegexEncoding {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceDesc {
     pub connector: SourceConnector,
-    /// Optionally, filtering and projection that may optimistically be applied
-    /// to the output of the source.
-    pub operators: Option<LinearOperator>,
+    /// Maps, Filters, and Projections that must be applied to the source.
+    ///
+    /// Ideally, sources can absorb this logic in to their implementation to
+    /// limit the volume of data they produce. If not, a rendered source may
+    /// need an additional operator to implement this transformation.
+    pub map_filter_project: MapFilterProject,
     pub desc: RelationDesc,
 }
 
@@ -796,34 +799,4 @@ pub struct IndexDesc {
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
     pub keys: Vec<MirScalarExpr>,
-}
-
-// TODO: change contract to ensure that the operator is always applied to
-// streams of rows
-/// In-place restrictions that can be made to rows.
-///
-/// These fields indicate *optional* information that may applied to
-/// streams of rows. Any row that does not satisfy all predicates may
-/// be discarded, and any column not listed in the projection may be
-/// replaced by a default value.
-///
-/// The intended order of operations is that the predicates are first
-/// applied, and columns not in projection can then be overwritten with
-/// default values. This allows the projection to avoid capturing columns
-/// used by the predicates but not otherwise required.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct LinearOperator {
-    /// Rows that do not pass all predicates may be discarded.
-    pub predicates: Vec<MirScalarExpr>,
-    /// Columns not present in `projection` may be replaced with
-    /// default values.
-    pub projection: Vec<usize>,
-}
-
-impl LinearOperator {
-    /// Reports whether this linear operator is trivial when applied to an
-    /// input of the specified arity.
-    pub fn is_trivial(&self, arity: usize) -> bool {
-        self.predicates.is_empty() && self.projection.iter().copied().eq(0..arity)
-    }
 }

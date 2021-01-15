@@ -246,22 +246,36 @@ where
         src_id: GlobalId,
         mut src: SourceDesc,
     ) {
-        if let Some(operator) = &src.operators {
-            if operator.is_trivial(src.arity()) {
-                src.operators = None;
-            }
-        }
-
         match src.connector {
             SourceConnector::Local => {
                 let ((handle, capability), stream) = scope.new_unordered_input();
+                let collection = stream.as_collection();
+                // Apply any map, filter, projection operators, or skip if none exist.
+                let (collection, errors) = if !src.map_filter_project.is_identity() {
+                    let map_filter_project = src.map_filter_project.clone();
+                    collection.flat_map_fallible("TableMFP", {
+                        let mut row_packer = repr::RowPacker::new();
+                        // TODO(mcsherry): re-use allocation for unpacking.
+                        move |input_row: Row| {
+                            let temp_storage = RowArena::new();
+                            let mut datums = input_row.unpack();
+                            map_filter_project
+                                .evaluate(&mut datums, &temp_storage, &mut row_packer)
+                                .map_err(DataflowError::from)
+                                .transpose()
+                        }
+                    })
+                } else {
+                    (collection, Collection::empty(scope))
+                };
+
+                // unimplemented!("TODO: Apply self.as_of_frontier");
                 render_state
                     .local_inputs
                     .insert(src_id, LocalInput { handle, capability });
-                let err_collection = Collection::empty(scope);
                 self.collections.insert(
                     MirRelationExpr::global_get(src_id, src.desc.typ().clone()),
-                    (stream.as_collection(), err_collection),
+                    (collection, errors),
                 );
             }
 
@@ -344,7 +358,7 @@ where
                                     &self.debug_name,
                                     scope.index(),
                                     self.as_of_frontier.clone(),
-                                    &mut src.operators,
+                                    &mut src.map_filter_project,
                                     src.desc.typ(),
                                 );
 
@@ -369,7 +383,7 @@ where
                         _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),
                     }
                 } else {
-                    let (stream, capability) = if let ExternalSourceConnector::AvroOcf(_) =
+                    let (stream, errors, capability) = if let ExternalSourceConnector::AvroOcf(_) =
                         connector
                     {
                         let ((source, err_source), capability) =
@@ -398,6 +412,7 @@ where
                         let reader_schema = Schema::parse_str(reader_schema).unwrap();
                         (
                             decode_avro_values(&source, &envelope, reader_schema, &self.debug_name),
+                            None,
                             capability,
                         )
                     } else {
@@ -437,12 +452,12 @@ where
 
                         // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using regexp_extract, csv_extract,
                         // a hypothetical future avro_extract, protobuf_extract, etc.
-                        let (stream, extra_token) = decode_values(
+                        let (stream, errors, extra_token) = decode_values(
                             &ok_source,
                             encoding,
                             &self.debug_name,
                             &envelope,
-                            &mut src.operators,
+                            &mut src.map_filter_project,
                             fast_forwarded,
                         );
                         if let Some(tok) = extra_token {
@@ -452,7 +467,7 @@ where
                                 .push(Rc::new(tok));
                         }
 
-                        (stream, capability)
+                        (stream, errors, capability)
                     };
 
                     let mut collection = match envelope {
@@ -472,52 +487,29 @@ where
                         SourceEnvelope::Upsert(_) => unreachable!(),
                     };
 
-                    // Implement source filtering and projection.
-                    // At the moment this is strictly optional, but we perform it anyhow
-                    // to demonstrate the intended use.
-                    if let Some(operators) = src.operators.clone() {
-                        // Determine replacement values for unused columns.
-                        let source_type = src.desc.typ();
-                        let position_or = (0..source_type.arity())
-                            .map(|col| {
-                                if operators.projection.contains(&col) {
-                                    Some(col)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>();
-
-                        // Evaluate the predicate on each record, noting potential errors that might result.
-                        let (collection2, errors) = collection.flat_map_fallible({
+                    // If any map, filter, or projection operations remain, apply them.
+                    if !src.map_filter_project.is_identity() {
+                        let map_filter_project = src.map_filter_project.clone();
+                        let (collection2, errors) = collection.flat_map_fallible("FinishingMFP", {
                             let mut row_packer = repr::RowPacker::new();
+                            // TODO(mcsherry): re-use allocation for unpacking.
                             move |input_row| {
                                 let temp_storage = RowArena::new();
-                                let datums = input_row.unpack();
-                                let pred_eval = operators
-                                    .predicates
-                                    .iter()
-                                    .map(|predicate| predicate.eval(&datums, &temp_storage))
-                                    .find(|result| result != &Ok(Datum::True));
-                                match pred_eval {
-                                    None => Some(Ok(row_packer.pack(position_or.iter().map(
-                                        |pos_or| match pos_or {
-                                            Some(index) => datums[*index],
-                                            None => Datum::Dummy,
-                                        },
-                                    )))),
-                                    Some(Ok(Datum::False)) => None,
-                                    Some(Ok(Datum::Null)) => None,
-                                    Some(Ok(x)) => {
-                                        panic!("Predicate evaluated to invalid value: {:?}", x)
-                                    }
-                                    Some(Err(x)) => Some(Err(x.into())),
-                                }
+                                let mut datums = input_row.unpack();
+                                map_filter_project
+                                    .evaluate(&mut datums, &temp_storage, &mut row_packer)
+                                    .map_err(DataflowError::from)
+                                    .transpose()
                             }
                         });
 
                         collection = collection2;
                         err_collection = err_collection.concat(&errors);
+                    }
+
+                    // If any errors were produced from the source, fold them in.
+                    if let Some(errors) = errors {
+                        err_collection = err_collection.concat(&errors.as_collection());
                     }
 
                     // Apply `as_of` to each timestamp.

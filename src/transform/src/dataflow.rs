@@ -14,9 +14,10 @@
 //! pushdown can be applied across views once we understand the context
 //! in which the views will be executed.
 
-use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{Id, LocalId, MirRelationExpr};
 use std::collections::{HashMap, HashSet};
+
+use dataflow_types::DataflowDesc;
+use repr::Datum;
 
 /// Optimizes the implementation of each dataflow.
 ///
@@ -206,17 +207,26 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
     // Push demand information into the SourceDesc.
     for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
         if let Some(columns) = demand.get(&Id::Global(*source_id)).clone() {
-            // Install no-op demand information if none exists.
-            if source_desc.operators.is_none() {
-                source_desc.operators = Some(LinearOperator {
-                    predicates: Vec::new(),
-                    projection: (0..source_desc.arity()).collect(),
-                })
+            // Determine dummy literals and the appropriate permutation.
+            let mut dummies = Vec::new();
+            let mut demand_projection = Vec::new();
+            let output_arity = source_desc.map_filter_project.projection.len();
+            for (column, typ) in source_desc.desc.typ().column_types.iter().enumerate() {
+                if columns.contains(&column) {
+                    demand_projection.push(column);
+                } else {
+                    demand_projection.push(output_arity + dummies.len());
+                    dummies.push(ScalarExpr::literal_ok(Datum::Dummy, typ.clone()));
+                }
             }
-            // Restrict required columns by those identified as demanded.
-            if let Some(operator) = &mut source_desc.operators {
-                operator.projection.retain(|col| columns.contains(col));
-            }
+
+            // Map in dummy literals and permute them to the correct locations.
+            source_desc.map_filter_project = source_desc
+                .map_filter_project
+                // TODO(mcsherry): because we only provide builder patterns.
+                .clone()
+                .map(dummies)
+                .project(demand_projection);
         }
     }
 }
@@ -245,17 +255,11 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
     // Push predicate information into the SourceDesc.
     for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
         if let Some(list) = predicates.get(&Id::Global(*source_id)).clone() {
-            // Install no-op predicate information if none exists.
-            if source_desc.operators.is_none() {
-                source_desc.operators = Some(LinearOperator {
-                    predicates: Vec::new(),
-                    projection: (0..source_desc.arity()).collect(),
-                })
-            }
             // Add any predicates that can be pushed to the source.
-            if let Some(operator) = &mut source_desc.operators {
-                operator.predicates.extend(list.iter().cloned());
-            }
+            source_desc.map_filter_project = source_desc
+                .map_filter_project
+                .clone()
+                .filter(list.iter().cloned());
         }
     }
 }

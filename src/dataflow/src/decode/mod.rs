@@ -26,8 +26,8 @@ use timely::{
 };
 
 use ::mz_avro::{types::Value, Schema};
-use dataflow_types::LinearOperator;
 use dataflow_types::{DataEncoding, RegexEncoding, SourceEnvelope};
+use expr::MapFilterProject;
 use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState, DiffPair};
 use log::error;
 use repr::Datum;
@@ -478,20 +478,36 @@ fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
 }
 
 /// Decode a stream of values from a stream of bytes.
-/// Returns the corresponding stream of Row/Timestamp/Diff tuples,
-/// and, optionally, a token that can be dropped to stop the decoding operator
-/// (if it isn't automatically stopped by the upstream operator stopping)
+/// Returns the corresponding stream of Row/Timestamp/Diff tuples, optionally
+/// a stream of error events from evaluation, and optionally a token that can
+/// be dropped to stop the decoding operator (if it isn't automatically stopped
+/// by the upstream operator stopping)
 pub fn decode_values<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     encoding: DataEncoding,
     debug_name: &str,
+<<<<<<< HEAD
     envelope: &SourceEnvelope,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,
+=======
+    envelope: &Envelope,
+    // A transformation that can be applied. The transform should be updated
+    // to reflect remaining transformations, where an identity transformation
+    // is ideal result and can be optimized away.
+    //
+    // Ignoring this input should be safe, as it will present to the caller
+    // as if all transformations remain to be done.
+    map_filter_project: &mut MapFilterProject,
+>>>>>>> 8acdfc874 (replace LinearOperator with MFP)
     fast_forwarded: bool,
-) -> (Stream<G, (Row, Timestamp, Diff)>, Option<Box<dyn Any>>)
+) -> (
+    Stream<G, (Row, Timestamp, Diff)>,
+    Option<Stream<G, (dataflow_types::DataflowError, Timestamp, Diff)>>,
+    Option<Box<dyn Any>>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -505,12 +521,28 @@ where
         (_, SourceEnvelope::Upsert(_)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
         }
+<<<<<<< HEAD
         (DataEncoding::Csv(enc), SourceEnvelope::None) => (
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators),
             None,
         ),
         (DataEncoding::Avro(enc), SourceEnvelope::CdcV2) => {
             decode_cdcv2(stream, &enc.value_schema, enc.schema_registry_config)
+=======
+        (DataEncoding::Csv(enc), Envelope::None) => {
+            let (rows, errors) = csv(
+                stream,
+                enc.header_row,
+                enc.n_cols,
+                enc.delimiter,
+                map_filter_project,
+            );
+            (rows, Some(errors), None)
+        }
+        (DataEncoding::Avro(enc), Envelope::CdcV2) => {
+            let (rows, token) = decode_cdcv2(stream, &enc.value_schema, enc.schema_registry_config);
+            (rows, None, token)
+>>>>>>> 8acdfc874 (replace LinearOperator with MFP)
         }
         (_, SourceEnvelope::CdcV2) => {
             unreachable!("Internal error: CDCv2 is not supported yet on non-Avro sources.")
@@ -541,6 +573,7 @@ where
                     SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
                 ),
                 None,
+                None,
             )
         }
         (DataEncoding::Avro(enc), envelope) => (
@@ -561,6 +594,7 @@ where
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
             ),
             None,
+            None,
         ),
         (DataEncoding::AvroOcf { .. }, _) => {
             unreachable!("Internal error: Cannot decode Avro OCF separately from reading")
@@ -568,8 +602,13 @@ where
         (_, SourceEnvelope::Debezium(_)) => unreachable!(
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
+<<<<<<< HEAD
         (DataEncoding::Regex(RegexEncoding { regex }), SourceEnvelope::None) => {
             (regex_fn(stream, regex, debug_name), None)
+=======
+        (DataEncoding::Regex(RegexEncoding { regex }), Envelope::None) => {
+            (regex_fn(stream, regex, debug_name), None, None)
+>>>>>>> 8acdfc874 (replace LinearOperator with MFP)
         }
         (DataEncoding::Protobuf(enc), SourceEnvelope::None) => (
             decode_values_inner(
@@ -578,6 +617,7 @@ where
                 &op_name,
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
             ),
+            None,
             None,
         ),
         (DataEncoding::Bytes, SourceEnvelope::None) => (
@@ -588,6 +628,7 @@ where
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
             ),
             None,
+            None,
         ),
         (DataEncoding::Text, SourceEnvelope::None) => (
             decode_values_inner(
@@ -596,6 +637,7 @@ where
                 &op_name,
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
             ),
+            None,
             None,
         ),
     }
