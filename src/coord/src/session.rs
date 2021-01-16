@@ -88,18 +88,8 @@ impl Session {
     }
 
     /// Marks the current transaction as failed.
-    ///
-    /// If the session is not in a transaction, this method does nothing.
     pub fn fail_transaction(&mut self) {
-        match self.transaction {
-            TransactionStatus::InTransaction => {
-                self.transaction = TransactionStatus::Failed;
-            }
-            TransactionStatus::InTransactionImplicit => {
-                self.transaction = TransactionStatus::Idle;
-            }
-            _ => {}
-        }
+        self.transaction = TransactionStatus::Failed;
     }
 
     /// Returns the current transaction status.
@@ -254,15 +244,22 @@ pub enum PortalState {
 /// A stream of batched rows.
 pub type RowBatchStream = Box<dyn Stream<Item = Result<Vec<Row>, comm::Error>> + Send + Unpin>;
 
-/// The transaction status of a session.
+/// The transaction status of a session. Postgres' transaction states are in
+/// backend/access/transam/xact.c. The states here don't cleanly match to all
+/// of those, but we try to have lots of tests that make sure our behavior is
+/// identical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionStatus {
-    /// Not currently in a transaction.
+    /// Not in an explicit or implicit transaction. May execute a single
+    /// statement in this state. Matches both TBLOCK_DEFAULT and TBLOCK_STARTED.
     Idle,
-    /// Currently in a transaction.
+    /// Currently in a transaction issued from a BEGIN. Matches TBLOCK_INPROGRESS.
     InTransaction,
-    /// Currently in an implicit transaction.
+    /// Currently in an implicit transaction started from a multi-statement query
+    /// with more than 1 statements. Matches TBLOCK_IMPLICIT_INPROGRESS.
     InTransactionImplicit,
-    /// Currently in a failed transaction.
+    /// In a failed transaction that was started explicitly (i.e., previously
+    /// InTransaction). We do not use Failed for implicit transactions because
+    /// those cleanup after themselves. Matches TBLOCK_ABORT.
     Failed,
 }

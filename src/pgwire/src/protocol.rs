@@ -343,7 +343,7 @@ where
             Ok(stmts) => stmts,
             Err(err) => {
                 self.error(err).await?;
-                return self.sync().await;
+                return self.ready().await;
             }
         };
 
@@ -361,10 +361,7 @@ where
         for stmt in stmts {
             // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
             if self.is_aborted_txn() && !is_txn_exit_stmt(Some(&stmt)) {
-                self.conn.send(BackendMessage::ErrorResponse(ErrorResponse::error(
-                        SqlState::IN_FAILED_SQL_TRANSACTION,
-                        "current transaction is aborted, commands ignored until end of transaction block",
-                    ))).await?;
+                self.aborted_txn_error().await?;
                 break;
             }
 
@@ -382,7 +379,7 @@ where
                 session.end_transaction();
             }
         }
-        self.sync().await
+        self.ready().await
     }
 
     async fn parse(
@@ -769,6 +766,15 @@ where
     }
 
     async fn sync(&mut self) -> Result<State, comm::Error> {
+        // Close the current transaction if we are not in an explicit transaction.
+        let session = self.coord_client.session();
+        if let TransactionStatus::Idle = session.transaction() {
+            session.end_transaction();
+        }
+        return self.ready().await;
+    }
+
+    async fn ready(&mut self) -> Result<State, comm::Error> {
         let txn_state = self.coord_client.session().transaction().into();
         self.conn
             .send(BackendMessage::ReadyForQuery(txn_state))
@@ -1264,10 +1270,18 @@ where
         let is_fatal = err.severity.is_fatal();
         self.conn.send(BackendMessage::ErrorResponse(err)).await?;
         let session = self.coord_client.session();
-        // Errors in implicit transactions move it back to idle, not failed.
         match session.transaction() {
+            // In Idle (i.e., a single statement), nothing changes since the state is
+            // always reset back to idle even during failure.
+            TransactionStatus::Idle => session.end_transaction(),
+            // Implicit transactions also clear themselves.
+            // TODO(mjibson): once we care about it, this will need to ensure we ROLLBACK
+            // the transaction.
             TransactionStatus::InTransactionImplicit => session.end_transaction(),
-            _ => session.fail_transaction(),
+            // Explicit transactions move to failed.
+            TransactionStatus::InTransaction => session.fail_transaction(),
+            // We should never attempt to execute any failable SQL while in Failed.
+            TransactionStatus::Failed => unreachable!(),
         };
         if is_fatal {
             Ok(State::Done)
@@ -1277,12 +1291,13 @@ where
     }
 
     async fn aborted_txn_error(&mut self) -> Result<State, comm::Error> {
-        return self
-            .error(ErrorResponse::error(
+        self.conn
+            .send(BackendMessage::ErrorResponse(ErrorResponse::error(
                 SqlState::IN_FAILED_SQL_TRANSACTION,
                 "current transaction is aborted, commands ignored until end of transaction block",
-            ))
-            .await;
+            )))
+            .await?;
+        Ok(State::Drain)
     }
 
     fn is_aborted_txn(&mut self) -> bool {
