@@ -5,19 +5,32 @@ menu:
   main:
     parent: 'sql-types'
 aliases:
-    - /sql/types/real
     - /sql/types/double
     - /sql/types/double-precision
-    - /sql/types/float64
+    - /sql/types/float4
+    - /sql/types/float8
+    - /sql/types/real
 ---
 
-`real` and `double precision` data express a variable-precision, inexact number
-with a floating decimal point.
+## `real` info
 
-Type               | Aliases           | Size    | Range
--------------------|-------------------|---------|------
-`real`             | `float4`          | 4 bytes | Approx. 1E-37 to 1E+37 with 6 decimal digits of precision
-`double precision` | `float`, `float8`, `double` | 8 bytes | Approx. 1E-307 to 1E+307 with 15 decimal digits of precision
+Detail | Info
+-------|------
+**Size** | 4 bytes
+**Aliases** | `float4`
+**Catalog name** | `pg_catalog.float4`
+**OID** | 700
+**Range** | Approx. 1E-37 to 1E+37 with 6 decimal digits of precision
+
+## `double precision` info
+
+Detail | Info
+-------|------
+**Size** | 8 bytes
+**Aliases** | `float`,`float8`, `double`
+**Catalog name** | `pg_catalog.float8`
+**OID** | 701
+**Range** | Approx. 1E-307 to 1E+307 with 15 decimal digits of precision
 
 ## Syntax
 
@@ -25,7 +38,11 @@ Type               | Aliases           | Size    | Range
 
 ## Details
 
-- Materialize assumes untyped numeric literals containing decimal points are [`decimal`](../decimal); to use `float`, you must explicitly cast them as we've done below.
+### Literals
+
+Materialize assumes untyped numeric literals containing decimal points are
+[`decimal`](../decimal); to use `float`, you must explicitly cast them as we've
+done below.
 
 ### Special values
 
@@ -53,8 +70,8 @@ The strings are recognized case insensitively.
 
 ### Valid casts
 
-In addition to the casts listed below, `real` and `double precision` values
-can be cast to and from one another.
+In addition to the casts listed below, `real` and `double precision` values can be cast
+to and from one another.
 
 #### From `real` or `double precision`
 
@@ -64,10 +81,10 @@ You can [cast](../../functions/cast) `real` or `double precision` to:
 - [`numeric`](../numeric)
 - [`text`](../text)
 
-#### To `real` or `double precision`
+#### To float4` or `double precision`
 
-You can [cast](../../functions/cast) the following types to `real` or `double
-precision`:
+You can [cast](../../functions/cast) the following types to `real` or
+`double precision`:
 
 - [`int`](../int)
 - [`numeric`](../numeric)

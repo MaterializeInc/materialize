@@ -15,6 +15,8 @@ Detail | Info
 **Quick Syntax** | `TRUE` or `FALSE`
 **Size** | 1 byte
 **Aliases** | `bool`
+**Catalog name** | `pg_catalog.bool`
+**OID** | 16
 
 ## Syntax
 
@@ -48,11 +50,9 @@ SELECT TRUE AS t_val;
 -------
  t
 ```
-<hr/>
+
 ```sql
 SELECT FALSE AS f_val;
-```
-```nofmt
  f_val
 -------
  f

@@ -37,8 +37,8 @@ Supported `WITH` option values:
 
 Option name | Value type | Default | Describes
 ------------|------------|---------|----------
-`SNAPSHOT`  | `bool`     | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot) below.
-`PROGRESS`  | `bool`     | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress) below.
+`SNAPSHOT`  | `boolean`     | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot) below.
+`PROGRESS`  | `boolean`     | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress) below.
 
 ## Details
 

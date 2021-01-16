@@ -17,6 +17,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `'{a=>123.4, b=>111.1}'::map[text=>double]'`
 **Size** | Variable
+**Catalog name** | Anonymous, but [nameable](../../create-type)
 
 ## Syntax
 
@@ -35,9 +36,9 @@ _value&lowbar;type_ | The [type](../../types) of the map's values.
 
 ### Construction
 
-A well-formed `map` is a collection of `key => value` mappings separated
-by commas. Each individual `map` must be correctly contained by a set of
-curly braces (`{}`).
+A well-formed `map` is a collection of `key => value` mappings separated by
+commas. Each individual `map` must be correctly contained by a set of curly
+braces (`{}`).
 
 You can construct maps from strings using the following syntax:
 ```sql
@@ -64,7 +65,44 @@ SELECT '{a=>{b=>{c=>d}}}'::map[text=>map[text=>map[text=>text]]] as nested_map;
 - Keys must be of type [`text`](../text).
 - Values can be of any [type](../../types) as long as the type is uniform.
 - Keys must be unique. If duplicate keys are present in a map, only one of the
-  (`key`, `value`) pairs will be retained. There is no guarantee which will be retained.
+  (`key`, `value`) pairs will be retained. There is no guarantee which will be
+  retained.
+
+### Custom types
+
+You can create [custom `map` types](/sql/types/#custom-types), which lets you
+create a named entry in your Materialize nodes' catalogs for a specific type of
+`map`.
+
+Currently, custom types only provides a shorthand for referring to
+otherwise-annoying-to-type names, but in the future will provide [binary
+encoding and decoding][binary] for these types, as well.
+
+[binary]:https://github.com/MaterializeInc/materialize/issues/4628
+
+### Valid casts
+
+#### Between `map`s
+
+Two `map` types can only be cast to and from one another if they are
+structurally equivalent, e.g. one is a [custom map
+type](/sql/types#custom-types) and the other is a [built-in
+map](/sql/types#built-in-types) and their key-value types are structurally
+equivalent.
+
+#### From `map`
+
+You can [cast](../../functions/cast) `map` to:
+
+- [`text`](../text)
+- Other `map`s as noted above.
+
+#### To `list`
+
+You can [cast](../../functions/cast) the following types to `map`:
+
+- [`text`](../text)&mdash;see [details](#construction)
+- Other `map`s as noted above.
 
 ## Examples
 
@@ -158,7 +196,8 @@ SELECT '{a=>{aa=>1.9}}, {b=>{bb=>2.0}}'::map[text=>map[text=>double]]
 
 #### Search for all top-level keys (`?&`)
 
-Returns `true` if all keys provided on the RHS are present in the top-level of the map, `false` otherwise.
+Returns `true` if all keys provided on the RHS are present in the top-level of
+the map, `false` otherwise.
 
 ```sql
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['b', 'a'] as search_for_all_keys;
@@ -180,7 +219,8 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['c', 'b'] as search_for_all_keys;
 
 #### Search for any top-level keys (`?|`)
 
-Returns `true` if any keys provided on the RHS are present in the top-level of the map, `false` otherwise.
+Returns `true` if any keys provided on the RHS are present in the top-level of
+the map, `false` otherwise.
 
 ```sql
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'b'] as search_for_any_keys;

@@ -15,6 +15,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `LIST[[1,2],[3]]`
 **Size** | Variable
+**Catalog name** | Anonymous, but [nameable](../../create-type)
 
 ## Syntax
 
@@ -27,6 +28,11 @@ _element_ | An element of any [data type](../) to place in the list. Note that a
 ## List functions + operators
 
 #### Polymorphism
+
+<!--
+  If any type other than list supports fully polymorphic functions, this
+  should be moved to doc/user/content/sql/types/_index.md
+-->
 
 List functions and operators are polymorphic, which applies the following
 constraints to their arguments:
@@ -91,7 +97,8 @@ Layered lists can be “ragged”, i.e. the length of lists in each layer can di
 from one another. This differs from `array`, which requires that each dimension
 of a multidimensional array only contain arrays of the same length.
 
-Note that you can also construct lists using the available [`text` cast](#text-to-list-casts).
+Note that you can also construct lists using the available [`text`
+cast](#text-to-list-casts).
 
 ### Accessing lists
 
@@ -125,7 +132,8 @@ SELECT LIST[['a', 'b'], ['c']][1][2];
  b
 ```
 
-If the index is invalid (either less than 1 or greater than the maximum index), lists return _NULL_.
+If the index is invalid (either less than 1 or greater than the maximum index),
+lists return _NULL_.
 
 ```sql
 SELECT LIST[['a', 'b'], ['c']][1][5] AS exceed_index;
@@ -182,7 +190,8 @@ SELECT LIST[1,2,3,4,5][3:] AS three_to_five;
  {3,4,5}
 ```
 
-If the first index exceeds the list's maximum index, the operation returns _NULL_:
+If the first index exceeds the list's maximum index, the operation returns
+_NULL_:
 
 ```sql
 SELECT LIST[1,2,3,4,5][10:] AS exceed_index;
@@ -264,17 +273,19 @@ SELECT LIST[['a', 'white space'], [NULL, ''], ['escape"m\e', 'nUlL']];
 
 {{< version-added v0.5.2 >}}
 
-To cast `text` to a `list`, you must format the text similar to list's
-[output format](#output-format).
+To cast `text` to a `list`, you must format the text similar to list's [output
+format](#output-format).
 
 The text you cast must:
 
-- Begin with an opening curly brace (`{`) and end with a closing curly brace (`}`)
+- Begin with an opening curly brace (`{`) and end with a closing curly brace
+  (`}`)
 - Separate each element with a comma (`,`)
 - Use a representation for elements that can be cast from text to the list's
   element type.
 
-    For example, to cast `text` to a `date list`, you use `date`'s `text` representation:
+    For example, to cast `text` to a `date list`, you use `date`'s `text`
+    representation:
 
     ```sql
     SELECT '{2001-02-03, 2004-05-06}'::date list as date_list;
@@ -324,9 +335,9 @@ The text you cast must:
 - Similar semantics to Avro and JSON arrays
 - A more ergonomic experience than PostgreSQL-style arrays
 
-This section focuses on the distinctions between Materialize’s `list` and `array`
-types, but with some knowledge of the PostgreSQL array type, you should also be
-able to infer how list differs from it, as well.
+This section focuses on the distinctions between Materialize’s `list` and
+`array` types, but with some knowledge of the PostgreSQL array type, you should
+also be able to infer how list differs from it, as well.
 
 #### Terminology
 
@@ -341,13 +352,16 @@ both list indexing and list slicing as subscripting.
 
 #### Type definitions
 
-**Lists** require explicitly declared layers, and each possible layer is
-treated as a distinct type. This means lists of the same element type cannot be
-used interchangeably if their number of layers differ. For example, a list of `int`s
-with two layers is `int list list` and one with three is `int list list list`.
-Because their number of lyaers differ, they cannot be used interchangeably.
+**Lists** require explicitly declared layers, and each possible layer is treated
+as a distinct type. For example, a list of `int`s with two layers is `int list
+list` and one with three is `int list list list`. Because their number of lyaers
+differ, they cannot be used interchangeably.
 
-**Arrays** only have one type for each non-array type, and all arrays share that type irrespective of their dimensions. This means that arrays of the same element type can be used interchangeably in most situations, without regard to their dimension. For example, arrays of `text` are all of type `text[]` and 1D, 2D, and 3D `text[]` can all be used in the same columns.
+**Arrays** only have one type for each non-array type, and all arrays share that
+type irrespective of their dimensions. This means that arrays of the same
+element type can be used interchangeably in most situations, without regard to
+their dimension. For example, arrays of `text` are all of type `text[]` and 1D,
+2D, and 3D `text[]` can all be used in the same columns.
 
 #### Nested structures
 
@@ -411,13 +425,29 @@ expressed as a list of comma-separated ranges inside a single square bracket.
 example, if the first element in a 2D list has a length of 2, all subsequent
 members must also have a length of 2.
 
+### Custom types
+
+You can create [custom `list` types](/sql/types/#custom-types), which lets you
+create a named entry in your Materialize nodes' catalogs for a specific type of
+list.
+
+Currently, custom types only provides a shorthand for referring to
+otherwise-annoying-to-type names, but in the future will provide [binary
+encoding and decoding][binary] for these types, as well.
+
+Note that custom `list` types have special rules regarding [polymorphism](/sql/types/#polymorphism).
+
+[binary]:https://github.com/MaterializeInc/materialize/issues/4628
+
 ### Valid casts
 
 #### Between `list`s
 
 You can cast one list type to another if the type of the source list’s elements
-can be cast to the target list’s elements’ type. For example, `float list` can be
-cast to `int list`, but `float list` cannot be cast to `timestamp list`.
+can be cast to the target list’s elements’ type. For example, `float list` can
+be cast to `int list`, but `float list` cannot be cast to `timestamp list`.
+
+Note that this rule also applies to casting between custom list types.
 
 #### From `list`
 

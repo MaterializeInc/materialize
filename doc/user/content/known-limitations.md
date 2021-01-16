@@ -97,7 +97,7 @@ Fixed in | Known limitation
 [v0.3.0] |  JSON-encoded streams are not supported ([#207](https://github.com/MaterializeInc/materialize/issues/207))
 [v0.3.0] |  Connecting Kafka sinks back in as sources is not supported ([#1665](https://github.com/MaterializeInc/materialize/issues/1665))
 [v0.3.0] |  Progress tracking for Kafka sinks is not supported ([#1442](https://github.com/MaterializeInc/materialize/issues/1442))
-[v0.3.0] | `date_trunc` for `timestamptz` data ([#1814](https://github.com/MaterializeInc/materialize/issues/1814))
+[v0.3.0] | `date_trunc` for `timestamp with time zone` data ([#1814](https://github.com/MaterializeInc/materialize/issues/1814))
 [v0.3.0] | Special `date`, `time`, and `timestamp` values from PostgreSQL are not supported ([#1805](https://github.com/MaterializeInc/materialize/issues/1805))
 [v0.3.0] | Cannot cast from string to time-like types ([#1378](https://github.com/MaterializeInc/materialize/issues/1378))
 [v0.3.0] | Using a non-existent namespace does not result in an error ([#1684](https://github.com/MaterializeInc/materialize/issues/1684))

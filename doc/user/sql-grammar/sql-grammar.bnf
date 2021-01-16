@@ -132,6 +132,8 @@ create_source_text_kinesis ::=
       ('UPSERT' ('FORMAT' ('BYTES' | 'TEXT'))?)
     )
   )?
+create_type ::=
+    'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
 create_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
@@ -303,7 +305,7 @@ type_escape_text ::=
 type_time ::=
   'TIME' "'" time_str "'"
 type_timestamp ::=
-  ('TIMESTAMP' 'WITH TIME ZONE'? | 'TIMESTAMPTZ')
+  ('TIMESTAMP' | 'TIMESTAMPTZ')
   "'" date_str
     ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
   "'"

@@ -11,8 +11,8 @@ menu:
 Arrays are a multidimensional sequence of any non-array type.
 
 {{< warning >}}
-Use of arrays is not recommended. Arrays in Materialize exist to facilitate
-compatibility with PostgreSQL. Specifically, many of the PostgreSQL
+We do not recommend using arrays, which exist in Materialize primarily to
+facilitate compatibility with PostgreSQL. Specifically, many of the PostgreSQL
 compatibility views in the [system catalog](/sql/system-tables/) must expose
 array types. Unfortunately, PostgreSQL arrays have odd semantics and do not
 interoperate well with modern data formats like JSON and Avro.
@@ -84,8 +84,8 @@ followed by the textual representation of each element separated by commas
 this format is applied recursively to each array dimension. No additional
 whitespace is added.
 
-Null elements are rendered as the literal string `NULL`. Non-null elements
-are rendered as if that element had been cast to `text`.
+Null elements are rendered as the literal string `NULL`. Non-null elements are
+rendered as if that element had been cast to `text`.
 
 An element whose textual representation contains curly braces, commas,
 whitespace, double quotes, backslashes, or is exactly the string `NULL` (in any
@@ -105,10 +105,35 @@ SELECT ARRAY[ARRAY['a', 'white space'], ARRAY[NULL, ''], ARRAY['escape"m\e', 'nU
  {{a,"white space"},{NULL,""},{"escape\"m\\e","nUlL"}}
 ```
 
+### Catalog names
+
+Builtin types (e.g. `integer`) have a builtin array type that can be referred to
+by prefixing the type catalog name name with an underscore. For example,
+`integer`'s catalog name is `pg_catalog.int4`, so its array type's catalog name
+is `pg_catalog_int4`.
+
+Array element | Catalog name | OID
+--------------|--------------|-----
+[`bigint`](../bigint) | `pg_catalog._int8` | 1016
+[`boolean`](../boolean) | `pg_catalog._bool` | 1000
+[`date`](../date) | `pg_catalog._date` | 1182
+[`double precision`](../float) | `pg_catalog._float8` | 1022
+[`integer`](../integer) | `pg_catalog._bool` | 1007
+[`interval`](../interval) | `pg_catalog._interval` | 1187
+[`jsonb`](../jsonb) | `pg_catalog.3807` | 1000
+[`numeric`](../numeric) | `pg_catalog._numeric` | 1231
+[`oid`](../oid) | `pg_catalog._oid` | 1028
+[`real`](../float) | `pg_catalog._float4` | 1021
+[`text`](../text) | `pg_catalog._bool` | 1009
+[`time`](../time) | `pg_catalog._time` | 1183
+[`timestamp`](../timestamp) | `pg_catalog._timestamp` | 1115
+[`timestamp with time zone`](../timestamp) | `pg_catalog._timestamptz` | 1185
+[`uuid`](../uuid) | `pg_catalog._uuid` | 2951
 
 ### Valid casts
 
-You can [cast](/sql/functions/cast) all array types to [`text`](/sql/types/text).
+You can [cast](/sql/functions/cast) all array types to
+[`text`](/sql/types/text).
 
 You cannot presently cast any other type to an array type.
 
