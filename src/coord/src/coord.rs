@@ -606,10 +606,25 @@ where
                         // Verify that this statetement type can be executed in the current
                         // transaction state.
                         match session.transaction() {
-                            // Idle is always safe (idle means there's a single statement being
+                            // Idle is almost always safe (idle means there's a single statement being
                             // executed). Failed transactions have already been checked in pgwire for a
                             // safe statement (COMMIT, ROLLBACK, etc.) and can also proceed.
-                            &TransactionStatus::Idle | &TransactionStatus::Failed => {}
+                            &TransactionStatus::Idle | &TransactionStatus::Failed => {
+                                if let Statement::Declare(_) = stmt {
+                                    // Declare is an exception. Although it's not against any spec to execute
+                                    // it, it will always result in nothing happening, since all portals will be
+                                    // immediately closed. Users don't know this detail, so this error helps them
+                                    // understand what's going wrong. Postgres does this too.
+                                    let _ = tx.send(Response {
+                                        result: Ok(ExecuteResponse::PgError {
+                                            code: SqlState::NO_ACTIVE_SQL_TRANSACTION,
+                                            message: "DECLARE CURSOR can only be used in transaction blocks".into(),
+                                        }),
+                                        session,
+                                    });
+                                    return;
+                                }
+                            }
 
                             // Implicit or explicit transactions only allow reads for now.
                             //
