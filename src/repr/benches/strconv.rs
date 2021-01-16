@@ -28,11 +28,6 @@ fn bench_parse_decimal(c: &mut Criterion) {
             b.iter(|| strconv::parse_decimal(s).unwrap())
         });
     }
-
-    let input = include_str!("testdata/twitter.json");
-    c.bench_function("parse_jsonb", |b| {
-        b.iter(|| black_box(strconv::parse_jsonb(input).unwrap()))
-    });
 }
 
 fn bench_parse_jsonb(c: &mut Criterion) {
