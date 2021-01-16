@@ -264,6 +264,9 @@ services:
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
       - ./peeker-config:/etc/peeker
+      - type: bind
+        source: ${MZ_CHBENCH_SNAPSHOT:-/tmp}
+        target: /snapshot
   test-correctness:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: test-correctness
@@ -380,10 +383,6 @@ mzworkflows:
     - step: run
       service: mzutil
       command: snapshot_view_states.py
-    # Output summary information about the topics
-    - step: run
-      service: kafka-util
-      command: summarize_topics.py
 
   # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
   # already called setup-ingest-benchmark and the cluster is still running
@@ -401,6 +400,9 @@ mzworkflows:
   # Take a snapshot of topic schemas and contents
   generate-snapshot:
     steps:
+    - step: run
+      service: peeker
+      command: --write-config /snapshot/config.toml
     - step: workflow
       workflow: setup-ingest-benchmark
     - step: run

@@ -24,6 +24,7 @@ import os
 import sys
 import pathlib
 import time
+import toml
 import typing
 
 import psycopg2  # type: ignore
@@ -57,15 +58,23 @@ def view_contents(cursor: psycopg2.extensions.cursor, view: str, timestamp: int)
     return stream.getvalue().strip()
 
 
+class SourceInfo:
+    """Container class containing information about a source."""
+
+    def __init__(self, topic_name: str, offset: int):
+        self.topic_name = topic_name
+        self.offset = offset
+
+
 def source_at_offset(
-    cursor: psycopg2.extensions.cursor, source_name: str, desired_offset: int
+    cursor: psycopg2.extensions.cursor, source_info: SourceInfo
 ) -> typing.Union[None, int]:
     """Return the mz timestamp from a source if it has reached the desired offset."""
     query = (
         'SELECT timestamp FROM mz_source_info WHERE source_name = %s and "offset" = %s'
     )
     try:
-        cursor.execute(query, (source_name, desired_offset))
+        cursor.execute(query, (source_info.topic_name, source_info.offset))
         if cursor.rowcount > 1:
             print("ERROR: More than one row returned when querying source offsets:")
             for row in cursor:
@@ -86,14 +95,58 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
     start_time = time.monotonic()
 
     # Create a dictionary mapping view names (as calculated from the filename) to expected contents
-    view_snapshots = {
+    view_snapshots: typing.Dict[str, str] = {
         p.stem: p.read_text().strip()
         for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
     }
 
+    source_offsets: typing.Dict[str, int] = {
+        p.stem: int(p.read_text().strip())
+        for p in pathlib.Path(args.snapshot_dir).glob("*.offset")
+    }
+
     # Create a dictionary mapping view names to source name and offset
-    with open(os.path.join(args.snapshot_dir, "offsets.json")) as fd:
-        source_offsets = json.load(fd)
+    view_sources: typing.Dict[str, SourceInfo] = {}
+    with open(os.path.join(args.snapshot_dir, "config.toml")) as fd:
+        conf = toml.load(fd)
+
+        if len(conf["sources"]) != 1:
+            print(f"ERROR: Expected just one source block: {conf['sources']}")
+            sys.exit(1)
+
+        source_info = conf["sources"][0]
+        topic_prefix: str = source_info["topic_namespace"]
+        source_names: typing.List[str] = source_info["names"]
+
+        for query_info in conf["queries"]:
+
+            # Ignore views not in this snapshot (they likely have multiple sources...)
+            view: str = query_info["name"]
+            if view not in view_snapshots:
+                continue
+
+            sources: typing.List[str] = query_info["sources"]
+            if len(query_info["sources"]) != 1:
+                print(
+                    f"ERROR: Expected just one source for view {view}: {query_info['sources']}"
+                )
+                sys.exit(1)
+
+            source_name: str = query_info["sources"][0]
+            if source_name not in source_name:
+                print(
+                    f"ERROR: No matching source {source_name} for view {view}: {source_names}"
+                )
+                sys.exit(1)
+
+            topic_name = f"{topic_prefix}{source_name}"
+            if topic_name not in source_offsets:
+                print(
+                    f"ERROR: Missing offset information for source {topic_name}: {source_offsets}"
+                )
+                sys.exit(1)
+
+            view_sources[view] = SourceInfo(topic_name, source_offsets[topic_name])
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
         installed_views = set(view_names(conn))
@@ -118,9 +171,7 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
 
                     # Determine if the source is at the desired offset and identify the
                     # mz_logical_timestamp associated with the offset
-                    desired_offset = source_offsets[view]["offset"]
-                    source_name = source_offsets[view]["topic"]
-                    timestamp = source_at_offset(cursor, source_name, desired_offset)
+                    timestamp = source_at_offset(cursor, view_sources[view])
                     if not timestamp:
                         continue
 

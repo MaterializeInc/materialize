@@ -34,11 +34,13 @@ names = [
 ]
 
 [default_query]
-# the amount of time to sleep between peeks
-sleep_ms = 0
 # Spin up this many threads querying this view
 # This affects the ratio of times this query is executed vs other queries
 thread_count = 1
+
+[default_query.sleep]
+secs = 0
+nanos = 0
 
 [[groups]]
 # group settings override per-query enabled, enable/disable groups with the `-q` flag,
@@ -51,7 +53,10 @@ queries = ["q01", "q03", "q17", "q22"]
 # default values for groups:
 thread_count = 1
 enabled = true
-sleep_ms = 0
+
+[groups.sleep]
+secs = 0
+nanos = 0
 
 [[groups]]
 name = "loadtest"
@@ -85,10 +90,10 @@ WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
 GROUP BY ol_number
 ORDER BY ol_number
 """
+sources = ["orderline"]
 
 
 [[queries]]
-sleep_ms = 1000
 name = "q02"
 query = """
 SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment
@@ -115,6 +120,11 @@ WHERE i_id = s_i_id
   AND s_quantity = m_s_quantity
 ORDER BY n_name, su_name, i_id
 """
+sources = ["item", "nation", "region", "stock", "supplier"]
+
+[queries.sleep]
+secs = 1
+nanos = 0
 
 [[queries]]
 name = "q03"
@@ -135,6 +145,7 @@ WHERE c_state LIKE 'A%'
 GROUP BY ol_o_id, ol_w_id, ol_d_id, o_entry_d
 ORDER BY revenue DESC, o_entry_d
 """
+sources = ["customer", "neworder", "order", "orderline"]
 
 [[queries]]
 name = "q04"
@@ -154,6 +165,7 @@ WHERE o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
 GROUP BY o_ol_cnt
 ORDER BY o_ol_cnt
 """
+sources = ["order", "orderline"]
 
 [[queries]]
 name = "q05"
@@ -179,6 +191,8 @@ WHERE c_id = o_c_id
 GROUP BY n_name
 ORDER BY revenue DESC;
 """
+sources = ["customer", "nation", "order", "orderline", "region", "stock", "supplier"]
+
 [[queries]]
 name = "q06"
 query = """
@@ -188,6 +202,7 @@ WHERE ol_delivery_d >= TIMESTAMP '1999-01-01 00:00:00.000000'
   AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'
   AND ol_quantity BETWEEN 1 AND 100000;
 """
+sources = ["orderline"]
 
 [[queries]]
 name = "q07"
@@ -225,6 +240,7 @@ WHERE ol_supply_w_id = s_w_id
 GROUP BY su_nationkey, substr(c_state, 1, 1), extract(year FROM o_entry_d)
 ORDER BY su_nationkey, cust_nation, l_year;
 """
+sources = ["customer", "nation", "order", "orderline", "stock", "supplier"]
 
 [[queries]]
 name = "q08"
@@ -254,6 +270,7 @@ WHERE i_id = s_i_id
 GROUP BY extract(year FROM o_entry_d)
 ORDER BY l_year;
 """
+sources = ["customer", "item", "nation", "order", "orderline", "region", "stock", "supplier"]
 
 [[queries]]
 name = "q09"
@@ -274,6 +291,7 @@ WHERE ol_i_id = s_i_id
 GROUP BY n_name, extract(year FROM o_entry_d)
 ORDER BY n_name, l_year DESC;
 """
+sources = ["item", "nation", "order", "orderline", "stock", "supplier"]
 
 [[queries]]
 name = "q10"
@@ -293,6 +311,7 @@ WHERE c_id = o_c_id
 GROUP BY c_id, c_last, c_city, c_phone, n_name
 ORDER BY revenue DESC;
 """
+sources = ["customer", "nation", "order", "orderline"]
 
 [[queries]]
 name = "q11"
@@ -312,6 +331,7 @@ HAVING sum(s_order_cnt) > (
 )
 ORDER BY ordercount DESC;
 """
+sources = ["nation", "stock", "supplier"]
 
 [[queries]]
 name = "q12"
@@ -330,6 +350,7 @@ WHERE ol_w_id = o_w_id
 GROUP BY o_ol_cnt
 ORDER BY o_ol_cnt;
 """
+sources = ["order", "orderline"]
 
 [[queries]]
 name = "q13"
@@ -347,6 +368,7 @@ FROM (
 GROUP BY c_count
 ORDER BY custdist DESC, c_count DESC;
 """
+sources = ["customer", "order"]
 
 [[queries]]
 name = "q14"
@@ -358,6 +380,7 @@ WHERE ol_i_id = i_id
   AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
   AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 """
+sources = ["item", "orderline"]
 
 [[queries]]
 name = "q15"
@@ -391,6 +414,7 @@ WHERE su_suppkey = supplier_no
 )
 ORDER BY su_suppkey;
 """
+sources = ["orderline", "stock", "supplier"]
 
 [[queries]]
 name = "q16"
@@ -409,6 +433,7 @@ WHERE i_id = s_i_id
 GROUP BY i_name, substr(i_data, 1, 3), i_price
 ORDER BY supplier_cnt DESC;
 """
+sources = ["item", "stock", "supplier"]
 
 [[queries]]
 name = "q17"
@@ -426,6 +451,7 @@ FROM
 WHERE ol_i_id = t.i_id
   AND ol_quantity < t.a;
 """
+sources = ["item", "orderline"]
 
 [[queries]]
 name = "q18"
@@ -442,6 +468,7 @@ GROUP BY o_id, o_w_id, o_d_id, c_id, c_last, o_entry_d, o_ol_cnt
 HAVING sum(ol_amount) > 200
 ORDER BY sum(ol_amount);
 """
+sources = ["customer", "order", "orderline"]
 
 [[queries]]
 name = "q19"
@@ -471,6 +498,7 @@ WHERE (
     AND ol_w_id in (1, 5, 3)
 )
 """
+sources = ["item", "orderline"]
 
 [[queries]]
 name = "q20"
@@ -490,6 +518,7 @@ WHERE su_suppkey IN (
   AND n_name = 'GERMANY'
 ORDER BY su_name;
 """
+sources = ["item", "nation", "orderline", "stock", "supplier"]
 
 [[queries]]
 name = "q21"
@@ -518,6 +547,7 @@ WHERE ol_o_id = o_id
 GROUP BY su_name
 ORDER BY numwait DESC, su_name;
 """
+sources = ["nation", "order", "orderline", "stock", "supplier"]
 
 [[queries]]
 name = "q22"
@@ -542,6 +572,7 @@ WHERE substr(c_phone, 1, 1) IN ('1', '2', '3', '4', '5', '6', '7')
 GROUP BY substr(c_state, 1, 1)
 ORDER BY substr(c_state, 1, 1);
 """
+sources = ["customer", "order"]
 
 [[queries]]
 name = "count_customer"
@@ -550,6 +581,7 @@ SELECT
     count(*) AS num_customers
 FROM customer;
 """
+sources = ["customer"]
 
 [[queries]]
 name = "count_item"
@@ -558,6 +590,7 @@ SELECT
     count(*) AS num_items
 FROM item;
 """
+sources = ["item"]
 
 [[queries]]
 name = "count_nation"
@@ -566,6 +599,7 @@ SELECT
     count(*) AS num_nations
 FROM nation;
 """
+sources = ["nation"]
 
 [[queries]]
 name = "count_neworder"
@@ -574,6 +608,7 @@ SELECT
     count(*) AS num_neworders
 FROM neworder;
 """
+sources = ["neworder"]
 
 [[queries]]
 name = "count_order"
@@ -582,6 +617,7 @@ SELECT
     count(*) AS num_orders
 FROM order;
 """
+sources = ["order"]
 
 [[queries]]
 name = "count_orderline"
@@ -590,6 +626,7 @@ SELECT
     count(*) AS num_orderlines
 FROM orderline;
 """
+sources = ["orderline"]
 
 [[queries]]
 name = "count_stock"
@@ -598,6 +635,7 @@ SELECT
     count(*) AS num_stocks
 FROM stock;
 """
+sources = ["stock"]
 
 [[queries]]
 name = "count_supplier"
@@ -606,6 +644,7 @@ SELECT
     count(*) AS num_suppliers
 FROM supplier;
 """
+sources = ["supplier"]
 
 [[queries]]
 name = "count_history"
@@ -614,6 +653,7 @@ SELECT
     count(*) AS num_historys
 FROM history;
 """
+sources = ["history"]
 
 [[queries]]
 name = "count_district"
@@ -622,6 +662,7 @@ SELECT
     count(*) AS num_districts
 FROM district;
 """
+sources = ["district"]
 
 [[queries]]
 name = "count_region"
@@ -630,6 +671,7 @@ SELECT
     count(*) AS num_regions
 FROM region;
 """
+sources = ["region"]
 
 [[queries]]
 name = "count_warehouse"
@@ -638,3 +680,4 @@ SELECT
     count(*) AS num_warehouses
 FROM warehouse;
 """
+sources = ["warehouse"]
