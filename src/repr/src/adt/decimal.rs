@@ -48,6 +48,7 @@
 //! [fixed-point arithmetic]: https://en.wikipedia.org/wiki/Fixed-point_arithmetic
 
 use std::cmp::PartialEq;
+use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::iter::Sum;
@@ -364,7 +365,17 @@ impl FromStr for Decimal {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut significand: i128 = 0;
+        // WARNING: this function is hot! Please benchmark any modifications
+        // via bench_parse_decimal.
+
+        // Decimals significands are stored as i128s, but due to a Rust bug
+        // checked multiplication of i128 is orders of magnitude slower than one
+        // would expect. So we do all our arithmetic on a u128 significand
+        // instead, and convert to an i128 only as the last step.
+        //
+        // See: https://github.com/rust-lang/rust/issues/53023
+
+        let mut significand: u128 = 0;
         let mut precision = 0;
         let mut scale: u8 = 0;
         let mut seen_decimal = false;
@@ -395,7 +406,7 @@ impl FromStr for Decimal {
                         .checked_mul(10)
                         .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
                     significand = significand
-                        .checked_add(i128::from(digit))
+                        .checked_add(u128::from(digit))
                         .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
                 }
                 '.' => {
@@ -447,9 +458,6 @@ impl FromStr for Decimal {
         if precision > MAX_DECIMAL_PRECISION {
             bail!("numeric literal exceeds maximum precision: {}", s);
         }
-        if negative {
-            significand *= -1;
-        }
         if seen_e_notation {
             if e_negative {
                 scale = scale
@@ -463,7 +471,7 @@ impl FromStr for Decimal {
             } else {
                 e_exponent -= scale;
                 scale = 0;
-                let p = 10_i128.checked_pow(e_exponent as u32).ok_or_else(|| {
+                let p = 10_u128.checked_pow(e_exponent as u32).ok_or_else(|| {
                     anyhow!(
                         "exponent in numeric literal {} overflows i128: 10^{}",
                         s,
@@ -475,6 +483,14 @@ impl FromStr for Decimal {
                     .checked_mul(p)
                     .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
             }
+        }
+        let mut significand = i128::try_from(significand)
+            .map_err(|_| anyhow!("numeric literal overflows i128: {}", s))?;
+        if negative {
+            if significand == i128::MAX {
+                bail!("numeric literal overflows i128: {}", s);
+            }
+            significand *= -1;
         }
         Ok(Decimal { scale, significand })
     }
