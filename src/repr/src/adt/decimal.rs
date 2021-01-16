@@ -48,6 +48,7 @@
 //! [fixed-point arithmetic]: https://en.wikipedia.org/wiki/Fixed-point_arithmetic
 
 use std::cmp::PartialEq;
+use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::iter::Sum;
@@ -364,118 +365,135 @@ impl FromStr for Decimal {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut significand: i128 = 0;
-        let mut precision = 0;
+        // WARNING: this function is hot! Please benchmark any modifications
+        // via bench_parse_decimal.
+
+        // Decimals significands are stored as i128s, but due to a Rust bug
+        // checked multiplication of i128 is orders of magnitude slower than one
+        // would expect. So we do all our arithmetic on a u128 significand
+        // instead, and convert to an i128 only as the last step.
+        //
+        // See: https://github.com/rust-lang/rust/issues/53023
+
+        let mut significand: u128 = 0;
+        let mut precision: u8 = 0;
         let mut scale: u8 = 0;
         let mut seen_decimal = false;
         let mut negative = false;
-        let mut seen_e_notation = false;
-        let mut e_exponent: u8 = 0;
-        let mut e_negative = false;
+        let mut seen_digit = false;
 
-        let mut z = s.chars().peekable();
+        // Iterating over bytes is faster than iterating over characters.
+        let mut z = s.bytes().peekable();
 
-        if let Some('-') = z.peek() {
+        // Check for a leading sign.
+        if let Some(b'-') = z.peek() {
             // Consume the negative sign.
             z.next();
             negative = true;
+        } else if let Some(b'+') = z.peek() {
+            // Consume the positive sign.
+            z.next();
         }
 
+        // Parse the digits and decimal point, if any.
         while let Some(&ch) = z.peek() {
             match ch {
-                '0'..='9' => {
-                    let digit = ch
-                        .to_digit(10)
-                        .ok_or_else(|| anyhow!("invalid digit in numeric literal: {}", s))?;
+                b'0'..=b'9' => {
+                    if precision == MAX_DECIMAL_PRECISION {
+                        bail!("numeric literal exceeds maximum precision: {}", s);
+                    }
                     precision += 1;
                     if seen_decimal {
                         scale += 1;
                     }
-                    significand = significand
-                        .checked_mul(10)
-                        .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
-                    significand = significand
-                        .checked_add(i128::from(digit))
-                        .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
+                    // Enforcing the maximum precision above ensures this
+                    // multiplication and addition do not overflow.
+                    significand *= 10;
+                    significand += u128::from(ch - b'0');
+                    seen_digit = true;
                 }
-                '.' => {
-                    if !seen_decimal {
-                        seen_decimal = true;
-                    } else {
-                        bail!("multiple decimal points in numeric literal: {}", s)
-                    }
-                }
+                b'.' if !seen_decimal => seen_decimal = true,
+                b'.' => bail!("multiple decimal points in numeric literal: {}", s),
                 _ => break,
             }
             z.next();
         }
 
-        // Check for e-notation.
-        // Note that 'e' is changed to 'E' during parsing step.
-        if let Some('E') = z.peek() {
-            // Consume the e-notation signifier.
-            z.next();
-            seen_e_notation = true;
-            if let Some('-') = z.peek() {
-                // Consume the negative sign.
-                z.next();
-                e_negative = true;
-            }
-            while let Some(&ch) = z.peek() {
-                match ch {
-                    '0'..='9' => {
-                        let digit = ch
-                            .to_digit(10)
-                            .ok_or_else(|| anyhow!("invalid digit in numeric literal: {}", s))?;
-                        e_exponent = e_exponent
-                            .checked_mul(10)
-                            .ok_or_else(|| anyhow!("exponent in e-notation overflows u8: {}", s))?;
-                        e_exponent = e_exponent
-                            .checked_add(digit as u8)
-                            .ok_or_else(|| anyhow!("exponent in e-notation overflows u8: {}", s))?;
-                    }
-                    _ => break,
-                }
-                z.next();
-            }
-        }
-
-        if z.peek().is_some() {
+        if !seen_digit {
             bail!("malformed numeric literal: {}", s);
         }
 
-        if precision > MAX_DECIMAL_PRECISION {
-            bail!("numeric literal exceeds maximum precision: {}", s);
+        // Check for E notation.
+        match z.next() {
+            None => (),
+            Some(b'e') | Some(b'E') => {
+                let mut e_exponent: u8 = 0;
+                let mut e_negative = false;
+
+                // Check for a leading sign for the exponent.
+                if let Some(b'-') = z.peek() {
+                    // Consume the negative sign.
+                    z.next();
+                    e_negative = true;
+                } else if let Some(b'+') = z.peek() {
+                    // Consume the positive sign.
+                    z.next();
+                }
+
+                // Only allow two digits in the exponent, so we don't need to
+                // check for overflow.
+                for _ in 0..2 {
+                    match z.next() {
+                        None => break,
+                        Some(ch @ b'0'..=b'9') => {
+                            e_exponent *= 10;
+                            e_exponent += ch - b'0';
+                        }
+                        Some(_) => bail!("malformed numeric literal: {}", s),
+                    }
+                }
+                match z.next() {
+                    None => (),
+                    Some(b'0'..=b'9') => {
+                        bail!("exponent in decimal has more than two digits: {}", s)
+                    }
+                    Some(_) => bail!("malformed numeric literal: {}", s),
+                }
+
+                if e_negative {
+                    scale += e_exponent;
+                    if scale > MAX_DECIMAL_PRECISION {
+                        bail!("numeric literal exceeds maximum precision: {}", s);
+                    }
+                } else if scale > e_exponent {
+                    scale -= e_exponent;
+                } else {
+                    e_exponent -= scale;
+                    scale = 0;
+                    let p = 10_u128.checked_pow(e_exponent as u32).ok_or_else(|| {
+                        anyhow!(
+                            "exponent in numeric literal {} overflows i128: 10^{}",
+                            s,
+                            e_exponent
+                        )
+                    })?;
+                    significand = significand
+                        .checked_mul(p)
+                        .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
+                }
+            }
+            Some(_) => bail!("malformed numeric literal: {}", s),
         }
+
+        // Compute the final significand.
+        let mut significand = i128::try_from(significand)
+            .map_err(|_| anyhow!("numeric literal overflows i128: {}", s))?;
         if negative {
+            // Significand is guaranteed to be positive, so the negation cannot
+            // overflow.
             significand *= -1;
         }
-        if seen_e_notation {
-            if e_negative {
-                scale = scale
-                    .checked_add(e_exponent)
-                    .ok_or_else(|| anyhow!("numeric literal exceeds maximum precision: {}", s))?;
-                if scale > MAX_DECIMAL_PRECISION {
-                    bail!("numeric literal exceeds maximum precision: {}", s);
-                }
-            } else if scale > e_exponent {
-                scale -= e_exponent;
-            } else {
-                e_exponent -= scale;
-                scale = 0;
-                let p = 10_i128.checked_pow(e_exponent as u32).ok_or_else(|| {
-                    anyhow!(
-                        "exponent in numeric literal {} overflows i128: 10^{}",
-                        s,
-                        e_exponent
-                    )
-                })?;
 
-                significand = significand
-                    .checked_mul(p)
-                    .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
-            }
-        }
         Ok(Decimal { scale, significand })
     }
 }

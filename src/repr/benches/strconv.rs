@@ -22,6 +22,14 @@ fn bench_parse_float32(c: &mut Criterion) {
     }
 }
 
+fn bench_parse_decimal(c: &mut Criterion) {
+    for s in &["-135412353251", "1.030340E11"] {
+        c.bench_with_input(BenchmarkId::new("parse_decimal", s), s, |b, s| {
+            b.iter(|| strconv::parse_decimal(s).unwrap())
+        });
+    }
+}
+
 fn bench_parse_jsonb(c: &mut Criterion) {
     let input = include_str!("testdata/twitter.json");
     c.bench_function("parse_jsonb", |b| {
@@ -81,6 +89,7 @@ criterion_group!(
     benches,
     bench_format_list_simple,
     bench_format_list_nested,
+    bench_parse_decimal,
     bench_parse_float32,
     bench_parse_jsonb
 );

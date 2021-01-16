@@ -240,11 +240,41 @@ SELECT 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1.0
 ----
 1
 
-### e-notation ###
+### edge cases ###
+query error invalid input syntax for numeric: malformed numeric literal: : ""
+SELECT ''::decimal
+
 query R
-SELECT 0.03142529E2;
+SELECT '  3  '::decimal
 ----
-3.142529
+3
+
+query R
+SELECT '99999999999999999999999999999999999999'::decimal
+----
+99999999999999999999999999999999999999
+
+query R
+SELECT '-99999999999999999999999999999999999999'::decimal
+----
+-99999999999999999999999999999999999999
+
+query error numeric literal exceeds maximum precision
+SELECT '100000000000000000000000000000000000000'::decimal
+
+query error numeric literal exceeds maximum precision
+SELECT '-100000000000000000000000000000000000000'::decimal
+
+### e-notation ###
+query RRR
+SELECT 0.03142529e2, 0.03142529e+2, 0.03142529E2
+----
+3.142529 3.142529 3.142529
+
+query RRR
+SELECT '0.03142529e2'::decimal(38, 6), '0.03142529e+2'::decimal(38, 6), '0.03142529E2'::decimal(38, 6)
+----
+3.142529 3.142529 3.142529
 
 query R
 SELECT 314.2529E-2;
@@ -252,7 +282,17 @@ SELECT 314.2529E-2;
 3.142529
 
 query R
+SELECT '314.2529E-2'::decimal(38, 6);
+----
+3.142529
+
+query R
 SELECT -314.2529E-2;
+----
+-3.142529
+
+query R
+SELECT '-314.2529E-2'::decimal(38, 6);
 ----
 -3.142529
 
