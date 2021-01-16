@@ -383,6 +383,7 @@ impl FromStr for Decimal {
         let mut seen_e_notation = false;
         let mut e_exponent: u8 = 0;
         let mut e_negative = false;
+        let mut seen_digit = false;
 
         let mut z = s.chars().peekable();
 
@@ -390,6 +391,9 @@ impl FromStr for Decimal {
             // Consume the negative sign.
             z.next();
             negative = true;
+        } else if let Some('+') = z.peek() {
+            // Consume the positive sign.
+            z.next();
         }
 
         while let Some(&ch) = z.peek() {
@@ -408,6 +412,7 @@ impl FromStr for Decimal {
                     significand = significand
                         .checked_add(u128::from(digit))
                         .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
+                    seen_digit = true;
                 }
                 '.' => {
                     if !seen_decimal {
@@ -421,9 +426,12 @@ impl FromStr for Decimal {
             z.next();
         }
 
+        if !seen_digit {
+            bail!("malformed numeric literal: {}", s);
+        }
+
         // Check for e-notation.
-        // Note that 'e' is changed to 'E' during parsing step.
-        if let Some('E') = z.peek() {
+        if let Some('E') | Some('e') = z.peek() {
             // Consume the e-notation signifier.
             z.next();
             seen_e_notation = true;
@@ -431,6 +439,9 @@ impl FromStr for Decimal {
                 // Consume the negative sign.
                 z.next();
                 e_negative = true;
+            } else if let Some('+') = z.peek() {
+                // Consume the positive sign.
+                z.next();
             }
             while let Some(&ch) = z.peek() {
                 match ch {

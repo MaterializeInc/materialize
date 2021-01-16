@@ -44,12 +44,20 @@ impl ToSql for Numeric {
         let non_neg = significand >= 0;
         significand = significand.abs();
 
-        // Ensure that the significand will always lie on a digit boundary.
-        for _ in 0..(4 - scale % 4) {
-            significand *= 10;
-        }
-
         let mut digits = vec![];
+
+        // Handle the last chunk of the significand which does not form a whole
+        // digit.
+        let (div, mul) = match scale % 4 {
+            0 => (1, 10000),
+            1 => (10, 1000),
+            2 => (100, 100),
+            3 => (1000, 10),
+            _ => unreachable!(),
+        };
+        digits.push(((significand % div) as i16) * mul);
+        significand /= div;
+
         while significand > 0 {
             digits.push((significand % 10_000) as i16);
             significand /= 10_000;
