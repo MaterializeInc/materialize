@@ -63,7 +63,7 @@ pub fn parse_bool(s: &str) -> Result<bool, ParseError> {
     match s.trim().to_lowercase().as_str() {
         "t" | "tr" | "tru" | "true" | "y" | "ye" | "yes" | "on" | "1" => Ok(true),
         "f" | "fa" | "fal" | "fals" | "false" | "n" | "no" | "of" | "off" | "0" => Ok(false),
-        _ => Err(ParseError::new("bool", s)),
+        _ => Err(ParseError::new("boolean", s)),
     }
 }
 
@@ -97,7 +97,7 @@ where
 pub fn parse_int32(s: &str) -> Result<i32, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::new("int4", s).with_details(e))
+        .map_err(|e| ParseError::new("integer", s).with_details(e))
 }
 
 /// Writes an [`i32`] to `buf`.
@@ -113,7 +113,7 @@ where
 pub fn parse_int64(s: &str) -> Result<i64, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::new("int8", s).with_details(e))
+        .map_err(|e| ParseError::new("bigint", s).with_details(e))
 }
 
 /// Writes an `i64` to `buf`.
@@ -137,7 +137,7 @@ pub fn parse_float32(s: &str) -> Result<f32, ParseError> {
     } else {
         s.as_str()
             .parse()
-            .map_err(|e| ParseError::new("float4", s.as_str()).with_details(e))
+            .map_err(|e| ParseError::new("real", s.as_str()).with_details(e))
     }
 }
 
@@ -170,7 +170,7 @@ pub fn parse_float64(s: &str) -> Result<f64, ParseError> {
     } else {
         s.as_str()
             .parse()
-            .map_err(|e| ParseError::new("float8", s.as_str()).with_details(e))
+            .map_err(|e| ParseError::new("double precision", s.as_str()).with_details(e))
     }
 }
 
@@ -321,7 +321,7 @@ pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
             };
             Ok(DateTime::from_utc(dt - offset, Utc))
         })
-        .map_err(|e| ParseError::new("timestamptz", s).with_details(e))
+        .map_err(|e| ParseError::new("timestamp with time zone", s).with_details(e))
 }
 
 /// Writes a [`DateTime<Utc>`] timestamp to `buf`.

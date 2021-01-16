@@ -32,13 +32,13 @@ $ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
 > SHOW COLUMNS FROM unions
 name       nullable  type
 -------------------------
-a          false     int8
-b          true      int8
-c1         true      int8
+a          false     bigint
+b          true      bigint
+c1         true      bigint
 c2         true      text
-d1         true      int8
+d1         true      bigint
 d2         true      text
-mz_obj_no  false     int8
+mz_obj_no  false     bigint
 
 > SELECT * FROM unions
 a   b       c1      c2     d1      d2      mz_obj_no

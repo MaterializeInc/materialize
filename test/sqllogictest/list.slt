@@ -22,7 +22,7 @@ SELECT (LIST[1,2,3])::text
 ----
 {1,2,3}
 
-query error LIST expression cannot be cast to uniform type: int4 vs int4 list
+query error LIST expression cannot be cast to uniform type: integer vs integer list
 SELECT LIST[1,LIST[2,3]]
 
 query T
@@ -65,7 +65,7 @@ SELECT (LIST[[[[1], [2]]], [[[3]]]])::text
 {{{{1},{2}}},{{{3}}}}
 
 # List(Int) cannot be cast to List(List(Int))
-query error CAST does not support casting from int4 list to int4 list list
+query error CAST does not support casting from integer list to integer list list
 SELECT LIST[1, null] :: INT LIST LIST
 
 query T
@@ -109,7 +109,7 @@ SELECT LIST [1, 2, 3][100]
 NULL
 
 # exceeds maximum dimension
-query error cannot subscript type int4
+query error cannot subscript type integer
 SELECT LIST [1, 2, 3][1][1]
 
 # 🔬🔬 list slices
@@ -194,7 +194,7 @@ SELECT (LIST [[1, 2, 3], [4, 5]][100][1])::text
 NULL
 
 # exceeds maximum dimension
-query error cannot subscript type int4
+query error cannot subscript type integer
 SELECT LIST [[1, 2, 3], [4, 5]][1][1][1]
 
 # 🔬🔬 list list slices
@@ -320,7 +320,7 @@ SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100][2][3]
 NULL
 
 # exceeds maximum dimension
-query error cannot subscript type int4
+query error cannot subscript type integer
 SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2][3][1]
 
 # 🔬🔬 list list list slices
@@ -665,22 +665,22 @@ SELECT (LIST[1,2,3][LIST[1][2.0 / 2]])::text
 
 # 🔬🔬 Err
 
-query error invalid input syntax for int8: invalid digit found in string: "dog"
+query error invalid input syntax for bigint: invalid digit found in string: "dog"
 SELECT LIST[1,2,3]['dog']
 
-query error subscript \(indexing\) does not support casting from date to int8
+query error subscript \(indexing\) does not support casting from date to bigint
 SELECT LIST [[1, 2, 3], [4, 5]][DATE '2001-01-01']
 
-query error subscript \(indexing\) does not support casting from timestamp to int8
+query error subscript \(indexing\) does not support casting from timestamp to bigint
 SELECT LIST [[1, 2, 3], [4, 5]][TIMESTAMP '2001-01-01']
 
-query error invalid input syntax for int8: invalid digit found in string: "dog"
+query error invalid input syntax for bigint: invalid digit found in string: "dog"
 SELECT (LIST[1,2,3][1:'dog'])::text
 
-query error subscript \(slicing\) does not support casting from date to int8
+query error subscript \(slicing\) does not support casting from date to bigint
 SELECT LIST [[1, 2, 3], [4, 5]][1:DATE '2001-01-01']
 
-query error subscript \(slicing\) does not support casting from timestamp to int8
+query error subscript \(slicing\) does not support casting from timestamp to bigint
 SELECT LIST [[1, 2, 3], [4, 5]][1:TIMESTAMP '2001-01-01']
 
 # 🔬 Built-in functions
@@ -1241,10 +1241,10 @@ NULL
 
 # 🔬🔬🔬🔬 Errors
 
-query error invalid input syntax for int4: invalid digit found in string: "dog"
+query error invalid input syntax for integer: invalid digit found in string: "dog"
 SELECT (LIST['1', 'dog']::int list)::text
 
-query error CAST does not support casting from date list to int4 list
+query error CAST does not support casting from date list to integer list
 SELECT LIST[DATE '2008-02-01']::int list
 
 # 🔬🔬🔬 Multi-dimensional and jagged lists
@@ -1649,7 +1649,7 @@ query error invalid input syntax for list: expected '\{', found 1: "1"
 SELECT ('1'::int list)::text
 
 # Invalid element
-query error invalid input syntax for list: invalid input syntax for int4: invalid digit found in string: "a": "\{a\}"
+query error invalid input syntax for list: invalid input syntax for integer: invalid digit found in string: "a": "\{a\}"
 SELECT ('{a}'::int list)::text
 
 # 'NULL' isn't a valid string for a list; just use unescaped NULL
@@ -2042,7 +2042,7 @@ SELECT '{\{\"1\":2\}}'::jsonb_list_c::text;
 statement ok
 CREATE TYPE bool AS LIST (element_type=int4)
 
-query error invalid input syntax for bool: "\{1,2\}"
+query error invalid input syntax for boolean: "\{1,2\}"
 SELECT '{1,2}'::bool;
 
 query T

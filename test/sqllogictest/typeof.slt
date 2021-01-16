@@ -30,7 +30,7 @@ text
 query T
 SELECT pg_typeof(1)
 ----
-int4
+integer
 
 query T
 SELECT pg_typeof(1.0)
@@ -48,7 +48,7 @@ CREATE TYPE int4_list_list AS LIST (element_type=int4_list)
 query T
 SELECT pg_typeof('{1}'::int4 list)
 ----
-int4 list
+integer list
 
 query T
 SELECT pg_typeof('{1}'::int4_list)
@@ -58,7 +58,7 @@ int4_list
 query T
 SELECT pg_typeof('{{1}}'::int4 list list)
 ----
-int4 list list
+integer list list
 
 query T
 SELECT pg_typeof('{{1}}'::int4_list_list)

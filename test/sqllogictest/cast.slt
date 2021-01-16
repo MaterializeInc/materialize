@@ -90,7 +90,7 @@ int4_list
 query T
 SELECT pg_typeof('{1}'::int4_list::int4 list)
 ----
-int4 list
+integer list
 
 query T
 SELECT pg_typeof('{1}'::int4_list_list::int4_list_list_too)

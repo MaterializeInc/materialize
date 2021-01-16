@@ -69,7 +69,7 @@ b  sum
 > SHOW COLUMNS FROM test1
 name nullable type
 -------------------
-b     false   int8
+b     false   bigint
 sum   true    numeric
 
 > SHOW VIEWS LIKE '%data%'

@@ -55,7 +55,7 @@ SELECT ('{  c  =>3, a=>     2, a => 1 }'::map[text=>int])::text
 ----
 {a=>1,c=>3}
 
-query error map key type must be text, got int4
+query error map key type must be text, got integer
 SELECT '{1=>true}'::map[int=>bool]
 
 query T
@@ -68,7 +68,7 @@ SELECT ('{}'::map[text=>int])::text
 ----
 {}
 
-query error invalid input syntax for bool: "2.0"
+query error invalid input syntax for boolean: "2.0"
 SELECT ('{a=>1, b=>false, c=>2.0}'::map[text=>bool])::text
 
 query T
@@ -132,7 +132,7 @@ SELECT ('{hello=>{world=>nested}}'::map[text=>map[text=>text]])::text
 ----
 {hello=>{world=>nested}}
 
-query error map key type must be text, got int4
+query error map key type must be text, got integer
 SELECT '{hello=>{1=>false}}'::map[text=>map[int=>bool]]
 
 query T
@@ -570,7 +570,7 @@ SELECT '{a=>\{\"1\":2\}}'::jsonb_map_c::text;
 statement ok
 CREATE TYPE bool AS MAP (key_type=text, value_type=int4)
 
-query error invalid input syntax for bool: "\{a=>1\}"
+query error invalid input syntax for boolean: "\{a=>1\}"
 SELECT '{a=>1}'::bool;
 
 query T
