@@ -61,3 +61,14 @@ CommandComplete {"tag":"SELECT 0"}
 CommandComplete {"tag":"COMMIT"}
 ReadyForQuery {"status":"I"}
 ReadyForQuery {"status":"I"}
+
+# Verify correct Close error.
+send
+Query {"query": "CLOSE c"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"cursor \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}

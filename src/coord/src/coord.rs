@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
@@ -54,7 +54,7 @@ use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timest
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
-    FetchStatement, ObjectType, Statement,
+    FetchStatement, Ident, ObjectType, Statement,
 };
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName, SchemaName};
@@ -1643,7 +1643,16 @@ where
                 if session.remove_portal(&name) {
                     tx.send(Ok(ExecuteResponse::ClosedCursor), session)
                 } else {
-                    tx.send(Err(anyhow!("cursor \"{}\" does not exist", name)), session)
+                    tx.send(
+                        Ok(ExecuteResponse::PgError {
+                            code: SqlState::INVALID_CURSOR_NAME,
+                            message: format!(
+                                "cursor {} does not exist",
+                                Ident::new(name).to_ast_string_stable()
+                            ),
+                        }),
+                        session,
+                    )
                 }
             }
         }
@@ -3306,7 +3315,7 @@ pub fn index_sql(
     view_desc: &RelationDesc,
     keys: &[usize],
 ) -> String {
-    use sql::ast::{Expr, Ident, Value};
+    use sql::ast::{Expr, Value};
 
     CreateIndexStatement {
         name: Some(Ident::new(index_name)),
