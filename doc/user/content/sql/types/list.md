@@ -41,6 +41,7 @@ constraints to their arguments:
 - All instances of `listelementany` must be of the same type.
 - If a function uses both `listany` and `listelementany` parameters, all
   instances of `listany` must be a list of the type used in `listelementany`.
+- If any value passed to a polymorphic parameter is a [custom type](/sql/types/#custom-types), additional constraints apply.
 
 ### Operators
 
