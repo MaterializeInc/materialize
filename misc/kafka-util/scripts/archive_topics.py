@@ -26,7 +26,7 @@ import requests
 
 # Setup basic formatting for logging output
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s %(message)s")
-log = logging.getLogger("restore.topics")
+log = logging.getLogger("archive.topics")
 log.setLevel(logging.INFO)
 
 # We only care to record the key, value, timestamp fields because the rest are empty or can be computed
