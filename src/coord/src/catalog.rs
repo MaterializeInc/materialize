@@ -229,6 +229,7 @@ pub enum TypeInner {
         key_id: GlobalId,
         value_id: GlobalId,
     },
+    Pseudo,
 }
 
 impl From<sql::plan::TypeInner> for TypeInner {
@@ -293,7 +294,7 @@ impl CatalogItem {
             CatalogItem::Table(_) => vec![],
             CatalogItem::Type(typ) => match &typ.inner {
                 TypeInner::Array { element_id } => vec![*element_id],
-                TypeInner::Base { .. } => vec![],
+                TypeInner::Base | TypeInner::Pseudo => vec![],
                 TypeInner::List { element_id } => vec![*element_id],
                 TypeInner::Map { key_id, value_id } => vec![*key_id, *value_id],
             },
@@ -656,7 +657,9 @@ impl Catalog {
                                         .items[element_type.name()];
                                     TypeInner::Array { element_id }
                                 }
-                                _ => TypeInner::Base,
+                                postgres_types::Kind::Pseudo => TypeInner::Pseudo,
+                                postgres_types::Kind::Simple => TypeInner::Base,
+                                _ => unreachable!(),
                             },
                         }),
                     ));
@@ -2194,6 +2197,7 @@ impl SqlCatalog for ConnCatalog<'_> {
                     custom_oid: Some(entry.oid),
                 }
             }
+            TypeInner::Pseudo => return None,
         })
     }
 

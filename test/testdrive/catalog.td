@@ -340,6 +340,7 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
+mz_pseudo_types
 mz_roles
 mz_schemas
 mz_sinks
@@ -363,6 +364,7 @@ mz_indexes            system
 mz_kafka_sinks        system
 mz_list_types         system
 mz_map_types          system
+mz_pseudo_types       system
 mz_roles              system
 mz_schemas            system
 mz_sinks              system

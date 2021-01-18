@@ -32,6 +32,10 @@ _time
 _timestamp
 _timestamptz
 _uuid
+any
+anyarray
+anyelement
+anynonarray
 bool
 bytea
 date
@@ -72,6 +76,10 @@ _time            system
 _timestamp       system
 _timestamptz     system
 _uuid            system
+any              system
+anyarray         system
+anyelement       system
+anynonarray      system
 bool             system
 bytea            system
 date             system

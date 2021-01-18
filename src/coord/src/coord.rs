@@ -70,9 +70,9 @@ use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{
     BUILTINS, MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES,
-    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_ROLES,
-    MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS,
-    MZ_VIEW_KEYS,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES,
+    MZ_ROLES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type, TypeInner};
 use crate::command::{
@@ -1427,6 +1427,7 @@ where
                 MZ_MAP_TYPES.id,
                 vec![id.to_string(), key_id.to_string(), value_id.to_string()],
             ),
+            TypeInner::Pseudo => (MZ_PSEUDO_TYPES.id, vec![id.to_string()]),
         };
         self.update_catalog_view(
             index_id,

@@ -363,6 +363,30 @@ pub const TYPE_JSONB_ARRAY: BuiltinType = BuiltinType {
     pgtype: &postgres_types::Type::JSONB_ARRAY,
 };
 
+pub const TYPE_ANY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1034),
+    pgtype: &postgres_types::Type::ANY,
+};
+
+pub const TYPE_ANYARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1035),
+    pgtype: &postgres_types::Type::ANYARRAY,
+};
+
+pub const TYPE_ANYELEMENT: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1036),
+    pgtype: &postgres_types::Type::ANYELEMENT,
+};
+
+pub const TYPE_ANYNONARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1037),
+    pgtype: &postgres_types::Type::ANYNONARRAY,
+};
+
 lazy_static! {
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
@@ -686,8 +710,16 @@ lazy_static! {
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
-        id: GlobalId::System(3037),
-        index_id: GlobalId::System(3038),
+        id: GlobalId::System(4037),
+        index_id: GlobalId::System(4038),
+    };
+    pub static ref MZ_PSEUDO_TYPES: BuiltinTable = BuiltinTable {
+        name: "mz_pseudo_types",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("type_id", ScalarType::String.nullable(false)),
+            id: GlobalId::System(4039),
+            index_id: GlobalId::System(4040),
     };
 }
 
@@ -1074,6 +1106,7 @@ FROM
             UNION ALL SELECT type_id, 'b' FROM mz_catalog.mz_base_types
             UNION ALL SELECT type_id, 'l' FROM mz_catalog.mz_list_types
             UNION ALL SELECT type_id, 'm' FROM mz_catalog.mz_map_types
+            UNION ALL SELECT type_id, 'p' FROM mz_catalog.mz_pseudo_types
         )
             AS t ON mz_types.id = t.type_id",
     id: GlobalId::System(5021),
@@ -1118,6 +1151,10 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
 lazy_static! {
     pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
         let mut builtins = vec![
+            Builtin::Type(&TYPE_ANY),
+            Builtin::Type(&TYPE_ANYARRAY),
+            Builtin::Type(&TYPE_ANYELEMENT),
+            Builtin::Type(&TYPE_ANYNONARRAY),
             Builtin::Type(&TYPE_BOOL),
             Builtin::Type(&TYPE_BOOL_ARRAY),
             Builtin::Type(&TYPE_BYTEA),
@@ -1187,6 +1224,7 @@ lazy_static! {
             Builtin::Table(&MZ_LIST_TYPES),
             Builtin::Table(&MZ_MAP_TYPES),
             Builtin::Table(&MZ_ROLES),
+            Builtin::Table(&MZ_PSEUDO_TYPES),
             Builtin::View(&MZ_RELATIONS),
             Builtin::View(&MZ_OBJECTS),
             Builtin::View(&MZ_CATALOG_NAMES),
