@@ -86,22 +86,39 @@ Values in custom types are _never_ considered equal to:
 
 ### Polymorphism
 
-If custom types and built-in types are both used in [polymorphic
-functions](list/#polymorphism), the resultant type is the "least custom type"
-that can be derived.
+When using custom types as values for [polymorphic
+functions](list/#polymorphism), the following additional constraints appply:
+
+- If any value passed to a polymorphic parameter is a custom type, the resultant
+  type must use the custom type in the appropriate location.
+
+  For example, if a custom type is used as:
+  - `listany`, the resultant `list` must be of exactly the same type.
+  - `listelementany`, the resultant `list`'s element must be of the custom type.
+- If custom types and built-in types are both used, the resultant type is the
+  "least custom type" that can be derived––i.e. the resultant type will have the
+  fewest possible layers of custom types that still fulfill all constraints.
+  Materialize will neither create nor discover a custom type that fills the
+  constraints, nor will it coerce a custom type to a built-in type.
+
+  For example, if appending a custom `list` to a built-in `list list`, the
+  resultant type will be a `list` of custom `list`s.
+
+#### Examples
 
 This is a little easier to understand if we make it concrete, so we'll focus on
 concatenting two lists and appending an element to list.
 
 For these operations, Materialize uses the following polymorphc parameters:
 
-- `ListAny`, which accepts any `list`, and constrains all lists to being of the
+- `listany`, which accepts any `list`, and constrains all lists to being of the
   same structurally equivalent type.
-- `ListElementAny`, which accepts any type, but must be equal to the element
-  type of the `list` type used with `ListAny`. For instance, if `ListAny` is
-  constrained to being `int4 list`, `ListElementAny` must be `int4`.
+- `listelementany`, which accepts any type, but must be equal to the element
+  type of the `list` type used with `listany`. For instance, if `listany` is
+  constrained to being `int4 list`, `listelementany` must be `int4`.
 
-When concatenating two lists, we'll use `list_cat` whose signature is `list_cat(l: ListAny, r: ListAny)`.
+When concatenating two lists, we'll use `list_cat` whose signature is
+`list_cat(l: listany, r: listany)`.
 
 If we concatenate a custom `list` (in this example, `custom_list`) and a
 structurally equivalent built-in `list` (`int4 list`), the result is of the same
@@ -115,14 +132,14 @@ SELECT pg_typeof(
 ) AS custom_list_built_in_list_cat;
 
 ```
-```
+```nofmt
  custom_list_built_in_list_cat
 -------------------------------
  custom_list
 ```
 
 When appending an element to a list, we'll use `list_append` whose signature is
-`list_append(l: ListAny, e: ListElementAny)`.
+`list_append(l: listany, e: listelementany)`.
 
 If we append a structurally appropriate elment (`int4`) to a custom `list`
 (`custom_list`), the result is of the same type as the custom `list`
@@ -134,15 +151,14 @@ SELECT pg_typeof(
 ) AS custom_list_built_in_element_cat;
 
 ```
-```
+```nofmt
  custom_list_built_in_element_cat
 ----------------------------------
  custom_list
 ```
 
-If we append a concatenate a structurally appropriate custom element
-(`custom_list`) to a built-in `list` (`int4 list list`), the result is a `list`
-of custom elements.
+If we append a structurally appropriate custom element (`custom_list`) to a
+built-in `list` (`int4 list list`), the result is a `list` of custom elements.
 
 ```sql
 SELECT pg_typeof(
@@ -150,17 +166,78 @@ SELECT pg_typeof(
 ) AS built_in_list_custom_element_append;
 
 ```
-```
+```nofmt
  built_in_list_custom_element_append
 -------------------------------------
  custom_list list
 ```
 
-This is the "least custom type" we could support for these values (i.e. we don't
-invent a new custom type whose element is `custom_list`, and we don't coerce
-`custom_list` into an anonymous built-in list).
+This is the "least custom type" we could support for these values––i.e.
+Materialize will not create or disocver a custom type whose elements are
+`custom_list`, nor will it coerce `custom_list` into an anonymous built-in
+list.
 
-Note that in this example, `custom_list list` is considered a custom type
-because it contains a reference to a custom type.
+Note that `custom_list list` is considered a custom type because it contains a
+reference to a custom type. Because it's a custom type, it enforces custom
+types' polymorphic constraints.
+
+For example, values of type `custom_list list` and `custom_nested_list` cannot
+both be used as `listany` values for the same function:
+
+```sql
+CREATE TYPE custom_nested_list AS LIST (element_type=custom_list);
+
+SELECT list_cat(
+  -- result is "custom_list list"
+  list_append('{{1}}'::int4 list list, '{2}'::custom_list),
+  -- result is custom_nested_list
+  '{{3}}'::custom_nested_list
+);
+```
+```nofmt
+ERROR: Cannot call function list_cat(custom_list list, custom_nested_list)...
+```
+
+As another example, when using `custom_list list` values for `listany`
+parameters, you can only use `custom_list` or `int4 list` values for
+`listelementany` parameters––using any other custom type will fail:
+
+```sql
+CREATE TYPE second_custom_list AS LIST (element_type=int4);
+
+SELECT list_append(
+  -- elements are custom_list
+  '{{1}}'::custom_nested_list,
+  -- second_custom_list is not interoperable with custom_list because both
+  -- are custom
+  '{2}'::second_custom_list
+);
+```
+```nofmt
+ERROR:  Cannot call function list_append(custom_nested_list, second_custom_list)...
+```
+
+To make custom types interoperable, you must cast them to the same type. For
+example, casting `custom_nested_list` to `custom_list list` (or vice versa)
+makes the values passed to `listany` parameters of the same custom type:
+
+```sql
+SELECT pg_typeof(
+  list_cat(
+    -- result is "custom_list list"
+    list_append(
+      '{{1}}'::int4 list list,
+      '{2}'::custom_list
+    ),
+    -- result is "custom_list list"
+    '{{3}}'::custom_nested_list::custom_list list
+  )
+) AS complex_list_cat;
+```
+```nofmt
+ complex_list_cat
+------------------
+ custom_list list
+```
 
 [create-type]: ../create-type
