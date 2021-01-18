@@ -85,7 +85,7 @@ but requires installing a plug-in such as `decoderbufs` or `wal2json` in the
 database. PostgreSQL 10 onwards includes built-in streaming replication
 capabilities via `pgoutput`, which is what `tb` uses out-of-the-box.
 
-You will have to set thewWrite-ahead logging (WAL) level to logical.
+You will have to set the Write-ahead logging (WAL) level to logical.
 
 ```sql
 ALTER SYSTEM set wal_level to logical;
