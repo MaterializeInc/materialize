@@ -129,7 +129,6 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
-
 ### `mz_kafka_sinks`
 
 The `mz_kafka_sinks` table contains a row for each Kafka sink in the system.
@@ -161,6 +160,14 @@ Field       | Type       | Meaning
 `schema_id` | [`bigint`] | The ID of the schema to which the object belongs.
 `name`      | [`text`]   | The name of the object.
 `type`      | [`text`]   | The type of the object: either `table`, `source`, `view`, `sink`, or `index`.
+
+### `mz_pseudo_types`
+
+The `mz_pseudo_types` table contains a row for each psuedo type in the system.
+
+Field          | Type       | Meaning
+---------------|------------|----------
+`type_id`      | [`text`]   | The ID of the type.
 
 ### `mz_relations`
 
