@@ -15,7 +15,7 @@ num_enum = "0.5.1"
 ore = { path = "../ore" }
 rand = "0.8.0"
 serde = { version = "1.0.0", features = ["derive"] }
-tokio = { version = "1.0.0", features = ["macros", "net", "rt", "time"] }
+tokio = { version = "1.0.2", features = ["macros", "net", "rt", "time"] }
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-util = { version = "0.6.0", features = ["codec"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
