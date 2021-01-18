@@ -15,7 +15,7 @@ futures-channel = "0.3.5"
 hex = "0.4.2"
 log = "0.4.13"
 postgres-types = "0.2.0"
-rand = "0.8.0"
+rand = "0.8.2"
 rand_distr = "0.4.0"
 structopt = "0.3.21"
 test-util = { path = "../../test-util" }

@@ -25,7 +25,7 @@ ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 postgres = "0.19.0"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-rand = "0.8.0"
+rand = "0.8.2"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
 tokio = "1.0.0"

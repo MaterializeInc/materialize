@@ -264,7 +264,7 @@ dependencies = [
  "postgres-types",
  "protobuf",
  "protoc",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rand_distr",
  "structopt",
  "test-util",
@@ -404,7 +404,7 @@ dependencies = [
  "log",
  "md-5",
  "ore",
- "rand 0.8.0",
+ "rand 0.8.2",
  "structopt",
  "test-util",
  "tokio",
@@ -471,7 +471,7 @@ dependencies = [
  "num_enum",
  "ore",
  "predicates",
- "rand 0.8.0",
+ "rand 0.8.2",
  "serde",
  "structopt",
  "tokio",
@@ -525,7 +525,7 @@ dependencies = [
  "pgrepr",
  "postgres-types",
  "prometheus",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rdkafka",
  "regex",
  "repr",
@@ -747,7 +747,7 @@ dependencies = [
  "pdqselect",
  "prometheus",
  "prometheus-static-metric",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rdkafka",
  "regex",
  "repr",
@@ -1729,7 +1729,7 @@ dependencies = [
  "futures",
  "mz-avro",
  "ore",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rdkafka",
  "serde",
  "serde_json",
@@ -2054,7 +2054,7 @@ dependencies = [
  "lazy_static",
  "log",
  "md-5",
- "rand 0.8.0",
+ "rand 0.8.2",
  "regex",
  "serde",
  "serde_json",
@@ -2480,7 +2480,7 @@ dependencies = [
  "futures-channel",
  "log",
  "ore",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kinesis",
@@ -2503,7 +2503,7 @@ dependencies = [
  "hex",
  "log",
  "postgres-types",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rand_distr",
  "structopt",
  "test-util",
@@ -2573,7 +2573,7 @@ dependencies = [
  "pgrepr",
  "postgres",
  "prometheus",
- "rand 0.8.0",
+ "rand 0.8.2",
  "repr",
  "sql",
  "tokio",
@@ -2730,7 +2730,7 @@ dependencies = [
  "hmac",
  "md5",
  "memchr",
- "rand 0.8.0",
+ "rand 0.8.2",
  "sha2",
  "stringprep",
 ]
@@ -3001,9 +3001,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.8.0"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a76330fb486679b4ace3670f117bbc9e16204005c4bde9c4bd372f45bed34f12"
+checksum = "18519b42a40024d661e1714153e9ad0c3de27cd495760ceb09710920f1098b1e"
 dependencies = [
  "libc",
  "rand_chacha 0.3.0",
@@ -3056,7 +3056,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da9e8f32ad24fb80d07d2323a9a2ce8b30d68a62b8cb4df88119ff49a698f038"
 dependencies = [
  "num-traits",
- "rand 0.8.0",
+ "rand 0.8.2",
 ]
 
 [[package]]
@@ -3209,7 +3209,7 @@ dependencies = [
  "itertools",
  "ordered-float",
  "ore",
- "rand 0.8.0",
+ "rand 0.8.2",
  "regex",
  "serde",
  "serde_json",
@@ -4016,7 +4016,7 @@ dependencies = [
  "kafka-util",
  "log",
  "ore",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rdkafka",
  "tokio",
  "tokio-postgres",
@@ -4050,7 +4050,7 @@ dependencies = [
  "predicates",
  "protobuf",
  "protoc",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rdkafka",
  "regex",
  "repr",

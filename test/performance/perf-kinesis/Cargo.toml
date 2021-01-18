@@ -15,7 +15,7 @@ futures = "0.3.9"
 futures-channel = "0.3.5"
 log = "0.4.13"
 ore = { path = "../../../src/ore" }
-rand = "0.8.0"
+rand = "0.8.2"
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
