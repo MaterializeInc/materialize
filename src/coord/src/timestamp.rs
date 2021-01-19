@@ -38,7 +38,7 @@ use aws_util::kinesis;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
-    AvroOcfEncoding, Consistency, DataEncoding, Envelope, ExternalSourceConnector,
+    AvroOcfEncoding, Consistency, DataEncoding, ExternalSourceConnector,
     FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector,
     SourceConnector, SourceEnvelope, TimestampSourceUpdate,
 };

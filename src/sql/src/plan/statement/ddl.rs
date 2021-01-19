@@ -25,8 +25,8 @@ use dataflow_types::SourceEnvelope;
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
     DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
-    KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding, RegexEncoding, S3SourceConnector,
-    SinkConnectorBuilder, SourceConnector,
+    KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding, RegexEncoding,
+    S3SourceConnector, SinkConnectorBuilder, SourceConnector,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -1021,6 +1021,7 @@ pub fn plan_create_sink(
         }
         Connector::Kinesis { .. } => None,
         Connector::AvroOcf { .. } => None,
+        Connector::S3 { .. } => None,
     };
 
     let key_desc_and_indices = key_indices.map(|key_indices| {
