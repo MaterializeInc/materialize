@@ -1127,7 +1127,7 @@ fn coerce_args_to_types(
 
 /// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
 macro_rules! params {
-    (($p:expr)...) => { ParamList::Variadic($p.into())};
+    ($p:ident...) => { ParamList::Variadic($p.into())};
     ($($p:expr),*)      => { ParamList::Exact(vec![$($p.into(),)*]) };
 }
 
@@ -1215,7 +1215,7 @@ lazy_static! {
                 params!(String) => UnaryFunc::CharLength
             },
             "concat" => Scalar {
-                 params!((Any)...) => Operation::variadic(|ecx, cexprs| {
+                 params!(Any...) => Operation::variadic(|ecx, cexprs| {
                     if cexprs.is_empty() {
                         bail!("No function matches the given name and argument types. \
                         You might need to add explicit type casts.")
@@ -1294,13 +1294,13 @@ lazy_static! {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
             },
             "jsonb_build_array" => Scalar {
-                params!((Any)...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
+                params!(Any...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
                     func: VariadicFunc::JsonbBuildArray,
                     exprs: exprs.into_iter().map(|e| typeconv::to_jsonb(ecx, e)).collect(),
                 }))
             },
             "jsonb_build_object" => Scalar {
-                params!((Any)...) => Operation::variadic(|ecx, exprs| {
+                params!(Any...) => Operation::variadic(|ecx, exprs| {
                     if exprs.len() % 2 != 0 {
                         bail!("argument list must have even number of elements")
                     }
