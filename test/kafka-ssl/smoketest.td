@@ -71,5 +71,5 @@ a
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.snk
-{"before": null, "after": {"com.materialize.Value":{"a": 1}}}
-{"before": null, "after": {"com.materialize.Value":{"a": 2}}}
+{"before": null, "after": {"row":{"a": 1}}}
+{"before": null, "after": {"row":{"a": 2}}}

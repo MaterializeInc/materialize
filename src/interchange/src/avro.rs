@@ -2280,7 +2280,7 @@ fn build_schema(
     columns: &[(ColumnName, ColumnType)],
     custom_types_info: &CustomTypesInfo,
 ) -> Schema {
-    let row_schema = build_row_schema_json(&columns, "row", custom_types_info);
+    let row_schema = build_row_schema_json(&columns, "envelope", custom_types_info);
     Schema::parse(&row_schema).expect("valid schema constructed")
 }
 

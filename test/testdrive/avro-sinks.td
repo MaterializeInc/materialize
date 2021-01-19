@@ -18,7 +18,7 @@
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
-{"before": null, "after": {"com.materialize.Value": {"column1": 1, "b": 2, "column3": 3}}}
+{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}}
 
 # Test that invented field names do not clash with named columns.
 
@@ -29,7 +29,7 @@ $ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
-{"before": null, "after": {"com.materialize.Value": {"column1": 1, "column1_1": 2, "b": 3, "b1": 4, "b2": 5}}}
+{"before": null, "after": {"row": {"column1": 1, "column1_1": 2, "b": 3, "b1": 4, "b2": 5}}}
 
 # Test a basic sink with multiple rows.
 
@@ -40,10 +40,10 @@ $ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.data_sink
-{"before": null, "after": {"com.materialize.Value": {"a": 1, "b": 1}}}
-{"before": null, "after": {"com.materialize.Value": {"a": 1, "b": 2}}}
-{"before": null, "after": {"com.materialize.Value": {"a": 2, "b": 1}}}
-{"before": null, "after": {"com.materialize.Value": {"a": 3, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}}
+{"before": null, "after": {"row": {"a": 2, "b": 1}}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}}
 
 # Test date/time types.
 
@@ -56,8 +56,8 @@ $ kafka-verify format=avro sink=materialize.public.data_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.datetime_data_sink
-{"before": null, "after": {"com.materialize.Value": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}
-{"before": null, "after": {"com.materialize.Value": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
+{"before": null, "after": {"row": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}
+{"before": null, "after": {"row": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
 
 > CREATE VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04')
 
@@ -66,8 +66,8 @@ $ kafka-verify format=avro sink=materialize.public.datetime_data_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.time_data_sink
-{"before": null, "after": {"com.materialize.Value": {"time": 3723000000}}}
-{"before": null, "after": {"com.materialize.Value": {"time": 3724000000}}}
+{"before": null, "after": {"row": {"time": 3723000000}}}
+{"before": null, "after": {"row": {"time": 3724000000}}}
 
 $ set schema={
     "type": "record",
@@ -77,7 +77,7 @@ $ set schema={
         "name": "before",
         "type": [
           {
-            "name": "com.materialize.Value",
+            "name": "row",
             "type": "record",
             "fields": [
               {"name": "a", "type": "long"},
@@ -87,7 +87,7 @@ $ set schema={
           "null"
         ]
       },
-      { "name": "after", "type": ["com.materialize.Value", "null"] }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
@@ -130,13 +130,13 @@ $ kafka-create-topic topic=consistency
 $ kafka-create-topic topic=input
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
-{"before": null, "after": {"com.materialize.Value": {"a": 1, "b": 1}}}
-{"before": null, "after": {"com.materialize.Value": {"a": 2, "b": 2}}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
-{"before": null, "after": {"com.materialize.Value": {"a": 3, "b": 1}}}
-{"before": null, "after": {"com.materialize.Value": {"a": 4, "b": 2}}}
-{"before": null, "after": {"com.materialize.Value": {"a": 1, "b": 7}}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}}
+{"before": null, "after": {"row": {"a": 4, "b": 2}}}
+{"before": null, "after": {"row": {"a": 1, "b": 7}}}
 
 $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
@@ -167,10 +167,10 @@ a  b
   AS OF 1
 
 $ kafka-verify format=avro sink=materialize.public.input_sink
-{"a": 1} {"before": null, "after": {"com.materialize.Value": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"a": 2} {"before": null, "after": {"com.materialize.Value": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
-{"a": 3} {"before": null, "after": {"com.materialize.Value": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"a": 4} {"before": null, "after": {"com.materialize.Value": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+{"a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
 
 $ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezium
 {"id": "1", "status": "BEGIN", "event_count": null}
@@ -198,10 +198,10 @@ Ambiguous column: a
   AS OF 1
 
 $ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys
-{"b": 1, "a": 1} {"before": null, "after": {"com.materialize.Value": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"b": 2, "a": 2} {"before": null, "after": {"com.materialize.Value": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
-{"b": 1, "a": 3} {"before": null, "after": {"com.materialize.Value": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"b": 2, "a": 4} {"before": null, "after": {"com.materialize.Value": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+{"b": 1, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"b": 2, "a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+{"b": 1, "a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"b": 2, "a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
 
 > CREATE VIEW json_data (a, b) AS VALUES ('{"a":1, "b":2}'::jsonb, 2)
 

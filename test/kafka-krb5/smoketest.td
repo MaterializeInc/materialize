@@ -64,5 +64,5 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.data_snk
-{"before": null, "after": {"com.materialize.Value": {"a": 102}}}
-{"before": null, "after": {"com.materialize.Value": {"a": 201}}}
+{"before": null, "after": {"row": {"a": 102}}}
+{"before": null, "after": {"row": {"a": 201}}}
