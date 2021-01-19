@@ -971,8 +971,9 @@ impl Catalog {
 
     pub fn drop_items_ops(&mut self, ids: &[GlobalId]) -> Vec<Op> {
         let mut ops = vec![];
+        let mut seen = HashSet::new();
         for &id in ids {
-            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut HashSet::new());
+            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut seen);
         }
         ops
     }
