@@ -2395,7 +2395,7 @@ impl Encoder {
                             },
                         )],
                         custom_oid: Some(
-                            custom_types_info.new_named("com.materialize.Transaction".to_string()),
+                            custom_types_info.new_named("transaction".to_string()),
                         ),
                     },
                 },
