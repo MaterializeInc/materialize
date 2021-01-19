@@ -738,10 +738,11 @@ impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    /// Attempt to extract a chain of map/filter/project operators on top of a Get. Returns true if
-    /// it was successful and false otherwise. We still fall back to individual implementations for
-    /// the various operators so that ones like Filter, that special-case being on top of a join,
-    /// can still do so.
+    /// Attempt to render a chain of map/filter/project operators on top of another operator.
+    ///
+    /// Returns true if it was successful, and false otherwise. If this method returns false,
+    /// we should continue with the traditional individual render implementations of each
+    /// operator.
     fn try_render_map_filter_project(
         &mut self,
         relation_expr: &RelationExpr,

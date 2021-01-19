@@ -310,23 +310,14 @@ where
                                 // full evaluation. Before we do this, we need to permute it to refer
                                 // to the correct physical column locations.
                                 mfp.permute(&column_map, column_map.len());
-                                // At this point, `mfp` is very commonly the identity (we have fully
-                                // applied it in the previous closure). However, it may not be the
-                                // identity if it produces duplicate columns (i.e. its `projection`
-                                // member has duplicates). In this case, we aren't currently able to
-                                // optimize it away, as `columns` cannot represent some output column
-                                // being in two locations. There are many ways we could improve this,
-                                // including improving query optimization (we should rarely need to
-                                // produce two copies of the same column) and further improvements
-                                // here (figure out how to apply the projection in the prior closure).
+                                // The `mfp` has access to all columns at this point, and could
+                                // plausibly be much simpler that a general `MapFilterProject`.
+                                // As of this writing, the `mfp` will only contain literals and
+                                // some projection to place them and potentially copy columns.
+                                // These should not error (if the literals are non-errors) and
+                                // could result in a simpler (non-erroring) operator.
                                 if !mfp.is_identity() {
-                                    // The `mfp` has access to all columns at this point, and could
-                                    // plausibly be much simpler that a general `MapFilterProject`.
-                                    // As of this writing, the `mfp` will only contain literals and
-                                    // some projection to place them and potentially copy columns.
-                                    // These should not error (if the literals are non-errors) and
-                                    // could result in a simpler (non-erroring) operator.
-                                    update_stream = update_stream.map({
+                                    let (updates, errors) = update_stream.flat_map_fallible({
                                         // Reuseable allocation for unpacking.
                                         let mut datums = DatumVec::new();
                                         let mut row_packer = repr::RowPacker::new();
@@ -335,10 +326,13 @@ where
                                             let mut datums_local = datums.borrow_with(&row);
                                             // TODO(mcsherry): re-use `row` allocation.
                                             mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer)
-                                                .expect("projection should not produce errors")
-                                                .expect("projection should always produce output")
+                                                .map_err(DataflowError::from)
+                                                .transpose()
                                         }
                                     });
+
+                                    update_stream = updates;
+                                    region_errs.push(errors);
                                 }
 
                                 inner_errs.push(differential_dataflow::collection::concatenate(region, region_errs).leave());
@@ -530,11 +524,7 @@ impl MyClosure {
         // Update ready_equivalences to reference correct column locations.
         for exprs in ready_equivalences.iter_mut() {
             for expr in exprs.iter_mut() {
-                expr.visit_mut(&mut |e| {
-                    if let ScalarExpr::Column(c) = e {
-                        *c = columns[c];
-                    }
-                });
+                expr.permute_map(&columns);
             }
         }
 
