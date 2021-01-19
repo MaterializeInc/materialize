@@ -31,6 +31,11 @@ pub fn avro_ocf<G>(
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
+    let collection = collection.map(|(k, v)| {
+        assert!(k.is_none(), "Avro OCF sinks must not have keys");
+        let v = v.expect("Avro OCF sinks must have values");
+        v
+    });
     let (schema, columns) = {
         let encoder = Encoder::new(None, desc, false, &mut connector.custom_types_info);
         let schema = encoder.value_writer_schema().clone();
@@ -59,10 +64,7 @@ pub fn avro_ocf<G>(
             input.for_each(|_, rows| {
                 rows.swap(&mut vector);
 
-                for ((k, v), _time, diff) in vector.drain(..) {
-                    assert!(k.is_none(), "Avro OCF sinks must not have keys");
-                    let v = v.expect("Avro OCF sinks must have values");
-
+                for (v, _time, diff) in vector.drain(..) {
                     let value = encode_datums_as_avro(v.iter(), &columns);
                     assert!(diff > 0, "can't sink negative multiplicities");
                     for value in repeat_n(value, diff as usize) {
