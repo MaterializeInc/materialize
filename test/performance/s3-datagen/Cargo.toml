@@ -1,0 +1,20 @@
+[package]
+name = "s3-datagen"
+description = "Generate data in S3 for testing our S3 sources"
+version = "0.0.0"
+edition = "2018"
+
+[dependencies]
+aws-util = { path = "../../../src/aws-util" }
+ore = { path = "../../../src/ore" }
+rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
+rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
+rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
+structopt = "0.3.21"
+tokio = { version = "1.0.0", features = ["macros", "net", "rt", "time"] }
+tracing = "0.1.22"
+tracing-subscriber = "0.2.15"
+anyhow = "1.0.38"
+bytefmt = "0.1.7"
+indicatif = "0.15.0"
+futures = "0.3.12"
