@@ -24,7 +24,7 @@ use mz_avro::{self};
 use repr::{RelationDesc, Row, Timestamp};
 
 pub fn avro_ocf<G>(
-    stream: Collection<G, (Option<Row>, Option<Row>)>,
+    collection: Collection<G, (Option<Row>, Option<Row>)>,
     id: GlobalId,
     mut connector: AvroOcfSinkConnector,
     desc: RelationDesc,
@@ -49,7 +49,7 @@ pub fn avro_ocf<G>(
 
     let mut vector = vec![];
 
-    stream
+    collection
         .inner
         .sink(Pipeline, &format!("avro-ocf-{}", id), move |input| {
             let avro_writer = match avro_writer.as_mut() {

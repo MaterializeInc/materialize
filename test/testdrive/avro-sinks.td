@@ -13,13 +13,37 @@
 
 > CREATE VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
 
+> CREATE SINK unnamed_cols_sink FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unnamed-cols-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
+{"before": null, "after": {"com.materialize.Value": {"column1": 1, "b": 2, "column3": 3}}}
+
 # Test that invented field names do not clash with named columns.
 
 > CREATE VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b, 5 as b;
 
+> CREATE SINK clashing_cols_sink FROM clashing_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'clashing-cols-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
+{"before": null, "after": {"com.materialize.Value": {"column1": 1, "column1_1": 2, "b": 3, "b1": 4, "b2": 5}}}
+
 # Test a basic sink with multiple rows.
 
 > CREATE VIEW data (a, b) AS VALUES (1, 1), (2, 1), (3, 1), (1, 2)
+
+> CREATE SINK data_sink FROM data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.data_sink
+{"before": null, "after": {"com.materialize.Value": {"a": 1, "b": 1}}}
+{"before": null, "after": {"com.materialize.Value": {"a": 1, "b": 2}}}
+{"before": null, "after": {"com.materialize.Value": {"a": 2, "b": 1}}}
+{"before": null, "after": {"com.materialize.Value": {"a": 3, "b": 1}}}
 
 # Test date/time types.
 
@@ -27,7 +51,23 @@
   (DATE '2000-01-01', TIMESTAMP '2000-01-01 10:10:10.111', TIMESTAMPTZ '2000-01-01 10:10:10.111+02'),
   (DATE '2000-02-01', TIMESTAMP '2000-02-01 10:10:10.111', TIMESTAMPTZ '2000-02-01 10:10:10.111+02')
 
+> CREATE SINK datetime_data_sink FROM datetime_data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'datetime-data-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.datetime_data_sink
+{"before": null, "after": {"com.materialize.Value": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}
+{"before": null, "after": {"com.materialize.Value": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
+
 > CREATE VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04')
+
+> CREATE SINK time_data_sink FROM time_data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'time-data-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.time_data_sink
+{"before": null, "after": {"com.materialize.Value": {"time": 3723000000}}}
+{"before": null, "after": {"com.materialize.Value": {"time": 3724000000}}}
 
 $ set schema={
     "type": "record",
@@ -37,7 +77,7 @@ $ set schema={
         "name": "before",
         "type": [
           {
-            "name": "row",
+            "name": "com.materialize.Value",
             "type": "record",
             "fields": [
               {"name": "a", "type": "long"},
@@ -47,7 +87,7 @@ $ set schema={
           "null"
         ]
       },
-      { "name": "after", "type": ["row", "null"] }
+      { "name": "after", "type": ["com.materialize.Value", "null"] }
     ]
   }
 
@@ -90,13 +130,13 @@ $ kafka-create-topic topic=consistency
 $ kafka-create-topic topic=input
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}}
+{"before": null, "after": {"com.materialize.Value": {"a": 1, "b": 1}}}
+{"before": null, "after": {"com.materialize.Value": {"a": 2, "b": 2}}}
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
-{"before": null, "after": {"row": {"a": 3, "b": 1}}}
-{"before": null, "after": {"row": {"a": 4, "b": 2}}}
-{"before": null, "after": {"row": {"a": 1, "b": 7}}}
+{"before": null, "after": {"com.materialize.Value": {"a": 3, "b": 1}}}
+{"before": null, "after": {"com.materialize.Value": {"a": 4, "b": 2}}}
+{"before": null, "after": {"com.materialize.Value": {"a": 1, "b": 7}}}
 
 $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}

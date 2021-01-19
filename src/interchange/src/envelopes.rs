@@ -56,16 +56,19 @@ where
                             }
                             cursor.step_key(&batch);
                         }
-                        // For each timestamp we've seen,
+                        // For each (timestamp, key) we've seen,
                         // we need to generate a series of (before, after) pairs.
                         //
                         // Steps to do this:
                         // (1) sort by ts, diff (so that for each ts, diffs appear in ascending order).
-                        // (2) in each ts, find the point where negative and positive diffs meet, using binary search.
+                        // (2) in each (ts, key), find the point where negative and positive diffs meet, using binary search.
                         // (3) The (ts, entry, diff) elements before that point will go into "before" fields in DiffPairs;
                         //     the ones after that point will go in "after".
 
                         // Step (1) above)
+
+                        // Because `sort_by_key` is stable, it will not reorder equal elements. Therefore, elements with the smae
+                        // key will stay grouped together.
                         buf.sort_by_key(|(t, _k, diff, _row)| (*t, *diff));
                         for ((t, k), group) in &buf
                             .into_iter()
@@ -86,6 +89,8 @@ where
                             let afters = elts[pos_idx..]
                                 .iter()
                                 .flat_map(|elt| iter::repeat(elt).take(elt.2 as usize));
+                            debug_assert!(befores.clone().all(|(_, _, diff, _)| *diff < 0));
+                            debug_assert!(afters.clone().all(|(_, _, diff, _)| *diff > 0));
                             for pair in befores.zip_longest(afters) {
                                 let (before, after) = match pair {
                                     itertools::EitherOrBoth::Both(before, after) => {

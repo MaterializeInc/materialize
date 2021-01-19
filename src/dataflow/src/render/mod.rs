@@ -728,6 +728,7 @@ where
         let collection = match sink.envelope {
             SinkEnvelope::Debezium => {
                 let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
+                // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
                 let rp = Rc::new(RefCell::new(RowPacker::new()));
                 let collection = combined.flat_map(move |(mut k, v)| {
                     let max_idx = v.len() - 1;
@@ -759,7 +760,6 @@ where
                         }
                         rp.push(Datum::Int64(i64::cast_from(diff)));
                         rp.extend_by_row(&v);
-                        // Add the unpacked timestamp so we can sort by them later.
                         let v = rp.finish_and_reuse();
                         ((k, Some(v)), time, 1)
                     }
