@@ -646,7 +646,7 @@ impl Catalog {
 
                 Builtin::Func(func) => {
                     let oid = catalog.allocate_oid()?;
-                    let _ = catalog.insert_item(
+                    events.push(catalog.insert_item(
                         func.id,
                         oid,
                         name.clone(),
@@ -654,7 +654,7 @@ impl Catalog {
                             plan_cx: PlanContext::default(),
                             inner: func.inner,
                         }),
-                    );
+                    ));
                 }
 
                 _ => (),
@@ -890,6 +890,11 @@ impl Catalog {
     }
 
     pub fn get_by_id(&self, id: &GlobalId) -> &CatalogEntry {
+        &self.by_id[id]
+    }
+
+    pub fn get_by_oid(&self, oid: &u32) -> &CatalogEntry {
+        let id = &self.by_oid[oid];
         &self.by_id[id]
     }
 
