@@ -712,8 +712,21 @@ pub fn plan_create_view(
     } else {
         scx.allocate_name(normalize::object_name(name.to_owned())?)
     };
+    let (mut relation_expr, mut desc, finishing) =
+        query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
+    relation_expr.bind_parameters(&params)?;
+    //TODO: materialize#724 - persist finishing information with the view?
+    relation_expr.finish(finishing);
+    let relation_expr = relation_expr.decorrelate();
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
+            if relation_expr.global_uses().contains(&item.id()) {
+                bail!(
+                    "cannot replace {0}view {1}: depended upon by new {1} definition",
+                    if *materialized { "materialized " } else { "" },
+                    item.name()
+                );
+            }
             let cascade = false;
             plan_drop_item(scx, ObjectType::View, item, cascade)?
         } else {
@@ -722,12 +735,6 @@ pub fn plan_create_view(
     } else {
         None
     };
-    let (mut relation_expr, mut desc, finishing) =
-        query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
-    relation_expr.bind_parameters(&params)?;
-    //TODO: materialize#724 - persist finishing information with the view?
-    relation_expr.finish(finishing);
-    let relation_expr = relation_expr.decorrelate();
     desc = plan_utils::maybe_rename_columns(format!("view {}", name), desc, columns)?;
     let temporary = *temporary;
     let materialize = *materialized; // Normalize for `raw_sql` below.
