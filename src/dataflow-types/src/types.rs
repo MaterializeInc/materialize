@@ -32,6 +32,7 @@ use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use kafka_util::KafkaAddrs;
 use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType, Timestamp};
+use uuid::Uuid;
 
 /// The response from a `Peek`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -620,6 +621,7 @@ pub struct KafkaSourceConnector {
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
     pub enable_caching: bool,
+    pub cluster_id: Uuid,
     // This field gets set after the initial construction of this struct, so this is None if it has
     // not yet been set.
     pub cached_files: Option<Vec<PathBuf>>,
