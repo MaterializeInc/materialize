@@ -13,3 +13,12 @@
 > CREATE TABLE t2 (f2 INTEGER)
 > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM t1, t2
 > DROP TABLE t1, t2 CASCADE
+
+# Test CREATE OR REPLACE statement that attempts to depend
+# on the object that is being replaced
+# https://github.com/MaterializeInc/materialize/issues/5272
+> CREATE VIEW v2 AS SELECT 1
+! CREATE OR REPLACE VIEW v2 AS SELECT * FROM v2
+cannot replace view materialize.public.v2: depended upon by new materialize.public.v2 definition
+! CREATE OR REPLACE MATERIALIZED VIEW v2 AS SELECT * FROM v2
+cannot replace view materialize.public.v2: depended upon by new materialize.public.v2 definition
