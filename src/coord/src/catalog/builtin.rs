@@ -1024,27 +1024,35 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
-    CASE
-        WHEN EXISTS (SELECT 1 FROM mz_catalog.mz_array_types WHERE type_id = mz_types.id) THEN 'a'
-        WHEN EXISTS (SELECT 1 FROM mz_catalog.mz_base_types WHERE type_id = mz_types.id) THEN 'b'
-        WHEN EXISTS (SELECT 1 FROM mz_catalog.mz_map_types WHERE type_id = mz_types.id) THEN 'm'
-    END AS typtype,
+    typtype,
     0::pg_catalog.oid AS typrelid,
     NULL::pg_catalog.oid AS typelem,
-    coalesce(
+    COALESCE(
         (
-            SELECT t.oid
-            FROM mz_catalog.mz_array_types a
-            JOIN mz_catalog.mz_types t ON a.type_id = t.id
-            WHERE a.element_id = mz_types.id
+            SELECT
+                t.oid
+            FROM
+                mz_catalog.mz_array_types AS a
+                JOIN mz_catalog.mz_types AS t ON a.type_id = t.id
+            WHERE
+                a.element_id = mz_types.id
         ),
         0
-    ) AS typarray,
+    )
+        AS typarray,
     NULL::pg_catalog.oid AS typreceive,
     false::pg_catalog.bool AS typnotnull,
     0::pg_catalog.oid AS typbasetype
-FROM mz_catalog.mz_types
-JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id",
+FROM
+    mz_catalog.mz_types
+    JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id
+    JOIN (
+            SELECT type_id, 'a' AS typtype FROM mz_catalog.mz_array_types
+            UNION ALL SELECT type_id, 'b' FROM mz_catalog.mz_base_types
+            UNION ALL SELECT type_id, 'l' FROM mz_catalog.mz_list_types
+            UNION ALL SELECT type_id, 'm' FROM mz_catalog.mz_map_types
+        )
+            AS t ON mz_types.id = t.type_id",
     id: GlobalId::System(4021),
     needs_logs: false,
 };
