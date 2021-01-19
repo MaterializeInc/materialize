@@ -90,6 +90,9 @@ Wrap your release notes at the 80 character mark.
 
   **Backwards-incompatible change**
 
+- Fix a bug that would cause `DROP` statements targeting multiple objects to fail
+  when those objects had dependent objects in common {{% gh 5316 %}}.
+
 {{% version-header v0.6.0 %}}
 
 - Support specifying default values for table columns via the new
