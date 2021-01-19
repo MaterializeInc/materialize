@@ -1300,14 +1300,19 @@ lazy_static! {
                 }))
             },
             "jsonb_build_object" => Scalar {
-                params!((Any, Any)...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
-                    func: VariadicFunc::JsonbBuildObject,
-                    exprs: exprs.into_iter().tuples().map(|(key, val)| {
-                        let key = typeconv::to_string(ecx, key);
-                        let val = typeconv::to_jsonb(ecx, val);
-                        vec![key, val]
-                    }).flatten().collect(),
-                }))
+                params!((Any)...) => Operation::variadic(|ecx, exprs| {
+                    if exprs.len() % 2 != 0 {
+                        bail!("argument list must have even number of elements")
+                    }
+                    Ok(ScalarExpr::CallVariadic {
+                        func: VariadicFunc::JsonbBuildObject,
+                        exprs: exprs.into_iter().tuples().map(|(key, val)| {
+                            let key = typeconv::to_string(ecx, key);
+                            let val = typeconv::to_jsonb(ecx, val);
+                            vec![key, val]
+                        }).flatten().collect(),
+                    })
+                })
             },
             "jsonb_pretty" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbPretty
