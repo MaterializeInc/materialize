@@ -287,6 +287,24 @@ pub struct FuncImpl<R> {
     op: Operation<R>,
 }
 
+/// Describes how each implementation should be represented in the catalog.
+#[derive(Debug)]
+pub struct FuncImplCatalogDetails {
+    pub oid: u32,
+    pub arg_oids: Vec<u32>,
+    pub variadic_oid: Option<u32>,
+}
+
+impl<R> FuncImpl<R> {
+    fn details(&self) -> FuncImplCatalogDetails {
+        FuncImplCatalogDetails {
+            oid: self.oid,
+            arg_oids: self.params.arg_oids(),
+            variadic_oid: self.params.variadic_oid(),
+        }
+    }
+}
+
 impl<R> fmt::Debug for FuncImpl<R> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("FuncImpl")
@@ -652,6 +670,22 @@ impl ParamList {
     fn exact_match(&self, types: &[&ScalarType]) -> bool {
         types.iter().enumerate().all(|(i, t)| self[i] == **t)
     }
+
+    /// Generates values underlying data for for `mz_catalog.mz_functions.arg_ids`.
+    fn arg_oids(&self) -> Vec<u32> {
+        match self {
+            ParamList::Exact(p) => p.iter().map(|p| p.oid()).collect::<Vec<_>>(),
+            ParamList::Variadic(p) => vec![p.oid()],
+        }
+    }
+
+    /// Generates values for `mz_catalog.mz_functions.variadic_id`.
+    fn variadic_oid(&self) -> Option<u32> {
+        match self {
+            ParamList::Exact(_) => None,
+            ParamList::Variadic(p) => Some(p.oid()),
+        }
+    }
 }
 
 impl std::ops::Index<usize> for ParamList {
@@ -749,6 +783,29 @@ impl ParamType {
         match self {
             ArrayAny | ListAny | MapAny | ListElementAny | NonVecAny => true,
             Any | DecimalAny | Plain(_) => false,
+        }
+    }
+
+    fn oid(&self) -> u32 {
+        match self {
+            ParamType::Plain(t) => match t {
+                ScalarType::List { custom_oid, .. } | ScalarType::Map { custom_oid, .. }
+                    if custom_oid.is_some() =>
+                {
+                    custom_oid.unwrap()
+                }
+                t => {
+                    let t: pgrepr::Type = t.into();
+                    t.oid()
+                }
+            },
+            ParamType::Any => postgres_types::Type::ANY.oid(),
+            ParamType::ArrayAny => postgres_types::Type::ANYARRAY.oid(),
+            ParamType::DecimalAny => postgres_types::Type::NUMERIC.oid(),
+            ParamType::ListAny => pgrepr::LIST.oid(),
+            ParamType::ListElementAny => postgres_types::Type::ANYELEMENT.oid(),
+            ParamType::MapAny => pgrepr::MAP.oid(),
+            ParamType::NonVecAny => postgres_types::Type::ANYNONARRAY.oid(),
         }
     }
 }
@@ -1174,6 +1231,16 @@ pub enum Func {
     Scalar(Vec<FuncImpl<HirScalarExpr>>),
     Aggregate(Vec<FuncImpl<(HirScalarExpr, AggregateFunc)>>),
     Table(Vec<FuncImpl<TableFuncPlan>>),
+}
+
+impl Func {
+    pub fn func_impls(&self) -> Vec<FuncImplCatalogDetails> {
+        match self {
+            Func::Scalar(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+            Func::Aggregate(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+            Func::Table(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+        }
+    }
 }
 
 /// Functions using this macro should be transformed/planned away before

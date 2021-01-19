@@ -3841,6 +3841,7 @@ dependencies = [
  "ore",
  "parse_duration",
  "pgrepr",
+ "postgres-types",
  "rdkafka",
  "regex",
  "repr",

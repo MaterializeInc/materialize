@@ -721,6 +721,19 @@ lazy_static! {
             id: GlobalId::System(4039),
             index_id: GlobalId::System(4040),
     };
+    pub static ref MZ_FUNCTIONS: BuiltinTable = BuiltinTable {
+        name: "mz_functions",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("arg_ids", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
+            .with_column("variadic_id", ScalarType::String.nullable(true)),
+            id: GlobalId::System(4041),
+            index_id: GlobalId::System(4042),
+    };
 }
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
@@ -1225,6 +1238,7 @@ lazy_static! {
             Builtin::Table(&MZ_MAP_TYPES),
             Builtin::Table(&MZ_ROLES),
             Builtin::Table(&MZ_PSEUDO_TYPES),
+            Builtin::Table(&MZ_FUNCTIONS),
             Builtin::View(&MZ_RELATIONS),
             Builtin::View(&MZ_OBJECTS),
             Builtin::View(&MZ_CATALOG_NAMES),
