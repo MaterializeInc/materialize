@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.38"
 bytes = "1.0.1"
-datadriven = "0.4.0"
+datadriven = "0.5.0"
 fallible-iterator = "0.2.0"
 ore = { path = "../ore" }
 postgres = "0.19.0"
