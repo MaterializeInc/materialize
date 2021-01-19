@@ -23,7 +23,7 @@ rand = "0.8.2"
 rand_distr = "0.4.0"
 structopt = "0.3.21"
 test-util = { path = "../../test/test-util" }
-tokio = "1.0.0"
+tokio = "1.0.2"
 tokio-postgres = "0.7.0"
 uuid = { version = "0.8.2", features = ["v4"] }
 

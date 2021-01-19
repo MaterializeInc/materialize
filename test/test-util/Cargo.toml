@@ -13,5 +13,5 @@ log = "0.4.13"
 ore = { path = "../../src/ore" }
 rand = "0.8.2"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-tokio = "1.0.0"
+tokio = "1.0.2"
 tokio-postgres = "0.7.0"

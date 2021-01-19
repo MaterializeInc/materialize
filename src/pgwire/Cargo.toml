@@ -28,6 +28,6 @@ prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", de
 rand = "0.8.2"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
-tokio = "1.0.0"
+tokio = "1.0.2"
 tokio-openssl = "0.6.0"
 tokio-util = { version = "0.6.0", features = ["codec"] }
