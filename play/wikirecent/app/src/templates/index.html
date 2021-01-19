@@ -62,9 +62,10 @@
 
                 connection.onmessage = function(event) {
                         var data = JSON.parse(event.data);
+                        var insert_values = data.inserted.map(convert_to_subject);
                         var delete_values = data.deleted.map(convert_to_subject);
                         var changeSet = vega.changeset()
-                                .insert(data.inserted.map(convert_to_subject))
+                                .insert(insert_values)
                                 .remove(d => subject_in_array(d, delete_values));
 
                         chart.view.change('data', changeSet).resize().run();

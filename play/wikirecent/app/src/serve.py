@@ -110,14 +110,14 @@ class View:
         """Read rows from TAIL, converting them to updates and broadcasting to listeners.
 
         :Params:
-            - `tail`: An asynchronous cursor that is configured to read rows from a TAIL query.
+            - `cursor`: A psycopg3 cursor that is configured to read rows from a TAIL query.
         """
         inserted = []
         deleted = []
-        while 1:
+        while True:
             await cursor.execute(f"FETCH ALL cur")
             async for (timestamp, progressed, diff, *columns) in cursor:
-                # This row serves as a synchronization primitive indicating that all
+                # The progressed column serves as a synchronization primitive indicating that all
                 # rows for an update have been read. We should publish this update.
                 if progressed:
                     self.update(deleted, inserted, timestamp)
@@ -132,7 +132,9 @@ class View:
                 elif diff > 0:
                     inserted.extend([columns] * diff)
                 else:
-                    raise ValueError(f"Bad data from TAIL: {row.strip()}")
+                    raise ValueError(
+                        f"Bad data in TAIL: {timestamp}, {progressed}, {diff}, {columns}"
+                    )
 
     def update(self, deleted, inserted, timestamp):
         """Update our internal view based on this diff and broadcast the update to listeners.
@@ -140,6 +142,7 @@ class View:
         :Params:
             - `deleted`: The list of rows that need to be removed.
             - `inserted`: The list of rows that need to be added.
+            - `timestamp`: The materialize internal timestamp for this view.
         """
         self.current_timestamp = int(timestamp)
 
@@ -155,7 +158,7 @@ class View:
             payload = {
                 "deleted": deleted,
                 "inserted": inserted,
-                "timestamp": int(timestamp),
+                "timestamp": self.current_timestamp,
             }
             self.broadcast(payload)
 
