@@ -32,4 +32,4 @@ uuid = "0.8.2"
 
 [dev-dependencies]
 criterion = "0.3.0"
-rand = "0.8.0"
+rand = "0.8.2"
