@@ -2394,9 +2394,7 @@ impl Encoder {
                                 nullable: false,
                             },
                         )],
-                        custom_oid: Some(
-                            custom_types_info.new_named("transaction".to_string()),
-                        ),
+                        custom_oid: Some(custom_types_info.new_named("transaction".to_string())),
                     },
                 },
             ));
