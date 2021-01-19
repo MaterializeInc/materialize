@@ -3265,7 +3265,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "base64",
@@ -3289,7 +3289,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3306,7 +3306,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kinesis"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3319,7 +3319,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3331,18 +3331,19 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "digest",
  "futures",
  "hex",
  "hmac",
  "http",
  "hyper",
  "log",
- "md5",
+ "md-5",
  "percent-encoding",
  "pin-project-lite",
  "rusoto_credential",
@@ -3355,7 +3356,7 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "bytes",
