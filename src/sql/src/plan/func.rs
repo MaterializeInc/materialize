@@ -331,7 +331,7 @@ impl From<AggregateFunc> for Operation<(ScalarExpr, AggregateFunc)> {
 /// Note that this is not exhaustive and will likely require additions.
 pub enum ParamList {
     Exact(Vec<ParamType>),
-    Repeat(Vec<ParamType>),
+    Variadic(ParamType),
 }
 
 impl ParamList {
@@ -363,16 +363,16 @@ impl ParamList {
     fn validate_arg_len(&self, input_len: usize) -> bool {
         match self {
             Self::Exact(p) => p.len() == input_len,
-            Self::Repeat(p) => input_len % p.len() == 0,
+            Self::Variadic(_) => true,
         }
     }
 
     /// Reports whether the parameter list contains any polymorphic parameters.
     fn has_polymorphic(&self) -> bool {
-        let p = match self {
-            ParamList::Exact(p) | ParamList::Repeat(p) => p,
-        };
-        p.iter().any(|p| p.is_polymorphic())
+        match self {
+            ParamList::Exact(p) => p.iter().any(|p| p.is_polymorphic()),
+            ParamList::Variadic(p) => p.is_polymorphic(),
+        }
     }
 
     /// Enforces polymorphic type consistency by finding the concrete type that
@@ -653,7 +653,7 @@ impl std::ops::Index<usize> for ParamList {
     fn index(&self, i: usize) -> &Self::Output {
         match self {
             Self::Exact(p) => &p[i],
-            Self::Repeat(p) => &p[i % p.len()],
+            Self::Variadic(p) => &p,
         }
     }
 }
@@ -1127,7 +1127,7 @@ fn coerce_args_to_types(
 
 /// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
 macro_rules! params {
-    (($($p:expr),*)...) => { ParamList::Repeat(vec![$($p.into(),)*]) };
+    (($p:expr)...) => { ParamList::Variadic($p.into())};
     ($($p:expr),*)      => { ParamList::Exact(vec![$($p.into(),)*]) };
 }
 
