@@ -1039,14 +1039,6 @@ pub fn plan_create_sink(
         SinkEnvelope::Tail { .. } => {
             unreachable!("SinkEnvelope::Tail is only used when creating tails, not sinks")
         }
-<<<<<<< HEAD
-        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
-        Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
-        Connector::S3 { .. } => unsupported!("S3 sinks"),
-||||||| constructed merge base
-        Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
-        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
-=======
     };
 
     let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
@@ -1066,7 +1058,7 @@ pub fn plan_create_sink(
         Connector::AvroOcf { path } => {
             avro_ocf_sink_builder(format, path, suffix, value_desc, custom_types_info)?
         }
->>>>>>> Refactor sinks to make them "dumber"; enable upsert sinks
+        Connector::S3 { .. } => unsupported!("S3 sinks"),
     };
 
     if !with_options.is_empty() {
