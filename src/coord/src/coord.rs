@@ -51,6 +51,7 @@ use expr::{
 };
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
+use repr::adt::array::ArrayDimension;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
@@ -70,11 +71,13 @@ use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{
     BUILTINS, MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES,
-    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES,
-    MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS,
-    MZ_VIEW_KEYS,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PROCS,
+    MZ_PSEUDO_TYPES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type, TypeInner};
+use crate::catalog::{
+    self, Catalog, CatalogItem, Func, Index, SinkConnectorState, Type, TypeInner,
+};
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
@@ -1375,6 +1378,50 @@ where
             )),
         )
         .await
+    }
+
+    async fn report_func_update(
+        &mut self,
+        id: GlobalId,
+        schema_id: i64,
+        name: &str,
+        func: &Func,
+        diff: isize,
+    ) {
+        for func_impl in func.inner.func_impls() {
+            let arg_oids = func_impl.arg_oids();
+            let mut packer = RowPacker::new();
+            packer
+                .push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: arg_oids.len(),
+                    }],
+                    arg_oids
+                        .iter()
+                        .map(|oid| Datum::Int32(*oid as i32))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            let row = packer.finish();
+            let arg_types_oid = row.unpack_first();
+
+            self.update_catalog_view(
+                MZ_PROCS.id,
+                iter::once((
+                    Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::Int32(func_impl.oid() as i32),
+                        Datum::Int64(schema_id),
+                        Datum::String(name),
+                        arg_types_oid,
+                        Datum::Int32(func_impl.variadic_oid() as i32),
+                    ]),
+                    diff,
+                )),
+            )
+            .await;
+        }
     }
 
     async fn sequence_plan(
@@ -2714,7 +2761,10 @@ where
                             self.report_type_update(*id, *oid, *schema_id, &name.item, ty, 1)
                                 .await;
                         }
-                        CatalogItem::Func(_) => unreachable!("funcs do not yet generate events"),
+                        CatalogItem::Func(func) => {
+                            self.report_func_update(*id, *schema_id, &name.item, func, 1)
+                                .await;
+                        }
                     }
                 }
                 catalog::Event::UpdatedItem {

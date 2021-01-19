@@ -161,6 +161,19 @@ Field       | Type       | Meaning
 `name`      | [`text`]   | The name of the object.
 `type`      | [`text`]   | The type of the object: either `table`, `source`, `view`, `sink`, or `index`.
 
+### `mz_procs`
+
+The `mz_procs` table contains a row for each process/function in the system.
+
+Field          | Type       | Meaning
+---------------|------------|--------
+`id`           | [`text`]   | Materialize's unique ID for the type.
+`oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the index.
+`schema_id`    | [`bigint`] | The ID of the schema to which the function belongs.
+`name`         | [`text`]   | The name of the function.
+`arg_types_oid` | [`_oid`]    | An array of [PostgreSQL-compatible OIDs][oid] representing the function's arguments' types.
+`variadic_oid` | [`oid`]    | A [PostgreSQL-compatible OID][oid] of the variadic array parameter's elements, or `0` if the function does not have a variadic parameter.
+
 ### `mz_pseudo_types`
 
 The `mz_pseudo_types` table contains a row for each psuedo type in the system.
@@ -280,3 +293,4 @@ Materialize with minor changes to the `pg_catalog` compatibility shim.
 [`text`]: /sql/types/text
 [gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [oid]: /sql/types/oid
+[`_oid`]: /sql/types/array

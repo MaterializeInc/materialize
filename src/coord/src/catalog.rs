@@ -632,7 +632,7 @@ impl Catalog {
 
                 Builtin::Func(func) => {
                     let oid = catalog.allocate_oid()?;
-                    let _ = catalog.insert_item(
+                    events.push(catalog.insert_item(
                         func.id,
                         oid,
                         name.clone(),
@@ -640,7 +640,7 @@ impl Catalog {
                             plan_cx: PlanContext::default(),
                             inner: func.inner,
                         }),
-                    );
+                    ));
                 }
 
                 _ => (),

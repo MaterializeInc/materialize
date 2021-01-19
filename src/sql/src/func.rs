@@ -287,6 +287,24 @@ pub struct FuncImpl<R> {
     op: Operation<R>,
 }
 
+pub trait FuncImplCatalogDetails {
+    fn oid(&self) -> u32;
+    fn arg_oids(&self) -> Vec<u32>;
+    fn variadic_oid(&self) -> u32;
+}
+
+impl<R> FuncImplCatalogDetails for &FuncImpl<R> {
+    fn oid(&self) -> u32 {
+        self.oid
+    }
+    fn arg_oids(&self) -> Vec<u32> {
+        self.params.arg_oids()
+    }
+    fn variadic_oid(&self) -> u32 {
+        self.params.variadic_oid()
+    }
+}
+
 impl<R> fmt::Debug for FuncImpl<R> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("FuncImpl")
@@ -652,6 +670,22 @@ impl ParamList {
     fn exact_match(&self, types: &[&ScalarType]) -> bool {
         types.iter().enumerate().all(|(i, t)| self[i] == **t)
     }
+
+    /// Generates values for `mz_catalog.mz_procs.arg_types_oid`.
+    fn arg_oids(&self) -> Vec<u32> {
+        match self {
+            ParamList::Exact(p) => p.iter().map(|p| p.oid()).collect::<Vec<_>>(),
+            ParamList::Variadic(p) => vec![p.oid()],
+        }
+    }
+
+    /// Generates values for `mz_catalog.mz_procs.variadic_oid`.
+    fn variadic_oid(&self) -> u32 {
+        match self {
+            ParamList::Exact(_) => 0,
+            ParamList::Variadic(p) => p.oid(),
+        }
+    }
 }
 
 impl std::ops::Index<usize> for ParamList {
@@ -749,6 +783,22 @@ impl ParamType {
         match self {
             ArrayAny | ListAny | MapAny | ListElementAny | NonVecAny => true,
             Any | DecimalAny | Plain(_) => false,
+        }
+    }
+
+    fn oid(&self) -> u32 {
+        match self {
+            ParamType::Plain(t) => {
+                let t: pgrepr::Type = t.into();
+                t.oid()
+            }
+            ParamType::Any => postgres_types::Type::ANY.oid(),
+            ParamType::ArrayAny => postgres_types::Type::ANYARRAY.oid(),
+            ParamType::DecimalAny => postgres_types::Type::NUMERIC.oid(),
+            ParamType::ListAny => pgrepr::LIST.oid(),
+            ParamType::ListElementAny => postgres_types::Type::ANYELEMENT.oid(),
+            ParamType::MapAny => pgrepr::MAP.oid(),
+            ParamType::NonVecAny => postgres_types::Type::ANYNONARRAY.oid(),
         }
     }
 }
@@ -1174,6 +1224,25 @@ pub enum Func {
     Scalar(Vec<FuncImpl<ScalarExpr>>),
     Aggregate(Vec<FuncImpl<(ScalarExpr, AggregateFunc)>>),
     Table(Vec<FuncImpl<TableFuncPlan>>),
+}
+
+impl Func {
+    pub fn func_impls(&self) -> Vec<Box<dyn FuncImplCatalogDetails + '_>> {
+        match self {
+            Func::Scalar(impls) => impls
+                .iter()
+                .map(|f| Box::new(f) as Box<dyn FuncImplCatalogDetails>)
+                .collect::<Vec<_>>(),
+            Func::Aggregate(impls) => impls
+                .iter()
+                .map(|f| Box::new(f) as Box<dyn FuncImplCatalogDetails>)
+                .collect::<Vec<_>>(),
+            Func::Table(impls) => impls
+                .iter()
+                .map(|f| Box::new(f) as Box<dyn FuncImplCatalogDetails>)
+                .collect::<Vec<_>>(),
+        }
+    }
 }
 
 lazy_static! {
