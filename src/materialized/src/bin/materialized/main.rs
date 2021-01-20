@@ -214,16 +214,7 @@ fn run() -> Result<(), anyhow::Error> {
             None => match env::var("MZ_WORKERS") {
                 Ok(val) => val.parse()?,
                 Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_WORKERS"),
-                Err(VarError::NotPresent) => match env::var("MZ_THREADS") {
-                    Ok(val) => {
-                        warn!("MZ_THREADS is a deprecated alias for MZ_WORKERS");
-                        val.parse()?
-                    }
-                    Err(VarError::NotUnicode(_)) => {
-                        bail!("non-unicode character found in MZ_THREADS")
-                    }
-                    Err(VarError::NotPresent) => cmp::max(1, num_cpus::get_physical() / 2),
-                },
+                Err(VarError::NotPresent) => cmp::max(1, num_cpus::get_physical() / 2),
             },
         },
     };
