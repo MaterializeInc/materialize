@@ -380,7 +380,7 @@ impl MapFilterProject {
             // that we can reduce the row representation size and total computation.
             // Pushing down literals harms the former and does nothing for the latter.
             // In the future, we'll want to have a harder think about this trade-off, as
-            // we are certainly making sub-optimal decisions by pushing down all availble
+            // we are certainly making sub-optimal decisions by pushing down all available
             // work.
             // TODO(mcsherry): establish better principles about what work to push down.
             let is_available =

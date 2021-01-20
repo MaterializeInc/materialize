@@ -475,7 +475,7 @@ impl MyClosure {
         self.before.evaluate(datums, &temp_storage, row_packer)
     }
 
-    /// Construct an instance of the closue from available columns.
+    /// Construct an instance of the closure from available columns.
     ///
     /// This method updates the available columns, equivalences, and
     /// the `MapFilterProject` instance. The columns are updated to
