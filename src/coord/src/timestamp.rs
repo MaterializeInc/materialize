@@ -1090,8 +1090,16 @@ impl Timestamper {
         } else {
             FileReadStyle::ReadOnce
         };
+        let compression = fc.compression.clone();
         std::thread::spawn(move || {
-            read_file_task(PathBuf::from(timestamp_topic), tx, None, tail, ctor);
+            read_file_task(
+                PathBuf::from(timestamp_topic),
+                tx,
+                None,
+                tail,
+                compression,
+                ctor,
+            );
         });
 
         Some(ByoFileConnector { stream: rx })
@@ -1225,8 +1233,16 @@ impl Timestamper {
             FileReadStyle::ReadOnce
         };
         let (tx, rx) = std::sync::mpsc::sync_channel(10000 as usize);
+        let compression = fc.compression.clone();
         std::thread::spawn(move || {
-            read_file_task(PathBuf::from(timestamp_topic), tx, None, tail, ctor);
+            read_file_task(
+                PathBuf::from(timestamp_topic),
+                tx,
+                None,
+                tail,
+                compression,
+                ctor,
+            );
         });
 
         Some(ByoFileConnector { stream: rx })
