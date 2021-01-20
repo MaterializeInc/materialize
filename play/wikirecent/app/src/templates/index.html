@@ -31,7 +31,7 @@
 
         function setup_view(view_name) {
 
-            var histogram = {
+            var chart = {
                 $schema: 'https://vega.github.io/schema/vega-lite/v4.json',
                 mark: 'bar',
                 height: 400,
@@ -47,7 +47,7 @@
                 actions: false
             }
 
-            vegaEmbed('#' + view_name, histogram, config).then(function(chart) {
+            vegaEmbed('#' + view_name, chart, config).then(function(chart) {
 
                 var path = "ws://" + location.host + "{{reverse_url('api/stream', '')}}" + view_name;
                 var connection = new WebSocket(path);
