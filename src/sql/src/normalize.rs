@@ -211,6 +211,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             with_options: _,
             format: _,
             envelope: _,
+            compression: _,
             if_not_exists,
             materialized,
         }) => {

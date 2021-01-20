@@ -21,8 +21,8 @@ use globset::GlobBuilder;
 
 use aws_arn::{Resource, ARN};
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
-    DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
+    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Compression, Consistency,
+    CsvEncoding, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
     KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding,
     RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SourceConnector,
 };
@@ -210,6 +210,7 @@ pub fn plan_create_source(
         with_options,
         format,
         envelope,
+        compression,
         if_not_exists,
         materialized,
     } = &stmt;
@@ -318,6 +319,8 @@ pub fn plan_create_source(
         })
     };
 
+    // Convert from sql-parser Compression to dataflow-types Compression
+    let compression: Compression = compression.clone().into();
     let mut with_options = normalize::options(with_options);
 
     let mut consistency = Consistency::RealTime;
@@ -325,6 +328,10 @@ pub fn plan_create_source(
 
     let (external_connector, mut encoding) = match connector {
         Connector::Kafka { broker, topic, .. } => {
+            if compression != Compression::None {
+                bail!("only NONE compression supported in KAFKA connectors");
+            }
+
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
             consistency = match with_options.remove("consistency") {
@@ -387,6 +394,9 @@ pub fn plan_create_source(
             (connector, encoding)
         }
         Connector::Kinesis { arn, .. } => {
+            if compression != Compression::None {
+                bail!("only NONE compression supported in KINESIS connectors");
+            }
             let arn: ARN = match arn.parse() {
                 Ok(arn) => arn,
                 Err(e) => bail!("Unable to parse provided ARN: {:#?}", e),
@@ -453,12 +463,16 @@ pub fn plan_create_source(
 
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
+                compression,
                 tail,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
         }
         Connector::S3 { bucket, pattern } => {
+            if compression != Compression::None {
+                bail!("only NONE compression supported in S3 connectors");
+            }
             scx.require_experimental_mode("S3 Sources")?;
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
                 bucket: bucket.clone(),
@@ -492,6 +506,7 @@ pub fn plan_create_source(
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
+                compression,
                 tail,
             });
             if format.is_some() {

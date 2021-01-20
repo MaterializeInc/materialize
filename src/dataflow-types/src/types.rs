@@ -480,6 +480,12 @@ impl Envelope {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Compression {
+    Gzip,
+    None,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceConnector {
     External {
@@ -637,6 +643,7 @@ pub struct KinesisSourceConnector {
 pub struct FileSourceConnector {
     pub path: PathBuf,
     pub tail: bool,
+    pub compression: Compression,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

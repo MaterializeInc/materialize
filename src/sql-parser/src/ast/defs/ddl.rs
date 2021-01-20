@@ -215,6 +215,37 @@ impl AstDisplay for Format {
 impl_display!(Format);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Compression {
+    Gzip,
+    None,
+}
+
+impl Default for Compression {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl AstDisplay for Compression {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Self::Gzip => f.write_str("GZIP "),
+            Self::None => f.write_str("NONE "),
+        }
+    }
+}
+impl_display!(Compression);
+
+impl From<Compression> for dataflow_types::Compression {
+    fn from(c: Compression) -> Self {
+        match c {
+            Compression::Gzip => Self::Gzip,
+            Compression::None => Self::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Connector {
     File {
         path: String,

@@ -1503,6 +1503,17 @@ impl<'a> Parser<'a> {
         Ok(envelope)
     }
 
+    fn parse_compression(&mut self) -> Result<Compression, ParserError> {
+        let compression = if self.parse_keyword(NONE) {
+            Compression::None
+        } else if self.parse_keyword(GZIP) {
+            Compression::Gzip
+        } else {
+            return self.expected(self.peek_pos(), "NONE or GZIP", self.peek_token());
+        };
+        Ok(compression)
+    }
+
     fn parse_create_source(&mut self) -> Result<Statement, ParserError> {
         let materialized = self.parse_keyword(MATERIALIZED);
         self.expect_keyword(SOURCE)?;
@@ -1522,6 +1533,11 @@ impl<'a> Parser<'a> {
         } else {
             Default::default()
         };
+        let compression = if self.parse_keyword(COMPRESSION) {
+            self.parse_compression()?
+        } else {
+            Default::default()
+        };
 
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
@@ -1530,6 +1546,7 @@ impl<'a> Parser<'a> {
             with_options,
             format,
             envelope,
+            compression,
             if_not_exists,
             materialized,
         }))

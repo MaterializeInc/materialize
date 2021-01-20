@@ -20,7 +20,7 @@
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, ObjectName, Query,
+    ColumnDef, Compression, Connector, DataType, Envelope, Expr, Format, Ident, ObjectName, Query,
     TableConstraint, Value,
 };
 
@@ -349,6 +349,7 @@ pub struct CreateSourceStatement {
     pub with_options: Vec<SqlOption>,
     pub format: Option<Format>,
     pub envelope: Envelope,
+    pub compression: Compression,
     pub if_not_exists: bool,
     pub materialized: bool,
 }
@@ -384,6 +385,10 @@ impl AstDisplay for CreateSourceStatement {
         if self.envelope != Default::default() {
             f.write_str(" ENVELOPE ");
             f.write_node(&self.envelope);
+        }
+        if self.compression != Default::default() {
+            f.write_str(" COMPRESSION ");
+            f.write_node(&self.compression);
         }
     }
 }

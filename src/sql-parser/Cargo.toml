@@ -15,6 +15,7 @@ phf = { version = "0.8.0", features = ["unicase"] }
 repr = { path = "../repr" }
 stacker = "0.1.12"
 unicase = "2.4.0"
+dataflow-types = { path = "../dataflow-types" }
 
 [dev-dependencies]
 datadriven = "0.5.0"
