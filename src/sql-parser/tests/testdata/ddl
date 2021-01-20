@@ -330,7 +330,7 @@ CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING SCHEMA 'baz'
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING SCHEMA 'baz'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(Schema(Inline("baz")))), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(Schema(Inline("baz")))), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo
@@ -347,49 +347,49 @@ CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF MESSAGE
 ----
 CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF MESSAGE 'somemessage' USING SCHEMA FILE 'path'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Protobuf { message_name: "somemessage", schema: File("path") }), envelope: None, if_not_exists: false, materialized: true })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Protobuf { message_name: "somemessage", schema: File("path") }), envelope: None, if_not_exists: false, materialized: true })
 
 parse-statement
 CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' WITH (tail = true) FORMAT REGEX '(asdf)|(jkl)'
 ----
 CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' WITH (tail = true) FORMAT REGEX '(asdf)|(jkl)'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Some(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Some(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false })
 
 parse-statement
 CREATE SOURCE IF NOT EXISTS foo (one, two) FROM FILE 'bar' WITH (tail = true) FORMAT REGEX '(asdf)|(jkl)'
 ----
 CREATE SOURCE IF NOT EXISTS foo (one, two) FROM FILE 'bar' WITH (tail = true) FORMAT REGEX '(asdf)|(jkl)'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [Ident("one"), Ident("two")], connector: File { path: "bar" }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Some(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [Ident("one"), Ident("two")], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Some(Regex("(asdf)|(jkl)")), envelope: None, if_not_exists: true, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH HEADER
 ----
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH HEADER
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Some(Csv { header_row: true, n_cols: None, delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Some(Csv { header_row: true, n_cols: None, delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH 3 COLUMNS
 ----
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH 3 COLUMNS
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Some(Csv { header_row: false, n_cols: Some(3), delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Some(Csv { header_row: false, n_cols: Some(3), delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo (one, two) FROM FILE 'bar' FORMAT CSV WITH HEADER
 ----
 CREATE SOURCE foo (one, two) FROM FILE 'bar' FORMAT CSV WITH HEADER
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [Ident("one"), Ident("two")], connector: File { path: "bar" }, with_options: [], format: Some(Csv { header_row: true, n_cols: None, delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [Ident("one"), Ident("two")], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Csv { header_row: true, n_cols: None, delimiter: ',' }), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = true) FORMAT CSV WITH 3 COLUMNS DELIMITED BY '|'
 ----
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = true) FORMAT CSV WITH 3 COLUMNS DELIMITED BY '|'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Some(Csv { header_row: false, n_cols: Some(3), delimiter: '|' }), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Some(Csv { header_row: false, n_cols: Some(3), delimiter: '|' }), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
@@ -410,35 +410,35 @@ CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'h
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: Debezium, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: Debezium, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED VALUE SCHEMA 'blah'
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED VALUE SCHEMA 'blah'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: None, value_schema: "blah" }), with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: None, value_schema: "blah" }), with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED KEY SCHEMA 'a' VALUE SCHEMA 'b'
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED KEY SCHEMA 'a' VALUE SCHEMA 'b'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: Some("a"), value_schema: "b" }), with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: Some("a"), value_schema: "b" }), with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') ENVELOPE DEBEZIUM
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: Debezium, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: Debezium, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE UPSERT
@@ -466,7 +466,7 @@ CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' FORMAT BYTES
 ----
 CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Bytes), envelope: None, if_not_exists: true, materialized: false })
+CreateSource(CreateSourceStatement { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Bytes), envelope: None, if_not_exists: true, materialized: false })
 
 parse-statement
 CREATE SOURCE IF EXISTS foo FROM FILE 'bar' USING SCHEMA ''
@@ -480,14 +480,14 @@ CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' WITH SNAPSHOT FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES
@@ -522,42 +522,42 @@ CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES
 ----
 CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: true })
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: true })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF 123
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT AS OF 123
 =>
-CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: Some(Value(Number("123"))), if_not_exists: false })
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: Some(Value(Number("123"))), if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITHOUT SNAPSHOT AS OF 123
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITHOUT SNAPSHOT AS OF 123
 =>
-CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: false, as_of: Some(Value(Number("123"))), if_not_exists: false })
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: false, as_of: Some(Value(Number("123"))), if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF now()
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT AS OF now()
 =>
-CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })), if_not_exists: false })
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })), if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
