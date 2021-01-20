@@ -32,8 +32,8 @@ use ore::iter::IteratorExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
-    JoinOperator, Limit, ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator,
-    TableAlias, TableFactor, TableWithJoins, Value, Values,
+    JoinOperator, Limit, ObjectName, OrderByExpr, Query, Raw, Select, SelectItem, SetExpr,
+    SetOperator, TableAlias, TableFactor, TableWithJoins, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -68,7 +68,7 @@ use crate::plan::typeconv::{self, CastContext};
 /// applying the returned `RowSetFinishing`.
 pub fn plan_root_query(
     scx: &StatementContext,
-    mut query: Query,
+    mut query: Query<Raw>,
     lifetime: QueryLifetime,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
     transform_ast::transform_query(scx, &mut query)?;
@@ -130,7 +130,7 @@ pub fn plan_insert_query(
     scx: &StatementContext,
     table_name: ObjectName,
     columns: Vec<Ident>,
-    source: InsertSource,
+    source: InsertSource<Raw>,
 ) -> Result<(GlobalId, RelationExpr), anyhow::Error> {
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let table = scx.resolve_item(table_name)?;
@@ -332,7 +332,7 @@ where
 /// Evaluates an expression in the AS OF position of a TAIL statement.
 pub fn eval_as_of<'a>(
     scx: &'a StatementContext,
-    mut expr: Expr,
+    mut expr: Expr<Raw>,
 ) -> Result<Timestamp, anyhow::Error> {
     let scope = Scope::from_source(
         None,
@@ -375,7 +375,7 @@ pub fn eval_as_of<'a>(
 
 pub fn plan_default_expr(
     scx: &StatementContext,
-    expr: &Expr,
+    expr: &Expr<Raw>,
     target_ty: &ScalarType,
 ) -> Result<ScalarExpr, anyhow::Error> {
     let qcx = &QueryContext::root(scx, QueryLifetime::OneShot);
@@ -393,7 +393,7 @@ pub fn plan_default_expr(
 pub fn plan_index_exprs<'a>(
     scx: &'a StatementContext,
     on_desc: &RelationDesc,
-    exprs: Vec<Expr>,
+    exprs: Vec<Expr<Raw>>,
 ) -> Result<Vec<::expr::ScalarExpr>, anyhow::Error> {
     let scope = Scope::from_source(None, on_desc.iter_names(), Some(Scope::empty(None)));
     let qcx = &QueryContext::root(scx, QueryLifetime::Static);
@@ -414,14 +414,14 @@ pub fn plan_index_exprs<'a>(
     Ok(out)
 }
 
-fn plan_expr_or_col_index(ecx: &ExprContext, e: &Expr) -> Result<ScalarExpr, anyhow::Error> {
+fn plan_expr_or_col_index(ecx: &ExprContext, e: &Expr<Raw>) -> Result<ScalarExpr, anyhow::Error> {
     match check_col_index(&ecx.name, e, ecx.relation_type.column_types.len())? {
         Some(column) => Ok(ScalarExpr::Column(ColumnRef { level: 0, column })),
         _ => plan_expr(ecx, e)?.type_as_any(ecx),
     }
 }
 
-fn check_col_index(name: &str, e: &Expr, max: usize) -> Result<Option<usize>, anyhow::Error> {
+fn check_col_index(name: &str, e: &Expr<Raw>, max: usize) -> Result<Option<usize>, anyhow::Error> {
     match e {
         Expr::Value(Value::Number(n)) => {
             let n = n
@@ -443,7 +443,7 @@ fn check_col_index(name: &str, e: &Expr, max: usize) -> Result<Option<usize>, an
 
 fn plan_query(
     qcx: &mut QueryContext,
-    q: &Query,
+    q: &Query<Raw>,
 ) -> Result<(RelationExpr, Scope, RowSetFinishing), anyhow::Error> {
     // Retain the old values of various CTE names so that we can restore them after we're done
     // planning this SELECT.
@@ -548,7 +548,7 @@ fn plan_query(
 
 fn plan_subquery(
     qcx: &mut QueryContext,
-    q: &Query,
+    q: &Query<Raw>,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let (mut expr, scope, finishing) = plan_query(qcx, q)?;
     if finishing.limit.is_some() || finishing.offset > 0 {
@@ -565,7 +565,7 @@ fn plan_subquery(
 
 fn plan_set_expr(
     qcx: &mut QueryContext,
-    q: &SetExpr,
+    q: &SetExpr<Raw>,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match q {
         SetExpr::Select(select) => {
@@ -660,7 +660,7 @@ fn plan_set_expr(
 
 fn plan_values(
     qcx: &QueryContext,
-    values: &[Vec<Expr>],
+    values: &[Vec<Expr<Raw>>],
     type_hints: Option<Vec<&ScalarType>>,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     ensure!(
@@ -776,8 +776,8 @@ struct SelectPlan {
 /// former class, see `plan_view_select`.
 fn plan_view_select(
     qcx: &QueryContext,
-    s: &Select,
-    order_by_exprs: &[OrderByExpr],
+    s: &Select<Raw>,
+    order_by_exprs: &[OrderByExpr<Raw>],
 ) -> Result<SelectPlan, anyhow::Error> {
     let Select {
         distinct,
@@ -1144,9 +1144,9 @@ fn plan_view_select(
 /// details.
 fn plan_group_by_expr<'a>(
     ecx: &ExprContext,
-    group_expr: &'a Expr,
+    group_expr: &'a Expr<Raw>,
     projection: &'a [(ExpandedSelectItem, Option<ColumnName>)],
-) -> Result<(Option<&'a Expr>, ScalarExpr), anyhow::Error> {
+) -> Result<(Option<&'a Expr<Raw>>, ScalarExpr), anyhow::Error> {
     let plan_projection = |column: usize| match &projection[column].0 {
         ExpandedSelectItem::InputOrdinal(column) => Ok((
             None,
@@ -1201,7 +1201,7 @@ fn plan_group_by_expr<'a>(
 /// Plans a slice of `ORDER BY` expressions.
 fn plan_order_by_exprs(
     ecx: &ExprContext,
-    order_by_exprs: &[OrderByExpr],
+    order_by_exprs: &[OrderByExpr<Raw>],
 ) -> Result<(Vec<ColumnOrder>, Vec<ScalarExpr>), anyhow::Error> {
     let project_key: Vec<_> = (0..ecx.scope.len()).collect();
     plan_projected_order_by_exprs(ecx, order_by_exprs, &project_key)
@@ -1211,7 +1211,7 @@ fn plan_order_by_exprs(
 /// projected via `project_key` rather than being accepted directly.
 fn plan_projected_order_by_exprs(
     ecx: &ExprContext,
-    order_by_exprs: &[OrderByExpr],
+    order_by_exprs: &[OrderByExpr<Raw>],
     project_key: &[usize],
 ) -> Result<(Vec<ColumnOrder>, Vec<ScalarExpr>), anyhow::Error> {
     let mut order_by = vec![];
@@ -1242,7 +1242,7 @@ fn plan_projected_order_by_exprs(
 /// directly.
 fn plan_order_by_or_distinct_expr(
     ecx: &ExprContext,
-    expr: &Expr,
+    expr: &Expr<Raw>,
     project_key: &[usize],
 ) -> Result<ScalarExpr, anyhow::Error> {
     match check_col_index(&ecx.name, expr, project_key.len())? {
@@ -1258,8 +1258,8 @@ fn plan_table_with_joins<'a>(
     qcx: &QueryContext,
     left: RelationExpr,
     left_scope: Scope,
-    join_operator: &JoinOperator,
-    table_with_joins: &'a TableWithJoins,
+    join_operator: &JoinOperator<Raw>,
+    table_with_joins: &'a TableWithJoins<Raw>,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let (mut left, mut left_scope) = plan_table_factor(
         qcx,
@@ -1281,8 +1281,8 @@ fn plan_table_factor(
     left_qcx: &QueryContext,
     left: RelationExpr,
     left_scope: Scope,
-    join_operator: &JoinOperator,
-    table_factor: &TableFactor,
+    join_operator: &JoinOperator<Raw>,
+    table_factor: &TableFactor<Raw>,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let lateral = matches!(
         table_factor,
@@ -1355,7 +1355,7 @@ fn plan_table_function(
     ecx: &ExprContext,
     name: &ObjectName,
     alias: Option<&TableAlias>,
-    args: &FunctionArgs,
+    args: &FunctionArgs<Raw>,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let name = normalize::object_name(name.clone())?;
 
@@ -1448,7 +1448,7 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
     Ok(scope)
 }
 
-fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
+fn invent_column_name(ecx: &ExprContext, expr: &Expr<Raw>) -> Option<ScopeItemName> {
     let name = match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
         Expr::Function(func) => {
@@ -1487,12 +1487,12 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
 
 enum ExpandedSelectItem<'a> {
     InputOrdinal(usize),
-    Expr(Cow<'a, Expr>),
+    Expr(Cow<'a, Expr<Raw>>),
 }
 
 fn expand_select_item<'a>(
     ecx: &ExprContext,
-    s: &'a SelectItem,
+    s: &'a SelectItem<Raw>,
 ) -> Result<Vec<(ExpandedSelectItem<'a>, Option<ColumnName>)>, anyhow::Error> {
     match s {
         SelectItem::Expr {
@@ -1567,7 +1567,7 @@ fn expand_select_item<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn plan_join_operator(
-    operator: &JoinOperator,
+    operator: &JoinOperator<Raw>,
     left_qcx: &QueryContext,
     left: RelationExpr,
     left_scope: Scope,
@@ -1653,7 +1653,7 @@ fn plan_join_operator(
 
 #[allow(clippy::too_many_arguments)]
 fn plan_join_constraint<'a>(
-    constraint: &'a JoinConstraint,
+    constraint: &'a JoinConstraint<Raw>,
     left_qcx: &QueryContext,
     left: RelationExpr,
     left_scope: Scope,
@@ -1864,7 +1864,10 @@ fn plan_using_constraint(
     Ok((both, both_scope))
 }
 
-pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarExpr, anyhow::Error> {
+pub fn plan_expr<'a>(
+    ecx: &'a ExprContext,
+    e: &Expr<Raw>,
+) -> Result<CoercibleScalarExpr, anyhow::Error> {
     if let Some(i) = ecx.scope.resolve_expr(e) {
         // We've already calculated this expression.
         return Ok(ScalarExpr::Column(i).into());
@@ -2118,7 +2121,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
 /// error instead.
 fn plan_exprs<E>(ecx: &ExprContext, exprs: &[E]) -> Result<Vec<CoercibleScalarExpr>, anyhow::Error>
 where
-    E: std::borrow::Borrow<Expr>,
+    E: std::borrow::Borrow<Expr<Raw>>,
 {
     let mut out = vec![];
     for expr in exprs {
@@ -2129,7 +2132,7 @@ where
 
 fn plan_array(
     ecx: &ExprContext,
-    exprs: &[Expr],
+    exprs: &[Expr<Raw>],
     type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     ecx.qcx.scx.require_experimental_mode("ARRAY")?;
@@ -2165,7 +2168,7 @@ fn plan_array(
 
 fn plan_list(
     ecx: &ExprContext,
-    exprs: &[Expr],
+    exprs: &[Expr<Raw>],
     type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (elem_type, exprs) = if exprs.is_empty() {
@@ -2241,7 +2244,10 @@ pub fn coerce_homogeneous_exprs(
     Ok(out)
 }
 
-fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExpr, anyhow::Error> {
+fn plan_aggregate(
+    ecx: &ExprContext,
+    sql_func: &Function<Raw>,
+) -> Result<AggregateExpr, anyhow::Error> {
     let name = normalize::object_name(sql_func.name.clone())?;
     let impls = match func::resolve_func(&ecx.qcx.scx, &name)? {
         Func::Aggregate(impls) => impls,
@@ -2374,8 +2380,8 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, Pla
 fn plan_op(
     ecx: &ExprContext,
     op: &str,
-    expr1: &Expr,
-    expr2: Option<&Expr>,
+    expr1: &Expr<Raw>,
+    expr2: Option<&Expr<Raw>>,
 ) -> Result<ScalarExpr, anyhow::Error> {
     let impls = func::resolve_op(op)?;
     let args = match expr2 {
@@ -2387,7 +2393,7 @@ fn plan_op(
 
 fn plan_function<'a>(
     ecx: &ExprContext,
-    sql_func: &'a Function,
+    sql_func: &'a Function<Raw>,
 ) -> Result<ScalarExpr, anyhow::Error> {
     let name = normalize::object_name(sql_func.name.clone())?;
     let impls = match func::resolve_func(&ecx.qcx.scx, &name)? {
@@ -2429,7 +2435,7 @@ fn plan_function<'a>(
 
 fn plan_is_null_expr<'a>(
     ecx: &ExprContext,
-    inner: &'a Expr,
+    inner: &'a Expr<Raw>,
     not: bool,
 ) -> Result<ScalarExpr, anyhow::Error> {
     // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
@@ -2452,10 +2458,10 @@ fn plan_is_null_expr<'a>(
 
 fn plan_case<'a>(
     ecx: &ExprContext,
-    operand: &'a Option<Box<Expr>>,
-    conditions: &'a [Expr],
-    results: &'a [Expr],
-    else_result: &'a Option<Box<Expr>>,
+    operand: &'a Option<Box<Expr<Raw>>>,
+    conditions: &'a [Expr<Raw>],
+    results: &'a [Expr<Raw>],
+    else_result: &'a Option<Box<Expr<Raw>>>,
 ) -> Result<ScalarExpr, anyhow::Error> {
     let mut cond_exprs = Vec::new();
     let mut result_exprs = Vec::new();
@@ -2726,7 +2732,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
 /// See the explanation of aggregate handling at the top of the file for more details.
 struct AggregateFuncVisitor<'a, 'ast> {
     scx: &'a StatementContext<'a>,
-    aggs: Vec<&'ast Function>,
+    aggs: Vec<&'ast Function<Raw>>,
     within_aggregate: bool,
     err: Option<anyhow::Error>,
 }
@@ -2741,7 +2747,7 @@ impl<'a, 'ast> AggregateFuncVisitor<'a, 'ast> {
         }
     }
 
-    fn into_result(self) -> Result<Vec<&'ast Function>, anyhow::Error> {
+    fn into_result(self) -> Result<Vec<&'ast Function<Raw>>, anyhow::Error> {
         match self.err {
             Some(err) => Err(err),
             None => {
@@ -2758,8 +2764,8 @@ impl<'a, 'ast> AggregateFuncVisitor<'a, 'ast> {
     }
 }
 
-impl<'a, 'ast> Visit<'ast> for AggregateFuncVisitor<'a, 'ast> {
-    fn visit_function(&mut self, func: &'ast Function) {
+impl<'a, 'ast> Visit<'ast, Raw> for AggregateFuncVisitor<'a, 'ast> {
+    fn visit_function(&mut self, func: &'ast Function<Raw>) {
         if let Ok(name) = normalize::object_name(func.name.clone()) {
             if let Ok(Func::Aggregate(_)) = func::resolve_func(self.scx, &name) {
                 if self.within_aggregate {
@@ -2787,7 +2793,7 @@ impl<'a, 'ast> Visit<'ast> for AggregateFuncVisitor<'a, 'ast> {
         visit::visit_function(self, func);
     }
 
-    fn visit_query(&mut self, _query: &'ast Query) {
+    fn visit_query(&mut self, _query: &'ast Query<Raw>) {
         // Don't go into subqueries.
     }
 }

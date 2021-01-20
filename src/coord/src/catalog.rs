@@ -26,7 +26,7 @@ use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{ExprHumanizer, GlobalId, OptimizedRelationExpr, ScalarExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
-use sql::ast::Expr;
+use sql::ast::{Expr, Raw};
 use sql::catalog::{Catalog as SqlCatalog, CatalogError as SqlCatalogError};
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
@@ -146,7 +146,7 @@ pub struct Table {
     pub plan_cx: PlanContext,
     pub desc: RelationDesc,
     #[serde(skip)]
-    pub defaults: Vec<Expr>,
+    pub defaults: Vec<Expr<Raw>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2051,7 +2051,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn table_details(&self) -> Option<&[Expr]> {
+    fn table_details(&self) -> Option<&[Expr<Raw>]> {
         if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
             Some(defaults)
         } else {

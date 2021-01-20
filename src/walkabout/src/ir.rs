@@ -80,6 +80,10 @@ pub enum Type {
     ///
     /// Primitive types do not need to be visited.
     Primitive,
+    /// Abstract type.
+    ///
+    /// Abstract types are required to implement `visit`.
+    Abstract(Vec<String>),
     /// An [`Option`] type..
     ///
     /// The value inside the option will need to be visited if the option is
@@ -178,57 +182,68 @@ fn analyze_fields(fields: &syn::Fields) -> Result<Vec<Field>> {
 fn analyze_type(ty: &syn::Type) -> Result<Type> {
     match ty {
         syn::Type::Path(syn::TypePath { qself: None, path }) => {
-            if path.segments.len() != 1 {
-                bail!(
-                    "Unable to analyze type path with more than one component: '{}'",
-                    path.into_token_stream()
-                );
-            }
-            let segment = path.segments.last().unwrap();
-            let segment_name = segment.ident.to_string();
+            match path.segments.len() {
+                2 => Ok(Type::Abstract(
+                    path.segments
+                        .iter()
+                        .map(|s| s.ident.to_string())
+                        .collect::<Vec<String>>(),
+                )),
+                1 => {
+                    let segment = path.segments.last().unwrap();
+                    let segment_name = segment.ident.to_string();
 
-            let container = |construct_ty: fn(Box<Type>) -> Type| match &segment.arguments {
-                syn::PathArguments::AngleBracketed(args) if args.args.len() == 1 => {
-                    match args.args.last().unwrap() {
-                        syn::GenericArgument::Type(ty) => {
-                            let inner = Box::new(analyze_type(ty)?);
-                            Ok(construct_ty(inner))
+                    let container = |construct_ty: fn(Box<Type>) -> Type| {
+                        match &segment.arguments {
+                    syn::PathArguments::AngleBracketed(args) if args.args.len() == 1 => {
+                        match args.args.last().unwrap() {
+                            syn::GenericArgument::Type(ty) => {
+                                let inner = Box::new(analyze_type(ty)?);
+                                Ok(construct_ty(inner))
+                            }
+                            _ => bail!("Container type argument is not a basic (i.e., non-lifetime, non-constraint) type argument: {}", ty.into_token_stream()),
                         }
-                        _ => bail!("Container type argument is not a basic (i.e., non-lifetime, non-constraint) type argument: {}", ty.into_token_stream()),
                     }
+                    syn::PathArguments::AngleBracketed(_) => bail!(
+                        "Container type does not have exactly one type argument: {}",
+                        ty.into_token_stream()
+                    ),
+                    syn::PathArguments::Parenthesized(_) => bail!(
+                        "Container type has unexpected parenthesized type arguments: {}",
+                        ty.into_token_stream()
+                    ),
+                    syn::PathArguments::None => bail!(
+                        "Container type is missing type argument: {}",
+                        ty.into_token_stream()
+                    ),
                 }
-                syn::PathArguments::AngleBracketed(_) => bail!(
-                    "Container type does not have exactly one type argument: {}",
-                    ty.into_token_stream()
-                ),
-                syn::PathArguments::Parenthesized(_) => bail!(
-                    "Container type has unexpected parenthesized type arguments: {}",
-                    ty.into_token_stream()
-                ),
-                syn::PathArguments::None => bail!(
-                    "Container type is missing type argument: {}",
-                    ty.into_token_stream()
-                ),
-            };
+                    };
 
-            match &*segment_name {
-                // HACK(benesch): DateTimeField is part of the sqlparser AST but
-                // comes from another crate whose source code is not easily
-                // accessible here. We probably want our own local definition of
-                // this type, but for now, just hardcode it as a primitive.
-                "bool" | "usize" | "u64" | "char" | "String" | "PathBuf" | "DateTimeField" => {
-                    match segment.arguments {
-                        syn::PathArguments::None => Ok(Type::Primitive),
-                        _ => bail!(
-                            "Primitive type had unexpected arguments: {}",
-                            ty.into_token_stream()
-                        ),
+                    match &*segment_name {
+                        // HACK(benesch): DateTimeField is part of the sqlparser AST but
+                        // comes from another crate whose source code is not easily
+                        // accessible here. We probably want our own local definition of
+                        // this type, but for now, just hardcode it as a primitive.
+                        "bool" | "usize" | "u64" | "char" | "String" | "PathBuf"
+                        | "DateTimeField" => match segment.arguments {
+                            syn::PathArguments::None => Ok(Type::Primitive),
+                            _ => bail!(
+                                "Primitive type had unexpected arguments: {}",
+                                ty.into_token_stream()
+                            ),
+                        },
+                        "Vec" => container(Type::Vec),
+                        "Option" => container(Type::Option),
+                        "Box" => container(Type::Box),
+                        _ => Ok(Type::Local(segment_name)),
                     }
                 }
-                "Vec" => container(Type::Vec),
-                "Option" => container(Type::Option),
-                "Box" => container(Type::Box),
-                _ => Ok(Type::Local(segment_name)),
+                _ => {
+                    bail!(
+                        "Unable to analyze type path with more than two components: '{}'",
+                        path.into_token_stream()
+                    )
+                }
             }
         }
         _ => bail!(

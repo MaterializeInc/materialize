@@ -20,7 +20,7 @@ use repr::adt::interval::Interval;
 use repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
-    CloseStatement, DeclareStatement, DiscardStatement, DiscardTarget, FetchStatement,
+    CloseStatement, DeclareStatement, DiscardStatement, DiscardTarget, FetchStatement, Raw,
     SetVariableStatement, SetVariableValue, ShowVariableStatement, Value,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -101,14 +101,14 @@ pub fn plan_discard(
 
 pub fn describe_declare(
     _: &StatementContext,
-    _: DeclareStatement,
+    _: DeclareStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_declare(
     _: &StatementContext,
-    DeclareStatement { name, stmt }: DeclareStatement,
+    DeclareStatement { name, stmt }: DeclareStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     Ok(Plan::Declare {
         name: name.to_string(),
