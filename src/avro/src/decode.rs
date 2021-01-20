@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 
 use chrono::{NaiveDate, NaiveDateTime};
+use flate2::read::MultiGzDecoder;
 
 use crate::error::{DecodeError, Error as AvroError};
 use crate::schema::{
@@ -177,6 +178,8 @@ impl<T: AsRef<[u8]>> Skip for Cursor<T> {
         Ok(())
     }
 }
+
+impl<R: Read> Skip for MultiGzDecoder<R> {}
 
 pub enum ValueOrReader<'a, V, R: AvroRead> {
     Value(V),
