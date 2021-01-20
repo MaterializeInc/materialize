@@ -34,6 +34,7 @@ use super::typeconv::{self, rescale_decimal, CastContext};
 use super::StatementContext;
 use crate::catalog::CatalogItemType;
 use crate::names::PartialName;
+use crate::plan::transform_ast;
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
@@ -264,8 +265,12 @@ macro_rules! sql_op {
                 allow_subqueries: true,
             };
 
+            // Desugar the expression
+            let mut expr = EXPR.clone();
+            transform_ast::transform_expr(&scx, &mut expr)?;
+
             // Plan the expression.
-            let mut expr = query::plan_expr(&ecx, &*EXPR)?.type_as_any(&ecx)?;
+            let mut expr = query::plan_expr(&ecx, &expr)?.type_as_any(&ecx)?;
 
             // Replace the parameters with the actual arguments.
             expr.splice_parameters(&args, 0);
