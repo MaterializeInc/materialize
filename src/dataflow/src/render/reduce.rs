@@ -25,11 +25,11 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, RelationExpr};
-use ore::vec::repurpose_allocation;
 use repr::{Datum, DatumList, Row, RowArena, RowPacker};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
+use crate::render::datum_vec::DatumVec;
 
 // This enum indicates what class of reduction each aggregate function is.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -104,7 +104,7 @@ where
             }
 
             let mut row_packer = RowPacker::new();
-            let mut datums = vec![];
+            let mut datums = DatumVec::new();
             let (key_val_input, mut err_input): (
                 Collection<_, Result<(Row, Row), DataflowError>, _>,
                 _,
@@ -119,7 +119,7 @@ where
                         row_packer.clear();
 
                         // First, evaluate the key selector expressions.
-                        let mut datums_local = std::mem::take(&mut datums);
+                        let mut datums_local = datums.borrow();
                         datums_local.extend(row.iter().take(columns_needed));
                         for expr in group_key_clone.iter() {
                             match expr.eval(&datums_local, &temp_storage) {
@@ -142,7 +142,7 @@ where
                                 }
                             }
                         }
-                        datums = repurpose_allocation(datums_local);
+                        drop(datums_local);
 
                         // Mint the final row, ideally re-using resources.
                         // TODO(mcsherry): This can perhaps be extracted for
