@@ -20,6 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use postgres::error::DbError;
 use tempfile::NamedTempFile;
 
 use util::MzTimestamp;
@@ -154,6 +155,36 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
             let actual = client_reads.query_one("FETCH c", &[])?;
             assert_eq!(actual.get::<_, String>("data"), *expected_data);
             assert_eq!(actual.get::<_, MzTimestamp>("timestamp").0, expected_ts);
+        }
+    }
+
+    // Aggressively compact the data in the index, then tail an unmaterialized
+    // view derived from the index. This previously selected an invalid
+    // `AS OF` timestamp (#5391).
+    client_writes
+        .batch_execute("ALTER INDEX t_primary_idx SET (logical_compaction_window = '1ms')")?;
+    client_writes.batch_execute("CREATE VIEW v AS SELECT * FROM t")?;
+    client_reads.batch_execute(
+        "BEGIN;
+         DECLARE c CURSOR FOR TAIL v;",
+    )?;
+    let rows = client_reads.query("FETCH ALL c", &[])?;
+    assert_eq!(rows.len(), 3);
+    for i in 0..3 {
+        assert_eq!(rows[i].get::<_, i64>("diff"), 1);
+        assert_eq!(rows[i].get::<_, String>("data"), format!("line {}", i + 1));
+    }
+
+    match client_reads.batch_execute("TAIL v AS OF 1") {
+        Ok(()) => panic!("TAIL with bad AS OF unexpectedly succeeded"),
+        Err(e) => {
+            let e = e
+                .source()
+                .and_then(|e| e.downcast_ref::<DbError>())
+                .unwrap();
+            assert!(e
+                .message()
+                .starts_with("Timestamp (1) is not valid for all inputs"));
         }
     }
 
