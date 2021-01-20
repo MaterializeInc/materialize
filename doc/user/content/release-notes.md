@@ -51,6 +51,12 @@ Wrap your release notes at the 80 character mark.
 - Commit consumed offsets to Kafka to facilitate source ingest progress
   monitoring.
 
+- Fix a bug that would cause `DROP` statements targeting multiple objects to fail
+  when those objects had dependent objects in common {{% gh 5316 %}}.
+
+- Prevent a bug that would allow `CREATE OR REPLACE` statements to create dependencies
+  on objects that were about to be dropped {{% gh 5272 %}}.
+
 {{% version-header v0.6.1 %}}
 
 - Add the advanced [`--timely-progress-mode` and `--differential-idle-merge-effort` command-line arguments](/cli/#dataflow-tuning)
@@ -89,9 +95,6 @@ Wrap your release notes at the 80 character mark.
   Previously, `sum` over `bigint` returned `bigint`.
 
   **Backwards-incompatible change**
-
-- Fix a bug that would cause `DROP` statements targeting multiple objects to fail
-  when those objects had dependent objects in common {{% gh 5316 %}}.
 
 {{% version-header v0.6.0 %}}
 
