@@ -101,11 +101,27 @@ def main(argv: List[str]) -> int:
     if args.command in ["create", "run", "start", "up"]:
         deps.acquire()
 
-    # Check if this is a run command that names a workflow. If so, run the
-    # workflow instead of Docker Compose.
+    # The `run` command requires special handling.
     if args.command == "run":
         workflow = composition.workflows.get(args.first_command_arg, None)
-        if workflow is not None:
+        if workflow is None:
+            # Restart any dependencies whose definitions have changed. This is
+            # Docker Compose's default behavior for `up`, but not for `run`,
+            # which is a constant irritation that we paper over here. The trick,
+            # taken from Buildkite's Docker Compose plugin, is to run an `up`
+            # command that requests zero instances of the requested service.
+            composition.run(
+                [
+                    "up",
+                    "-d",
+                    "--scale",
+                    f"{args.first_command_arg}=0",
+                    args.first_command_arg,
+                ]
+            )
+        else:
+            # The user has specified a workflow rather than a service. Run the
+            # workflow instead of Docker Compose.
             if args.remainder:
                 raise errors.MzRuntimeError(
                     f"cannot specify extra arguments ({' '.join(args.remainder)}) "
