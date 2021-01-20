@@ -51,9 +51,7 @@ def main(argv: List[str]) -> int:
     elif args.command == "lint":
         return lint(repo)
     elif args.command == "list-compositions":
-        for name in repo.compositions:
-            print(name)
-        return 0
+        return list_compositions(repo)
 
     # Load composition.
     try:
@@ -76,9 +74,11 @@ def main(argv: List[str]) -> int:
 
     # Handle special mzcompose commands that apply to the composition.
     if args.command == "list-workflows":
-        for name in composition.workflows:
-            print(name)
-        return 0
+        return list_workflows(composition)
+    elif args.command == "list-ports":
+        return list_ports(composition, args.first_command_arg)
+    elif args.command == "web":
+        return web(composition, args.first_command_arg)
 
     # From here on out we're definitely invoking Docker Compose, so make sure
     # it's new enough.
@@ -101,11 +101,27 @@ def main(argv: List[str]) -> int:
     if args.command in ["create", "run", "start", "up"]:
         deps.acquire()
 
-    # Check if this is a run command that names a workflow. If so, run the
-    # workflow instead of Docker Compose.
+    # The `run` command requires special handling.
     if args.command == "run":
         workflow = composition.workflows.get(args.first_command_arg, None)
-        if workflow is not None:
+        if workflow is None:
+            # Restart any dependencies whose definitions have changed. This is
+            # Docker Compose's default behavior for `up`, but not for `run`,
+            # which is a constant irritation that we paper over here. The trick,
+            # taken from Buildkite's Docker Compose plugin, is to run an `up`
+            # command that requests zero instances of the requested service.
+            composition.run(
+                [
+                    "up",
+                    "-d",
+                    "--scale",
+                    f"{args.first_command_arg}=0",
+                    args.first_command_arg,
+                ]
+            )
+        else:
+            # The user has specified a workflow rather than a service. Run the
+            # workflow instead of Docker Compose.
             if args.remainder:
                 raise errors.MzRuntimeError(
                     f"cannot specify extra arguments ({' '.join(args.remainder)}) "
@@ -113,24 +129,6 @@ def main(argv: List[str]) -> int:
                 )
             workflow.run()
             return 0
-    # Check if we are being asked to list ports
-    elif args.command == "list-ports":
-        for port in composition.find_host_ports(args.first_command_arg):
-            print(port)
-        return 0
-    # Check if we are being asked to open a web connection to this service
-    elif args.command == "web":
-        ports = composition.find_host_ports(args.first_command_arg)
-        if len(ports) == 1:
-            webbrowser.open(f"http://localhost:{ports[0]}")
-        elif not ports:
-            raise errors.MzRuntimeError(
-                f"No running services matched {args.first_command_arg}"
-            )
-        else:
-            raise errors.MzRuntimeError(
-                f"Too many ports matched {args.first_command_arg}, found: {ports}"
-            )
 
     # Hand over control to Docker Compose.
     announce("Delegating to Docker Compose")
@@ -178,6 +176,41 @@ def lint(repo: mzbuild.Repository) -> int:
     for error in sorted(errors):
         print(error)
     return 1 if errors else 0
+
+
+def list_compositions(repo: mzbuild.Repository) -> int:
+    for name in sorted(repo.compositions):
+        print(name)
+    return 0
+
+
+def list_workflows(composition: mzcompose.Composition) -> int:
+    for name in sorted(composition.workflows):
+        print(name)
+    return 0
+
+
+def list_ports(composition: mzcompose.Composition, service: Optional[str]) -> int:
+    if service is None:
+        raise errors.MzRuntimeError(f"list-ports command requires a service argument")
+    for port in composition.find_host_ports(service):
+        print(port)
+    return 0
+
+
+def web(composition: mzcompose.Composition, service: Optional[str]) -> int:
+    if service is None:
+        raise errors.MzRuntimeError(f"web command requires a service argument")
+    ports = composition.find_host_ports(service)
+    if len(ports) == 1:
+        webbrowser.open(f"http://localhost:{ports[0]}")
+    elif not ports:
+        raise errors.MzRuntimeError(f"No running services matched {service!r}")
+    else:
+        raise errors.MzRuntimeError(
+            f"Too many ports matched {service!r}, found: {ports}"
+        )
+    return 0
 
 
 # We subclass `argparse.ArgumentParser` so that we can override its default
