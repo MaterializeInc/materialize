@@ -24,10 +24,11 @@ use reqwest::Url;
 use rusoto_core::Region;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
-    DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
-    KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding, RegexEncoding,
-    S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceEnvelope,
+    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Compression, Consistency,
+    CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector,
+    KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding,
+    RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector,
+    SourceEnvelope,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -440,7 +441,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(format)?;
             (connector, encoding)
         }
-        Connector::File { path, .. } => {
+        Connector::File { path, compression } => {
             let tail = match with_options.remove("tail") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
@@ -455,6 +456,7 @@ pub fn plan_create_source(
 
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
+                compression: compression.clone().into(),
                 tail,
             });
             let encoding = get_encoding(format)?;
@@ -494,6 +496,7 @@ pub fn plan_create_source(
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
+                compression: Compression::None,
                 tail,
             });
             if format.is_some() {

@@ -20,7 +20,7 @@ use log::error;
 use timely::scheduling::{Activator, SyncActivator};
 
 use dataflow_types::{
-    AvroOcfEncoding, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
+    AvroOcfEncoding, Compression, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
 };
 use expr::{PartitionId, SourceInstanceId};
 use mz_avro::types::Value;
@@ -304,6 +304,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     tx: std::sync::mpsc::SyncSender<Result<Out, anyhow::Error>>,
     activator: Option<SyncActivator>,
     read_style: FileReadStyle,
+    compression: Compression,
     iter_ctor: Ctor,
 ) where
     I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
