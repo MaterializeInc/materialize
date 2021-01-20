@@ -31,7 +31,7 @@ pub mod adt;
 pub mod strconv;
 
 pub use cache::{CachedRecord, CachedRecordIter};
-pub use relation::{ColumnName, ColumnType, CustomTypesInfo, RelationDesc, RelationType};
+pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{datum_size, DatumList, DatumMap, Row, RowArena, RowPacker};
 pub use scalar::{Datum, ScalarBaseType, ScalarType};
 

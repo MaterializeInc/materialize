@@ -709,6 +709,7 @@ pub enum ScalarType {
         /// to right.
         fields: Vec<(ColumnName, ColumnType)>,
         custom_oid: Option<u32>,
+        custom_name: Option<String>,
     },
     /// A PostgreSQL object identifier.
     Oid,
@@ -861,12 +862,14 @@ impl PartialEq for ScalarType {
                 Record {
                     fields: fields_a,
                     custom_oid: oid_a,
+                    custom_name: name_a,
                 },
                 Record {
                     fields: fields_b,
                     custom_oid: oid_b,
+                    custom_name: name_b,
                 },
-            ) => fields_a.eq(fields_b) && oid_a == oid_b,
+            ) => fields_a.eq(fields_b) && oid_a == oid_b && name_a == name_b,
             (
                 Map {
                     value_type: value_l,
@@ -937,10 +940,15 @@ impl Hash for ScalarType {
                 element_type.hash(state);
                 custom_oid.hash(state);
             }
-            Record { fields, custom_oid } => {
+            Record {
+                fields,
+                custom_oid,
+                custom_name,
+            } => {
                 state.write_u8(16);
                 fields.hash(state);
                 custom_oid.hash(state);
+                custom_name.hash(state);
             }
             Uuid => state.write_u8(16),
             Oid => state.write_u8(17),

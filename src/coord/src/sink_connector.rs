@@ -151,7 +151,6 @@ async fn build_kafka(
         frontier,
         strict: !with_snapshot,
         config_options: builder.config_options,
-        custom_types_info: builder.custom_types_info,
     }))
 }
 
@@ -196,6 +195,5 @@ fn build_avro_ocf(
         frontier,
         strict: !with_snapshot,
         value_desc: builder.value_desc,
-        custom_types_info: builder.custom_types_info,
     }))
 }

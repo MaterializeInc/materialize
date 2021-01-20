@@ -26,7 +26,7 @@ use repr::{RelationDesc, Row, Timestamp};
 pub fn avro_ocf<G>(
     collection: Collection<G, (Option<Row>, Option<Row>)>,
     id: GlobalId,
-    mut connector: AvroOcfSinkConnector,
+    connector: AvroOcfSinkConnector,
     desc: RelationDesc,
 ) where
     G: Scope<Timestamp = Timestamp>,
@@ -37,7 +37,7 @@ pub fn avro_ocf<G>(
         v
     });
     let (schema, columns) = {
-        let encoder = Encoder::new(None, desc, false, &mut connector.custom_types_info);
+        let encoder = Encoder::new(None, desc, false);
         let schema = encoder.value_writer_schema().clone();
         let columns = encoder.value_columns().to_vec();
         (schema, columns)

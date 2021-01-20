@@ -24,7 +24,6 @@ use chrono::{NaiveDateTime, Timelike};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, info, warn};
-use repr::CustomTypesInfo;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
@@ -1122,6 +1121,7 @@ fn validate_schema_2(
             ScalarType::Record {
                 fields: columns,
                 custom_oid: None,
+                custom_name: None,
             }
         }
         SchemaPiece::Array(inner) => {
@@ -2276,11 +2276,8 @@ impl Decoder {
 ///   * Union schemas are only used to represent nullability. The first
 ///     variant is always the null variant, and the second and last variant
 ///     is the non-null variant.
-fn build_schema(
-    columns: &[(ColumnName, ColumnType)],
-    custom_types_info: &CustomTypesInfo,
-) -> Schema {
-    let row_schema = build_row_schema_json(&columns, "envelope", custom_types_info);
+fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
+    let row_schema = build_row_schema_json(&columns, "envelope");
     Schema::parse(&row_schema).expect("valid schema constructed")
 }
 
@@ -2373,7 +2370,6 @@ impl Encoder {
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
         include_transaction: bool,
-        custom_types_info: &mut CustomTypesInfo,
     ) -> Self {
         let mut value_columns = column_names_and_types(value_desc);
         if include_transaction {
@@ -2394,15 +2390,16 @@ impl Encoder {
                                 nullable: false,
                             },
                         )],
-                        custom_oid: Some(custom_types_info.new_named("transaction".to_string())),
+                        custom_oid: None,
+                        custom_name: Some("transaction".to_string()),
                     },
                 },
             ));
         }
-        let writer_schema = build_schema(&value_columns, &custom_types_info);
+        let writer_schema = build_schema(&value_columns);
         let key_info = key_desc.map(|key_desc| {
             let columns = column_names_and_types(key_desc);
-            let row_schema = build_row_schema_json(&columns, "row", &custom_types_info);
+            let row_schema = build_row_schema_json(&columns, "row");
             KeyInfo {
                 schema: Schema::parse(&row_schema).expect("valid schema constructed"),
                 columns,
@@ -2644,8 +2641,7 @@ impl SchemaCache {
 
 fn build_row_schema_fields<F: FnMut() -> String>(
     columns: &[(ColumnName, ColumnType)],
-    custom_types_info: &CustomTypesInfo,
-    oids_seen: &mut HashSet<u32>,
+    names_seen: &mut HashSet<String>,
     namer: &mut F,
 ) -> Vec<serde_json::value::Value> {
     let mut fields = Vec::new();
@@ -2692,25 +2688,20 @@ fn build_row_schema_fields<F: FnMut() -> String>(
             ScalarType::Array(_t) => unimplemented!("array types"),
             ScalarType::List { .. } => unimplemented!("list types"),
             ScalarType::Map { .. } => unimplemented!("map types"),
-            ScalarType::Record { fields, custom_oid } => {
-                let name = match custom_oid {
-                    Some(oid) => custom_types_info
-                        .oids_to_names
-                        .get(oid)
-                        .expect("All custom types should have names")
-                        .to_owned(),
-                    None => namer(),
+            ScalarType::Record {
+                fields,
+                custom_name,
+                ..
+            } => {
+                let (name, name_seen) = match custom_name {
+                    Some(name) => (name.clone(), !names_seen.insert(name.clone())),
+                    None => (namer(), false),
                 };
-                let oid_seen = match custom_oid {
-                    Some(oid) => !oids_seen.insert(*oid),
-                    None => false,
-                };
-                if oid_seen {
+                if name_seen {
                     json!(name)
                 } else {
                     let fields = fields.to_vec();
-                    let json_fields =
-                        build_row_schema_fields(&fields, custom_types_info, oids_seen, namer);
+                    let json_fields = build_row_schema_fields(&fields, names_seen, namer);
                     json!({
                         "type": "record",
                         "name": name,
@@ -2733,19 +2724,13 @@ fn build_row_schema_fields<F: FnMut() -> String>(
 fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
-    custom_types_info: &CustomTypesInfo,
 ) -> serde_json::value::Value {
     let mut name_idx = 0;
-    let fields = build_row_schema_fields(
-        columns,
-        custom_types_info,
-        &mut Default::default(),
-        &mut move || {
-            let ret = format!("com.materialize.sink.record{}", name_idx);
-            name_idx += 1;
-            ret
-        },
-    );
+    let fields = build_row_schema_fields(columns, &mut Default::default(), &mut move || {
+        let ret = format!("com.materialize.sink.record{}", name_idx);
+        name_idx += 1;
+        ret
+    });
     json!({
         "type": "record",
         "fields": fields,
@@ -2757,7 +2742,6 @@ fn build_row_schema_json(
 pub mod cdc_v2 {
 
     use mz_avro::schema::{FullName, SchemaNode};
-    use repr::CustomTypesInfo;
     use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, RowPacker, Timestamp};
     use serde_json::json;
 
@@ -2799,9 +2783,9 @@ pub mod cdc_v2 {
 
     impl Encoder {
         /// Creates a new CDCv2 encoder from a relation description.
-        pub fn new(desc: RelationDesc, custom_types_info: &CustomTypesInfo) -> Self {
+        pub fn new(desc: RelationDesc) -> Self {
             let columns = super::column_names_and_types(desc);
-            let row_schema = build_row_schema_json(&columns, "data", custom_types_info);
+            let row_schema = build_row_schema_json(&columns, "data");
             let schema = build_schema(row_schema);
             Self { columns, schema }
         }
@@ -3023,13 +3007,9 @@ pub mod cdc_v2 {
                 .with_column("id", ScalarType::Int64.nullable(false))
                 .with_column("price", ScalarType::Float64.nullable(true));
 
-            let custom_types_info = Default::default();
-            let encoder = Encoder::new(desc.clone(), &custom_types_info);
-            let row_schema = build_row_schema_json(
-                &crate::avro::column_names_and_types(desc),
-                "data",
-                &custom_types_info,
-            );
+            let encoder = Encoder::new(desc.clone());
+            let row_schema =
+                build_row_schema_json(&crate::avro::column_names_and_types(desc), "data");
             let schema = build_schema(row_schema);
 
             let values = vec![
@@ -3167,7 +3147,7 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
-            let encoder = Encoder::new(None, desc, false, &mut Default::default());
+            let encoder = Encoder::new(None, desc, false);
             let avro_value = encode_datums_as_avro(std::iter::once(datum), encoder.value_columns());
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),

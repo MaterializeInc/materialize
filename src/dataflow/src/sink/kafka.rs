@@ -234,7 +234,7 @@ struct EncodedRow {
 pub fn kafka<G>(
     collection: Collection<G, (Option<Row>, Option<Row>)>,
     id: GlobalId,
-    mut connector: KafkaSinkConnector,
+    connector: KafkaSinkConnector,
     key_desc: Option<RelationDesc>,
     value_desc: RelationDesc,
 ) -> Box<dyn Any>
@@ -282,12 +282,7 @@ where
             &stream.scope().index().to_string(),
         );
 
-        let encoder = Encoder::new(
-            key_desc,
-            value_desc,
-            connector.consistency.is_some(),
-            &mut connector.custom_types_info,
-        );
+        let encoder = Encoder::new(key_desc, value_desc, connector.consistency.is_some());
 
         let producer = config
             .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(

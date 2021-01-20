@@ -4282,6 +4282,7 @@ impl VariadicFunc {
                     .zip(input_types.into_iter())
                     .collect(),
                 custom_oid: None,
+                custom_name: None,
             }
             .nullable(true),
             SplitPart => ScalarType::String.nullable(true),

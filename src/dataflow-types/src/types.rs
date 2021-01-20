@@ -22,7 +22,6 @@ use anyhow::Context;
 use globset::Glob;
 use log::warn;
 use regex::Regex;
-use repr::CustomTypesInfo;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use url::Url;
@@ -691,7 +690,6 @@ pub struct KafkaSinkConnector {
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
     pub config_options: BTreeMap<String, String>,
-    pub custom_types_info: CustomTypesInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -700,7 +698,6 @@ pub struct AvroOcfSinkConnector {
     pub path: PathBuf,
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
-    pub custom_types_info: CustomTypesInfo,
 }
 
 impl SinkConnector {
@@ -761,7 +758,6 @@ pub struct AvroOcfSinkConnectorBuilder {
     pub path: PathBuf,
     pub file_name_suffix: String,
     pub value_desc: RelationDesc,
-    pub custom_types_info: CustomTypesInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -779,7 +775,6 @@ pub struct KafkaSinkConnectorBuilder {
     pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
-    pub custom_types_info: CustomTypesInfo,
 }
 
 /// An index storing processed updates so they can be queried

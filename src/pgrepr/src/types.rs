@@ -249,6 +249,7 @@ impl Type {
             Type::Record(_) => ScalarType::Record {
                 fields: vec![],
                 custom_oid: None,
+                custom_name: None,
             },
             Type::Text => ScalarType::String,
             Type::Time => ScalarType::Time,

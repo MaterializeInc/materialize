@@ -505,6 +505,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
             ScalarType::Record {
                 fields,
                 custom_oid: None,
+                custom_name: None,
             }
         }
         Type::Map { value_type } => {

@@ -19,7 +19,6 @@ use differential_dataflow::{
 use differential_dataflow::{AsCollection, Collection};
 use itertools::Itertools;
 use ore::collections::CollectionExt;
-use repr::CustomTypesInfo;
 use repr::{ColumnType, Datum, Diff, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use timely::dataflow::{channels::pact::Pipeline, operators::Operator, Scope, Stream};
 
@@ -114,13 +113,14 @@ where
     x.as_collection()
 }
 
-pub fn dbz_desc(desc: RelationDesc, custom_types_info: &mut CustomTypesInfo) -> RelationDesc {
+pub fn dbz_desc(desc: RelationDesc) -> RelationDesc {
     let cols = column_names_and_types(desc);
     let row = ColumnType {
         nullable: true,
         scalar_type: ScalarType::Record {
             fields: cols.into_iter().collect(),
-            custom_oid: Some(custom_types_info.new_named("row".to_owned())),
+            custom_oid: None,
+            custom_name: Some("row".to_owned()),
         },
     };
     let typ = RelationType::new(vec![row.clone(), row]);

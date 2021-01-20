@@ -35,8 +35,6 @@ use itertools::Itertools;
 use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
 use regex::Regex;
-use repr::ColumnType;
-use repr::CustomTypesInfo;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
 use reqwest::Url;
 use rusoto_core::Region;
@@ -51,7 +49,6 @@ use crate::ast::{
     DropObjectsStatement, Expr, Format, Ident, IfExistsBehavior, ObjectName, ObjectType, SqlOption,
     Statement, Value,
 };
-use crate::catalog::Catalog;
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
@@ -761,7 +758,6 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     topic_suffix: String,
-    custom_types_info: CustomTypesInfo,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let (schema_registry_url, ccsr_with_options) = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
@@ -791,7 +787,6 @@ fn kafka_sink_builder(
             .map(|(desc, _indices)| desc.clone()),
         value_desc.clone(),
         include_consistency,
-        &mut custom_types_info.clone(),
     );
     let value_schema = encoder.value_writer_schema().canonical_form();
     let key_schema = encoder
@@ -835,7 +830,6 @@ fn kafka_sink_builder(
         key_schema,
         key_desc_and_indices,
         value_desc,
-        custom_types_info,
     }))
 }
 
@@ -844,7 +838,6 @@ fn avro_ocf_sink_builder(
     path: String,
     file_name_suffix: String,
     value_desc: RelationDesc,
-    custom_types_info: CustomTypesInfo,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     if format.is_some() {
         bail!("avro ocf sinks cannot specify a format");
@@ -860,7 +853,6 @@ fn avro_ocf_sink_builder(
         path,
         file_name_suffix,
         value_desc,
-        custom_types_info,
     }))
 }
 
@@ -871,83 +863,6 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
-fn get_desc_custom_types_info(typ: &RelationType, catalog: &dyn Catalog) -> CustomTypesInfo {
-    fn recurse(typ: &ScalarType, catalog: &dyn Catalog, out: &mut CustomTypesInfo) {
-        let oid = match typ {
-            ScalarType::Bool
-            | ScalarType::Int32
-            | ScalarType::Int64
-            | ScalarType::Float32
-            | ScalarType::Float64
-            | ScalarType::Decimal(_, _)
-            | ScalarType::Date
-            | ScalarType::Time
-            | ScalarType::Timestamp
-            | ScalarType::TimestampTz
-            | ScalarType::Interval
-            | ScalarType::Bytes
-            | ScalarType::String
-            | ScalarType::Jsonb
-            | ScalarType::Uuid
-            | ScalarType::Array(_)
-            | ScalarType::Oid
-            | ScalarType::List {
-                custom_oid: None, ..
-            }
-            | ScalarType::Record {
-                custom_oid: None, ..
-            }
-            | ScalarType::Map {
-                custom_oid: None, ..
-            } => return,
-            ScalarType::List {
-                element_type,
-                custom_oid: Some(oid),
-            } => {
-                recurse(&**element_type, catalog, out);
-                *oid
-            }
-            ScalarType::Record {
-                fields,
-                custom_oid: Some(oid),
-            } => {
-                for (
-                    _,
-                    ColumnType {
-                        scalar_type: typ, ..
-                    },
-                ) in fields.iter()
-                {
-                    recurse(typ, catalog, out);
-                }
-                *oid
-            }
-            ScalarType::Map {
-                value_type,
-                custom_oid: Some(oid),
-            } => {
-                recurse(&**value_type, catalog, out);
-                *oid
-            }
-        };
-        let name = catalog.get_item_by_oid(&oid).name().clone().to_string();
-        out.oids_to_names.insert(oid, name);
-        if oid >= out.next_available_oid {
-            out.next_available_oid += 1;
-        }
-    }
-    let mut result = CustomTypesInfo {
-        oids_to_names: Default::default(),
-        next_available_oid: 0,
-    };
-    for ColumnType {
-        scalar_type: typ, ..
-    } in typ.column_types.iter()
-    {
-        recurse(typ, catalog, &mut result);
-    }
-    result
-}
 pub fn plan_create_sink(
     scx: &StatementContext,
     stmt: CreateSinkStatement,
@@ -1032,10 +947,8 @@ pub fn plan_create_sink(
         (RelationDesc::new(typ, names), key_indices)
     });
 
-    let mut custom_types_info = get_desc_custom_types_info(desc.typ(), scx.catalog);
-
     let value_desc = match envelope {
-        SinkEnvelope::Debezium => dbz_desc(desc.clone(), &mut custom_types_info),
+        SinkEnvelope::Debezium => dbz_desc(desc.clone()),
         SinkEnvelope::Upsert => desc.clone(),
         SinkEnvelope::Tail { .. } => {
             unreachable!("SinkEnvelope::Tail is only used when creating tails, not sinks")
@@ -1053,12 +966,9 @@ pub fn plan_create_sink(
             key_desc_and_indices,
             value_desc,
             suffix,
-            custom_types_info,
         )?,
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
-        Connector::AvroOcf { path } => {
-            avro_ocf_sink_builder(format, path, suffix, value_desc, custom_types_info)?
-        }
+        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix, value_desc)?,
         Connector::S3 { .. } => unsupported!("S3 sinks"),
     };
 
