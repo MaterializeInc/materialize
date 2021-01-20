@@ -734,6 +734,7 @@ dependencies = [
  "differential-dataflow",
  "dogsdogsdogs",
  "expr",
+ "flate2",
  "futures",
  "globset",
  "inotify",
