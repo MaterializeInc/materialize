@@ -240,10 +240,10 @@ impl CatalogItem {
         match &self {
             CatalogItem::Table(tbl) => Ok(&tbl.desc),
             CatalogItem::Source(src) => Ok(&src.desc),
-            CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(name.to_string())),
             CatalogItem::View(view) => Ok(&view.desc),
-            CatalogItem::Index(_) => Err(SqlCatalogError::InvalidIndexDependency(name.to_string())),
-            CatalogItem::Type(_) => Err(SqlCatalogError::InvalidTypeDependency(name.to_string())),
+            CatalogItem::Index(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => Err(
+                SqlCatalogError::InvalidDependency(name.to_string(), self.type_string()),
+            ),
         }
     }
 
