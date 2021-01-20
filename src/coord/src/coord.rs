@@ -266,7 +266,7 @@ where
                             .insert(*id, Frontiers::new(self.num_timely_workers, Some(1_000)));
                     } else {
                         self.ship_dataflow(self.dataflow_builder().build_index_dataflow(*id))
-                            .await;
+                            .await?;
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -291,7 +291,8 @@ where
                     )
                     .await
                     .with_context(|| format!("recreating sink {}", name))?;
-                    self.handle_sink_connector_ready(*id, *oid, connector).await;
+                    self.handle_sink_connector_ready(*id, *oid, connector)
+                        .await?;
                 }
                 _ => (), // Handled in prior loop.
             }
@@ -516,7 +517,13 @@ where
                 // a Kafka topic) that's been created on our behalf. If
                 // we fail now, we'll leak that external state.
                 if self.catalog.try_get_by_id(id).is_some() {
-                    self.handle_sink_connector_ready(id, oid, connector).await;
+                    // TODO(benesch): this `expect` here is possibly scary, but
+                    // no better solution presents itself. Possibly sinks should
+                    // have an error bit, and an error here would set the error
+                    // bit on the sink.
+                    self.handle_sink_connector_ready(id, oid, connector)
+                        .await
+                        .expect("marking sink ready should never fail");
                 } else {
                     // Another session dropped the sink while we were
                     // creating the connector. Report to the client that
@@ -1005,7 +1012,7 @@ where
         id: GlobalId,
         oid: u32,
         connector: SinkConnector,
-    ) {
+    ) -> Result<(), anyhow::Error> {
         // Update catalog entry with sink connector.
         let entry = self.catalog.get_by_id(&id);
         let name = entry.name().clone();
@@ -1023,9 +1030,7 @@ where
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        self.catalog_transact(ops)
-            .await
-            .expect("replacing a sink cannot fail");
+        self.catalog_transact(ops).await?;
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
             name.to_string(),
@@ -1733,7 +1738,7 @@ where
         {
             Ok(_) => {
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                    .await;
+                    .await?;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1784,7 +1789,7 @@ where
             Ok(()) => {
                 if let Some(index_id) = index_id {
                     self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                        .await;
+                        .await?;
                 }
 
                 self.maybe_begin_caching(source_id, &source.connector).await;
@@ -1935,7 +1940,7 @@ where
             Ok(()) => {
                 if let Some(index_id) = index_id {
                     self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                        .await;
+                        .await?;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -1971,7 +1976,7 @@ where
         match self.catalog_transact(vec![op]).await {
             Ok(()) => {
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(id))
-                    .await;
+                    .await?;
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
@@ -2192,7 +2197,7 @@ where
                     .import_view_into_dataflow(&view_id, &source, &mut dataflow);
                 dataflow.add_index_to_build(index_id, view_id, typ.clone(), key.clone());
                 dataflow.add_index_export(index_id, view_id, typ, key);
-                self.ship_dataflow(dataflow).await;
+                self.ship_dataflow(dataflow).await?;
             }
 
             broadcast(
@@ -2285,7 +2290,7 @@ where
                 object_columns,
             }),
         ))
-        .await;
+        .await?;
 
         let resp = ExecuteResponse::Tailing { rx };
 
@@ -2453,9 +2458,9 @@ where
                 Antichain::from_elem(Timestamp::max_value())
             }
         } else {
-            // TODO: This should more carefully consider `since` frontiers of its input.
-            // This will be forcibly corrected if any inputs are compacted.
-            Antichain::from_elem(0)
+            // Use the earliest time that is still valid for all sources.
+            let (index_ids, _indexes_complete) = self.catalog.nearest_indexes(&[source_id]);
+            self.indexes.least_valid_since(index_ids)
         };
         Ok(frontier)
     }
@@ -2990,7 +2995,7 @@ where
     /// In particular, there are requirement on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
-    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) {
+    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) -> Result<(), anyhow::Error> {
         // The identity for `join` is the minimum element.
         let mut since = Antichain::from_elem(Timestamp::minimum());
 
@@ -3053,16 +3058,12 @@ where
             // If we have requested a specific time that is invalid .. someone errored.
             use timely::order::PartialOrder;
             if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
-                // This can occur in SINK and TAIL at the moment. Their behaviors are fluid enough
-                // that we just correct to avoid producing incorrect output updates, but we should
-                // fix the root of the problem in a more principled manner.
-                log::error!(
-                    "Dataflow {} requested as_of ({:?}) not >= since ({:?}); correcting",
+                bail!(
+                    "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
                     dataflow.debug_name,
                     as_of,
                     since
                 );
-                as_of.join_assign(&since);
             }
         } else {
             // Bind the since frontier to the dataflow description.
@@ -3078,6 +3079,7 @@ where
             SequencedCommand::CreateDataflows(vec![dataflow]),
         )
         .await;
+        Ok(())
     }
 
     // Tell the cacher to start caching data for `id` if that source
