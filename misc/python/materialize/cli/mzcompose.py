@@ -51,9 +51,7 @@ def main(argv: List[str]) -> int:
     elif args.command == "lint":
         return lint(repo)
     elif args.command == "list-compositions":
-        for name in repo.compositions:
-            print(name)
-        return 0
+        return list_compositions(repo)
 
     # Load composition.
     try:
@@ -76,9 +74,11 @@ def main(argv: List[str]) -> int:
 
     # Handle special mzcompose commands that apply to the composition.
     if args.command == "list-workflows":
-        for name in composition.workflows:
-            print(name)
-        return 0
+        return list_workflows(composition)
+    elif args.command == "list-ports":
+        return list_ports(composition, args.first_command_arg)
+    elif args.command == "web":
+        return web(composition, args.first_command_arg)
 
     # From here on out we're definitely invoking Docker Compose, so make sure
     # it's new enough.
@@ -113,24 +113,6 @@ def main(argv: List[str]) -> int:
                 )
             workflow.run()
             return 0
-    # Check if we are being asked to list ports
-    elif args.command == "list-ports":
-        for port in composition.find_host_ports(args.first_command_arg):
-            print(port)
-        return 0
-    # Check if we are being asked to open a web connection to this service
-    elif args.command == "web":
-        ports = composition.find_host_ports(args.first_command_arg)
-        if len(ports) == 1:
-            webbrowser.open(f"http://localhost:{ports[0]}")
-        elif not ports:
-            raise errors.MzRuntimeError(
-                f"No running services matched {args.first_command_arg}"
-            )
-        else:
-            raise errors.MzRuntimeError(
-                f"Too many ports matched {args.first_command_arg}, found: {ports}"
-            )
 
     # Hand over control to Docker Compose.
     announce("Delegating to Docker Compose")
@@ -178,6 +160,41 @@ def lint(repo: mzbuild.Repository) -> int:
     for error in sorted(errors):
         print(error)
     return 1 if errors else 0
+
+
+def list_compositions(repo: mzbuild.Repository) -> int:
+    for name in sorted(repo.compositions):
+        print(name)
+    return 0
+
+
+def list_workflows(composition: mzcompose.Composition) -> int:
+    for name in sorted(composition.workflows):
+        print(name)
+    return 0
+
+
+def list_ports(composition: mzcompose.Composition, service: Optional[str]) -> int:
+    if service is None:
+        raise errors.MzRuntimeError(f"list-ports command requires a service argument")
+    for port in composition.find_host_ports(service):
+        print(port)
+    return 0
+
+
+def web(composition: mzcompose.Composition, service: Optional[str]) -> int:
+    if service is None:
+        raise errors.MzRuntimeError(f"web command requires a service argument")
+    ports = composition.find_host_ports(service)
+    if len(ports) == 1:
+        webbrowser.open(f"http://localhost:{ports[0]}")
+    elif not ports:
+        raise errors.MzRuntimeError(f"No running services matched {service!r}")
+    else:
+        raise errors.MzRuntimeError(
+            f"Too many ports matched {service!r}, found: {ports}"
+        )
+    return 0
 
 
 # We subclass `argparse.ArgumentParser` so that we can override its default
