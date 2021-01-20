@@ -118,7 +118,7 @@ pub trait AvroRead: Read + Skip {}
 impl<T> AvroRead for T where T: Read + Skip {}
 
 /// A trait that allows for efficient skipping forward while reading data.
-pub trait Skip {
+pub trait Skip: Read {
     /// Advance the cursor by `len` bytes.
     ///
     /// If possible, the implementation should be more efficient than calling
@@ -131,7 +131,23 @@ pub trait Skip {
     /// # Errors
     ///
     /// Can return an error in all the same cases that [`Read::read`] can.
-    fn skip(&mut self, len: usize) -> Result<(), io::Error>;
+    fn skip(&mut self, mut len: usize) -> Result<(), io::Error> {
+        const BUF_SIZE: usize = 512;
+        let mut buf = [0; BUF_SIZE];
+
+        while len > 0 {
+            let n = if len < BUF_SIZE {
+                self.read(&mut buf[..len])?
+            } else {
+                self.read(&mut buf)?
+            };
+            if n == 0 {
+                break;
+            }
+            len -= n;
+        }
+        Ok(())
+    }
 }
 
 impl Skip for File {
