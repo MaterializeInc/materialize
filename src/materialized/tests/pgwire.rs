@@ -12,7 +12,6 @@
 use std::error::Error;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::thread;
 use std::time::Duration;
 
 use fallible_iterator::FallibleIterator;
@@ -179,12 +178,9 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
                 .get::<_, String>(0),
             "newdb",
         );
-        client
-            .batch_execute(
-                "CREATE DATABASE newdb; \
-                 CREATE MATERIALIZED VIEW v AS SELECT 1;",
-            )
-            .await?;
+        client.batch_execute("CREATE DATABASE newdb").await?;
+        client.batch_execute("CREATE TABLE v (i INT)").await?;
+        client.batch_execute("INSERT INTO v VALUES (1)").await?;
 
         match notice_rx.next().await {
             Some(tokio_postgres::AsyncMessage::Notice(n)) => {
@@ -203,12 +199,6 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
             .pg_config()
             .dbname("newdb")
             .connect(postgres::NoTls)?;
-
-        // Sleep a little bit so the view catches up.
-        // TODO(benesch): seriously? It's a view over a static query.
-        // HISTORICAL NOTE(brennan): The above comment was left when this was only 500 millis.
-        // WTF is going on here?
-        thread::sleep(Duration::from_millis(2000));
 
         assert_eq!(
             // `v` here should refer to the `v` in `newdb.public` that we
@@ -231,44 +221,6 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
             "hello",
         );
     }
-
-    Ok(())
-}
-
-#[test]
-fn test_multiple_statements() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
-    let (_server, mut client) = util::start_server(util::Config::default())?;
-    let result = client.batch_execute(
-        "CREATE VIEW v1 AS SELECT * FROM (VALUES (1)); \
-         CREATE VIEW v2 AS SELECT * FROM (VALUES (2)); \
-         CREATE VIEW v3 AS SELECT sum(column1) FROM (SELECT * FROM v1 UNION SELECT * FROM v2); \
-         CREATE VIEW v4 AS SELECT * FROM nonexistent; \
-         CREATE VIEW v5 AS SELECT 5;",
-    );
-
-    // v4 creation fails, so the whole query should be an error.
-    assert!(result.is_err());
-
-    assert_eq!(
-        client.query_one("SELECT * FROM v1", &[])?.get::<_, i32>(0),
-        1,
-    );
-
-    assert_eq!(
-        client.query_one("SELECT * FROM v2", &[])?.get::<_, i32>(0),
-        2,
-    );
-
-    assert_eq!(
-        client.query_one("SELECT * FROM v3", &[])?.get::<_, i64>(0),
-        3,
-    );
-
-    assert!(client.query_one("SELECT * FROM v4", &[]).is_err());
-
-    // the statement to create v5 is correct, but it should not have been executed, since v4 failed to create.
-    assert!(client.query_one("SELECT * from v5", &[]).is_err());
 
     Ok(())
 }

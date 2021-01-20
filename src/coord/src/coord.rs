@@ -603,6 +603,94 @@ where
                 };
                 match &portal.stmt {
                     Some(stmt) => {
+                        // Verify that this statetement type can be executed in the current
+                        // transaction state.
+                        match session.transaction() {
+                            // Idle is almost always safe (idle means there's a single statement being
+                            // executed). Failed transactions have already been checked in pgwire for a
+                            // safe statement (COMMIT, ROLLBACK, etc.) and can also proceed.
+                            &TransactionStatus::Idle | &TransactionStatus::Failed => {
+                                if let Statement::Declare(_) = stmt {
+                                    // Declare is an exception. Although it's not against any spec to execute
+                                    // it, it will always result in nothing happening, since all portals will be
+                                    // immediately closed. Users don't know this detail, so this error helps them
+                                    // understand what's going wrong. Postgres does this too.
+                                    let _ = tx.send(Response {
+                                        result: Ok(ExecuteResponse::PgError {
+                                            code: SqlState::NO_ACTIVE_SQL_TRANSACTION,
+                                            message: "DECLARE CURSOR can only be used in transaction blocks".into(),
+                                        }),
+                                        session,
+                                    });
+                                    return;
+                                }
+                            }
+
+                            // Implicit or explicit transactions only allow reads for now.
+                            //
+                            // Implicit transactions happen when a multi-statement query is executed
+                            // (a "simple query"). However if a "BEGIN" appears somewhere in there,
+                            // then the existing implicit transaction will be upgraded to an explicit
+                            // transaction. Thus, we should not separate what implicit and explicit
+                            // transactions can do unless there's some additional checking to make sure
+                            // something disallowed in explicit transactions did not previously take place
+                            // in the implicit portion.
+                            &TransactionStatus::InTransactionImplicit
+                            | &TransactionStatus::InTransaction => match stmt {
+                                Statement::Close(_)
+                                | Statement::Commit(_)
+                                | Statement::Copy(_)
+                                | Statement::Declare(_)
+                                | Statement::Discard(_)
+                                | Statement::Explain(_)
+                                | Statement::Fetch(_)
+                                | Statement::Rollback(_)
+                                | Statement::Select(_)
+                                | Statement::SetTransaction(_)
+                                | Statement::ShowVariable(_)
+                                | Statement::StartTransaction(_)
+                                | Statement::Tail(_) => {}
+
+                                Statement::AlterIndexOptions(_)
+                                | Statement::AlterObjectRename(_)
+                                | Statement::CreateDatabase(_)
+                                | Statement::CreateIndex(_)
+                                | Statement::CreateSchema(_)
+                                | Statement::CreateSink(_)
+                                | Statement::CreateSource(_)
+                                | Statement::CreateTable(_)
+                                | Statement::CreateType(_)
+                                | Statement::CreateView(_)
+                                | Statement::Delete(_)
+                                | Statement::DropDatabase(_)
+                                | Statement::DropObjects(_)
+                                | Statement::Insert(_)
+                                | Statement::SetVariable(_)
+                                | Statement::ShowColumns(_)
+                                | Statement::ShowCreateIndex(_)
+                                | Statement::ShowCreateSink(_)
+                                | Statement::ShowCreateSource(_)
+                                | Statement::ShowCreateTable(_)
+                                | Statement::ShowCreateView(_)
+                                | Statement::ShowDatabases(_)
+                                | Statement::ShowIndexes(_)
+                                | Statement::ShowObjects(_)
+                                | Statement::Update(_) => {
+                                    let _ = tx.send(Response {
+                                        result: Ok(ExecuteResponse::PgError {
+                                            code: SqlState::ACTIVE_SQL_TRANSACTION,
+                                            message: format!(
+                                                "{} cannot be run inside a transaction block",
+                                                stmt
+                                            ),
+                                        }),
+                                        session,
+                                    });
+                                    return;
+                                }
+                            },
+                        }
+
                         let mut internal_cmd_tx = internal_cmd_tx.clone();
                         let stmt = stmt.clone();
                         let params = portal.parameters.clone();

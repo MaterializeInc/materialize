@@ -124,6 +124,13 @@ pub enum Record<'a> {
         sql: &'a str,
         output: Result<QueryOutput<'a>, &'a str>,
     },
+    /// A `simple` directive.
+    Simple {
+        location: Location,
+        sql: &'a str,
+        output: Output,
+        output_str: &'a str,
+    },
     /// A `hash-threshold` directive.
     HashThreshold { threshold: u64 },
     /// A `halt` directive.

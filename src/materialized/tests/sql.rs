@@ -104,11 +104,12 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default().threads(2);
-    let (_server, mut client) = util::start_server(config)?;
+    let (server, mut client_writes) = util::start_server(config)?;
+    let mut client_reads = server.connect()?;
 
-    client.batch_execute(
-        "CREATE TABLE t (data text);
-         BEGIN;
+    client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_reads.batch_execute(
+        "BEGIN;
          DECLARE c CURSOR FOR TAIL t;",
     )?;
 
@@ -116,8 +117,8 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 
     for i in 1..=3 {
         let data = format!("line {}", i);
-        client.execute("INSERT INTO t VALUES ($1)", &[&data])?;
-        let row = client.query_one("FETCH ALL c", &[])?;
+        client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
+        let row = client_reads.query_one("FETCH ALL c", &[])?;
         assert_eq!(row.get::<_, i64>("diff"), 1);
         assert_eq!(row.get::<_, String>("data"), data);
         events.push((row.get::<_, MzTimestamp>("timestamp").0, data));
@@ -126,14 +127,14 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     // Now tail without a snapshot as of each timestamp, verifying that when we do
     // so we only see events that occur as of or later than that timestamp.
     for (ts, _) in &events {
-        client.batch_execute(&*format!(
+        client_reads.batch_execute(&*format!(
             "DECLARE c CURSOR FOR TAIL t WITH (SNAPSHOT = false) AS OF {}",
             ts - 1
         ))?;
 
         // Skip by the things we won't be able to see.
         for (_, expected) in events.iter().skip_while(|(inner_ts, _)| inner_ts < ts) {
-            let actual = client.query_one("FETCH c", &[])?;
+            let actual = client_reads.query_one("FETCH c", &[])?;
             assert_eq!(actual.get::<_, String>("data"), *expected);
         }
     }
@@ -141,7 +142,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     // Now tail with a snapshot as of each timestamp. We should see a batch of
     // updates all at the tailed timestamp, and then updates afterward.
     for (ts, _) in &events {
-        client.batch_execute(&*format!("DECLARE c CURSOR FOR TAIL t AS OF {}", ts - 1))?;
+        client_reads.batch_execute(&*format!("DECLARE c CURSOR FOR TAIL t AS OF {}", ts - 1))?;
 
         for (mut expected_ts, expected_data) in events.iter() {
             if expected_ts < ts - 1 {
@@ -150,7 +151,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
                 expected_ts = ts - 1;
             }
 
-            let actual = client.query_one("FETCH c", &[])?;
+            let actual = client_reads.query_one("FETCH c", &[])?;
             assert_eq!(actual.get::<_, String>("data"), *expected_data);
             assert_eq!(actual.get::<_, MzTimestamp>("timestamp").0, expected_ts);
         }
@@ -168,18 +169,19 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default().threads(2);
-    let (_server, mut client) = util::start_server(config)?;
+    let (server, mut client_writes) = util::start_server(config)?;
+    let mut client_reads = server.connect()?;
 
-    client.batch_execute(
-        "CREATE TABLE t (data text);
-         BEGIN;
+    client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_reads.batch_execute(
+        "BEGIN;
          DECLARE c CURSOR FOR TAIL t WITH (PROGRESS);",
     )?;
 
     for i in 1..=3 {
         let data = format!("line {}", i);
-        client.execute("INSERT INTO t VALUES ($1)", &[&data])?;
-        match client.query("FETCH ALL c", &[])?.as_slice() {
+        client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
+        match client_reads.query("FETCH ALL c", &[])?.as_slice() {
             [data_row, progress_row] => {
                 assert_eq!(data_row.get::<_, bool>("progressed"), false);
                 assert_eq!(data_row.get::<_, i64>("diff"), 1);
@@ -207,10 +209,10 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().threads(2);
     let (_server, mut client) = util::start_server(config)?;
 
+    client.batch_execute("CREATE TABLE t (i INT8)")?;
+    client.batch_execute("INSERT INTO t VALUES (1), (2), (3);")?;
     client.batch_execute(
         "BEGIN;
-         CREATE TABLE t (i INT8);
-         INSERT INTO t VALUES (1), (2), (3);
          DECLARE c CURSOR FOR TAIL t;",
     )?;
 
@@ -273,10 +275,10 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().threads(2);
     let (_server, mut client) = util::start_server(config)?;
 
+    client.batch_execute("CREATE TABLE t (i INT8)")?;
+    client.batch_execute("INSERT INTO t VALUES (1), (2), (3)")?;
     client.batch_execute(
         "BEGIN;
-         CREATE TABLE t (i INT8);
-         INSERT INTO t VALUES (1), (2), (3);
          DECLARE c CURSOR FOR TAIL t;",
     )?;
 
@@ -309,8 +311,10 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
 
     // Verify that the wait only happens for TAIL. A SELECT with 0 rows should not
     // block.
+    client.batch_execute("COMMIT")?;
+    client.batch_execute("CREATE TABLE empty ()")?;
     client.batch_execute(
-        "CREATE TABLE empty ();
+        "BEGIN;
          DECLARE c CURSOR FOR SELECT * FROM empty;",
     )?;
     let rows = client.query("FETCH c", &[])?;
@@ -349,10 +353,13 @@ fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
 
     let mut file = NamedTempFile::new()?;
     client.batch_execute(&*format!(
-        "CREATE SOURCE f FROM FILE '{}' WITH (tail = true) FORMAT TEXT;
-         BEGIN; DECLARE c CURSOR FOR TAIL f;",
+        "CREATE SOURCE f FROM FILE '{}' WITH (tail = true) FORMAT TEXT",
         file.path().display()
     ))?;
+    client.batch_execute(
+        "BEGIN;
+         DECLARE c CURSOR FOR TAIL f;",
+    )?;
 
     let mut append = |data| -> Result<_, Box<dyn Error>> {
         file.write_all(data)?;
@@ -376,7 +383,8 @@ fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
 
     // Check that writing to the tailed file after the source is dropped doesn't
     // cause a crash (#1361).
-    client.execute("DROP SOURCE f", &[])?;
+    client.batch_execute("COMMIT")?;
+    client.batch_execute("DROP SOURCE f")?;
     thread::sleep(Duration::from_millis(100));
     append(b"line 3\n")?;
     thread::sleep(Duration::from_millis(100));
