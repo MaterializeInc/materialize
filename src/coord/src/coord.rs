@@ -54,7 +54,7 @@ use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timest
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
-    FetchStatement, ObjectType, Statement,
+    FetchStatement, ObjectType, Raw, Statement,
 };
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName, SchemaName};
@@ -101,7 +101,7 @@ pub struct AdvanceSourceTimestamp {
 pub struct StatementReady {
     pub session: Session,
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<sql::ast::Statement, anyhow::Error>,
+    pub result: Result<sql::ast::Statement<Raw>, anyhow::Error>,
     pub params: Params,
 }
 
@@ -266,7 +266,7 @@ where
                             .insert(*id, Frontiers::new(self.num_timely_workers, Some(1_000)));
                     } else {
                         self.ship_dataflow(self.dataflow_builder().build_index_dataflow(*id))
-                            .await;
+                            .await?;
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -291,7 +291,8 @@ where
                     )
                     .await
                     .with_context(|| format!("recreating sink {}", name))?;
-                    self.handle_sink_connector_ready(*id, *oid, connector).await;
+                    self.handle_sink_connector_ready(*id, *oid, connector)
+                        .await?;
                 }
                 _ => (), // Handled in prior loop.
             }
@@ -516,7 +517,13 @@ where
                 // a Kafka topic) that's been created on our behalf. If
                 // we fail now, we'll leak that external state.
                 if self.catalog.try_get_by_id(id).is_some() {
-                    self.handle_sink_connector_ready(id, oid, connector).await;
+                    // TODO(benesch): this `expect` here is possibly scary, but
+                    // no better solution presents itself. Possibly sinks should
+                    // have an error bit, and an error here would set the error
+                    // bit on the sink.
+                    self.handle_sink_connector_ready(id, oid, connector)
+                        .await
+                        .expect("marking sink ready should never fail");
                 } else {
                     // Another session dropped the sink while we were
                     // creating the connector. Report to the client that
@@ -603,6 +610,94 @@ where
                 };
                 match &portal.stmt {
                     Some(stmt) => {
+                        // Verify that this statetement type can be executed in the current
+                        // transaction state.
+                        match session.transaction() {
+                            // Idle is almost always safe (idle means there's a single statement being
+                            // executed). Failed transactions have already been checked in pgwire for a
+                            // safe statement (COMMIT, ROLLBACK, etc.) and can also proceed.
+                            &TransactionStatus::Idle | &TransactionStatus::Failed => {
+                                if let Statement::Declare(_) = stmt {
+                                    // Declare is an exception. Although it's not against any spec to execute
+                                    // it, it will always result in nothing happening, since all portals will be
+                                    // immediately closed. Users don't know this detail, so this error helps them
+                                    // understand what's going wrong. Postgres does this too.
+                                    let _ = tx.send(Response {
+                                        result: Ok(ExecuteResponse::PgError {
+                                            code: SqlState::NO_ACTIVE_SQL_TRANSACTION,
+                                            message: "DECLARE CURSOR can only be used in transaction blocks".into(),
+                                        }),
+                                        session,
+                                    });
+                                    return;
+                                }
+                            }
+
+                            // Implicit or explicit transactions only allow reads for now.
+                            //
+                            // Implicit transactions happen when a multi-statement query is executed
+                            // (a "simple query"). However if a "BEGIN" appears somewhere in there,
+                            // then the existing implicit transaction will be upgraded to an explicit
+                            // transaction. Thus, we should not separate what implicit and explicit
+                            // transactions can do unless there's some additional checking to make sure
+                            // something disallowed in explicit transactions did not previously take place
+                            // in the implicit portion.
+                            &TransactionStatus::InTransactionImplicit
+                            | &TransactionStatus::InTransaction => match stmt {
+                                Statement::Close(_)
+                                | Statement::Commit(_)
+                                | Statement::Copy(_)
+                                | Statement::Declare(_)
+                                | Statement::Discard(_)
+                                | Statement::Explain(_)
+                                | Statement::Fetch(_)
+                                | Statement::Rollback(_)
+                                | Statement::Select(_)
+                                | Statement::SetTransaction(_)
+                                | Statement::ShowVariable(_)
+                                | Statement::StartTransaction(_)
+                                | Statement::Tail(_) => {}
+
+                                Statement::AlterIndexOptions(_)
+                                | Statement::AlterObjectRename(_)
+                                | Statement::CreateDatabase(_)
+                                | Statement::CreateIndex(_)
+                                | Statement::CreateSchema(_)
+                                | Statement::CreateSink(_)
+                                | Statement::CreateSource(_)
+                                | Statement::CreateTable(_)
+                                | Statement::CreateType(_)
+                                | Statement::CreateView(_)
+                                | Statement::Delete(_)
+                                | Statement::DropDatabase(_)
+                                | Statement::DropObjects(_)
+                                | Statement::Insert(_)
+                                | Statement::SetVariable(_)
+                                | Statement::ShowColumns(_)
+                                | Statement::ShowCreateIndex(_)
+                                | Statement::ShowCreateSink(_)
+                                | Statement::ShowCreateSource(_)
+                                | Statement::ShowCreateTable(_)
+                                | Statement::ShowCreateView(_)
+                                | Statement::ShowDatabases(_)
+                                | Statement::ShowIndexes(_)
+                                | Statement::ShowObjects(_)
+                                | Statement::Update(_) => {
+                                    let _ = tx.send(Response {
+                                        result: Ok(ExecuteResponse::PgError {
+                                            code: SqlState::ACTIVE_SQL_TRANSACTION,
+                                            message: format!(
+                                                "{} cannot be run inside a transaction block",
+                                                stmt
+                                            ),
+                                        }),
+                                        session,
+                                    });
+                                    return;
+                                }
+                            },
+                        }
+
                         let mut internal_cmd_tx = internal_cmd_tx.clone();
                         let stmt = stmt.clone();
                         let params = portal.parameters.clone();
@@ -767,7 +862,7 @@ where
     async fn handle_statement(
         &mut self,
         session: &Session,
-        stmt: sql::ast::Statement,
+        stmt: sql::ast::Statement<Raw>,
         params: &sql::plan::Params,
     ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
         let pcx = PlanContext::default();
@@ -817,7 +912,7 @@ where
         &self,
         session: &mut Session,
         name: String,
-        stmt: Statement,
+        stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         // handle_describe cares about symbiosis mode here. Declared cursors are
@@ -838,7 +933,7 @@ where
         &self,
         session: &mut Session,
         name: String,
-        stmt: Option<Statement>,
+        stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         let desc = if let Some(stmt) = stmt.clone() {
@@ -917,7 +1012,7 @@ where
         id: GlobalId,
         oid: u32,
         connector: SinkConnector,
-    ) {
+    ) -> Result<(), anyhow::Error> {
         // Update catalog entry with sink connector.
         let entry = self.catalog.get_by_id(&id);
         let name = entry.name().clone();
@@ -935,9 +1030,7 @@ where
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        self.catalog_transact(ops)
-            .await
-            .expect("replacing a sink cannot fail");
+        self.catalog_transact(ops).await?;
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
             name.to_string(),
@@ -1645,7 +1738,7 @@ where
         {
             Ok(_) => {
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                    .await;
+                    .await?;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1696,7 +1789,7 @@ where
             Ok(()) => {
                 if let Some(index_id) = index_id {
                     self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                        .await;
+                        .await?;
                 }
 
                 self.maybe_begin_caching(source_id, &source.connector).await;
@@ -1847,7 +1940,7 @@ where
             Ok(()) => {
                 if let Some(index_id) = index_id {
                     self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                        .await;
+                        .await?;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -1883,7 +1976,7 @@ where
         match self.catalog_transact(vec![op]).await {
             Ok(()) => {
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(id))
-                    .await;
+                    .await?;
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
@@ -2104,7 +2197,7 @@ where
                     .import_view_into_dataflow(&view_id, &source, &mut dataflow);
                 dataflow.add_index_to_build(index_id, view_id, typ.clone(), key.clone());
                 dataflow.add_index_export(index_id, view_id, typ, key);
-                self.ship_dataflow(dataflow).await;
+                self.ship_dataflow(dataflow).await?;
             }
 
             broadcast(
@@ -2197,7 +2290,7 @@ where
                 object_columns,
             }),
         ))
-        .await;
+        .await?;
 
         let resp = ExecuteResponse::Tailing { rx };
 
@@ -2365,9 +2458,9 @@ where
                 Antichain::from_elem(Timestamp::max_value())
             }
         } else {
-            // TODO: This should more carefully consider `since` frontiers of its input.
-            // This will be forcibly corrected if any inputs are compacted.
-            Antichain::from_elem(0)
+            // Use the earliest time that is still valid for all sources.
+            let (index_ids, _indexes_complete) = self.catalog.nearest_indexes(&[source_id]);
+            self.indexes.least_valid_since(index_ids)
         };
         Ok(frontier)
     }
@@ -2902,7 +2995,7 @@ where
     /// In particular, there are requirement on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
-    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) {
+    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) -> Result<(), anyhow::Error> {
         // The identity for `join` is the minimum element.
         let mut since = Antichain::from_elem(Timestamp::minimum());
 
@@ -2965,16 +3058,12 @@ where
             // If we have requested a specific time that is invalid .. someone errored.
             use timely::order::PartialOrder;
             if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
-                // This can occur in SINK and TAIL at the moment. Their behaviors are fluid enough
-                // that we just correct to avoid producing incorrect output updates, but we should
-                // fix the root of the problem in a more principled manner.
-                log::error!(
-                    "Dataflow {} requested as_of ({:?}) not >= since ({:?}); correcting",
+                bail!(
+                    "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
                     dataflow.debug_name,
                     as_of,
                     since
                 );
-                as_of.join_assign(&since);
             }
         } else {
             // Bind the since frontier to the dataflow description.
@@ -2990,6 +3079,7 @@ where
             SequencedCommand::CreateDataflows(vec![dataflow]),
         )
         .await;
+        Ok(())
     }
 
     // Tell the cacher to start caching data for `id` if that source
@@ -3220,7 +3310,7 @@ pub fn index_sql(
 ) -> String {
     use sql::ast::{Expr, Ident, Value};
 
-    CreateIndexStatement {
+    CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
         on_name: sql::normalize::unresolve(view_name),
         key_parts: Some(
@@ -3256,7 +3346,7 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
 /// through the session.
 pub fn describe(
     catalog: &dyn sql::catalog::Catalog,
-    stmt: Statement,
+    stmt: Statement<Raw>,
     param_types: &[Option<pgrepr::Type>],
     session: Option<&Session>,
 ) -> Result<StatementDesc, anyhow::Error> {

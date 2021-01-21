@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{DataType, Expr, Ident, ObjectName, SqlOption};
+use crate::ast::{AstInfo, DataType, Expr, Ident, ObjectName, SqlOption};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -287,7 +287,7 @@ impl_display!(Connector);
 /// A table-level constraint, specified in a `CREATE TABLE` or an
 /// `ALTER TABLE ADD <constraint>` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TableConstraint {
+pub enum TableConstraint<T: AstInfo> {
     /// `[ CONSTRAINT <name> ] { PRIMARY KEY | UNIQUE } (<columns>)`
     Unique {
         name: Option<Ident>,
@@ -306,11 +306,11 @@ pub enum TableConstraint {
     /// `[ CONSTRAINT <name> ] CHECK (<expr>)`
     Check {
         name: Option<Ident>,
-        expr: Box<Expr>,
+        expr: Box<Expr<T>>,
     },
 }
 
-impl AstDisplay for TableConstraint {
+impl<T: AstInfo> AstDisplay for TableConstraint<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             TableConstraint::Unique {
@@ -352,18 +352,18 @@ impl AstDisplay for TableConstraint {
         }
     }
 }
-impl_display!(TableConstraint);
+impl_display_t!(TableConstraint);
 
 /// SQL column definition
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ColumnDef {
+pub struct ColumnDef<T: AstInfo> {
     pub name: Ident,
     pub data_type: DataType,
     pub collation: Option<ObjectName>,
-    pub options: Vec<ColumnOptionDef>,
+    pub options: Vec<ColumnOptionDef<T>>,
 }
 
-impl AstDisplay for ColumnDef {
+impl<T: AstInfo> AstDisplay for ColumnDef<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_node(&self.name);
         f.write_str(" ");
@@ -374,7 +374,7 @@ impl AstDisplay for ColumnDef {
         }
     }
 }
-impl_display!(ColumnDef);
+impl_display_t!(ColumnDef);
 
 /// An optionally-named `ColumnOption`: `[ CONSTRAINT <name> ] <column-option>`.
 ///
@@ -393,29 +393,29 @@ impl_display!(ColumnDef);
 /// non-constraint options, lumping them all together under the umbrella of
 /// "column options," and we allow any column option to be named.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ColumnOptionDef {
+pub struct ColumnOptionDef<T: AstInfo> {
     pub name: Option<Ident>,
-    pub option: ColumnOption,
+    pub option: ColumnOption<T>,
 }
 
-impl AstDisplay for ColumnOptionDef {
+impl<T: AstInfo> AstDisplay for ColumnOptionDef<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_node(&display_constraint_name(&self.name));
         f.write_node(&self.option);
     }
 }
-impl_display!(ColumnOptionDef);
+impl_display_t!(ColumnOptionDef);
 
 /// `ColumnOption`s are modifiers that follow a column definition in a `CREATE
 /// TABLE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ColumnOption {
+pub enum ColumnOption<T: AstInfo> {
     /// `NULL`
     Null,
     /// `NOT NULL`
     NotNull,
     /// `DEFAULT <restricted-expr>`
-    Default(Expr),
+    Default(Expr<T>),
     /// `{ PRIMARY KEY | UNIQUE }`
     Unique {
         is_primary: bool,
@@ -427,10 +427,10 @@ pub enum ColumnOption {
         referred_columns: Vec<Ident>,
     },
     // `CHECK (<expr>)`
-    Check(Expr),
+    Check(Expr<T>),
 }
 
-impl AstDisplay for ColumnOption {
+impl<T: AstInfo> AstDisplay for ColumnOption<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         use ColumnOption::*;
         match self {
@@ -465,7 +465,7 @@ impl AstDisplay for ColumnOption {
         }
     }
 }
-impl_display!(ColumnOption);
+impl_display_t!(ColumnOption);
 
 fn display_constraint_name<'a>(name: &'a Option<Ident>) -> impl AstDisplay + 'a {
     struct ConstraintName<'a>(&'a Option<Ident>);

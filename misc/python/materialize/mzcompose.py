@@ -1243,6 +1243,8 @@ def wait_for_pg(
                 password=password,
                 timeout=1,
             )
+            # The default (autocommit = false) wraps everything in a transaction.
+            conn.autocommit = True
             cur = conn.cursor()
             cur.execute(query)
             if expected == "any" and cur.rowcount == -1:

@@ -22,7 +22,7 @@ use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
-use sql_parser::ast::{Expr, ObjectName};
+use sql_parser::ast::{Expr, ObjectName, Raw};
 
 use super::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
@@ -34,6 +34,7 @@ use super::typeconv::{self, rescale_decimal, CastContext};
 use super::StatementContext;
 use crate::catalog::CatalogItemType;
 use crate::names::PartialName;
+use crate::plan::transform_ast;
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
@@ -241,7 +242,7 @@ impl<R> Operation<R> {
 macro_rules! sql_op {
     ($l:literal) => {{
         lazy_static! {
-            static ref EXPR: Expr = sql_parser::parser::parse_expr($l.into())
+            static ref EXPR: Expr<Raw> = sql_parser::parser::parse_expr($l.into())
                 .expect("static function definition failed to parse");
         }
         Operation::variadic(move |ecx, args| {
@@ -264,8 +265,12 @@ macro_rules! sql_op {
                 allow_subqueries: true,
             };
 
+            // Desugar the expression
+            let mut expr = EXPR.clone();
+            transform_ast::transform_expr(&scx, &mut expr)?;
+
             // Plan the expression.
-            let mut expr = query::plan_expr(&ecx, &*EXPR)?.type_as_any(&ecx)?;
+            let mut expr = query::plan_expr(&ecx, &expr)?.type_as_any(&ecx)?;
 
             // Replace the parameters with the actual arguments.
             expr.splice_parameters(&args, 0);
@@ -1735,6 +1740,14 @@ lazy_static! {
                 })
             },
             "unnest" => Table {
+                vec![ArrayAny] => Operation::unary(move |ecx, e| {
+                    let el_typ =  ecx.scalar_type(&e).unwrap_array_element_type().clone();
+                    Ok(TableFuncPlan {
+                        func: TableFunc::UnnestArray{ el_typ },
+                        exprs: vec![e],
+                        column_names: vec![Some("unnest".into())],
+                    })
+                }),
                 vec![ListAny] => Operation::unary(move |ecx, e| {
                     let el_typ =  ecx.scalar_type(&e).unwrap_list_element_type().clone();
                     Ok(TableFuncPlan {

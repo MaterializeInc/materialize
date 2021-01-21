@@ -26,25 +26,25 @@
 //! by invoking the right visitor method of each of its fields.
 //!
 //! ```
-//! # use sql_parser::ast::{Expr, Function, FunctionArgs, ObjectName, WindowSpec};
+//! # use sql_parser::ast::{Expr, Function, FunctionArgs, ObjectName, WindowSpec, Raw, AstInfo};
 //! #
-//! pub trait Visit<'ast> {
+//! pub trait Visit<'ast, T: AstInfo> {
 //!     /* ... */
 //!
-//!     fn visit_function(&mut self, node: &'ast Function) {
+//!     fn visit_function(&mut self, node: &'ast Function<T>) {
 //!         visit_function(self, node);
 //!     }
 //!
 //!     /* ... */
 //!     # fn visit_object_name(&mut self, node: &'ast ObjectName);
-//!     # fn visit_function_args(&mut self, node: &'ast FunctionArgs);
-//!     # fn visit_expr(&mut self, node: &'ast Expr);
-//!     # fn visit_window_spec(&mut self, node: &'ast WindowSpec);
+//!     # fn visit_function_args(&mut self, node: &'ast FunctionArgs<T>);
+//!     # fn visit_expr(&mut self, node: &'ast Expr<T>);
+//!     # fn visit_window_spec(&mut self, node: &'ast WindowSpec<T>);
 //! }
 //!
-//! pub fn visit_function<'ast, V>(visitor: &mut V, node: &'ast Function)
+//! pub fn visit_function<'ast, V, T: AstInfo>(visitor: &mut V, node: &'ast Function<T>)
 //! where
-//!     V: Visit<'ast> + ?Sized,
+//!     V: Visit<'ast, T> + ?Sized,
 //! {
 //!     visitor.visit_object_name(&node.name);
 //!     visitor.visit_function_args(&node.args);
@@ -66,15 +66,15 @@
 //! ```
 //! use std::error::Error;
 //!
-//! use sql_parser::ast::Query;
+//! use sql_parser::ast::{AstInfo, Query, Raw};
 //! use sql_parser::ast::visit::{self, Visit};
 //!
 //! struct SubqueryCounter {
 //!     count: usize,
 //! }
 //!
-//! impl<'ast> Visit<'ast> for SubqueryCounter {
-//!     fn visit_query(&mut self, query: &'ast Query) {
+//! impl<'ast> Visit<'ast, Raw> for SubqueryCounter {
+//!     fn visit_query(&mut self, query: &'ast Query<Raw>) {
 //!         self.count += 1;
 //!
 //!         // Delegate to the default implentation to visit any nested
@@ -105,17 +105,23 @@
 //! ```
 //! use std::error::Error;
 //!
-//! use sql_parser::ast::Ident;
+//! use sql_parser::ast::{Ident, Raw, AstInfo};
 //! use sql_parser::ast::visit::{self, Visit};
 //!
 //! struct IdentCollector<'ast> {
 //!     idents: Vec<&'ast Ident>,
 //! }
 //!
-//! impl<'ast> Visit<'ast> for IdentCollector<'ast> {
+//! impl<'ast> Visit<'ast, Raw> for IdentCollector<'ast> {
 //!     fn visit_ident(&mut self, node: &'ast Ident) {
 //!         self.idents.push(node);
 //!         visit::visit_ident(self, node);
+//!     }
+//!     fn visit_table(&mut self, name: &'ast <Raw as AstInfo>::Table) {
+//!         for node in &name.0 {
+//!             self.idents.push(node);
+//!             visit::visit_ident(self, node);
+//!         }
 //!     }
 //! }
 //!

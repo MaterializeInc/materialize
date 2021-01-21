@@ -14,7 +14,7 @@ use derivative::Derivative;
 
 use dataflow_types::PeekResponse;
 use repr::Row;
-use sql::ast::{FetchDirection, ObjectType, Statement};
+use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
 use sql::plan::ExecuteTimeout;
 use tokio_postgres::error::SqlState;
 
@@ -30,7 +30,7 @@ pub enum Command {
 
     Declare {
         name: String,
-        stmt: Statement,
+        stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
         session: Session,
         tx: futures::channel::oneshot::Sender<Response<()>>,
@@ -38,7 +38,7 @@ pub enum Command {
 
     Describe {
         name: String,
-        stmt: Option<Statement>,
+        stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
         session: Session,
         tx: futures::channel::oneshot::Sender<Response<()>>,
@@ -63,7 +63,7 @@ pub enum Command {
     },
 
     NoSessionExecute {
-        stmt: Statement,
+        stmt: Statement<Raw>,
         params: sql::plan::Params,
         tx: futures::channel::oneshot::Sender<anyhow::Result<NoSessionExecuteResponse>>,
     },
