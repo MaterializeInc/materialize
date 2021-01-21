@@ -13,14 +13,13 @@ use async_trait::async_trait;
 use futures::future::TryFutureExt;
 use futures::stream::{Stream, StreamExt};
 use log::error;
-use tokio::io::{self, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 
-use ore::netio::{self, SniffedStream, SniffingStream};
+use ore::netio::{self, AsyncReady, SniffedStream, SniffingStream};
 
 use crate::http;
 
-type Handlers = Vec<Box<dyn ConnectionHandler + Send + Sync>>;
+type Handlers<S> = Vec<Box<dyn ConnectionHandler<S> + Send + Sync>>;
 
 /// A mux routes incoming TCP connections to a dynamic set of connection
 /// handlers. It enables serving multiple protocols over the same port.
@@ -28,28 +27,28 @@ type Handlers = Vec<Box<dyn ConnectionHandler + Send + Sync>>;
 /// Connections are routed by sniffing the first several bytes sent over the
 /// wire and matching them against each handler, in order. The first handler
 /// to match the connection will be invoked.
-pub struct Mux {
-    handlers: Handlers,
+pub struct Mux<S> where S: AsyncRead + AsyncWrite + Unpin + Send + Sync {
+    handlers: Handlers<S>,
 }
 
-impl Mux {
+impl <S>Mux<S> where S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {
     /// Constructs a new `Mux`.
-    pub fn new() -> Mux {
+    pub fn new() -> Mux<S> {
         Mux { handlers: vec![] }
     }
 
     /// Adds a new connection handler to this mux.
     pub fn add_handler<H>(&mut self, handler: H)
     where
-        H: ConnectionHandler + Send + Sync + 'static,
+        H: ConnectionHandler<S> + Send + Sync + 'static,
     {
         self.handlers.push(Box::new(handler));
     }
 
-    /// Serves incoming TCP traffic from `listener`.
-    pub async fn serve<S>(self, mut incoming: S)
+    /// Serves incoming traffic from `listener`.
+    pub async fn serve<U>(self, mut incoming: U)
     where
-        S: Stream<Item = io::Result<TcpStream>> + Unpin,
+        U: Stream<Item = io::Result<S>> + Unpin,
     {
         let handlers = Arc::new(self.handlers);
         while let Some(conn) = incoming.next().await {
@@ -60,24 +59,13 @@ impl Mux {
                     continue;
                 }
             };
-            // Set TCP_NODELAY to disable tinygram prevention (Nagle's
-            // algorithm), which forces a 40ms delay between each query
-            // on linux. According to John Nagle [0], the true problem
-            // is delayed acks, but disabling those is a receive-side
-            // operation (TCP_QUICKACK), and we can't always control the
-            // client. PostgreSQL sets TCP_NODELAY on both sides of its
-            // sockets, so it seems sane to just do the same.
-            //
-            // If set_nodelay fails, it's a programming error, so panic.
-            //
-            // [0]: https://news.ycombinator.com/item?id=10608356
-            conn.set_nodelay(true).expect("set_nodelay failed");
             tokio::spawn(handle_connection(handlers.clone(), conn));
         }
     }
 }
 
-async fn handle_connection(handlers: Arc<Handlers>, conn: TcpStream) {
+async fn handle_connection<S>(handlers: Arc<Handlers<S>>, conn: S) 
+    where S: AsyncRead + AsyncWrite + Unpin + Send + Sync {
     // Sniff out what protocol we've received. Choosing how many bytes to
     // sniff is a delicate business. Read too many bytes and you'll stall
     // out protocols with small handshakes, like pgwire. Read too few bytes
@@ -113,7 +101,7 @@ async fn handle_connection(handlers: Arc<Handlers>, conn: TcpStream) {
 
 /// A connection handler manages an incoming network connection.
 #[async_trait]
-pub trait ConnectionHandler {
+pub trait ConnectionHandler<S> where S: AsyncRead + AsyncWrite + Unpin + Send + Sync {
     /// Returns the name of the connection handler for use in e.g. log messages.
     fn name(&self) -> &str;
 
@@ -122,11 +110,12 @@ pub trait ConnectionHandler {
     fn match_handshake(&self, buf: &[u8]) -> bool;
 
     /// Handles the connection.
-    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error>;
+    async fn handle_connection(&self, conn: SniffedStream<S>) -> Result<(), anyhow::Error>;
 }
 
 #[async_trait]
-impl ConnectionHandler for pgwire::Server {
+impl <S>ConnectionHandler<S> for pgwire::Server 
+    where S: AsyncRead + AsyncWrite + AsyncReady + Unpin + Send + Sync + 'static {
     fn name(&self) -> &str {
         "pgwire server"
     }
@@ -135,13 +124,14 @@ impl ConnectionHandler for pgwire::Server {
         pgwire::match_handshake(buf)
     }
 
-    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
+    async fn handle_connection(&self, conn: SniffedStream<S>) -> Result<(), anyhow::Error> {
         self.handle_connection(conn).await
     }
 }
 
 #[async_trait]
-impl ConnectionHandler for http::Server {
+impl <S>ConnectionHandler<S> for http::Server
+    where S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {
     fn name(&self) -> &str {
         "http server"
     }
@@ -150,13 +140,14 @@ impl ConnectionHandler for http::Server {
         self.match_handshake(buf)
     }
 
-    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
+    async fn handle_connection(&self, conn: SniffedStream<S>) -> Result<(), anyhow::Error> {
         self.handle_connection(conn).await
     }
 }
 
 #[async_trait]
-impl ConnectionHandler for comm::Switchboard<SniffedStream<TcpStream>> {
+impl <S>ConnectionHandler<S> for comm::Switchboard<SniffedStream<S>>
+    where S: comm::Connection + Unpin + Sync {
     fn name(&self) -> &str {
         "switchboard"
     }
@@ -165,7 +156,7 @@ impl ConnectionHandler for comm::Switchboard<SniffedStream<TcpStream>> {
         comm::protocol::match_handshake(buf)
     }
 
-    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
+    async fn handle_connection(&self, conn: SniffedStream<S>) -> Result<(), anyhow::Error> {
         self.handle_connection(conn).err_into().await
     }
 }

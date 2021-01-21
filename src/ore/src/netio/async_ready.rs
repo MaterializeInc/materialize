@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use async_trait::async_trait;
-use tokio::io::{self, Interest, Ready};
+use tokio::{io::{self, Interest, Ready}, net::UnixStream};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
 
@@ -26,6 +26,13 @@ pub trait AsyncReady {
 
 #[async_trait]
 impl AsyncReady for TcpStream {
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        self.ready(interest).await
+    }
+}
+
+#[async_trait]
+impl AsyncReady for UnixStream {
     async fn ready(&self, interest: Interest) -> io::Result<Ready> {
         self.ready(interest).await
     }

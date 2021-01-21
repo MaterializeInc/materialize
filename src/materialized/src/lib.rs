@@ -39,7 +39,7 @@ use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use crate::mux::Mux;
 
 mod http;
-mod mux;
+pub mod mux;
 mod version_check;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
@@ -216,6 +216,18 @@ pub async fn serve(
             let mut incoming = Box::pin(try_stream! {
                 loop {
                     let (conn, _addr) = listener.accept().await?;
+                    // Set TCP_NODELAY to disable tinygram prevention (Nagle's
+                    // algorithm), which forces a 40ms delay between each query
+                    // on linux. According to John Nagle [0], the true problem
+                    // is delayed acks, but disabling those is a receive-side
+                    // operation (TCP_QUICKACK), and we can't always control the
+                    // client. PostgreSQL sets TCP_NODELAY on both sides of its
+                    // sockets, so it seems sane to just do the same.
+                    //
+                    // If set_nodelay fails, it's a programming error, so panic.
+                    //
+                    // [0]: https://news.ycombinator.com/item?id=10608356
+                    conn.set_nodelay(true).expect("set_nodelay failed");
                     yield conn;
                 }
             });
