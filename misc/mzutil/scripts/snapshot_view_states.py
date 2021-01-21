@@ -49,6 +49,7 @@ def snapshot_materialize_views(args: argparse.Namespace) -> None:
     """Record the current table status of all views installed in Materialize."""
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
+        conn.autocommit = True
         for view in view_names(conn):
             with conn.cursor() as cursor:
                 viewfile = os.path.join(args.snapshot_dir, f"{view}.sql")
@@ -61,6 +62,7 @@ def snapshot_source_offsets(args: argparse.Namespace) -> None:
     """Record the current topic offset of all sources installed in Materialize."""
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
+        conn.autocommit = True
         for source in source_names(conn):
             with conn.cursor() as cursor:
                 query = "SELECT mz_source_info.offset as offset FROM mz_source_info WHERE source_name = %s"
