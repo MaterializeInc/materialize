@@ -61,3 +61,35 @@ CommandComplete {"tag":"SELECT 0"}
 CommandComplete {"tag":"COMMIT"}
 ReadyForQuery {"status":"I"}
 ReadyForQuery {"status":"I"}
+
+# Verify correct Close error.
+send
+Query {"query": "CLOSE c"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"34000"},{"typ":"M","value":"cursor \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}
+
+# Verify that portals (cursors) are destroyed on Sync.
+send
+Parse {"query": "VALUES (1), (2)"}
+Bind {"portal": "c"}
+Execute {"portal": "c", "max_rows": 1}
+Sync
+Query {"query": "FETCH c"}
+----
+
+until err_field_typs=M
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+PortalSuspended
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"M","value":"cursor \"c\" does not exist"}]}
+ReadyForQuery {"status":"I"}
