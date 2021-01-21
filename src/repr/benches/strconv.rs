@@ -7,12 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
 use repr::strconv;
+
+fn bench_parse_float32(c: &mut Criterion) {
+    for s in &["-3.0", "9.7", "NaN", "inFiNiTy"] {
+        c.bench_with_input(BenchmarkId::new("parse_float32", s), s, |b, s| {
+            b.iter(|| strconv::parse_float32(s).unwrap())
+        });
+    }
+}
+
+fn bench_parse_decimal(c: &mut Criterion) {
+    for s in &["-135412353251", "1.030340E11"] {
+        c.bench_with_input(BenchmarkId::new("parse_decimal", s), s, |b, s| {
+            b.iter(|| strconv::parse_decimal(s).unwrap())
+        });
+    }
+}
 
 fn bench_parse_jsonb(c: &mut Criterion) {
     let input = include_str!("testdata/twitter.json");
@@ -73,6 +89,8 @@ criterion_group!(
     benches,
     bench_format_list_simple,
     bench_format_list_nested,
+    bench_parse_decimal,
+    bench_parse_float32,
     bench_parse_jsonb
 );
 criterion_main!(benches);

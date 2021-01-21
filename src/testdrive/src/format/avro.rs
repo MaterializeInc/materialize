@@ -212,7 +212,10 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
                     }
                 }
             }
-            Err(format!("Type not found in union: {}", name))
+            Err(format!(
+                "Type not found in union: {}. variants: {:#?}",
+                name, variants
+            ))
         }
         _ => Err(format!(
             "unable to match JSON value to schema: {:?} vs {:?}",

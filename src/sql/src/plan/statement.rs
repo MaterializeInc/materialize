@@ -20,7 +20,7 @@ use anyhow::bail;
 use ore::collections::CollectionExt;
 use repr::{ColumnType, RelationDesc, ScalarType};
 
-use crate::ast::{Ident, ObjectName, ObjectType, Statement};
+use crate::ast::{Ident, ObjectName, ObjectType, Raw, Statement};
 use crate::catalog::{Catalog, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema};
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
@@ -88,7 +88,7 @@ impl StatementDesc {
 /// See the documentation of [`StatementDesc`] for details.
 pub fn describe(
     catalog: &dyn Catalog,
-    stmt: Statement,
+    stmt: Statement<Raw>,
     param_types_in: &[Option<pgrepr::Type>],
 ) -> Result<StatementDesc, anyhow::Error> {
     let mut param_types = BTreeMap::new();
@@ -166,7 +166,7 @@ pub fn describe(
 pub fn plan(
     pcx: &PlanContext,
     catalog: &dyn Catalog,
-    stmt: Statement,
+    stmt: Statement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let param_types = params

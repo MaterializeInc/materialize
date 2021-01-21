@@ -22,8 +22,8 @@ use repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
     CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
-    ExplainStage, ExplainStatement, Explainee, InsertStatement, Query, SelectStatement, Statement,
-    TailStatement, UpdateStatement,
+    ExplainStage, ExplainStatement, Explainee, InsertStatement, Query, Raw, SelectStatement,
+    Statement, TailStatement, UpdateStatement,
 };
 use crate::catalog::CatalogItemType;
 use crate::plan::query;
@@ -44,7 +44,7 @@ pub fn describe_insert(
         columns,
         source,
         ..
-    }: InsertStatement,
+    }: InsertStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     query::plan_insert_query(scx, table_name, columns, source)?;
     Ok(StatementDesc::new(None))
@@ -56,7 +56,7 @@ pub fn plan_insert(
         table_name,
         columns,
         source,
-    }: InsertStatement,
+    }: InsertStatement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
@@ -68,14 +68,14 @@ pub fn plan_insert(
 
 pub fn describe_update(
     _: &StatementContext,
-    _: UpdateStatement,
+    _: UpdateStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     unsupported!("UPDATE statements")
 }
 
 pub fn plan_update(
     _: &StatementContext,
-    _: UpdateStatement,
+    _: UpdateStatement<Raw>,
     _: &Params,
 ) -> Result<Plan, anyhow::Error> {
     unsupported!("UPDATE statements")
@@ -83,14 +83,14 @@ pub fn plan_update(
 
 pub fn describe_delete(
     _: &StatementContext,
-    _: DeleteStatement,
+    _: DeleteStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     unsupported!("DELETE statements")
 }
 
 pub fn plan_delete(
     _: &StatementContext,
-    _: DeleteStatement,
+    _: DeleteStatement<Raw>,
     _: &Params,
 ) -> Result<Plan, anyhow::Error> {
     unsupported!("DELETE statements")
@@ -98,7 +98,7 @@ pub fn plan_delete(
 
 pub fn describe_select(
     scx: &StatementContext,
-    SelectStatement { query, .. }: SelectStatement,
+    SelectStatement { query, .. }: SelectStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     let (_relation_expr, desc, _finishing) =
         query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
@@ -107,7 +107,7 @@ pub fn describe_select(
 
 pub fn plan_select(
     scx: &StatementContext,
-    SelectStatement { query, as_of }: SelectStatement,
+    SelectStatement { query, as_of }: SelectStatement<Raw>,
     params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
@@ -129,7 +129,7 @@ pub fn describe_explain(
     scx: &StatementContext,
     ExplainStatement {
         stage, explainee, ..
-    }: ExplainStatement,
+    }: ExplainStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
         match stage {
@@ -160,7 +160,7 @@ pub fn plan_explain(
         stage,
         explainee,
         options,
-    }: ExplainStatement,
+    }: ExplainStatement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let is_view = matches!(explainee, Explainee::View(_));
@@ -213,7 +213,7 @@ pub fn plan_explain(
 /// an `::expr::RelationExpr`, which cannot include correlated expressions.
 pub fn plan_query(
     scx: &StatementContext,
-    query: Query,
+    query: Query<Raw>,
     params: &Params,
     lifetime: QueryLifetime,
 ) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
@@ -231,7 +231,7 @@ with_options! {
 
 pub fn describe_tail(
     scx: &StatementContext,
-    TailStatement { name, options, .. }: TailStatement,
+    TailStatement { name, options, .. }: TailStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     let sql_object = scx.resolve_item(name)?;
     let options = TailOptions::try_from(options)?;
@@ -255,12 +255,13 @@ pub fn plan_tail(
         name,
         options,
         as_of,
-    }: TailStatement,
+    }: TailStatement<Raw>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
     let entry = scx.resolve_item(name)?;
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let options = TailOptions::try_from(options)?;
+    let desc = entry.desc()?.clone();
 
     match entry.item_type() {
         CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
@@ -271,6 +272,7 @@ pub fn plan_tail(
                 copy_to,
                 emit_progress: options.progress.unwrap_or(false),
                 object_columns: entry.desc()?.arity(),
+                desc,
             })
         }
         CatalogItemType::Index | CatalogItemType::Sink | CatalogItemType::Type => bail!(
@@ -289,7 +291,7 @@ with_options! {
 
 pub fn describe_copy(
     scx: &StatementContext,
-    CopyStatement { relation, .. }: CopyStatement,
+    CopyStatement { relation, .. }: CopyStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(match relation {
         CopyRelation::Table { .. } => bail!("unsupported COPY relation {:?}", relation),
@@ -306,7 +308,7 @@ pub fn plan_copy(
         direction,
         target,
         options,
-    }: CopyStatement,
+    }: CopyStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let options = CopyOptions::try_from(options)?;
     let format = if let Some(format) = options.format {

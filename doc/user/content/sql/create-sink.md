@@ -27,7 +27,7 @@ Field | Use
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
 **AVRO OCF** _path_ | The absolute path and file name of the Avro Object Container file (OCF) to create and write to. The filename will be modified to let Materialize create a unique file each time Materialize starts, but the file extension will not be modified. You can find more details [here](#avro-ocf-sinks).
-**AS OF** _timestamp&lowbar;expression_ | The logical time to tail from onwards (either a number of milliseconds since the Unix epoch, or a `TIMESTAMP` or `TIMESTAMPTZ`).
+**AS OF** _timestamp&lowbar;expression_ | The logical time to tail from onwards (either a number of milliseconds since the Unix epoch, or a `TIMESTAMP` or `timestamp with time zone`).
 
 ### Kafka connector
 
@@ -48,7 +48,7 @@ The following options are valid within the `WITH` clause.
 Field | Value type | Description
 ------|------------|------------
 `replication_factor` | `int` | Set the sink Kafka topic's replication factor. This defaults to 1.
-`consistency` | `bool` | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
+`consistency` | `boolean` | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
 
 #### SSL `WITH` options
 

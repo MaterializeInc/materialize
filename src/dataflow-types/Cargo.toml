@@ -7,9 +7,11 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.38"
+aws-util = { path = "../aws-util" }
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 expr = { path = "../expr" }
+globset = { version = "0.4.0", features = ["serde1"] }
 interchange = { path = "../interchange" }
 kafka-util = { path = "../kafka-util" }
 log = "0.4.13"

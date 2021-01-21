@@ -2053,7 +2053,7 @@ pub enum BinaryFunc {
     Lte,
     Gt,
     Gte,
-    IsLikePatternMatch,
+    IsLikePatternMatch { case_insensitive: bool },
     IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
@@ -2173,7 +2173,9 @@ impl BinaryFunc {
             BinaryFunc::Lte => Ok(eager!(lte)),
             BinaryFunc::Gt => Ok(eager!(gt)),
             BinaryFunc::Gte => Ok(eager!(gte)),
-            BinaryFunc::IsLikePatternMatch => eager!(is_like_pattern_match_dynamic),
+            BinaryFunc::IsLikePatternMatch { case_insensitive } => {
+                eager!(is_like_pattern_match_dynamic, *case_insensitive)
+            }
             BinaryFunc::IsRegexpMatch { case_insensitive } => {
                 eager!(is_regexp_match_dynamic, *case_insensitive)
             }
@@ -2269,7 +2271,7 @@ impl BinaryFunc {
                 ScalarType::Bool.nullable(in_nullable)
             }
 
-            IsLikePatternMatch | IsRegexpMatch { .. } => {
+            IsLikePatternMatch { .. } | IsRegexpMatch { .. } => {
                 // The output can be null if the pattern is invalid.
                 ScalarType::Bool.nullable(true)
             }
@@ -2562,7 +2564,7 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat => true,
-            IsLikePatternMatch
+            IsLikePatternMatch { .. }
             | ToCharTimestamp
             | ToCharTimestampTz
             | DatePartInterval
@@ -2645,7 +2647,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Lte => f.write_str("<="),
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
-            BinaryFunc::IsLikePatternMatch => f.write_str("like"),
+            BinaryFunc::IsLikePatternMatch {
+                case_insensitive: false,
+            } => f.write_str("like"),
+            BinaryFunc::IsLikePatternMatch {
+                case_insensitive: true,
+            } => f.write_str("ilike"),
             BinaryFunc::IsRegexpMatch {
                 case_insensitive: false,
             } => f.write_str("~"),
@@ -3157,7 +3164,7 @@ impl UnaryFunc {
             JsonbPretty => ScalarType::String.nullable(in_nullable),
 
             RecordGet(i) => match input_type.scalar_type {
-                ScalarType::Record { mut fields } => fields.swap_remove(*i).1.nullable(true),
+                ScalarType::Record { mut fields, .. } => fields.swap_remove(*i).1.nullable(true),
                 _ => unreachable!("RecordGet specified nonexistent field"),
             },
 
@@ -3462,10 +3469,15 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     ))
 }
 
-fn is_like_pattern_match_dynamic<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn is_like_pattern_match_dynamic<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    case_insensitive: bool,
+) -> Result<Datum<'a>, EvalError> {
     let haystack = a.unwrap_str();
-    let needle = like_pattern::build_regex(b.unwrap_str())?;
-    Ok(Datum::from(needle.is_match(haystack)))
+    let flags = if case_insensitive { "i" } else { "" };
+    let needle = like_pattern::build_regex(b.unwrap_str(), flags)?;
+    Ok(Datum::from(needle.is_match(haystack.as_ref())))
 }
 
 fn is_regexp_match_static<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
@@ -3762,7 +3774,7 @@ where
         String => strconv::format_string(buf, d.unwrap_str()),
         Jsonb => strconv::format_jsonb(buf, JsonbRef::from_datum(d)),
         Uuid => strconv::format_uuid(buf, d.unwrap_uuid()),
-        Record { fields } => {
+        Record { fields, .. } => {
             let mut fields = fields.iter();
             strconv::format_record(buf, &d.unwrap_list(), |buf, d| {
                 let (_name, ty) = fields.next().unwrap();
@@ -4269,6 +4281,8 @@ impl VariadicFunc {
                     .into_iter()
                     .zip(input_types.into_iter())
                     .collect(),
+                custom_oid: None,
+                custom_name: None,
             }
             .nullable(true),
             SplitPart => ScalarType::String.nullable(true),

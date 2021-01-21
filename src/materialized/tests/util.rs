@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryInto;
 use std::error::Error;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -21,6 +22,7 @@ use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
 use openssl::x509::extension::SubjectAlternativeName;
 use openssl::x509::{X509NameBuilder, X509};
+use postgres::types::{FromSql, Type};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -199,4 +201,21 @@ pub fn generate_certs(cert_path: &Path, key_path: &Path) -> Result<(), Box<dyn E
     fs::write(cert_path, &cert.to_pem()?)?;
     fs::write(key_path, &pkey.private_key_to_pem_pkcs8()?)?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub struct MzTimestamp(pub u64);
+
+impl<'a> FromSql<'a> for MzTimestamp {
+    fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
+        let n = pgrepr::Numeric::from_sql(ty, raw)?;
+        if n.0.scale() != 0 {
+            return Err("scale of numeric was not 0".into());
+        }
+        Ok(MzTimestamp(n.0.significand().try_into()?))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        pgrepr::Numeric::accepts(ty)
+    }
 }

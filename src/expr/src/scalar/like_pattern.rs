@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 
 use crate::scalar::EvalError;
 
 /// Builds a regular expression that matches the same strings as a SQL
 /// LIKE pattern.
-pub fn build_regex(pattern: &str) -> Result<Regex, EvalError> {
+pub fn build_regex(pattern: &str, flags: &str) -> Result<Regex, EvalError> {
     // LIKE patterns always cover the whole string, so we anchor the regex on
     // both sides. An underscore (`_`) in a LIKE pattern matches any single
     // character and a percent sign (`%`) matches any sequence of zero or more
@@ -49,8 +49,20 @@ pub fn build_regex(pattern: &str) -> Result<Regex, EvalError> {
     }
     regex.push('$');
     if escape {
-        Err(EvalError::UnterminatedLikeEscapeSequence)
-    } else {
-        Ok(Regex::new(&regex).expect("regex constructed to be valid"))
+        return Err(EvalError::UnterminatedLikeEscapeSequence);
     }
+
+    let mut regex = RegexBuilder::new(&regex);
+    for f in flags.chars() {
+        match f {
+            'i' => {
+                regex.case_insensitive(true);
+            }
+            'c' => {
+                regex.case_insensitive(false);
+            }
+            _ => return Err(EvalError::InvalidRegexFlag(f)),
+        }
+    }
+    Ok(regex.build().expect("regex constructed to be valid"))
 }

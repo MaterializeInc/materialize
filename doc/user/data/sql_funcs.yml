@@ -260,10 +260,10 @@
 
 - type: Date and Time
   description: Time functions take or produce a time-like type, e.g. [`date`](../types/date),
-    [`timestamp`](../types/timestamp), [`timestamptz`](../types/timestamptz).
+    [`timestamp`](../types/timestamp), [`timestamp with time zone`](../types/timestamptz).
   functions:
   - signature: current_timestamp() -> timestamptz
-    description: 'The `timestamptz` representing when the query was executed.<br/><br/>**NOTE**:
+    description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
       Users cannot define views with queries containing `current_timestamp()`.'
 
   - signature: 'date_trunc(time_component: str, val: timestamp) -> timestamp'
@@ -279,7 +279,7 @@
       cannot define views with queries containing `mz_logical_timestamp()`.'
 
   - signature: now() -> timestamptz
-    description: 'The `timestamptz` representing when the query was executed.<br/><br/>**NOTE**:
+    description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
       Users cannot define views with queries containing `now()`.'
 
   - signature: 'to_timestamp(val: double precision) -> timestamptz'

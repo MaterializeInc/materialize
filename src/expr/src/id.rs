@@ -124,11 +124,15 @@ impl fmt::Display for SourceInstanceId {
 /// Unique identifier for each part of a whole source.
 ///     Kafka -> partition
 ///     Kinesis -> shard
+///     File -> only one
+///     S3 -> only one
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
     Kinesis(String),
     File,
+    // TODO(bwm): should this partition based on object keys?
+    S3,
 }
 
 impl fmt::Display for PartitionId {

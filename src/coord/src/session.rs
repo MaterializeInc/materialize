@@ -17,7 +17,7 @@ use derivative::Derivative;
 use futures::Stream;
 
 use repr::{Datum, Row, ScalarType};
-use sql::ast::Statement;
+use sql::ast::{Raw, Statement};
 use sql::plan::{Params, StatementDesc};
 
 mod vars;
@@ -88,18 +88,8 @@ impl Session {
     }
 
     /// Marks the current transaction as failed.
-    ///
-    /// If the session is not in a transaction, this method does nothing.
     pub fn fail_transaction(&mut self) {
-        match self.transaction {
-            TransactionStatus::InTransaction => {
-                self.transaction = TransactionStatus::Failed;
-            }
-            TransactionStatus::InTransactionImplicit => {
-                self.transaction = TransactionStatus::Idle;
-            }
-            _ => {}
-        }
+        self.transaction = TransactionStatus::Failed;
     }
 
     /// Returns the current transaction status.
@@ -137,7 +127,7 @@ impl Session {
         &mut self,
         portal_name: String,
         desc: StatementDesc,
-        stmt: Option<Statement>,
+        stmt: Option<Statement<Raw>>,
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<pgrepr::Format>,
     ) {
@@ -199,19 +189,19 @@ impl Session {
 /// A prepared statement.
 #[derive(Debug)]
 pub struct PreparedStatement {
-    sql: Option<Statement>,
+    sql: Option<Statement<Raw>>,
     desc: StatementDesc,
 }
 
 impl PreparedStatement {
     /// Constructs a new prepared statement.
-    pub fn new(sql: Option<Statement>, desc: StatementDesc) -> PreparedStatement {
+    pub fn new(sql: Option<Statement<Raw>>, desc: StatementDesc) -> PreparedStatement {
         PreparedStatement { sql, desc }
     }
 
     /// Returns the raw SQL string associated with this prepared statement,
     /// if the prepared statement was not the empty query.
-    pub fn sql(&self) -> Option<&Statement> {
+    pub fn sql(&self) -> Option<&Statement<Raw>> {
         self.sql.as_ref()
     }
 
@@ -226,7 +216,7 @@ impl PreparedStatement {
 #[derivative(Debug)]
 pub struct Portal {
     /// The statement that is bound to this portal.
-    pub stmt: Option<Statement>,
+    pub stmt: Option<Statement<Raw>>,
     /// The statement description.
     pub desc: StatementDesc,
     /// The bound values for the parameters in the prepared statement, if any.
@@ -254,15 +244,22 @@ pub enum PortalState {
 /// A stream of batched rows.
 pub type RowBatchStream = Box<dyn Stream<Item = Result<Vec<Row>, comm::Error>> + Send + Unpin>;
 
-/// The transaction status of a session.
+/// The transaction status of a session. Postgres' transaction states are in
+/// backend/access/transam/xact.c. The states here don't cleanly match to all
+/// of those, but we try to have lots of tests that make sure our behavior is
+/// identical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionStatus {
-    /// Not currently in a transaction.
+    /// Not in an explicit or implicit transaction. May execute a single
+    /// statement in this state. Matches both TBLOCK_DEFAULT and TBLOCK_STARTED.
     Idle,
-    /// Currently in a transaction.
+    /// Currently in a transaction issued from a BEGIN. Matches TBLOCK_INPROGRESS.
     InTransaction,
-    /// Currently in an implicit transaction.
+    /// Currently in an implicit transaction started from a multi-statement query
+    /// with more than 1 statements. Matches TBLOCK_IMPLICIT_INPROGRESS.
     InTransactionImplicit,
-    /// Currently in a failed transaction.
+    /// In a failed transaction that was started explicitly (i.e., previously
+    /// InTransaction). We do not use Failed for implicit transactions because
+    /// those cleanup after themselves. Matches TBLOCK_ABORT.
     Failed,
 }

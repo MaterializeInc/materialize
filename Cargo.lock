@@ -220,7 +220,9 @@ dependencies = [
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kinesis",
+ "rusoto_s3",
  "rusoto_sts",
+ "serde",
  "tokio",
 ]
 
@@ -262,7 +264,7 @@ dependencies = [
  "postgres-types",
  "protobuf",
  "protoc",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rand_distr",
  "structopt",
  "test-util",
@@ -344,9 +346,9 @@ checksum = "ae44d1a3d5a19df61dd0c8beb138458ac2a53a7ac09eba97d55592540004306b"
 
 [[package]]
 name = "bytes"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad1f8e949d755f9d79112b5bb46938e0ef9d3804a0b16dfab13aafcaa5f0fa72"
+checksum = "b700ce4376041dcd0a327fd0097c41095743c4c8af8887265942faf1100bd040"
 
 [[package]]
 name = "cast"
@@ -402,7 +404,7 @@ dependencies = [
  "log",
  "md-5",
  "ore",
- "rand 0.8.0",
+ "rand 0.8.2",
  "structopt",
  "test-util",
  "tokio",
@@ -469,7 +471,7 @@ dependencies = [
  "num_enum",
  "ore",
  "predicates",
- "rand 0.8.0",
+ "rand 0.8.2",
  "serde",
  "structopt",
  "tokio",
@@ -523,7 +525,7 @@ dependencies = [
  "pgrepr",
  "postgres-types",
  "prometheus",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rdkafka",
  "regex",
  "repr",
@@ -709,9 +711,9 @@ dependencies = [
 
 [[package]]
 name = "datadriven"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d7337e53bfa2d8e547c582c1141882bc3b500904bab157fca7b4fa6b6a5ff5a"
+checksum = "3746c0c397dd30632405eef04cd5e92693e03279e8189d1922dbf227bcbe66a8"
 dependencies = [
  "anyhow",
 ]
@@ -733,6 +735,7 @@ dependencies = [
  "dogsdogsdogs",
  "expr",
  "futures",
+ "globset",
  "inotify",
  "interchange",
  "itertools",
@@ -744,13 +747,14 @@ dependencies = [
  "pdqselect",
  "prometheus",
  "prometheus-static-metric",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rdkafka",
  "regex",
  "repr",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kinesis",
+ "rusoto_s3",
  "serde",
  "serde_json",
  "timely",
@@ -774,9 +778,11 @@ name = "dataflow-types"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-util",
  "ccsr",
  "comm",
  "expr",
+ "globset",
  "interchange",
  "kafka-util",
  "log",
@@ -1350,6 +1356,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 
 [[package]]
+name = "globset"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c152169ef1e421390738366d2f796655fec62621dabbd0fd476f905934061e4a"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "fnv",
+ "log",
+ "regex",
+ "serde",
+]
+
+[[package]]
 name = "h2"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1617,6 +1637,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smallvec",
+ "timely",
  "url",
  "uuid",
 ]
@@ -1709,7 +1730,7 @@ dependencies = [
  "futures",
  "mz-avro",
  "ore",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rdkafka",
  "serde",
  "serde_json",
@@ -1748,9 +1769,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.81"
+version = "0.2.82"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1482821306169ec4d07f6aca392a4681f66c75c9918aa49641a2595db64053cb"
+checksum = "89203f3fba0a3795506acaad8ebce3c80c0af93f994d5a1d7a0b1eeb23271929"
 
 [[package]]
 name = "libm"
@@ -1822,7 +1843,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 
 [[package]]
 name = "materialized"
-version = "0.6.1-dev"
+version = "0.6.2-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -2034,7 +2055,7 @@ dependencies = [
  "lazy_static",
  "log",
  "md-5",
- "rand 0.8.0",
+ "rand 0.8.2",
  "regex",
  "serde",
  "serde_json",
@@ -2460,7 +2481,7 @@ dependencies = [
  "futures-channel",
  "log",
  "ore",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kinesis",
@@ -2483,7 +2504,7 @@ dependencies = [
  "hex",
  "log",
  "postgres-types",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rand_distr",
  "structopt",
  "test-util",
@@ -2553,7 +2574,7 @@ dependencies = [
  "pgrepr",
  "postgres",
  "prometheus",
- "rand 0.8.0",
+ "rand 0.8.2",
  "repr",
  "sql",
  "tokio",
@@ -2710,7 +2731,7 @@ dependencies = [
  "hmac",
  "md5",
  "memchr",
- "rand 0.8.0",
+ "rand 0.8.2",
  "sha2",
  "stringprep",
 ]
@@ -2981,9 +3002,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.8.0"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a76330fb486679b4ace3670f117bbc9e16204005c4bde9c4bd372f45bed34f12"
+checksum = "18519b42a40024d661e1714153e9ad0c3de27cd495760ceb09710920f1098b1e"
 dependencies = [
  "libc",
  "rand_chacha 0.3.0",
@@ -3036,7 +3057,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da9e8f32ad24fb80d07d2323a9a2ce8b30d68a62b8cb4df88119ff49a698f038"
 dependencies = [
  "num-traits",
- "rand 0.8.0",
+ "rand 0.8.2",
 ]
 
 [[package]]
@@ -3094,7 +3115,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.25.0-dev"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#2e168f4d2aea1c53d415f33a3b4d47f6dc6199ab"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#6ac37feb6931332422d604ed80a904caec1eabd7"
 dependencies = [
  "futures",
  "libc",
@@ -3110,7 +3131,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "2.1.1+1.5.3"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#2e168f4d2aea1c53d415f33a3b4d47f6dc6199ab"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#6ac37feb6931332422d604ed80a904caec1eabd7"
 dependencies = [
  "cmake",
  "libc",
@@ -3189,7 +3210,7 @@ dependencies = [
  "itertools",
  "ordered-float",
  "ore",
- "rand 0.8.0",
+ "rand 0.8.2",
  "regex",
  "serde",
  "serde_json",
@@ -3245,7 +3266,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "base64",
@@ -3269,7 +3290,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3286,7 +3307,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kinesis"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3297,20 +3318,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusoto_s3"
+version = "0.46.0"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "xml-rs",
+]
+
+[[package]]
 name = "rusoto_signature"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "digest",
  "futures",
  "hex",
  "hmac",
  "http",
  "hyper",
  "log",
- "md5",
+ "md-5",
  "percent-encoding",
  "pin-project-lite",
  "rusoto_credential",
@@ -3323,7 +3357,7 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3665,12 +3699,14 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "aws-arn",
+ "aws-util",
  "build-info",
  "ccsr",
  "chrono",
  "dataflow-types",
  "expr",
  "futures",
+ "globset",
  "interchange",
  "itertools",
  "lazy_static",
@@ -3982,7 +4018,7 @@ dependencies = [
  "kafka-util",
  "log",
  "ore",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rdkafka",
  "tokio",
  "tokio-postgres",
@@ -4016,7 +4052,7 @@ dependencies = [
  "predicates",
  "protobuf",
  "protoc",
- "rand 0.8.0",
+ "rand 0.8.2",
  "rdkafka",
  "regex",
  "repr",
@@ -4137,9 +4173,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d258221f566b6c803c7b4714abadc080172b272090cdc5e244a6d4dd13c3a6bd"
+checksum = "0ca04cec6ff2474c638057b65798f60ac183e5e79d3448bb7163d36a39cff6ec"
 dependencies = [
  "autocfg",
  "bytes",
@@ -4227,9 +4263,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-stream"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4cdeb73537e63f98adcd73138af75e3f368ccaecffaa29d7eb61b9f5a440457"
+checksum = "76066865172052eb8796c686f0b441a93df8b08d40a950b062ffb9a426f00edd"
 dependencies = [
  "futures-core",
  "pin-project-lite",
@@ -4593,9 +4629,9 @@ dependencies = [
 
 [[package]]
 name = "whoami"
-version = "1.0.3"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d595b2e146f36183d6a590b8d41568e2bc84c922267f43baf61c956330eeb436"
+checksum = "1a921c0ad578a51c0b6c0bbb9b95f0ed11e90d61da506139e48a946edd11ee1e"
 dependencies = [
  "wasm-bindgen",
  "web-sys",

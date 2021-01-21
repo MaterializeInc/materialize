@@ -48,6 +48,7 @@ use crate::source::cache::CacheSender;
 mod file;
 mod kafka;
 mod kinesis;
+mod s3;
 mod util;
 
 pub mod cache;
@@ -58,6 +59,7 @@ pub use file::FileReadStyle;
 pub use file::FileSourceInfo;
 pub use kafka::KafkaSourceInfo;
 pub use kinesis::KinesisSourceInfo;
+pub use s3::S3SourceInfo;
 
 /// Shared configuration information for all source types.
 pub struct SourceConfig<'a, G> {
@@ -465,8 +467,8 @@ impl ConsistencyInfo {
                 &source_id.to_string(),
                 &worker_id.to_string(),
             ),
-            // we have never downgraded, so make sure the initial value is outside of our frequncy
-            time_since_downgrade: Instant::now() - timestamp_frequency,
+            // we have never downgraded, so make sure the initial value is outside of our frequency
+            time_since_downgrade: Instant::now() - timestamp_frequency - Duration::from_secs(1),
             partition_metrics: Default::default(),
         }
     }

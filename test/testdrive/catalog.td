@@ -97,7 +97,7 @@ d
 > SHOW DATABASES WHERE (name = (SELECT min(name) FROM mz_databases))
 d
 ! SHOW DATABASES WHERE 7
-WHERE clause must have type bool, not type int4
+WHERE clause must have type boolean, not type integer
 
 # Creating a database with a name that already exists should fail.
 ! CREATE DATABASE d
@@ -175,7 +175,7 @@ foo.other.int_list
 
 > CREATE TYPE bool AS LIST (element_type=int4)
 ! SELECT '{1}'::bool
-invalid input syntax for bool: "{1}"
+invalid input syntax for boolean: "{1}"
 
 > SELECT pg_typeof('{1}'::public.bool);
 public.bool

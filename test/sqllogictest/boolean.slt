@@ -45,28 +45,28 @@ tR                true
 tRuE              true
 TRUE              true
 
-query error invalid input syntax for bool: "blah"
+query error invalid input syntax for boolean: "blah"
 SELECT 'blah'::bool
 
-query error NOT argument must have type bool, not type int4
+query error NOT argument must have type boolean, not type integer
 SELECT NOT 1
 
-query error AND argument must have type bool, not type int4
+query error AND argument must have type boolean, not type integer
 SELECT 1 AND 1
 
-query error OR argument must have type bool, not type int4
+query error OR argument must have type boolean, not type integer
 SELECT 1 OR 1
 
-query error OR argument must have type bool, not type int4
+query error OR argument must have type boolean, not type integer
 SELECT 1 OR FALSE
 
-query error OR argument must have type bool, not type int4
+query error OR argument must have type boolean, not type integer
 SELECT FALSE OR 1
 
-query error AND argument must have type bool, not type int4
+query error AND argument must have type boolean, not type integer
 SELECT 1 AND FALSE
 
-query error AND argument must have type bool, not type int4
+query error AND argument must have type boolean, not type integer
 SELECT FALSE AND 1
 
 query B
@@ -159,7 +159,7 @@ SELECT NOT FALSE OR FALSE
 ----
 true
 
-### int4 to bool ###
+### integer to bool ###
 
 query B
 SELECT 99::int::bool
@@ -193,7 +193,7 @@ SELECT NOT 0::bigint::bool
 ----
 true
 
-### bool to int4 ###
+### bool to integer ###
 
 query I
 SELECT true::int
@@ -230,7 +230,7 @@ FROM x
 EOF
 
 statement ok
-CREATE TABLE y (a bool, b bool)
+CREATE TABLE y (a boolean, b bool)
 
 # Bypass if statements with identical branches
 query T multiline

@@ -33,7 +33,7 @@ The following special syntax is permitted if _val_ is a string literal:
 
 Source type | Return type
 ------------|------------
-`int` | `bool`
+`int` | `boolean`
 `int` | `float`
 `int` | `decimal`
 `int` | `text`
@@ -44,7 +44,7 @@ Source type | Return type
 `decimal` | `float`
 `decimal` | `text`
 `date` | `timestamp`
-`date` | `timestamptz`
+`date` | `timestamp with time zone`
 `date` | `text`
 `list` | `text`
 `time` | `interval`

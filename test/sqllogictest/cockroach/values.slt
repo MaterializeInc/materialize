@@ -72,5 +72,5 @@ VALUES ((SELECT 1)), ((SELECT 2))
 1
 2
 
-query error pgcode 42804 invalid input syntax for int4
+query error pgcode 42804 invalid input syntax for integer
 VALUES (NULL, 1), (2, NULL), (NULL, 'a')

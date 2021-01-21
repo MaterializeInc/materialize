@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use anyhow::bail;
 use rusoto_core::Region;
 
-use dataflow_types::AwsConnectInfo;
+use aws_util::aws;
 
 use crate::ast::Value;
 
@@ -98,7 +98,7 @@ macro_rules! with_options {
 pub(crate) fn aws_connect_info(
     options: &mut BTreeMap<String, Value>,
     region: Option<Region>,
-) -> anyhow::Result<AwsConnectInfo> {
+) -> anyhow::Result<aws::ConnectInfo> {
     // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
     // https://github.com/materializeinc/materialize/issues/1991
     let mut extract = |key| match options.remove(key) {
@@ -113,10 +113,10 @@ pub(crate) fn aws_connect_info(
             .transpose()?
             .ok_or_else(|| anyhow::anyhow!("region is required"))?,
     };
-    Ok(AwsConnectInfo {
+    aws::ConnectInfo::new(
         region,
-        access_key_id: extract("access_key_id")?,
-        secret_access_key: extract("secret_access_key")?,
-        token: extract("token")?,
-    })
+        extract("access_key_id")?,
+        extract("secret_access_key")?,
+        extract("token")?,
+    )
 }

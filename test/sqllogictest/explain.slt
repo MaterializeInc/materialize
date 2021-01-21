@@ -45,7 +45,7 @@ EXPLAIN TYPED RAW PLAN FOR SELECT * FROM (SELECT 1)
 | | types = ()
 | | keys = ()
 | Map 1
-| | types = (int4)
+| | types = (integer)
 | | keys = ()
 
 EOF
@@ -87,7 +87,7 @@ EXPLAIN TYPED RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FR
 ----
 %0 =
 | Constant
-| | types = (int4, text)
+| | types = (integer, text)
 | | keys = ()
 
 %1 =
@@ -95,15 +95,15 @@ EXPLAIN TYPED RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FR
 | | types = ()
 | | keys = ()
 | Map 1, "b"
-| | types = (int4, text)
+| | types = (integer, text)
 | | keys = ()
 
 %2 =
 | Union %0 %1
-| | types = (int4, text)
+| | types = (integer, text)
 | | keys = ()
 | Map select(%3), select(%4)
-| | types = (int4, text, text?, int4?)
+| | types = (integer, text, text?, integer?)
 | | keys = ()
 | |
 | | %3 =
@@ -120,7 +120,7 @@ EXPLAIN TYPED RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FR
 | | | | types = ()
 | | | | keys = ()
 | | | Map select(%5)
-| | | | types = (int4?)
+| | | | types = (integer?)
 | | | | keys = ()
 | | | |
 | | | | %5 =
@@ -128,12 +128,12 @@ EXPLAIN TYPED RAW PLAN FOR SELECT (SELECT column2), (SELECT (SELECT column1)) FR
 | | | | | | types = ()
 | | | | | | keys = ()
 | | | | | Map #^^0
-| | | | | | types = (int4)
+| | | | | | types = (integer)
 | | | | | | keys = ()
 | | | |
 | |
 | Project (#2, #3)
-| | types = (text?, int4?)
+| | types = (text?, integer?)
 | | keys = ()
 
 EOF
@@ -216,9 +216,9 @@ EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 | | types = ()
 | | keys = ()
 | Map 1
-| | types = (int4)
+| | types = (integer)
 | | keys = ()
-| | types = (int4)
+| | types = (integer)
 | | keys = ()
 
 EOF
@@ -280,7 +280,7 @@ EXPLAIN TYPED OPTIMIZED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LI
 ----
 %0 =
 | Get materialize.public.ordered (u2)
-| | types = (int4?, text?)
+| | types = (integer?, text?)
 | | keys = ()
 
 Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
@@ -295,10 +295,10 @@ EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW ordered_view
 ----
 %0 =
 | Get materialize.public.ordered (u2)
-| | types = (int4?, text?)
+| | types = (integer?, text?)
 | | keys = ()
 | TopK group=() order=(#1 asc, #0 desc) limit=5 offset=0
-| | types = (int4?, text?)
+| | types = (integer?, text?)
 | | keys = ()
 
 EOF

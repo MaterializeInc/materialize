@@ -587,6 +587,16 @@ fn generate_series_int64(start: Datum, stop: Datum) -> Vec<(Row, Diff)> {
         .collect()
 }
 
+fn unnest_array(a: Datum) -> Vec<(Row, Diff)> {
+    let mut row_packer = RowPacker::new();
+
+    a.unwrap_array()
+        .elements()
+        .iter()
+        .map(move |e| (row_packer.pack(&[e]), 1))
+        .collect()
+}
+
 fn unnest_list(a: Datum) -> Vec<(Row, Diff)> {
     let mut row_packer = RowPacker::new();
 
@@ -729,6 +739,9 @@ pub enum TableFunc {
         source: GlobalId,
         cache_directory: PathBuf,
     },
+    UnnestArray {
+        el_typ: ScalarType,
+    },
     UnnestList {
         el_typ: ScalarType,
     },
@@ -779,6 +792,7 @@ impl TableFunc {
                     })
                     .collect::<Vec<(Row, Diff)>>()
             }
+            TableFunc::UnnestArray { .. } => unnest_array(datums[0]),
             TableFunc::UnnestList { .. } => unnest_list(datums[0]),
         }
     }
@@ -816,6 +830,7 @@ impl TableFunc {
                 ScalarType::Bytes.nullable(false),
                 ScalarType::Bytes.nullable(false),
             ],
+            TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
         })
     }
@@ -831,6 +846,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt64 => 1,
             TableFunc::Repeat => 0,
             TableFunc::ReadCachedData { .. } => 4,
+            TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
         }
     }
@@ -846,6 +862,7 @@ impl TableFunc {
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
             | TableFunc::ReadCachedData { .. }
+            | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. } => true,
         }
     }
@@ -864,6 +881,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt64 => true,
             TableFunc::Repeat => false,
             TableFunc::ReadCachedData { .. } => true,
+            TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
         }
     }
@@ -883,6 +901,7 @@ impl fmt::Display for TableFunc {
             TableFunc::ReadCachedData { source, .. } => {
                 write!(f, "internal_read_cached_data({})", source)
             }
+            TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
         }
     }

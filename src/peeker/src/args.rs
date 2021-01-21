@@ -12,13 +12,13 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
-use std::result::Result as StdResult;
+use std::fs;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
 use log::{debug, info};
 use regex::Regex;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Serialize};
 use structopt::StructOpt;
 
 use crate::{Error, Result};
@@ -61,33 +61,13 @@ pub struct Args {
     /// A value of 0 never shuts down.
     #[structopt(long, default_value = "0")]
     pub run_seconds: u32,
+    /// Write out the parsed contents of the config file
+    #[structopt(long)]
+    pub write_config: Option<String>,
 }
 
 pub fn load_config(config_path: Option<&str>, cli_queries: Option<&str>) -> Result<Config> {
-    // load and parse th toml
-    let config_file = config_path
-        .map(std::fs::read_to_string)
-        .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
-    let conf = match &config_file {
-        Ok(contents) => {
-            let contents = substitute_config_env_vars(contents);
-            toml::from_str::<RawConfig>(&contents).map_err(|e| {
-                format!(
-                    "Unable to parse config file {}: {}",
-                    config_path.as_deref().unwrap_or("DEFAULT"),
-                    e
-                )
-            })?
-        }
-        Err(e) => {
-            eprintln!(
-                "unable to read config file {:?}: {}",
-                config_path.as_deref().unwrap_or("DEFAULT"),
-                e
-            );
-            std::process::exit(1);
-        }
-    };
+    let conf = load_raw_config(config_path);
 
     // Get everything into the normalized QueryGroup representation
     let mut config = Config::try_from(conf)?;
@@ -119,6 +99,35 @@ pub fn load_config(config_path: Option<&str>, cli_queries: Option<&str>) -> Resu
     Ok(config)
 }
 
+fn load_raw_config(config_path: Option<&str>) -> RawConfig {
+    // load and parse th toml
+    let config_file = config_path
+        .map(std::fs::read_to_string)
+        .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
+    let config = match &config_file {
+        Ok(contents) => substitute_config_env_vars(contents),
+        Err(e) => {
+            eprintln!(
+                "unable to read config file {:?}: {}",
+                config_path.as_deref().unwrap_or("DEFAULT"),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+    match toml::from_str::<RawConfig>(&config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!(
+                "Unable to parse config file {}: {}",
+                config_path.as_deref().unwrap_or("DEFAULT"),
+                e
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 pub fn print_config_supplied(config: Config) {
     println!("named queries:");
     let mut groups = config.groups.iter().collect::<Vec<_>>();
@@ -139,6 +148,27 @@ pub fn print_config_supplied(config: Config) {
             }
         }
     }
+}
+
+pub fn write_config_supplied(config_path: Option<&str>, outfile: &str) {
+    let config_contents = toml::to_string(&load_raw_config(config_path));
+    match &config_contents {
+        Ok(contents) => match fs::write(outfile, contents) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("unable to write config file {:?}: {}", outfile, e);
+                std::process::exit(1);
+            }
+        },
+        Err(e) => {
+            eprintln!(
+                "unable to generate config file {:?}: {}",
+                config_path.as_deref().unwrap_or("DEFAULT"),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
 }
 
 /// A query configuration
@@ -233,7 +263,7 @@ impl QueryGroup {
     fn from_raw_query(q: RawQuery, default: &DefaultQuery) -> QueryGroup {
         QueryGroup {
             name: q.name.clone(),
-            sleep: q.sleep_ms.unwrap_or(default.sleep_ms),
+            sleep: q.sleep.unwrap_or(default.sleep),
             thread_count: q.thread_count.unwrap_or(default.thread_count),
             queries: vec![Query {
                 name: q.name,
@@ -247,7 +277,7 @@ impl QueryGroup {
         let g_name = g.name.clone();
         Ok(QueryGroup {
             name: g_name.clone(),
-            sleep: g.sleep_ms,
+            sleep: g.sleep,
             thread_count: g.thread_count,
             queries: g
                 .queries
@@ -271,21 +301,21 @@ pub struct Query {
     pub query: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Source {
     pub schema_registry: String,
     pub kafka_broker: String,
     pub topic_namespace: String,
-    pub names: Vec<String>,
     /// If true, `create MATERIALIZED source`
     #[serde(default)]
     pub materialized: bool,
+    pub names: Vec<String>,
 }
 
 // inner parsing helpers
 
 /// The raw config file, it is parsed and then defaults are supplied, resulting in [`Config`]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct RawConfig {
     /// Default to be filled in for other queries
     default_query: DefaultQuery,
@@ -297,42 +327,42 @@ struct RawConfig {
     sources: Vec<Source>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct DefaultQuery {
-    #[serde(deserialize_with = "deser_duration_ms")]
-    sleep_ms: Duration,
     thread_count: u32,
     /// Groups share their connection and only one query happens at a time
     #[serde(default)]
     group: Option<String>,
+    sleep: Duration,
 }
 
 /// An explicitly created, named group
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct GroupConfig {
     name: String,
-    /// The names of the queries that belong in this group, must be specified separately
-    /// in the config file
-    queries: Vec<String>,
     #[serde(default = "one")]
     thread_count: u32,
-    #[serde(default, deserialize_with = "deser_duration_ms")]
-    sleep_ms: Duration,
     /// Whether to enabled this group. Overrides enabled in queries
     #[serde(default = "btrue")]
     enabled: bool,
+    /// The names of the queries that belong in this group, must be specified separately
+    /// in the config file
+    queries: Vec<String>,
+    #[serde(default)]
+    sleep: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct RawQuery {
     name: String,
     query: String,
     #[serde(default = "btrue")]
     enabled: bool,
-    #[serde(default, deserialize_with = "deser_duration_ms_opt")]
-    sleep_ms: Option<Duration>,
     #[serde(default)]
     thread_count: Option<u32>,
+    sources: Vec<String>,
+    #[serde(default)]
+    sleep: Option<Duration>,
 }
 
 /// helper for serde default
@@ -342,22 +372,6 @@ fn btrue() -> bool {
 
 fn one() -> u32 {
     1
-}
-
-fn deser_duration_ms<'de, D>(deser: D) -> StdResult<Duration, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let d = Duration::from_millis(Deserialize::deserialize(deser)?);
-    Ok(d)
-}
-
-fn deser_duration_ms_opt<'de, D>(deser: D) -> StdResult<Option<Duration>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let d = Duration::from_millis(Deserialize::deserialize(deser)?);
-    Ok(Some(d))
 }
 
 lazy_static! {

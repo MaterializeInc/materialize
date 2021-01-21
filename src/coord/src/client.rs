@@ -9,7 +9,7 @@
 
 use futures::SinkExt;
 
-use sql::ast::Statement;
+use sql::ast::{Raw, Statement};
 use sql::plan::Params;
 
 use crate::command::{
@@ -51,7 +51,7 @@ impl Client {
     /// temporary resources that would normally need to be cleaned up by Terminate.
     pub async fn execute(
         &mut self,
-        stmt: Statement,
+        stmt: Statement<Raw>,
         params: Params,
     ) -> Result<NoSessionExecuteResponse, anyhow::Error> {
         self.send(|tx| Command::NoSessionExecute { stmt, params, tx })
@@ -104,7 +104,7 @@ impl SessionClient {
     pub async fn describe(
         &mut self,
         name: String,
-        stmt: Option<Statement>,
+        stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         self.send(|tx, session| Command::Describe {
@@ -121,7 +121,7 @@ impl SessionClient {
     pub async fn declare(
         &mut self,
         name: String,
-        stmt: Statement,
+        stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         self.send(|tx, session| Command::Declare {

@@ -67,7 +67,7 @@ interval_end    true  text
 interval_start  true  text
 measurements    true  jsonb
 meter           true  text
-value           true  int4
+value           true  integer
 
 > SELECT id, interval_start, interval_end, value, meter FROM billing_records br
 2 2020-01-01_00:00:10 2020-01-01_00:00:15 25  user

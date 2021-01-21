@@ -14,6 +14,7 @@ use std::time::SystemTime;
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
+use dataflow_types::SinkEnvelope;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
@@ -26,7 +27,7 @@ use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{ExprHumanizer, GlobalId, OptimizedRelationExpr, ScalarExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
-use sql::ast::Expr;
+use sql::ast::{Expr, Raw};
 use sql::catalog::{Catalog as SqlCatalog, CatalogError as SqlCatalogError};
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
@@ -146,7 +147,7 @@ pub struct Table {
     pub plan_cx: PlanContext,
     pub desc: RelationDesc,
     #[serde(skip)]
-    pub defaults: Vec<Expr>,
+    pub defaults: Vec<Expr<Raw>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +164,7 @@ pub struct Sink {
     pub plan_cx: PlanContext,
     pub from: GlobalId,
     pub connector: SinkConnectorState,
+    pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub as_of: Option<u64>,
 }
@@ -971,8 +973,9 @@ impl Catalog {
 
     pub fn drop_items_ops(&mut self, ids: &[GlobalId]) -> Vec<Op> {
         let mut ops = vec![];
+        let mut seen = HashSet::new();
         for &id in ids {
-            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut HashSet::new());
+            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut seen);
         }
         ops
     }
@@ -1527,6 +1530,7 @@ impl Catalog {
                 plan_cx: pcx,
                 from: sink.from,
                 connector: SinkConnectorState::Pending(sink.connector_builder),
+                envelope: sink.envelope,
                 with_snapshot,
                 as_of,
             }),
@@ -1804,14 +1808,12 @@ impl ExprHumanizer for ConnCatalog<'_> {
             List { element_type, .. } => {
                 format!("{} list", self.humanize_scalar_type(element_type))
             }
-            Map { value_type, .. } => {
-                format!(
-                    "map[{}=>{}]",
-                    self.humanize_scalar_type(&ScalarType::String),
-                    self.humanize_scalar_type(value_type)
-                )
-            }
-            Record { fields } => format!(
+            Map { value_type, .. } => format!(
+                "map[{}=>{}]",
+                self.humanize_scalar_type(&ScalarType::String),
+                self.humanize_scalar_type(value_type)
+            ),
+            Record { fields, .. } => format!(
                 "record({})",
                 fields
                     .iter()
@@ -1819,8 +1821,18 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .join(",")
             ),
             ty => {
-                let full_name = self.get_item_by_oid(&pgrepr::Type::from(ty).oid()).name();
-                let res = self.minimal_qualification(full_name).to_string();
+                let pgrepr_type = pgrepr::Type::from(ty);
+                let res = if self
+                    .search_path
+                    .iter()
+                    .any(|schema| schema == &PG_CATALOG_SCHEMA)
+                {
+                    pgrepr_type.name().to_string()
+                } else {
+                    // If PG_CATALOG_SCHEMA is not in search path, you need
+                    // qualified object name to refer to type.
+                    self.get_item_by_oid(&pgrepr_type.oid()).name().to_string()
+                };
                 if let ScalarType::Decimal(p, s) = typ {
                     format!("{}({},{})", res, p, s)
                 } else {
@@ -2042,7 +2054,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn table_details(&self) -> Option<&[Expr]> {
+    fn table_details(&self) -> Option<&[Expr<Raw>]> {
         if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
             Some(defaults)
         } else {

@@ -163,3 +163,38 @@ fn test_cmd_arg_bad_nesting_intersect2() {
 "#,
         );
 }
+
+// --ci-output tests
+
+#[test]
+fn test_ci_output_bad_file() {
+    cmd()
+        .arg("tests")
+        .arg("--ci-output")
+        .assert()
+        .failure()
+        .stderr(predicate::str::starts_with(
+            "error: reading tests: Is a directory",
+        ))
+        .stdout(predicate::str::starts_with("^^^ +++"));
+}
+
+#[test]
+fn test_ci_output_cmd_arg() {
+    cmd()
+        .arg("--ci-output")
+        .write_stdin("$ cmd badarg")
+        .assert()
+        .failure()
+        .stderr(
+            r#"<stdin>:1:7: error: command argument is not in required key=value format
+     |
+   1 | $ cmd badarg
+     |       ^
+"#,
+        )
+        .stdout(predicate::str::starts_with(
+            "--- ==> <stdin>
+^^^ +++",
+        ));
+}

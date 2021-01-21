@@ -46,10 +46,10 @@ false
 true
 
 # Do not allow int4 text comparisons
-query error no overload for text < int4
+query error no overload for text < integer
 SELECT 'foo'::text < 5::int;
 
-query error no overload for int4 < text
+query error no overload for integer < text
 SELECT 1 < ALL(VALUES(NULL))
 
 # But string *literals* can coerce to anything.
@@ -87,7 +87,7 @@ EXPLAIN RAW PLAN FOR
 
 EOF
 
-# Check int8 promotes to float8
+# Check int8 promotes to double precision
 query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 1::bigint > 1.11111::float
@@ -98,7 +98,7 @@ EXPLAIN RAW PLAN FOR
 
 EOF
 
-# Check numeric promotes to float8
+# Check numeric promotes to double precision
 query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 1.1 > 1::float;
@@ -143,15 +143,15 @@ EXPLAIN RAW PLAN FOR
 EOF
 
 # Cannot implicitly cast int4 to string
-query error Cannot call function char_length\(int4\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function char_length\(integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT char_length(321);
 
 # Cannot implicitly cast string to any numeric category
 query error no overload for text \+ text
 SELECT 'dog'::text + 'cat'::text;
 
-# Cannot implicitly cast float8 to numeric
-query error Cannot call function round\(float8, int4\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+# Cannot implicitly cast double precision to numeric
+query error Cannot call function round\(double precision, integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(1.23::float, 1);
 
 # Check that float8 is the most common type
@@ -226,10 +226,10 @@ SELECT 1::bigint::bigint;
 ----
 1
 
-query error CAST does not support casting from bool to int8
+query error CAST does not support casting from boolean to bigint
 SELECT TRUE::boolean::bigint
 
-query error CAST does not support casting from date to int8
+query error CAST does not support casting from date to bigint
 SELECT '2001 02-03'::date::bigint
 
 query T
@@ -252,7 +252,7 @@ SELECT 2::int::bigint;
 ----
 2
 
-query error CAST does not support casting from interval to int8
+query error CAST does not support casting from interval to bigint
 SELECT '1'::interval::bigint
 
 #pginvalid
@@ -266,16 +266,16 @@ SELECT '1'::jsonb::bigint;
 ----
 1
 
-query error invalid input syntax for int8: invalid digit found in string: "dog"
+query error invalid input syntax for bigint: invalid digit found in string: "dog"
 SELECT 'dog'::text::bigint
 
-query error CAST does not support casting from time to int8
+query error CAST does not support casting from time to bigint
 SELECT '01:02:03'::time::bigint
 
-query error CAST does not support casting from timestamp to int8
+query error CAST does not support casting from timestamp to bigint
 SELECT '2002 03-04'::timestamp::bigint
 
-query error CAST does not support casting from timestamptz to int8
+query error CAST does not support casting from timestamp with time zone to bigint
 SELECT '2003 04-05'::timestamptz::bigint
 
 query T
@@ -288,16 +288,16 @@ SELECT TRUE::boolean::boolean;
 ----
 true
 
-query error CAST does not support casting from date to bool
+query error CAST does not support casting from date to boolean
 SELECT '2001 02-03'::date::boolean
 
-query error CAST does not support casting from numeric\(38,0\) to bool
+query error CAST does not support casting from numeric\(38,0\) to boolean
 SELECT 1.1::numeric::boolean
 
-query error CAST does not support casting from float8 to bool
+query error CAST does not support casting from double precision to boolean
 SELECT 1.2::double::boolean
 
-query error CAST does not support casting from float4 to bool
+query error CAST does not support casting from real to boolean
 SELECT 1.3::real::boolean
 
 query T
@@ -305,7 +305,7 @@ SELECT 2::int::boolean;
 ----
 true
 
-query error CAST does not support casting from interval to bool
+query error CAST does not support casting from interval to boolean
 SELECT '1'::interval::boolean
 
 #pginvalid
@@ -319,22 +319,22 @@ SELECT '1'::jsonb::boolean;
 ----
 NULL
 
-query error invalid input syntax for bool: "dog"
+query error invalid input syntax for boolean: "dog"
 SELECT 'dog'::text::boolean
 
-query error CAST does not support casting from time to bool
+query error CAST does not support casting from time to boolean
 SELECT '01:02:03'::time::boolean
 
-query error CAST does not support casting from timestamp to bool
+query error CAST does not support casting from timestamp to boolean
 SELECT '2002 03-04'::timestamp::boolean
 
-query error CAST does not support casting from timestamptz to bool
+query error CAST does not support casting from timestamp with time zone to boolean
 SELECT '2003 04-05'::timestamptz::boolean
 
-query error CAST does not support casting from int8 to date
+query error CAST does not support casting from bigint to date
 SELECT 1::bigint::date
 
-query error CAST does not support casting from bool to date
+query error CAST does not support casting from boolean to date
 SELECT TRUE::boolean::date
 
 query T
@@ -345,13 +345,13 @@ SELECT '2001 02-03'::date::date;
 query error CAST does not support casting from numeric\(38,0\) to date
 SELECT 1.1::numeric::date
 
-query error CAST does not support casting from float8 to date
+query error CAST does not support casting from double precision to date
 SELECT 1.2::double::date
 
-query error CAST does not support casting from float4 to date
+query error CAST does not support casting from real to date
 SELECT 1.3::real::date
 
-query error CAST does not support casting from int4 to date
+query error CAST does not support casting from integer to date
 SELECT 2::int::date
 
 query error CAST does not support casting from interval to date
@@ -381,7 +381,7 @@ SELECT 1::bigint::numeric;
 ----
 1.0000
 
-query error CAST does not support casting from bool to numeric\(38,0\)
+query error CAST does not support casting from boolean to numeric\(38,0\)
 SELECT TRUE::boolean::numeric
 
 query error CAST does not support casting from date to numeric\(38,0\)
@@ -429,7 +429,7 @@ SELECT '01:02:03'::time::numeric
 query error CAST does not support casting from timestamp to numeric\(38,0\)
 SELECT '2002 03-04'::timestamp::numeric
 
-query error CAST does not support casting from timestamptz to numeric\(38,0\)
+query error CAST does not support casting from timestamp with time zone to numeric\(38,0\)
 SELECT '2003 04-05'::timestamptz::numeric
 
 query T
@@ -437,10 +437,10 @@ SELECT 1::bigint::double;
 ----
 1.000
 
-query error CAST does not support casting from bool to float8
+query error CAST does not support casting from boolean to double precision
 SELECT TRUE::boolean::double
 
-query error CAST does not support casting from date to float8
+query error CAST does not support casting from date to double precision
 SELECT '2001 02-03'::date::double
 
 query T
@@ -463,7 +463,7 @@ SELECT 2::int::double;
 ----
 2.000
 
-query error CAST does not support casting from interval to float8
+query error CAST does not support casting from interval to double precision
 SELECT '1'::interval::double
 
 #pginvalid
@@ -477,16 +477,16 @@ SELECT '1'::jsonb::double;
 ----
 1.000
 
-query error invalid input syntax for float8: invalid float literal: "dog"
+query error invalid input syntax for double precision: invalid float literal: "dog"
 SELECT 'dog'::text::double
 
-query error CAST does not support casting from time to float8
+query error CAST does not support casting from time to double precision
 SELECT '01:02:03'::time::double
 
-query error CAST does not support casting from timestamp to float8
+query error CAST does not support casting from timestamp to double precision
 SELECT '2002 03-04'::timestamp::double
 
-query error CAST does not support casting from timestamptz to float8
+query error CAST does not support casting from timestamp with time zone to double precision
 SELECT '2003 04-05'::timestamptz::double
 
 query T
@@ -494,10 +494,10 @@ SELECT 1::bigint::real;
 ----
 1.000
 
-query error CAST does not support casting from bool to float4
+query error CAST does not support casting from boolean to real
 SELECT TRUE::boolean::real
 
-query error CAST does not support casting from date to float4
+query error CAST does not support casting from date to real
 SELECT '2001 02-03'::date::real
 
 query T
@@ -520,7 +520,7 @@ SELECT 2::int::real;
 ----
 2.000
 
-query error CAST does not support casting from interval to float4
+query error CAST does not support casting from interval to real
 SELECT '1'::interval::real
 
 #pginvalid
@@ -534,16 +534,16 @@ SELECT '2'::jsonb::real;
 ----
 2.000
 
-query error invalid input syntax for float4: invalid float literal: "dog"
+query error invalid input syntax for real: invalid float literal: "dog"
 SELECT 'dog'::text::real
 
-query error CAST does not support casting from time to float4
+query error CAST does not support casting from time to real
 SELECT '01:02:03'::time::real
 
-query error CAST does not support casting from timestamp to float4
+query error CAST does not support casting from timestamp to real
 SELECT '2002 03-04'::timestamp::real
 
-query error CAST does not support casting from timestamptz to float4
+query error CAST does not support casting from timestamp with time zone to real
 SELECT '2003 04-05'::timestamptz::real
 
 query T
@@ -551,7 +551,7 @@ SELECT 1::bigint::integer;
 ----
 1
 
-query error CAST does not support casting from date to int4
+query error CAST does not support casting from date to integer
 SELECT '2001 02-03'::date::integer
 
 query T
@@ -574,7 +574,7 @@ SELECT 2::int::integer;
 ----
 2
 
-query error CAST does not support casting from interval to int4
+query error CAST does not support casting from interval to integer
 SELECT '1'::interval::integer
 
 #pginvalid
@@ -588,22 +588,22 @@ SELECT '1'::jsonb::integer;
 ----
 1
 
-query error invalid input syntax for int4: invalid digit found in string: "dog"
+query error invalid input syntax for integer: invalid digit found in string: "dog"
 SELECT 'dog'::text::integer
 
-query error CAST does not support casting from time to int4
+query error CAST does not support casting from time to integer
 SELECT '01:02:03'::time::integer
 
-query error CAST does not support casting from timestamp to int4
+query error CAST does not support casting from timestamp to integer
 SELECT '2002 03-04'::timestamp::integer
 
-query error CAST does not support casting from timestamptz to int4
+query error CAST does not support casting from timestamp with time zone to integer
 SELECT '2003 04-05'::timestamptz::integer
 
-query error CAST does not support casting from int8 to interval
+query error CAST does not support casting from bigint to interval
 SELECT 1::bigint::interval
 
-query error CAST does not support casting from bool to interval
+query error CAST does not support casting from boolean to interval
 SELECT TRUE::boolean::interval
 
 query error CAST does not support casting from date to interval
@@ -612,13 +612,13 @@ SELECT '2001 02-03'::date::interval
 query error CAST does not support casting from numeric\(38,0\) to interval
 SELECT 1.1::numeric::interval
 
-query error CAST does not support casting from float8 to interval
+query error CAST does not support casting from double precision to interval
 SELECT 1.2::double::interval
 
-query error CAST does not support casting from float4 to interval
+query error CAST does not support casting from real to interval
 SELECT 1.3::real::interval
 
-query error CAST does not support casting from int4 to interval
+query error CAST does not support casting from integer to interval
 SELECT 2::int::interval
 
 query T
@@ -640,14 +640,14 @@ SELECT '01:02:03'::time::interval;
 query error CAST does not support casting from timestamp to interval
 SELECT '2002 03-04'::timestamp::interval
 
-query error CAST does not support casting from timestamptz to interval
+query error CAST does not support casting from timestamp with time zone to interval
 SELECT '2003 04-05'::timestamptz::interval
 
-query error CAST does not support casting from int8 to jsonb
+query error CAST does not support casting from bigint to jsonb
 SELECT 1::bigint::jsonb
 
 #pginvalid
-query error CAST does not support casting from bool to jsonb
+query error CAST does not support casting from boolean to jsonb
 SELECT TRUE::boolean::jsonb;
 
 query error CAST does not support casting from date to jsonb
@@ -656,10 +656,10 @@ SELECT '2001 02-03'::date::jsonb
 query error CAST does not support casting from numeric\(38,0\) to jsonb
 SELECT 1.1::numeric::jsonb
 
-query error CAST does not support casting from float8 to jsonb
+query error CAST does not support casting from double precision to jsonb
 SELECT 1.2::double::jsonb;
 
-query error CAST does not support casting from int4 to jsonb
+query error CAST does not support casting from integer to jsonb
 SELECT 2::int::jsonb;
 
 query error CAST does not support casting from interval to jsonb
@@ -687,7 +687,7 @@ SELECT '01:02:03'::time::jsonb
 query error CAST does not support casting from timestamp to jsonb
 SELECT '2002 03-04'::timestamp::jsonb
 
-query error CAST does not support casting from timestamptz to jsonb
+query error CAST does not support casting from timestamp with time zone to jsonb
 SELECT '2003 04-05'::timestamptz::jsonb
 
 query T
@@ -760,10 +760,10 @@ SELECT '2003 04-05'::timestamptz::text;
 ----
 2003-04-05 00:00:00+00
 
-query error CAST does not support casting from int8 to time
+query error CAST does not support casting from bigint to time
 SELECT 1::bigint::time
 
-query error CAST does not support casting from bool to time
+query error CAST does not support casting from boolean to time
 SELECT TRUE::boolean::time
 
 query error CAST does not support casting from date to time
@@ -772,13 +772,13 @@ SELECT '2001 02-03'::date::time
 query error CAST does not support casting from numeric\(38,0\) to time
 SELECT 1.1::numeric::time
 
-query error CAST does not support casting from float8 to time
+query error CAST does not support casting from double precision to time
 SELECT 1.2::double::time
 
-query error CAST does not support casting from float4 to time
+query error CAST does not support casting from real to time
 SELECT 1.3::real::time
 
-query error CAST does not support casting from int4 to time
+query error CAST does not support casting from integer to time
 SELECT 2::int::time
 
 query T
@@ -800,13 +800,13 @@ SELECT '01:02:03'::time::time;
 query error CAST does not support casting from timestamp to time
 SELECT '2002 03-04'::timestamp::time
 
-query error CAST does not support casting from timestamptz to time
+query error CAST does not support casting from timestamp with time zone to time
 SELECT '2003 04-05'::timestamptz::time
 
-query error CAST does not support casting from int8 to timestamp
+query error CAST does not support casting from bigint to timestamp
 SELECT 1::bigint::timestamp
 
-query error CAST does not support casting from bool to timestamp
+query error CAST does not support casting from boolean to timestamp
 SELECT TRUE::boolean::timestamp
 
 query T
@@ -817,13 +817,13 @@ SELECT '2001 02-03'::date::timestamp;
 query error CAST does not support casting from numeric\(38,0\) to timestamp
 SELECT 1.1::numeric::timestamp
 
-query error CAST does not support casting from float8 to timestamp
+query error CAST does not support casting from double precision to timestamp
 SELECT 1.2::double::timestamp
 
-query error CAST does not support casting from float4 to timestamp
+query error CAST does not support casting from real to timestamp
 SELECT 1.3::real::timestamp
 
-query error CAST does not support casting from int4 to timestamp
+query error CAST does not support casting from integer to timestamp
 SELECT 2::int::timestamp
 
 query error CAST does not support casting from interval to timestamp
@@ -848,10 +848,10 @@ SELECT '2003 04-05'::timestamptz::timestamp;
 ----
 2003-04-05 00:00:00
 
-query error CAST does not support casting from int8 to timestamptz
+query error CAST does not support casting from bigint to timestamp with time zone
 SELECT 1::bigint::timestamptz
 
-query error CAST does not support casting from bool to timestamptz
+query error CAST does not support casting from boolean to timestamp with time zone
 SELECT TRUE::boolean::timestamptz
 
 query T
@@ -859,28 +859,28 @@ SELECT '2001 02-03'::date::timestamptz;
 ----
 2001-02-03 00:00:00+00
 
-query error CAST does not support casting from numeric\(38,0\) to timestamptz
+query error CAST does not support casting from numeric\(38,0\) to timestamp with time zone
 SELECT 1.1::numeric::timestamptz
 
-query error CAST does not support casting from float8 to timestamptz
+query error CAST does not support casting from double precision to timestamp with time zone
 SELECT 1.2::double::timestamptz
 
-query error CAST does not support casting from float4 to timestamptz
+query error CAST does not support casting from real to timestamp with time zone
 SELECT 1.3::real::timestamptz
 
-query error CAST does not support casting from int4 to timestamptz
+query error CAST does not support casting from integer to timestamp with time zone
 SELECT 2::int::timestamptz
 
-query error CAST does not support casting from interval to timestamptz
+query error CAST does not support casting from interval to timestamp with time zone
 SELECT '1'::interval::timestamptz
 
-query error CAST does not support casting from jsonb to timestamptz
+query error CAST does not support casting from jsonb to timestamp with time zone
 SELECT '{}'::jsonb::timestamptz
 
-query error invalid input syntax for timestamptz: YEAR, MONTH, DAY are all required: "dog"
+query error invalid input syntax for timestamp with time zone: YEAR, MONTH, DAY are all required: "dog"
 SELECT 'dog'::text::timestamptz
 
-query error CAST does not support casting from time to timestamptz
+query error CAST does not support casting from time to timestamp with time zone
 SELECT '01:02:03'::time::timestamptz
 
 query T

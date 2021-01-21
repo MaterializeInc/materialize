@@ -18,6 +18,7 @@ Best used when no data is running through the system.
 
 import argparse
 import os
+import sys
 import typing
 
 import psycopg2  # type: ignore
@@ -34,16 +35,47 @@ def view_names(
             yield row[0]
 
 
+def source_names(
+    conn: psycopg2.extensions.connection,
+) -> typing.Generator[str, None, None]:
+    """Return a generator containing all sources in Materialize."""
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT source_name FROM mz_source_info")
+        for row in cursor:
+            yield row[0]
+
+
 def snapshot_materialize_views(args: argparse.Namespace) -> None:
     """Record the current table status of all views installed in Materialize."""
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
+        conn.autocommit = True
         for view in view_names(conn):
             with conn.cursor() as cursor:
                 viewfile = os.path.join(args.snapshot_dir, f"{view}.sql")
                 with open(viewfile, "w") as outfile:
                     query = f"COPY (SELECT * FROM {view}) TO STDOUT"
                     cursor.copy_expert(query, outfile)
+
+
+def snapshot_source_offsets(args: argparse.Namespace) -> None:
+    """Record the current topic offset of all sources installed in Materialize."""
+
+    with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
+        conn.autocommit = True
+        for source in source_names(conn):
+            with conn.cursor() as cursor:
+                query = "SELECT mz_source_info.offset as offset FROM mz_source_info WHERE source_name = %s"
+                cursor.execute(query, (source,))
+
+                if cursor.rowcount != 1:
+                    print(f"ERROR: Expected one row for {source}: {cursor.fetchall()}")
+                    sys.exit(1)
+
+                viewfile = os.path.join(args.snapshot_dir, f"{source}.offset")
+                with open(viewfile, "w") as outfile:
+                    offset = cursor.fetchone()[0]
+                    outfile.write(f"{offset}")
 
 
 def main() -> None:
@@ -67,6 +99,7 @@ def main() -> None:
 
     args = parser.parse_args()
     snapshot_materialize_views(args)
+    snapshot_source_offsets(args)
 
 
 if __name__ == "__main__":

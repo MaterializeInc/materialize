@@ -34,6 +34,7 @@ use ore::lex::LexBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use ore::ascii::UncasedStr;
 use ore::fmt::FormatBuffer;
 
 use crate::adt::array::ArrayDimension;
@@ -62,7 +63,7 @@ pub fn parse_bool(s: &str) -> Result<bool, ParseError> {
     match s.trim().to_lowercase().as_str() {
         "t" | "tr" | "tru" | "true" | "y" | "ye" | "yes" | "on" | "1" => Ok(true),
         "f" | "fa" | "fal" | "fals" | "false" | "n" | "no" | "of" | "off" | "0" => Ok(false),
-        _ => Err(ParseError::new("bool", s)),
+        _ => Err(ParseError::new("boolean", s)),
     }
 }
 
@@ -96,7 +97,7 @@ where
 pub fn parse_int32(s: &str) -> Result<i32, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::new("int4", s).with_details(e))
+        .map_err(|e| ParseError::new("integer", s).with_details(e))
 }
 
 /// Writes an [`i32`] to `buf`.
@@ -112,7 +113,7 @@ where
 pub fn parse_int64(s: &str) -> Result<i64, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::new("int8", s).with_details(e))
+        .map_err(|e| ParseError::new("bigint", s).with_details(e))
 }
 
 /// Writes an `i64` to `buf`.
@@ -126,13 +127,17 @@ where
 
 /// Parses an `f32` from `s`.
 pub fn parse_float32(s: &str) -> Result<f32, ParseError> {
-    match s.trim().to_lowercase().as_str() {
-        "inf" | "infinity" | "+inf" | "+infinity" => Ok(f32::INFINITY),
-        "-inf" | "-infinity" => Ok(f32::NEG_INFINITY),
-        "nan" => Ok(f32::NAN),
-        s => s
+    let s = UncasedStr::new(s.trim());
+    if s == "inf" || s == "infinity" || s == "+inf" || s == "+infinity" {
+        Ok(f32::INFINITY)
+    } else if s == "-inf" || s == "-infinity" {
+        Ok(f32::NEG_INFINITY)
+    } else if s == "nan" {
+        Ok(f32::NAN)
+    } else {
+        s.as_str()
             .parse()
-            .map_err(|e| ParseError::new("float4", s).with_details(e)),
+            .map_err(|e| ParseError::new("real", s.as_str()).with_details(e))
     }
 }
 
@@ -155,13 +160,17 @@ where
 
 /// Parses an `f64` from `s`.
 pub fn parse_float64(s: &str) -> Result<f64, ParseError> {
-    match s.trim().to_lowercase().as_str() {
-        "inf" | "infinity" | "+inf" | "+infinity" => Ok(f64::INFINITY),
-        "-inf" | "-infinity" => Ok(f64::NEG_INFINITY),
-        "nan" => Ok(f64::NAN),
-        s => s
+    let s = UncasedStr::new(s.trim());
+    if s == "inf" || s == "infinity" || s == "+inf" || s == "+infinity" {
+        Ok(f64::INFINITY)
+    } else if s == "-inf" || s == "-infinity" {
+        Ok(f64::NEG_INFINITY)
+    } else if s == "nan" {
+        Ok(f64::NAN)
+    } else {
+        s.as_str()
             .parse()
-            .map_err(|e| ParseError::new("float8", s).with_details(e)),
+            .map_err(|e| ParseError::new("double precision", s.as_str()).with_details(e))
     }
 }
 
@@ -312,7 +321,7 @@ pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
             };
             Ok(DateTime::from_utc(dt - offset, Utc))
         })
-        .map_err(|e| ParseError::new("timestamptz", s).with_details(e))
+        .map_err(|e| ParseError::new("timestamp with time zone", s).with_details(e))
 }
 
 /// Writes a [`DateTime<Utc>`] timestamp to `buf`.

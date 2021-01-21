@@ -95,7 +95,7 @@ main() {
     fi
 
     export KAFKA_TOPIC_FILTER="${topic_filter}"
-    export MZ_THREADS="${workers}"
+    export MZ_WORKERS="${workers}"
     export MZ_CHBENCH_SNAPSHOT="${snapshot}"
     export PEEKER_QUERIES="${peeker_queries}"
 

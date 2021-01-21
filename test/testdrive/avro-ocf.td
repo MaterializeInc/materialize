@@ -32,9 +32,9 @@ a  b  mz_obj_no
 > SHOW COLUMNS FROM basic
 name       nullable  type
 -------------------------
-a          false     int8
-b          false     int4
-mz_obj_no  false     int8
+a          false     bigint
+b          false     integer
+mz_obj_no  false     bigint
 
 $ avro-ocf-write path=data-no-codec.ocf schema=${writer-schema}
 {"a": 1, "b": 2}
@@ -52,9 +52,9 @@ a  b  mz_obj_no
 > SHOW COLUMNS FROM basic_no_codec
 name       nullable  type
 -------------------------
-a          false     int8
-b          false     int4
-mz_obj_no  false     int8
+a          false     bigint
+b          false     integer
+mz_obj_no  false     bigint
 
 $ avro-ocf-write path=data-snappy.ocf schema=${writer-schema} codec=snappy
 {"a": 1, "b": 2}
@@ -72,9 +72,9 @@ a  b  mz_obj_no
 > SHOW COLUMNS FROM basic_snappy
 name       nullable  type
 -------------------------
-a          false     int8
-b          false     int4
-mz_obj_no  false     int8
+a          false     bigint
+b          false     integer
+mz_obj_no  false     bigint
 
 $ set reader-schema={
     "name": "row",
@@ -98,9 +98,9 @@ a  b  mz_obj_no
 > SHOW COLUMNS FROM reader_schema
 name       nullable  type
 -------------------------
-a          false     int8
-b          false     int8
-mz_obj_no  false     int8
+a          false     bigint
+b          false     bigint
+mz_obj_no  false     bigint
 
 ! CREATE MATERIALIZED SOURCE reader_schema
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
@@ -183,7 +183,7 @@ name        nullable  type
 d           false     date
 ts          false     timestamp
 ts_tz       false     timestamp
-mz_obj_no   false     int8
+mz_obj_no   false     bigint
 
 > CREATE SINK basic_sink_${testdrive.seed} FROM basic
   INTO AVRO OCF '${testdrive.temp-dir}/basic-sink.ocf'

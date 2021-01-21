@@ -14,7 +14,7 @@ use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::VisitMut;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType,
-    Ident, ObjectName, Statement,
+    Ident, ObjectName, Raw, Statement,
 };
 
 use crate::catalog::PG_CATALOG_SCHEMA;
@@ -34,7 +34,7 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
     |catalog: &mut Catalog| {
         struct TypeNormalizer;
 
-        impl<'ast> VisitMut<'ast> for TypeNormalizer {
+        impl<'ast> VisitMut<'ast, Raw> for TypeNormalizer {
             fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType) {
                 if let DataType::Other { name, .. } = data_type {
                     if name.0.len() == 1 {

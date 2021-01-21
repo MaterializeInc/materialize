@@ -8,6 +8,12 @@ menu:
 
 `oid` expresses a PostgreSQL-compatible object identifier.
 
+Detail | Info
+-------|------
+**Size** | 4 bytes
+**Catalog name** | `pg_catalog.oid`
+**OID** | 26
+
 ## Details
 
 `oid` types in Materialize are provided for compatibility with PostgreSQL . You

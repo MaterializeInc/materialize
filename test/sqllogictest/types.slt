@@ -31,7 +31,7 @@ true
 query T
 SELECT pg_typeof('true'::boolean)
 ----
-bool
+boolean
 
 query error type "pg_catalog.boolean" does not exist
 SELECT 'true'::pg_catalog.boolean
@@ -95,7 +95,7 @@ SELECT '1.2'::pg_catalog.float(1)
 query T
 SELECT pg_typeof('1.2'::float(1))
 ----
-float4
+real
 
 query T
 SELECT '1.2'::real
@@ -108,7 +108,7 @@ SELECT '1.2'::pg_catalog.real
 query T
 SELECT pg_typeof('1.2'::real)
 ----
-float4
+real
 
 # 🔬🔬 float8
 
@@ -135,7 +135,7 @@ SELECT '1.2'::pg_catalog.float(53)
 query T
 SELECT pg_typeof('1.2'::float(53))
 ----
-float8
+double precision
 
 query T
 SELECT '1.2'::double
@@ -148,7 +148,7 @@ SELECT '1.2'::pg_catalog.double
 query T
 SELECT pg_typeof('1.2'::double)
 ----
-float8
+double precision
 
 # 🔬🔬 int4
 
@@ -175,7 +175,7 @@ SELECT '1'::pg_catalog.int
 query T
 SELECT pg_typeof('1'::int)
 ----
-int4
+integer
 
 query T
 SELECT '1'::integer
@@ -188,7 +188,7 @@ SELECT '1'::pg_catalog.integer
 query T
 SELECT pg_typeof('1'::integer)
 ----
-int4
+integer
 
 query T
 SELECT '1'::smallint
@@ -201,7 +201,7 @@ SELECT '1'::pg_catalog.smallint
 query T
 SELECT pg_typeof('1'::smallint)
 ----
-int4
+integer
 
 # 🔬🔬 int8
 
@@ -228,7 +228,7 @@ SELECT '1'::pg_catalog.bigint
 query T
 SELECT pg_typeof('1'::bigint)
 ----
-int8
+bigint
 
 # 🔬🔬 interval
 
@@ -438,22 +438,22 @@ SELECT '{true}'::pg_catalog.bool list::text
 query T
 SELECT pg_typeof(1::float)
 ----
-float8
+double precision
 
 query T
 SELECT pg_typeof(1::float(1))
 ----
-float4
+real
 
 query T
 SELECT pg_typeof(1::float(53))
 ----
-float8
+double precision
 
 query T
 SELECT pg_typeof(1::float(53))
 ----
-float8
+double precision
 
 # 🔬 misc. resolution tests
 

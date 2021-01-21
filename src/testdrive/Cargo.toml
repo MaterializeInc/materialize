@@ -10,7 +10,7 @@ async-trait = "0.1.42"
 atty = "0.2.0"
 aws-util = { path = "../aws-util" }
 byteorder = "1.4.2"
-bytes = "1.0.0"
+bytes = "1.0.1"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
@@ -27,7 +27,7 @@ parse_duration = "2.1.0"
 pgrepr = { path = "../pgrepr" }
 postgres_array = "0.11.0"
 protobuf = { version = "2.17.0", features = ["with-serde"] }
-rand = "0.8.0"
+rand = "0.8.2"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.4.3"
 repr = { path = "../repr" }
@@ -43,9 +43,9 @@ structopt = "0.3.21"
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.1.0"
 termcolor = "1.1.2"
-tokio = "1.0.0"
+tokio = "1.0.2"
 tokio-postgres = { version = "0.7.0", features = ["with-chrono-0_4", "with-serde_json-1"] }
-tokio-stream = "0.1.1"
+tokio-stream = "0.1.2"
 url = "2.2.0"
 uuid = "0.8.2"
 

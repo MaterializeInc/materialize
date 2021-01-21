@@ -23,7 +23,7 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
 name       nullable  type
 --------------------------
 data       false     bytea
-mz_offset  false     int8
+mz_offset  false     bigint
 
 > SELECT * FROM data
 data           mz_offset
@@ -41,4 +41,4 @@ data           mz_offset
 name       nullable  type
 --------------------------
 named_col  false     bytea
-mz_offset  false     int8
+mz_offset  false     bigint

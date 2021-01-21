@@ -46,6 +46,11 @@ fn main() -> Result<()> {
 
     let args: Args = ore::cli::parse_args();
 
+    if let Some(write_config) = args.write_config {
+        args::write_config_supplied(args.config_file.as_deref(), &write_config);
+        return Ok(());
+    }
+
     let config = args::load_config(args.config_file.as_deref(), args.queries.as_deref())?;
 
     if args.help_config {

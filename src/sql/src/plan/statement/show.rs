@@ -19,7 +19,7 @@ use ore::collections::CollectionExt;
 use repr::{Datum, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
-    ObjectName, ObjectType, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
+    ObjectName, ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowStatementFilter, Statement, Value,
@@ -161,7 +161,7 @@ pub fn plan_show_create_index(
 
 pub fn show_databases<'a>(
     scx: &'a StatementContext<'a>,
-    ShowDatabasesStatement { filter }: ShowDatabasesStatement,
+    ShowDatabasesStatement { filter }: ShowDatabasesStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
     Ok(ShowSelect::new(scx, query, filter))
@@ -176,7 +176,7 @@ pub fn show_objects<'a>(
         object_type,
         from,
         filter,
-    }: ShowObjectsStatement,
+    }: ShowObjectsStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     match object_type {
         ObjectType::Schema => show_schemas(scx, extended, full, from, filter),
@@ -195,7 +195,7 @@ fn show_schemas<'a>(
     extended: bool,
     full: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let database = if let Some(from) = from {
         scx.resolve_database(from)?
@@ -237,7 +237,7 @@ fn show_tables<'a>(
     extended: bool,
     full: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED TABLES");
@@ -270,7 +270,7 @@ fn show_sources<'a>(
     full: bool,
     materialized: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
@@ -316,7 +316,7 @@ fn show_views<'a>(
     full: bool,
     materialized: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
@@ -361,7 +361,7 @@ fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
@@ -390,7 +390,7 @@ fn show_types<'a>(
     extended: bool,
     full: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
@@ -420,7 +420,7 @@ fn show_all_objects<'a>(
     extended: bool,
     full: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
@@ -451,7 +451,7 @@ pub fn show_indexes<'a>(
         extended,
         table_name,
         filter,
-    }: ShowIndexesStatement,
+    }: ShowIndexesStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED INDEXES")
@@ -496,7 +496,7 @@ pub fn show_columns<'a>(
         full,
         table_name,
         filter,
-    }: ShowColumnsStatement,
+    }: ShowColumnsStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED COLUMNS");
@@ -524,7 +524,7 @@ pub fn show_columns<'a>(
 /// Can be interrogated for its columns, or converted into a proper [`Plan`].
 pub struct ShowSelect<'a> {
     scx: &'a StatementContext<'a>,
-    stmt: SelectStatement,
+    stmt: SelectStatement<Raw>,
 }
 
 impl<'a> ShowSelect<'a> {
@@ -538,7 +538,7 @@ impl<'a> ShowSelect<'a> {
     fn new(
         scx: &'a StatementContext,
         query: String,
-        filter: Option<ShowStatementFilter>,
+        filter: Option<ShowStatementFilter<Raw>>,
     ) -> ShowSelect<'a> {
         let filter = match filter {
             Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
