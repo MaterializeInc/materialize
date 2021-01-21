@@ -133,7 +133,6 @@ where
                     .iter()
                     .map(|k| input_mapper.map_expr_to_global(k.clone(), *input))
                     .collect::<Vec<_>>();
-
                 // Keys for the next input to be joined must be produced from
                 // ScalarExprs found in `equivalences`, re-written to bind the
                 // appropriate columns (as `joined` has permuted columns).
@@ -141,7 +140,7 @@ where
                     .iter()
                     .map(|expr| {
                         let mut bound_expr = input_mapper
-                            .find_bound_expr(expr, &bound_inputs, &equivalences)
+                            .find_bound_expr(expr, &bound_inputs, &join_build_state.equivalences)
                             .expect("Expression in join plan is not bound at time of use");
 
                         bound_expr.permute_map(&join_build_state.column_map);
@@ -215,7 +214,8 @@ where
             // We have completed the join building, but may have work remaining.
             // For example, we may have expressions not pushed down (e.g. literals)
             // and projections that could not be applied (e.g. column repetition).
-            if let Some(mfp) = join_build_state.complete() {
+            let closure = join_build_state.complete();
+            if !closure.is_identity() {
                 let (updates, errors) = joined.flat_map_fallible({
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();
@@ -224,7 +224,8 @@ where
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums.borrow_with(&row);
                         // TODO(mcsherry): re-use `row` allocation.
-                        mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer)
+                        closure
+                            .apply(&mut datums_local, &temp_storage, &mut row_packer)
                             .map_err(DataflowError::from)
                             .transpose()
                     }

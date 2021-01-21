@@ -8,9 +8,27 @@
 // by the Apache License, Version 2.0.
 
 //! Rendering of `RelationExpr::Join` operators, and supporting types.
+//!
+//! Join planning proceeds by repeatedly introducing collections that
+//! extend the set of available output columns. The expected location
+//! of each output column is determined by the order of inputs to the
+//! join operator: columns are appended in that order.
+//!
+//! While planning the join, we also have access to logic in the form
+//! of expressions, predicates, and projections that we intended to
+//! apply to the output of the join. This logic uses "output column
+//! reckoning" where columns are identified by their intended output
+//! position.
+//!
+//! As we consider applying expressions to partial results, we will
+//! place the results in column locations *after* the intended output
+//! column locations. These output locations in addition to the new
+//! distinct identifiers for constructed expressions is "extended
+//! output column reckoning", as is what we use when reasoning about
+//! work still available to be done on the partial join results.
 
-pub mod delta_join;
-pub mod linear_join;
+mod delta_join;
+mod linear_join;
 
 use std::collections::HashMap;
 
@@ -23,7 +41,7 @@ use repr::{Datum, Row, RowArena, RowPacker};
 /// as there is a relationship between the borrowed lifetime of the closed-over
 /// state and the arguments it takes when invoked. It was not clear how to do
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
-pub struct JoinClosure {
+struct JoinClosure {
     ready_equivalences: Vec<Vec<ScalarExpr>>,
     before: MapFilterProject,
 }
@@ -31,7 +49,7 @@ pub struct JoinClosure {
 impl JoinClosure {
     /// Applies per-row filtering and logic.
     #[inline(always)]
-    pub fn apply<'a>(
+    fn apply<'a>(
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
@@ -61,7 +79,7 @@ impl JoinClosure {
     /// extra hard to ensure that the closure contains all the work,
     /// and `mfp` is left as an identity transform (which can then
     /// be ignored).
-    pub fn build(
+    fn build(
         columns: &mut HashMap<usize, usize>,
         equivalences: &mut Vec<Vec<ScalarExpr>>,
         mfp: &mut MapFilterProject,
@@ -173,7 +191,7 @@ impl JoinClosure {
     }
 
     /// True iff the closure neither filters nor transforms recorcds.
-    pub fn is_identity(&self) -> bool {
+    fn is_identity(&self) -> bool {
         self.ready_equivalences.is_empty() && self.before.is_identity()
     }
 }
@@ -187,29 +205,29 @@ impl JoinClosure {
 /// filtering, expressions, projection) and the physical organization of the current stream
 /// of data, which columns may be partially assembled in non-standard locations and which
 /// may already have been partially subjected to logic we need to apply.
-pub struct JoinBuildState {
+struct JoinBuildState {
     /// Map from expected locations in extended output column reckoning to physical locations.
-    pub column_map: HashMap<usize, usize>,
+    column_map: HashMap<usize, usize>,
     /// A list of equivalence classes of expressions.
     ///
     /// Within each equivalence class, expressions must evaluate to the same result to pass
     /// the join expression. Importantly, "the same" should be evaluated with `Datum`s Rust
     /// equality, rather than the equality presented by the `BinaryFunc` equality operator.
     /// The distinction is important for null handling, at the least.
-    pub equivalences: Vec<Vec<ScalarExpr>>,
+    equivalences: Vec<Vec<ScalarExpr>>,
     /// The linear operator logic (maps, filters, and projection) that remains to be applied
     /// to the output of the join.
     ///
     /// We we advance through the construction of the join dataflow, we may be able to peel
     /// off some of this work, ideally reducing `mfp` to something nearly the identity.
-    pub mfp: MapFilterProject,
+    mfp: MapFilterProject,
 }
 
 impl JoinBuildState {
     /// Create a new join state and initial closure from initial values.
     ///
     /// The initial closure can be `None` which indicates that it is the identity operator.
-    pub fn new(
+    fn new(
         columns: std::ops::Range<usize>,
         equivalences: &[Vec<ScalarExpr>],
         mfp: &MapFilterProject,
@@ -218,20 +236,26 @@ impl JoinBuildState {
         for column in columns {
             column_map.insert(column, column_map.len());
         }
+        let mut equivalences = equivalences.to_vec();
+        for equivalence in equivalences.iter_mut() {
+            equivalence.sort();
+            equivalence.dedup();
+        }
+        equivalences.sort();
         Self {
             column_map,
-            equivalences: equivalences.to_vec(),
+            equivalences,
             mfp: mfp.clone(),
         }
     }
 
     /// Present new columns and extract any newly available closure.
-    pub fn add_columns(
+    fn add_columns(
         &mut self,
         new_columns: std::ops::Range<usize>,
         bound_expressions: &[ScalarExpr],
     ) -> JoinClosure {
-        // Remove each element of `next_keys` from `equivalences`, so that we
+        // Remove each element of `bound_expressions` from `equivalences`, so that we
         // avoid redundant predicate work. This removal also paves the way for
         // more precise "demand" information going forward.
         for equivalence in self.equivalences.iter_mut() {
@@ -249,19 +273,31 @@ impl JoinBuildState {
 
     /// Extract a final `MapFilterProject` once all columns are available.
     ///
-    /// The `None` output indicates that the `MapFilterProject` is the identity.
-    pub fn complete(self) -> Option<MapFilterProject> {
+    /// If not all columns are available this method will likely panic.
+    /// This method differs from `extract_closure` in that it forcibly
+    /// completes the join, extracting projections and expressions that
+    /// may not be extracted with `extract_closure` (for example, literals,
+    /// permutations, and repetition of output columns).
+    ///
+    /// The resulting closure may be the identity operator, which can be
+    /// checked with the `is_identity()` method.
+    fn complete(self) -> JoinClosure {
         let Self {
             column_map,
-            equivalences,
+            mut equivalences,
             mut mfp,
         } = self;
-        assert!(equivalences.is_empty());
+
+        for equivalence in equivalences.iter_mut() {
+            for expr in equivalence.iter_mut() {
+                expr.permute_map(&column_map);
+            }
+        }
         mfp.permute(&column_map, column_map.len());
-        if !mfp.is_identity() {
-            Some(mfp)
-        } else {
-            None
+
+        JoinClosure {
+            ready_equivalences: equivalences,
+            before: mfp,
         }
     }
 
@@ -269,7 +305,7 @@ impl JoinBuildState {
     ///
     /// The extracted closure is not guaranteed to be non-trivial. Sensitive users should
     /// consider using the `.is_identity()` method to determine non-triviality.
-    pub fn extract_closure(&mut self) -> JoinClosure {
+    fn extract_closure(&mut self) -> JoinClosure {
         JoinClosure::build(&mut self.column_map, &mut self.equivalences, &mut self.mfp)
     }
 }
