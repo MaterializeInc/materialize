@@ -7,168 +7,67 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! [`Args::from_cli`] parses the command line arguments from the cli and the config file
+//! CLI argument and config file parsing.
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
-use std::result::Result as StdResult;
+use std::fs;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
 use log::{debug, info};
 use regex::Regex;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Serialize};
+use structopt::StructOpt;
 
 use crate::{Error, Result};
 
 static DEFAULT_CONFIG: &str = include_str!("../config.toml");
 
-#[derive(Debug)]
+/// Measures Materialize's query latency.
+#[derive(Debug, StructOpt)]
 pub struct Args {
+    /// Config file to use.
+    ///
+    /// If unspecified, uses the default, built-in config that includes many
+    /// CH-benCHmark queries.
+    #[structopt(short = "c", long, value_name = "FILE")]
+    pub config_file: Option<String>,
+    /// Limit to these query names from config file.
+    #[structopt(short = "q", long, value_name = "QUERIES")]
+    pub queries: Option<String>,
+    /// URL of materialized instance to collect metrics from.
+    #[structopt(
+        long,
+        default_value = "postgres://ignoreuser@materialized:6875/materialize",
+        value_name = "URL"
+    )]
     pub materialized_url: String,
-    /// If true, don't run peeks, just create sources and views
+    /// Run the initalization of sources and views, but don't start peeking.
+    #[structopt(long)]
     pub only_initialize: bool,
+    /// How long to spend trying to initialize.
+    #[structopt(long, parse(try_from_str = parse_duration::parse), default_value = "60s")]
     pub init_timeout: Duration,
-    pub config: Config,
-    pub warmup_secs: u32,
-    pub run_secs: u32,
+    /// Print the names of the available queries in the config file.
+    #[structopt(long)]
+    pub help_config: bool,
+    /// How long to wait before connecting to materialized.
+    #[structopt(long, default_value = "0")]
+    pub warmup_seconds: u32,
+    /// How long to run before shutting down.
+    ///
+    /// A value of 0 never shuts down.
+    #[structopt(long, default_value = "0")]
+    pub run_seconds: u32,
+    /// Write out the parsed contents of the config file
+    #[structopt(long)]
+    pub write_config: Option<String>,
 }
 
-impl Args {
-    /// Load the arguments provided on the cli, and parse the required config file
-    pub fn from_cli() -> Result<Args> {
-        let args: Vec<_> = std::env::args().collect();
-
-        let mut opts = getopts::Options::new();
-        opts.optflag("h", "help", "show this usage information");
-        opts.optopt(
-            "c",
-            "config-file",
-            "The config file to use. Unspecified will use the default config with many tpcch queries",
-            "FNAME",
-        );
-        opts.optflag(
-            "",
-            "help-config",
-            "print the names of the available queries in the config file",
-        );
-        opts.optopt(
-            "q",
-            "queries",
-            "limit to these query names from config file",
-            "QUERIES",
-        );
-        opts.optopt(
-            "",
-            "materialized-url",
-            "url of the materialized instance to collect metrics from. \
-             Default: postgres://ignoreuser@materialized:6875/materialize",
-            "URL",
-        );
-        opts.optflag(
-            "",
-            "only-initialize",
-            "run the initalization of sources and views, but don't start peeking",
-        );
-        opts.optopt(
-            "",
-            "init-timeout",
-            "How long to spend trying to initialize. Default: 60s",
-            "ATTEMPTS",
-        );
-        opts.optopt(
-            "",
-            "warmup-seconds",
-            "How long to wait before connecting to Materialize. Default: 0",
-            "WARMUP",
-        );
-        opts.optopt(
-            "",
-            "run-seconds",
-            "How long to run before shutting down, value of 0 never shuts down. Default: 0",
-            "RUN",
-        );
-        let popts = match opts.parse(&args[1..]) {
-            Ok(popts) => {
-                if popts.opt_present("h") {
-                    print!("{}", opts.usage("usage: materialized [options]"));
-                    std::process::exit(0);
-                } else {
-                    popts
-                }
-            }
-            Err(e) => {
-                println!("error parsing arguments: {}", e);
-                std::process::exit(0);
-            }
-        };
-        let init_timeout = popts
-            .opt_str("init-timeout")
-            .map(|d| parse_duration::parse(&d))
-            .transpose()
-            .map_err(|e| format!("Error parsing --init-timeout: {}", e))?
-            .unwrap_or_else(|| Duration::from_secs(60));
-        let warmup_secs = popts
-            .opt_str("warmup-seconds")
-            .map(|s| s.parse())
-            .transpose()
-            .map_err(|e| format!("Error parsing --warmup-seconds: {}", e))?
-            .unwrap_or(0);
-        let run_secs = popts
-            .opt_str("run-seconds")
-            .map(|s| s.parse())
-            .transpose()
-            .map_err(|e| format!("Error parsing --run-seconds: {}", e))?
-            .unwrap_or(u32::MAX);
-
-        let config = load_config(popts.opt_str("config-file"), popts.opt_str("queries"))?;
-
-        if popts.opt_present("help-config") {
-            print_config_supplied(config);
-            std::process::exit(0);
-        }
-
-        Ok(Args {
-            materialized_url: popts.opt_get_default(
-                "materialized-url",
-                "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
-            )?,
-            only_initialize: popts.opt_present("only-initialize"),
-            init_timeout,
-            config,
-            warmup_secs,
-            run_secs,
-        })
-    }
-}
-
-fn load_config(config_path: Option<String>, cli_queries: Option<String>) -> Result<Config> {
-    // load and parse th toml
-    let config_file = config_path
-        .as_ref()
-        .map(std::fs::read_to_string)
-        .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
-    let conf = match &config_file {
-        Ok(contents) => {
-            let contents = substitute_config_env_vars(contents);
-            toml::from_str::<RawConfig>(&contents).map_err(|e| {
-                format!(
-                    "Unable to parse config file {}: {}",
-                    config_path.as_deref().unwrap_or("DEFAULT"),
-                    e
-                )
-            })?
-        }
-        Err(e) => {
-            eprintln!(
-                "unable to read config file {:?}: {}",
-                config_path.as_deref().unwrap_or("DEFAULT"),
-                e
-            );
-            std::process::exit(1);
-        }
-    };
+pub fn load_config(config_path: Option<&str>, cli_queries: Option<&str>) -> Result<Config> {
+    let conf = load_raw_config(config_path);
 
     // Get everything into the normalized QueryGroup representation
     let mut config = Config::try_from(conf)?;
@@ -200,7 +99,36 @@ fn load_config(config_path: Option<String>, cli_queries: Option<String>) -> Resu
     Ok(config)
 }
 
-fn print_config_supplied(config: Config) {
+fn load_raw_config(config_path: Option<&str>) -> RawConfig {
+    // load and parse th toml
+    let config_file = config_path
+        .map(std::fs::read_to_string)
+        .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
+    let config = match &config_file {
+        Ok(contents) => substitute_config_env_vars(contents),
+        Err(e) => {
+            eprintln!(
+                "unable to read config file {:?}: {}",
+                config_path.as_deref().unwrap_or("DEFAULT"),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+    match toml::from_str::<RawConfig>(&config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!(
+                "Unable to parse config file {}: {}",
+                config_path.as_deref().unwrap_or("DEFAULT"),
+                e
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+pub fn print_config_supplied(config: Config) {
     println!("named queries:");
     let mut groups = config.groups.iter().collect::<Vec<_>>();
     groups.sort_by_key(|g| g.queries.len());
@@ -220,6 +148,27 @@ fn print_config_supplied(config: Config) {
             }
         }
     }
+}
+
+pub fn write_config_supplied(config_path: Option<&str>, outfile: &str) {
+    let config_contents = toml::to_string(&load_raw_config(config_path));
+    match &config_contents {
+        Ok(contents) => match fs::write(outfile, contents) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("unable to write config file {:?}: {}", outfile, e);
+                std::process::exit(1);
+            }
+        },
+        Err(e) => {
+            eprintln!(
+                "unable to generate config file {:?}: {}",
+                config_path.as_deref().unwrap_or("DEFAULT"),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
 }
 
 /// A query configuration
@@ -314,7 +263,7 @@ impl QueryGroup {
     fn from_raw_query(q: RawQuery, default: &DefaultQuery) -> QueryGroup {
         QueryGroup {
             name: q.name.clone(),
-            sleep: q.sleep_ms.unwrap_or(default.sleep_ms),
+            sleep: q.sleep.unwrap_or(default.sleep),
             thread_count: q.thread_count.unwrap_or(default.thread_count),
             queries: vec![Query {
                 name: q.name,
@@ -328,7 +277,7 @@ impl QueryGroup {
         let g_name = g.name.clone();
         Ok(QueryGroup {
             name: g_name.clone(),
-            sleep: g.sleep_ms,
+            sleep: g.sleep,
             thread_count: g.thread_count,
             queries: g
                 .queries
@@ -352,21 +301,21 @@ pub struct Query {
     pub query: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Source {
     pub schema_registry: String,
     pub kafka_broker: String,
     pub topic_namespace: String,
-    pub names: Vec<String>,
     /// If true, `create MATERIALIZED source`
     #[serde(default)]
     pub materialized: bool,
+    pub names: Vec<String>,
 }
 
 // inner parsing helpers
 
 /// The raw config file, it is parsed and then defaults are supplied, resulting in [`Config`]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct RawConfig {
     /// Default to be filled in for other queries
     default_query: DefaultQuery,
@@ -378,42 +327,42 @@ struct RawConfig {
     sources: Vec<Source>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct DefaultQuery {
-    #[serde(deserialize_with = "deser_duration_ms")]
-    sleep_ms: Duration,
     thread_count: u32,
     /// Groups share their connection and only one query happens at a time
     #[serde(default)]
     group: Option<String>,
+    sleep: Duration,
 }
 
 /// An explicitly created, named group
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct GroupConfig {
     name: String,
-    /// The names of the queries that belong in this group, must be specified separately
-    /// in the config file
-    queries: Vec<String>,
     #[serde(default = "one")]
     thread_count: u32,
-    #[serde(default, deserialize_with = "deser_duration_ms")]
-    sleep_ms: Duration,
     /// Whether to enabled this group. Overrides enabled in queries
     #[serde(default = "btrue")]
     enabled: bool,
+    /// The names of the queries that belong in this group, must be specified separately
+    /// in the config file
+    queries: Vec<String>,
+    #[serde(default)]
+    sleep: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct RawQuery {
     name: String,
     query: String,
     #[serde(default = "btrue")]
     enabled: bool,
-    #[serde(default, deserialize_with = "deser_duration_ms_opt")]
-    sleep_ms: Option<Duration>,
     #[serde(default)]
     thread_count: Option<u32>,
+    sources: Vec<String>,
+    #[serde(default)]
+    sleep: Option<Duration>,
 }
 
 /// helper for serde default
@@ -423,22 +372,6 @@ fn btrue() -> bool {
 
 fn one() -> u32 {
     1
-}
-
-fn deser_duration_ms<'de, D>(deser: D) -> StdResult<Duration, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let d = Duration::from_millis(Deserialize::deserialize(deser)?);
-    Ok(d)
-}
-
-fn deser_duration_ms_opt<'de, D>(deser: D) -> StdResult<Option<Duration>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let d = Duration::from_millis(Deserialize::deserialize(deser)?);
-    Ok(Some(d))
 }
 
 lazy_static! {

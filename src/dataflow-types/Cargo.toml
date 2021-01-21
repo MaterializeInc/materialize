@@ -1,26 +1,28 @@
 [package]
 name = "dataflow-types"
 description = "Types for the dataflow crate."
-version = "0.1.0"
+version = "0.0.0"
 edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.34"
-interchange = { path = "../interchange" }
+anyhow = "1.0.38"
+aws-util = { path = "../aws-util" }
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 expr = { path = "../expr" }
+globset = { version = "0.4.0", features = ["serde1"] }
+interchange = { path = "../interchange" }
 kafka-util = { path = "../kafka-util" }
-log = "0.4"
-regex = "1.4.1"
+log = "0.4.13"
+regex = "1.4.3"
 repr = { path = "../repr" }
-rusoto_core = "0.45.0"
-serde = { version = "1.0", features = ["derive"] }
+rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
+serde = { version = "1.0.0", features = ["derive"] }
 serde_regex = "1.1.0"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 url = { version = "2.2.0", features = ["serde"] }
-uuid = { version = "0.8", features = ["serde", "v4"] }
+uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [dev-dependencies]
 serde_json = "1.0.60"

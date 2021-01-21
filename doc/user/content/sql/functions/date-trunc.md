@@ -14,7 +14,7 @@ menu:
 
 Parameter | Type | Description
 ----------|------|------------
-_ts&lowbar;val_ | [`timestamp`](../../types/timestamp), [`timestamptz`](../../types/timestamptz) | The value you want to truncate.
+_ts&lowbar;val_ | [`timestamp`](../../types/timestamp), [`timestamp with time zone`](../../types/timestamptz) | The value you want to truncate.
 
 ### Return value
 

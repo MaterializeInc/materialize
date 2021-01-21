@@ -21,7 +21,7 @@
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{DataType, Ident, ObjectName, OrderByExpr, Query, Value};
+use crate::ast::{AstInfo, DataType, Ident, ObjectName, OrderByExpr, Query, Value};
 
 /// An SQL expression of any type.
 ///
@@ -29,130 +29,142 @@ use crate::ast::{DataType, Ident, ObjectName, OrderByExpr, Query, Value};
 /// (e.g. boolean vs string), so the caller must handle expressions of
 /// inappropriate type, like `WHERE 1` or `SELECT 1=1`, as necessary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Expr {
+pub enum Expr<T: AstInfo> {
     /// Identifier e.g. table name or column name
     Identifier(Vec<Ident>),
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
     QualifiedWildcard(Vec<Ident>),
     /// A field access, like `(expr).foo`.
-    FieldAccess { expr: Box<Expr>, field: Ident },
+    FieldAccess { expr: Box<Expr<T>>, field: Ident },
     /// A wildcard field access, like `(expr).*`.
     ///
     /// Note that this is different from `QualifiedWildcard` in that the
     /// wildcard access occurs on an arbitrary expression, rather than a
     /// qualified name. The distinction is important for PostgreSQL
     /// compatibility.
-    WildcardAccess(Box<Expr>),
+    WildcardAccess(Box<Expr<T>>),
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),
     /// Boolean negation
-    Not { expr: Box<Expr> },
+    Not { expr: Box<Expr<T>> },
     /// Boolean and
-    And { left: Box<Expr>, right: Box<Expr> },
+    And {
+        left: Box<Expr<T>>,
+        right: Box<Expr<T>>,
+    },
     /// Boolean or
-    Or { left: Box<Expr>, right: Box<Expr> },
+    Or {
+        left: Box<Expr<T>>,
+        right: Box<Expr<T>>,
+    },
     /// `IS NULL` expression
-    IsNull { expr: Box<Expr>, negated: bool },
+    IsNull { expr: Box<Expr<T>>, negated: bool },
     /// `[ NOT ] IN (val1, val2, ...)`
     InList {
-        expr: Box<Expr>,
-        list: Vec<Expr>,
+        expr: Box<Expr<T>>,
+        list: Vec<Expr<T>>,
         negated: bool,
     },
     /// `[ NOT ] IN (SELECT ...)`
     InSubquery {
-        expr: Box<Expr>,
-        subquery: Box<Query>,
+        expr: Box<Expr<T>>,
+        subquery: Box<Query<T>>,
         negated: bool,
     },
     /// `<expr> [ NOT ] BETWEEN <low> AND <high>`
     Between {
-        expr: Box<Expr>,
+        expr: Box<Expr<T>>,
         negated: bool,
-        low: Box<Expr>,
-        high: Box<Expr>,
+        low: Box<Expr<T>>,
+        high: Box<Expr<T>>,
     },
     /// Unary or binary operator
     Op {
         op: String,
-        expr1: Box<Expr>,
-        expr2: Option<Box<Expr>>,
+        expr1: Box<Expr<T>>,
+        expr2: Option<Box<Expr<T>>>,
     },
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
-        expr: Box<Expr>,
+        expr: Box<Expr<T>>,
         data_type: DataType,
     },
     /// `expr COLLATE collation`
     Collate {
-        expr: Box<Expr>,
+        expr: Box<Expr<T>>,
         collation: ObjectName,
     },
     /// COALESCE(<expr>, ...)
     ///
     /// While COALESCE has the same syntax as a function call, its semantics are
     /// extremely unusual, and are better captured with a dedicated AST node.
-    Coalesce { exprs: Vec<Expr> },
+    Coalesce { exprs: Vec<Expr<T>> },
     /// Nested expression e.g. `(foo > bar)` or `(1)`
-    Nested(Box<Expr>),
+    Nested(Box<Expr<T>>),
     /// A row constructor like `ROW(<expr>...)` or `(<expr>, <expr>...)`.
-    Row { exprs: Vec<Expr> },
+    Row { exprs: Vec<Expr<T>> },
     /// A literal value, such as string, number, date or NULL
     Value(Value),
     /// Scalar function call e.g. `LEFT(foo, 5)`
-    Function(Function),
+    Function(Function<T>),
     /// `CASE [<operand>] WHEN <condition> THEN <result> ... [ELSE <result>] END`
     ///
     /// Note we only recognize a complete single expression as `<condition>`,
     /// not `< 0` nor `1, 2, 3` as allowed in a `<simple when clause>` per
     /// <https://jakewheat.github.io/sql-overview/sql-2011-foundation-grammar.html#simple-when-clause>
     Case {
-        operand: Option<Box<Expr>>,
-        conditions: Vec<Expr>,
-        results: Vec<Expr>,
-        else_result: Option<Box<Expr>>,
+        operand: Option<Box<Expr<T>>>,
+        conditions: Vec<Expr<T>>,
+        results: Vec<Expr<T>>,
+        else_result: Option<Box<Expr<T>>>,
     },
     /// An exists expression `EXISTS(SELECT ...)`, used in expressions like
     /// `WHERE EXISTS (SELECT ...)`.
-    Exists(Box<Query>),
+    Exists(Box<Query<T>>),
     /// A parenthesized subquery `(SELECT ...)`, used in expression like
     /// `SELECT (subquery) AS x` or `WHERE (subquery) = x`
-    Subquery(Box<Query>),
+    Subquery(Box<Query<T>>),
     /// `<expr> <op> ANY/SOME (<query>)`
     AnySubquery {
-        left: Box<Expr>,
+        left: Box<Expr<T>>,
         op: String,
-        right: Box<Query>,
+        right: Box<Query<T>>,
     },
-    /// `<expr> <op> ANY (<query>)`
+    /// `<expr> <op> ANY (<array_expr>)`
     AnyExpr {
-        left: Box<Expr>,
+        left: Box<Expr<T>>,
         op: String,
-        right: Box<Expr>,
+        right: Box<Expr<T>>,
     },
     /// `<expr> <op> ALL (<query>)`
-    All {
-        left: Box<Expr>,
+    AllSubquery {
+        left: Box<Expr<T>>,
         op: String,
-        right: Box<Query>,
+        right: Box<Query<T>>,
+    },
+    /// `<expr> <op> ALL (<array_expr>)`
+    AllExpr {
+        left: Box<Expr<T>>,
+        op: String,
+        right: Box<Expr<T>>,
     },
     /// `ARRAY[<expr>*]`
-    Array(Vec<Expr>),
+    Array(Vec<Expr<T>>),
     /// `LIST[<expr>*]`
-    List(Vec<Expr>),
+    List(Vec<Expr<T>>),
     /// `<expr>[<expr>]`
     SubscriptIndex {
-        expr: Box<Expr>,
-        subscript: Box<Expr>,
+        expr: Box<Expr<T>>,
+        subscript: Box<Expr<T>>,
     },
     /// `<expr>[<expr>:<expr>(, <expr>?:<expr>?)*]`
     SubscriptSlice {
-        expr: Box<Expr>,
-        positions: Vec<SubscriptPosition>,
+        expr: Box<Expr<T>>,
+        positions: Vec<SubscriptPosition<T>>,
     },
 }
 
-impl AstDisplay for Expr {
+impl<T: AstInfo> AstDisplay for Expr<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Expr::Identifier(s) => f.write_node(&display::separated(s, ".")),
@@ -353,7 +365,15 @@ impl AstDisplay for Expr {
                 f.write_node(&right);
                 f.write_str(")");
             }
-            Expr::All { left, op, right } => {
+            Expr::AllSubquery { left, op, right } => {
+                f.write_node(&left);
+                f.write_str(" ");
+                f.write_str(op);
+                f.write_str(" ALL (");
+                f.write_node(&right);
+                f.write_str(")");
+            }
+            Expr::AllExpr { left, op, right } => {
                 f.write_node(&left);
                 f.write_str(" ");
                 f.write_str(op);
@@ -398,45 +418,45 @@ impl AstDisplay for Expr {
         }
     }
 }
-impl_display!(Expr);
+impl_display_t!(Expr);
 
-impl Expr {
+impl<T: AstInfo> Expr<T> {
     pub fn is_string_literal(&self) -> bool {
         matches!(self, Expr::Value(Value::String(_)))
     }
 
-    pub fn null() -> Expr {
+    pub fn null() -> Expr<T> {
         Expr::Value(Value::Null)
     }
 
-    pub fn number<S>(n: S) -> Expr
+    pub fn number<S>(n: S) -> Expr<T>
     where
         S: Into<String>,
     {
         Expr::Value(Value::Number(n.into()))
     }
 
-    pub fn negate(self) -> Expr {
+    pub fn negate(self) -> Expr<T> {
         Expr::Not {
             expr: Box::new(self),
         }
     }
 
-    pub fn and(self, right: Expr) -> Expr {
+    pub fn and(self, right: Expr<T>) -> Expr<T> {
         Expr::And {
             left: Box::new(self),
             right: Box::new(right),
         }
     }
 
-    pub fn or(self, right: Expr) -> Expr {
+    pub fn or(self, right: Expr<T>) -> Expr<T> {
         Expr::Or {
             left: Box::new(self),
             right: Box::new(right),
         }
     }
 
-    pub fn binop(self, op: &str, right: Expr) -> Expr {
+    pub fn binop(self, op: &str, right: Expr<T>) -> Expr<T> {
         Expr::Op {
             op: op.to_string(),
             expr1: Box::new(self),
@@ -444,43 +464,43 @@ impl Expr {
         }
     }
 
-    pub fn lt(self, right: Expr) -> Expr {
+    pub fn lt(self, right: Expr<T>) -> Expr<T> {
         self.binop("<", right)
     }
 
-    pub fn lt_eq(self, right: Expr) -> Expr {
+    pub fn lt_eq(self, right: Expr<T>) -> Expr<T> {
         self.binop("<=", right)
     }
 
-    pub fn gt(self, right: Expr) -> Expr {
+    pub fn gt(self, right: Expr<T>) -> Expr<T> {
         self.binop(">", right)
     }
 
-    pub fn gt_eq(self, right: Expr) -> Expr {
+    pub fn gt_eq(self, right: Expr<T>) -> Expr<T> {
         self.binop(">=", right)
     }
 
-    pub fn equals(self, right: Expr) -> Expr {
+    pub fn equals(self, right: Expr<T>) -> Expr<T> {
         self.binop("=", right)
     }
 
-    pub fn minus(self, right: Expr) -> Expr {
+    pub fn minus(self, right: Expr<T>) -> Expr<T> {
         self.binop("-", right)
     }
 
-    pub fn multiply(self, right: Expr) -> Expr {
+    pub fn multiply(self, right: Expr<T>) -> Expr<T> {
         self.binop("*", right)
     }
 
-    pub fn modulo(self, right: Expr) -> Expr {
+    pub fn modulo(self, right: Expr<T>) -> Expr<T> {
         self.binop("%", right)
     }
 
-    pub fn divide(self, right: Expr) -> Expr {
+    pub fn divide(self, right: Expr<T>) -> Expr<T> {
         self.binop("/", right)
     }
 
-    pub fn call(name: Vec<&str>, args: Vec<Expr>) -> Expr {
+    pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
         Expr::Function(Function {
             name: ObjectName(name.into_iter().map(Into::into).collect()),
             args: FunctionArgs::Args(args),
@@ -490,26 +510,26 @@ impl Expr {
         })
     }
 
-    pub fn call_nullary(name: Vec<&str>) -> Expr {
+    pub fn call_nullary(name: Vec<&str>) -> Expr<T> {
         Expr::call(name, vec![])
     }
 
-    pub fn call_unary(self, name: Vec<&str>) -> Expr {
+    pub fn call_unary(self, name: Vec<&str>) -> Expr<T> {
         Expr::call(name, vec![self])
     }
 
-    pub fn take(&mut self) -> Expr {
+    pub fn take(&mut self) -> Expr<T> {
         mem::replace(self, Expr::Identifier(vec![]))
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SubscriptPosition {
-    pub start: Option<Expr>,
-    pub end: Option<Expr>,
+pub struct SubscriptPosition<T: AstInfo> {
+    pub start: Option<Expr<T>>,
+    pub end: Option<Expr<T>>,
 }
 
-impl AstDisplay for SubscriptPosition {
+impl<T: AstInfo> AstDisplay for SubscriptPosition<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         if let Some(start) = &self.start {
             f.write_node(start);
@@ -520,17 +540,17 @@ impl AstDisplay for SubscriptPosition {
         }
     }
 }
-impl_display!(SubscriptPosition);
+impl_display_t!(SubscriptPosition);
 
 /// A window specification (i.e. `OVER (PARTITION BY .. ORDER BY .. etc.)`)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct WindowSpec {
-    pub partition_by: Vec<Expr>,
-    pub order_by: Vec<OrderByExpr>,
+pub struct WindowSpec<T: AstInfo> {
+    pub partition_by: Vec<Expr<T>>,
+    pub order_by: Vec<OrderByExpr<T>>,
     pub window_frame: Option<WindowFrame>,
 }
 
-impl AstDisplay for WindowSpec {
+impl<T: AstInfo> AstDisplay for WindowSpec<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         let mut delim = "";
         if !self.partition_by.is_empty() {
@@ -561,7 +581,7 @@ impl AstDisplay for WindowSpec {
         }
     }
 }
-impl_display!(WindowSpec);
+impl_display_t!(WindowSpec);
 
 /// Specifies the data processed by a window function, e.g.
 /// `RANGE UNBOUNDED PRECEDING` or `ROWS BETWEEN 5 PRECEDING AND CURRENT ROW`.
@@ -629,17 +649,17 @@ impl_display!(WindowFrameBound);
 
 /// A function call
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Function {
+pub struct Function<T: AstInfo> {
     pub name: ObjectName,
-    pub args: FunctionArgs,
+    pub args: FunctionArgs<T>,
     // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
-    pub filter: Option<Box<Expr>>,
-    pub over: Option<WindowSpec>,
+    pub filter: Option<Box<Expr<T>>>,
+    pub over: Option<WindowSpec<T>>,
     // aggregate functions may specify eg `COUNT(DISTINCT x)`
     pub distinct: bool,
 }
 
-impl AstDisplay for Function {
+impl<T: AstInfo> AstDisplay for Function<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_node(&self.name);
         f.write_str("(");
@@ -660,18 +680,18 @@ impl AstDisplay for Function {
         }
     }
 }
-impl_display!(Function);
+impl_display_t!(Function);
 
 /// Arguments for a function call.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum FunctionArgs {
+pub enum FunctionArgs<T: AstInfo> {
     /// The special star argument, as in `count(*)`.
     Star,
     /// A normal list of arguments.
-    Args(Vec<Expr>),
+    Args(Vec<Expr<T>>),
 }
 
-impl AstDisplay for FunctionArgs {
+impl<T: AstInfo> AstDisplay for FunctionArgs<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             FunctionArgs::Star => f.write_str("*"),
@@ -679,4 +699,4 @@ impl AstDisplay for FunctionArgs {
         }
     }
 }
-impl_display!(FunctionArgs);
+impl_display_t!(FunctionArgs);

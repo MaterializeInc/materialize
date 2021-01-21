@@ -56,13 +56,6 @@ from materialize import ui
 
 announce = ui.speaker("==> ")
 
-# BUILD_MODE enables building Rust binaries without the --release flag.
-# TODO(mjibson): Make this not an environment variable, instead pass it around
-# like a regular argument to things that need it.
-BUILD_MODE = os.environ.get("BUILD_MODE", "release").lower()
-if BUILD_MODE not in ["debug", "release"]:
-    raise ValueError("unknown BUILD_MODE")
-
 
 class Fingerprint(bytes):
     """A SHA-1 hash of the inputs to an `Image`.
@@ -93,11 +86,13 @@ class RepositoryDetails:
 
     Attributes:
         root: The path to the root of the repository.
+        release_mode: Whether the repository is being built in release mode.
         cargo_workspace: The `cargo.Workspace` associated with the repository.
     """
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, release_mode: bool):
         self.root = root
+        self.release_mode = release_mode
         self.cargo_workspace = cargo.Workspace(root)
 
     def xcargo(self) -> str:
@@ -158,6 +153,11 @@ class PreImage:
 
     def inputs(self) -> Set[str]:
         """Return the files which are considered inputs to the action."""
+        raise NotImplementedError
+
+    def extra(self) -> str:
+        """Returns additional data for incorporation in the fingerprint."""
+        return ""
 
 
 class CargoPreImage(PreImage):
@@ -175,6 +175,10 @@ class CargoPreImage(PreImage):
             ".cargo/config",
         }
 
+    def extra(self) -> str:
+        # Cargo images depend on the release mode.
+        return str(self.rd.release_mode)
+
 
 class CargoBuild(CargoPreImage):
     """A pre-image action that builds a single binary with Cargo."""
@@ -189,12 +193,13 @@ class CargoBuild(CargoPreImage):
 
     def build(self) -> None:
         cargo_build = [self.rd.xcargo(), "build", "--bin", self.bin]
-        if BUILD_MODE == "release":
+        if self.rd.release_mode:
             cargo_build.append("--release")
         spawn.runv(
             cargo_build, cwd=self.rd.root,
         )
-        shutil.copy(self.rd.xcargo_target_dir() / BUILD_MODE / self.bin, self.path)
+        cargo_profile = "release" if self.rd.release_mode else "debug"
+        shutil.copy(self.rd.xcargo_target_dir() / cargo_profile / self.bin, self.path)
         if self.strip:
             # NOTE(benesch): the debug information is large enough that it slows
             # down CI, since we're packaging these binaries up into Docker
@@ -337,7 +342,6 @@ class Image:
             configuration file.
         pre_image: An optional action to perform before running `docker build`.
         build_args: An optional list of --build-arg to pass to the dockerfile
-        is_cargo: Whether the image uses Cargo to build itself.
     """
 
     _DOCKERFILE_MZFROM_RE = re.compile(rb"^MZFROM\s*(\S+)")
@@ -346,7 +350,6 @@ class Image:
         self.rd = rd
         self.path = path
         self.pre_image: Optional[PreImage] = None
-        self.is_cargo = False
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
             self.name: str = data.pop("name")
@@ -354,7 +357,6 @@ class Image:
             pre_image = data.pop("pre-image", None)
             if pre_image is not None:
                 typ = pre_image.pop("type", None)
-                self.is_cargo = typ.startswith("cargo")
                 if typ == "cargo-build":
                     self.pre_image = CargoBuild(self.rd, self.path, pre_image)
                 elif typ == "cargo-test":
@@ -528,6 +530,13 @@ class ResolvedImage:
                 repository.
         """
         paths = set(git.expand_globs(self.image.rd.root, f"{self.image.path}/**"))
+        if not paths:
+            # While we could find an `mzbuild.yml` file for this service, expland_globs didn't
+            # return any files that matched this service. At the very least, the `mzbuild.yml`
+            # file itself should have been returned. We have a bug if paths is empty.
+            raise AssertionError(
+                f"{self.image.name} mzbuild exists but its files are unknown to git"
+            )
         if self.image.pre_image is not None:
             paths |= self.image.pre_image.inputs()
         if transitive:
@@ -569,11 +578,10 @@ class ResolvedImage:
             self_hash.update(file_hash.digest())
             self_hash.update(b"\0")
 
+        if self.image.pre_image is not None:
+            self_hash.update(self.image.pre_image.extra().encode())
+
         full_hash = hashlib.sha1()
-        # For images using Cargo, add the BUILD_MODE to the hash so
-        # debug and release binaries have different hashes.
-        if self.image.is_cargo:
-            full_hash.update(BUILD_MODE.encode())
         full_hash.update(self_hash.digest())
         for dep in sorted(self.dependencies.values(), key=lambda d: d.name):
             full_hash.update(dep.name.encode())
@@ -652,8 +660,8 @@ class Repository:
         compose_dirs: The set of directories containing an `mzcompose.yml` file.
     """
 
-    def __init__(self, root: Path):
-        self.rd = RepositoryDetails(root)
+    def __init__(self, root: Path, release_mode: bool = True):
+        self.rd = RepositoryDetails(root, release_mode)
         self.images: Dict[str, Image] = {}
         self.compositions: Dict[str, Path] = {}
         for (path, dirs, files) in os.walk(self.root, topdown=True):

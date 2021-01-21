@@ -12,11 +12,14 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::bail;
-use openssl::ssl::SslAcceptor;
-use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
+use async_trait::async_trait;
+use log::trace;
+use openssl::ssl::{Ssl, SslContext};
+use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
 
 use coord::session::Session;
+use ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
@@ -27,12 +30,12 @@ use crate::secrets::SecretManager;
 pub struct Server {
     id_alloc: IdAllocator,
     secrets: SecretManager,
-    tls: Option<SslAcceptor>,
+    tls: Option<SslContext>,
     coord_client: coord::Client,
 }
 
 impl Server {
-    pub fn new(tls: Option<SslAcceptor>, coord_client: coord::Client) -> Server {
+    pub fn new(tls: Option<SslContext>, coord_client: coord::Client) -> Server {
         Server {
             id_alloc: IdAllocator::new(1, 1 << 16),
             secrets: SecretManager::new(),
@@ -43,40 +46,65 @@ impl Server {
 
     pub async fn handle_connection<A>(&self, conn: A) -> Result<(), anyhow::Error>
     where
-        A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
+    {
+        // Allocate state for this connection.
+        let conn_id = match self.id_alloc.alloc() {
+            Ok(id) => id,
+            Err(IdExhaustionError) => {
+                bail!("maximum number of connections reached");
+            }
+        };
+        self.secrets.generate(conn_id);
+
+        let res = self.handle_connection_inner(conn_id, conn).await;
+
+        // Clean up state tied to this specific connection.
+        self.id_alloc.free(conn_id);
+        self.secrets.free(conn_id);
+
+        res
+    }
+
+    pub async fn handle_connection_inner<A>(
+        &self,
+        conn_id: u32,
+        conn: A,
+    ) -> Result<(), anyhow::Error>
+    where
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
         let mut conn = Conn::Unencrypted(conn);
         loop {
-            conn = match codec::decode_startup(&mut conn).await? {
-                FrontendStartupMessage::Startup { version, params } => {
-                    let conn_id = match self.id_alloc.alloc() {
-                        Ok(id) => id,
-                        Err(IdExhaustionError) => {
-                            bail!("maximum number of connections reached");
-                        }
-                    };
-                    self.secrets.generate(conn_id);
+            let message = codec::decode_startup(&mut conn).await?;
 
+            match &message {
+                Some(message) => trace!("cid={} recv={:?}", conn_id, message),
+                None => trace!("cid={} recv=<eof>", conn_id),
+            }
+
+            conn = match message {
+                // Clients sometimes hang up during the startup sequence, e.g.
+                // because they receive an unacceptable response to an
+                // `SslRequest`. This is considered a graceful termination.
+                None => return Ok(()),
+
+                Some(FrontendStartupMessage::Startup { version, params }) => {
                     let coord_client = self.coord_client.for_session(Session::new(conn_id));
-
                     let machine = StateMachine {
                         conn: FramedConn::new(conn_id, conn),
                         conn_id,
                         secret_key: self.secrets.get(conn_id).unwrap(),
                         coord_client,
                     };
-                    let res = machine.run(version, params).await;
-
-                    // Clean up state tied to this specific connection.
-                    self.id_alloc.free(conn_id);
-                    self.secrets.free(conn_id);
-                    return Ok(res?);
+                    machine.run(version, params).await?;
+                    return Ok(());
                 }
 
-                FrontendStartupMessage::CancelRequest {
+                Some(FrontendStartupMessage::CancelRequest {
                     conn_id,
                     secret_key,
-                } => {
+                }) => {
                     if self.secrets.verify(conn_id, secret_key) {
                         self.coord_client.clone().cancel_request(conn_id).await;
                     }
@@ -85,23 +113,28 @@ impl Server {
                     return Ok(());
                 }
 
-                FrontendStartupMessage::SslRequest => match conn {
+                Some(FrontendStartupMessage::SslRequest) => match conn {
                     // NOTE(benesch): we can match on `self.tls` properly,
                     // instead of checking `is_some` and `unwrap`ping, when
                     // the move_ref_patterns feature stabilizes.
                     // See: https://github.com/rust-lang/rust/issues/68354
                     Conn::Unencrypted(mut conn) if self.tls.is_some() => {
+                        trace!("cid={} send=AcceptSsl", conn_id);
                         conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
                         let tls = self.tls.as_ref().unwrap();
-                        Conn::Ssl(tokio_openssl::accept(tls, conn).await?)
+                        let mut ssl_stream = SslStream::new(Ssl::new(tls)?, conn)?;
+                        Pin::new(&mut ssl_stream).accept().await?;
+                        Conn::Ssl(ssl_stream)
                     }
                     mut conn => {
+                        trace!("cid={} send=RejectSsl", conn_id);
                         conn.write_all(&[REJECT_ENCRYPTION]).await?;
                         conn
                     }
                 },
 
-                FrontendStartupMessage::GssEncRequest => {
+                Some(FrontendStartupMessage::GssEncRequest) => {
+                    trace!("cid={} send=RejectGssEnc", conn_id);
                     conn.write_all(&[REJECT_ENCRYPTION]).await?;
                     conn
                 }
@@ -123,8 +156,8 @@ where
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Conn::Unencrypted(inner) => Pin::new(inner).poll_read(cx, buf),
             Conn::Ssl(inner) => Pin::new(inner).poll_read(cx, buf),
@@ -154,6 +187,19 @@ where
         match self.get_mut() {
             Conn::Unencrypted(inner) => Pin::new(inner).poll_shutdown(cx),
             Conn::Ssl(inner) => Pin::new(inner).poll_shutdown(cx),
+        }
+    }
+}
+
+#[async_trait]
+impl<A> AsyncReady for Conn<A>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Sync + Unpin,
+{
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        match self {
+            Conn::Unencrypted(inner) => inner.ready(interest).await,
+            Conn::Ssl(inner) => inner.ready(interest).await,
         }
     }
 }

@@ -27,7 +27,7 @@ Field | Use
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
 **AVRO OCF** _path_ | The absolute path and file name of the Avro Object Container file (OCF) to create and write to. The filename will be modified to let Materialize create a unique file each time Materialize starts, but the file extension will not be modified. You can find more details [here](#avro-ocf-sinks).
-**AS OF** _timestamp&lowbar;expression_ | The logical time to tail from onwards (either a number of milliseconds since the Unix epoch, or a `TIMESTAMP` or `TIMESTAMPTZ`).
+**AS OF** _timestamp&lowbar;expression_ | The logical time to tail from onwards (either a number of milliseconds since the Unix epoch, or a `TIMESTAMP` or `timestamp with time zone`).
 
 ### Kafka connector
 
@@ -48,12 +48,12 @@ The following options are valid within the `WITH` clause.
 Field | Value type | Description
 ------|------------|------------
 `replication_factor` | `int` | Set the sink Kafka topic's replication factor. This defaults to 1.
-`consistency` | `bool` | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
+`consistency` | `boolean` | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
 
 #### SSL `WITH` options
 
 Use the following options to connect Materialize to an SSL-encrypted Kafka
-cluster.
+cluster. For more detail, see [SSL-encrypted Kafka details](/sql/create-source/avro-kafka/#ssl-encrypted-kafka-details).
 
 Field | Value | Description
 ------|-------|------------
@@ -62,12 +62,29 @@ Field | Value | Description
 `ssl_key_password` | `text` | Your SSL key's password, if any.
 `ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 
-### AS OF
+#### Kerberos `WITH` options
+
+Use the following options to connect Materialize using SASL.
+
+For more detail, see [Kerberized Kafka details](/sql/create-source/avro-kafka/#kerberized-kafka-details).
+
+Field | Value | Description
+------|-------|------------
+`sasl_mechanism` | `text` | The authentication method used for SASL connections. Required if `security_protocol` is `sasl_plain` or `sasl_ssl`. Supported mechanisms are `gssapi`, `plain`, `scram-sha-256`, `scram-sha-512`, `oauthbearer`.
+`sasl_username` | `text` | Your SASL username. Required if `sasl_mechanism` is `plain`, `scram-sha-256`, or `scram-sha-512`.
+`sasl_password` | `text` | Your SASL password. Required if `sasl_mechanism` is `plain`, `scram-sha-256`, or `scram-sha-512`.
+`sasl_kerberos_keytab` | `text` | The absolute path to your keytab. Required if `sasl_mechanism` is `gssapi`.
+`sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanism` is `gssapi`.
+`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanism` is `gssapi`.
+`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required if `sasl_mechanism` is `gssapi`.
+`sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanism` is `gssapi`.
+
+### `AS OF`
 
 `AS OF` is the specific point in time to start emitting all events for a given `SINK`. If you don't
 use `AS OF`, Materialize will pick a timestamp itself.
 
-### WITH SNAPSHOT or WITHOUT SNAPSHOT
+### `WITH SNAPSHOT` or `WITHOUT SNAPSHOT`
 
 By default, each `SINK` is created with a `SNAPSHOT` which contains the results of the query at its `AS OF` timestamp.
 Any further updates to these results are produced at the time when they occur. To only see results after the
@@ -203,7 +220,7 @@ Field | Use
 ------|-----
 _id_ | The transaction id this record refers to.
 _status_ | Either `BEGIN` or `END`. Materialize sends a record with `BEGIN` the first time it writes a data message for `id`, and it sends a `END` record after it has written all data messages for `id`.
-_event&lowbar;count_ | This field null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
+_event&lowbar;count_ | This field is null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
 
 ##### Consistency information details
 - Materialize writes consistency output to a different topic per sink.

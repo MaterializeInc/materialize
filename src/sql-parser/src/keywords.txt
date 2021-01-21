@@ -31,11 +31,15 @@ Arn
 Array
 As
 Asc
+At
 Avro
 Begin
 Between
+Bigint
+Boolean
 Both
 Broker
+Bucket
 By
 Bytes
 Cascade
@@ -107,11 +111,14 @@ Hold
 Hour
 Hours
 If
+Ilike
 In
 Index
 Indexes
 Inner
 Insert
+Int
+Integer
 Intersect
 Interval
 Into
@@ -133,6 +140,7 @@ Limit
 List
 Local
 Map
+Matching
 Materialize
 Materialized
 Message
@@ -146,7 +154,6 @@ No
 None
 Not
 Null
-Numeric
 Objects
 Ocf
 Of
@@ -169,7 +176,9 @@ Protobuf
 Range
 Raw
 Read
+Real
 References
+Regclass
 Regex
 Registry
 Rename
@@ -181,6 +190,8 @@ Right
 Rollback
 Row
 Rows
+S3
+Scan
 Schema
 Schemas
 Second
@@ -201,6 +212,7 @@ Sources
 Start
 Stdin
 Stdout
+String
 Table
 Tables
 Tail
@@ -211,7 +223,6 @@ Then
 Ties
 Time
 Timestamp
-TimestampTz
 To
 Topic
 Trailing

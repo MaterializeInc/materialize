@@ -48,6 +48,7 @@ use crate::source::cache::CacheSender;
 mod file;
 mod kafka;
 mod kinesis;
+mod s3;
 mod util;
 
 pub mod cache;
@@ -58,6 +59,7 @@ pub use file::FileReadStyle;
 pub use file::FileSourceInfo;
 pub use kafka::KafkaSourceInfo;
 pub use kinesis::KinesisSourceInfo;
+pub use s3::S3SourceInfo;
 
 /// Shared configuration information for all source types.
 pub struct SourceConfig<'a, G> {
@@ -465,7 +467,8 @@ impl ConsistencyInfo {
                 &source_id.to_string(),
                 &worker_id.to_string(),
             ),
-            time_since_downgrade: Instant::now(),
+            // we have never downgraded, so make sure the initial value is outside of our frequency
+            time_since_downgrade: Instant::now() - timestamp_frequency - Duration::from_secs(1),
             partition_metrics: Default::default(),
         }
     }
@@ -510,8 +513,8 @@ impl ConsistencyInfo {
                 // If someone resets their system clock to be too far in the past, this could cause
                 // Materialize to block and not give control to other operators. We thus give up
                 // on timestamping this message
-                error!("The new timestamp is more than 1 second behind the last assigned timestamp. To\
-                avoid unnecessary blocking, Materialize will not attempt to downgrade the capability. Please\
+                error!("The new timestamp is more than 1 second behind the last assigned timestamp. To \
+                avoid unnecessary blocking, Materialize will not attempt to downgrade the capability. Please \
                 consider resetting your system time.");
                 return None;
             }
@@ -934,10 +937,10 @@ where
                 return SourceStatus::Done;
             }
 
-            if !read_cached_files {
-                // Downgrade capability (if possible) before reading next cached file.
-                consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
+            // Downgrade capability (if possible)
+            consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
 
+            if !read_cached_files {
                 if let Some(msgs) = source_info.next_cached_file() {
                     // TODO(rkhaitan) change this to properly re-use old timestamps.
                     // Currently this is hard to do because there can be arbitrary delays between

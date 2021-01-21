@@ -14,6 +14,8 @@ use std::time::SystemTime;
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
+use dataflow_types::SinkEnvelope;
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
@@ -22,11 +24,11 @@ use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
-use expr::{GlobalId, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::RelationDesc;
+use expr::{ExprHumanizer, GlobalId, OptimizedRelationExpr, ScalarExpr};
+use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
-use sql::ast::Expr;
-use sql::catalog::CatalogError as SqlCatalogError;
+use sql::ast::{Expr, Raw};
+use sql::catalog::{Catalog as SqlCatalog, CatalogError as SqlCatalogError};
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
@@ -35,10 +37,12 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::catalog::error::{Error, ErrorKind};
+use crate::catalog::migrate::CONTENT_MIGRATIONS;
 use crate::session::Session;
 
 mod config;
 mod error;
+mod migrate;
 
 pub mod builtin;
 pub mod storage;
@@ -77,6 +81,7 @@ pub const FIRST_USER_OID: u32 = 20_000;
 pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
+    by_oid: HashMap<u32, GlobalId>,
     indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
@@ -142,7 +147,7 @@ pub struct Table {
     pub plan_cx: PlanContext,
     pub desc: RelationDesc,
     #[serde(skip)]
-    pub defaults: Vec<Expr>,
+    pub defaults: Vec<Expr<Raw>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +164,7 @@ pub struct Sink {
     pub plan_cx: PlanContext,
     pub from: GlobalId,
     pub connector: SinkConnectorState,
+    pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub as_of: Option<u64>,
 }
@@ -387,12 +393,13 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of events that describe the initial state
     /// of the catalog.
-    pub fn open(config: Config) -> Result<(Catalog, Vec<Event>), Error> {
+    pub fn open(config: &Config) -> Result<(Catalog, Vec<Event>), Error> {
         let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
 
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
             by_id: BTreeMap::new(),
+            by_oid: HashMap::new(),
             indexes: HashMap::new(),
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
@@ -403,7 +410,7 @@ impl Catalog {
                 nonce: rand::random(),
                 experimental_mode,
                 cluster_id,
-                cache_directory: config.cache_directory,
+                cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
             },
         };
@@ -596,6 +603,21 @@ impl Catalog {
             }
         }
 
+        let mut catalog_content_version = catalog.storage().get_catalog_content_version()?;
+
+        while CONTENT_MIGRATIONS.len() > catalog_content_version {
+            if let Err(e) = CONTENT_MIGRATIONS[catalog_content_version](&mut catalog) {
+                return Err(Error::new(ErrorKind::FailedMigration {
+                    last_version: catalog_content_version,
+                    cause: e.to_string(),
+                }));
+            }
+            catalog_content_version += 1;
+            catalog
+                .storage()
+                .set_catalog_content_version(catalog_content_version)?;
+        }
+
         let items = catalog.storage().load_items()?;
         for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
@@ -622,8 +644,24 @@ impl Catalog {
             let oid = catalog.allocate_oid()?;
             events.push(catalog.insert_item(id, oid, name, item));
         }
-
         Ok((catalog, events))
+    }
+
+    /// Opens the catalog at `path` with parameters set appropriately for debug
+    /// contexts, like in tests.
+    ///
+    /// This function should not be called in production contexts. Use
+    /// [`Catalog::open`] with appropriately set configuration parameters
+    /// instead.
+    pub fn open_debug(path: &Path) -> Result<Catalog, anyhow::Error> {
+        let (catalog, _) = Self::open(&Config {
+            path,
+            enable_logging: true,
+            experimental_mode: None,
+            cache_directory: None,
+            build_info: &DUMMY_BUILD_INFO,
+        })?;
+        Ok(catalog)
     }
 
     pub fn for_session(&self, session: &Session) -> ConnCatalog {
@@ -888,6 +926,7 @@ impl Catalog {
             .expect("catalog out of sync");
         let schema_id = schema.id;
         schema.items.insert(entry.name.item.clone(), entry.id);
+        self.by_oid.insert(oid, entry.id);
         self.by_id.insert(entry.id, entry);
 
         Event::CreatedItem {
@@ -934,8 +973,9 @@ impl Catalog {
 
     pub fn drop_items_ops(&mut self, ids: &[GlobalId]) -> Vec<Op> {
         let mut ops = vec![];
+        let mut seen = HashSet::new();
         for &id in ids {
-            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut HashSet::new());
+            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut seen);
         }
         ops
     }
@@ -1490,6 +1530,7 @@ impl Catalog {
                 plan_cx: pcx,
                 from: sink.from,
                 connector: SinkConnectorState::Pending(sink.connector_builder),
+                envelope: sink.envelope,
                 with_snapshot,
                 as_of,
             }),
@@ -1581,18 +1622,17 @@ impl Catalog {
         }
     }
 
+    /// Serializes the catalog's in-memory state.
+    ///
+    /// There are no guarantees about the format of the serialized state, except
+    /// that the serialized state for two identical catalogs will compare
+    /// identically.
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
 
     pub fn config(&self) -> &sql::catalog::CatalogConfig {
         &self.config
-    }
-}
-
-impl IdHumanizer for Catalog {
-    fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        self.by_id.get(&id).map(|entry| entry.name.to_string())
     }
 }
 
@@ -1712,23 +1752,106 @@ impl From<PlanContext> for SerializedPlanContext {
     }
 }
 
-/// Loads the catalog stored at `path` and returns its serialized state.
-///
-/// There are no guarantees about the format of the serialized state, except
-/// that the serialized state for two identical catalogs will compare
-/// identically.
-pub fn dump(path: &Path) -> Result<String, anyhow::Error> {
-    let (catalog, _events) = Catalog::open(Config {
-        path: Some(path),
-        enable_logging: true,
-        experimental_mode: None,
-        cache_directory: None,
-        build_info: &DUMMY_BUILD_INFO,
-    })?;
-    Ok(catalog.dump())
+impl ConnCatalog<'_> {
+    fn resolve_item_name(&self, name: &PartialName) -> Result<&FullName, SqlCatalogError> {
+        self.resolve_item(name).map(|entry| entry.name())
+    }
+
+    fn minimal_qualification(&self, full_name: &FullName) -> PartialName {
+        let database = match &full_name.database {
+            DatabaseSpecifier::Ambient => None,
+            DatabaseSpecifier::Name(n) if *n == self.database => None,
+            DatabaseSpecifier::Name(n) => Some(n.clone()),
+        };
+
+        let schema = if database.is_none()
+            && self.resolve_item_name(&PartialName {
+                database: None,
+                schema: None,
+                item: full_name.item.clone(),
+            }) == Ok(full_name)
+        {
+            None
+        } else {
+            // If `search_path` does not contain `full_name.schema`, the
+            // `PartialName` must contain it.
+            Some(full_name.schema.clone())
+        };
+
+        let res = PartialName {
+            database,
+            schema,
+            item: full_name.item.clone(),
+        };
+        assert_eq!(self.resolve_item_name(&res), Ok(full_name));
+        res
+    }
 }
 
-impl sql::catalog::Catalog for ConnCatalog<'_> {
+impl ExprHumanizer for ConnCatalog<'_> {
+    fn humanize_id(&self, id: GlobalId) -> Option<String> {
+        self.catalog
+            .by_id
+            .get(&id)
+            .map(|entry| entry.name.to_string())
+    }
+
+    fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
+        use ScalarType::*;
+
+        match typ {
+            Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
+            List { custom_oid, .. } | Map { custom_oid, .. } if custom_oid.is_some() => {
+                let full_name = self.get_item_by_oid(&custom_oid.unwrap()).name();
+                self.minimal_qualification(full_name).to_string()
+            }
+            List { element_type, .. } => {
+                format!("{} list", self.humanize_scalar_type(element_type))
+            }
+            Map { value_type, .. } => format!(
+                "map[{}=>{}]",
+                self.humanize_scalar_type(&ScalarType::String),
+                self.humanize_scalar_type(value_type)
+            ),
+            Record { fields, .. } => format!(
+                "record({})",
+                fields
+                    .iter()
+                    .map(|f| format!("{}: {}", f.0, self.humanize_column_type(&f.1)))
+                    .join(",")
+            ),
+            ty => {
+                let pgrepr_type = pgrepr::Type::from(ty);
+                let res = if self
+                    .search_path
+                    .iter()
+                    .any(|schema| schema == &PG_CATALOG_SCHEMA)
+                {
+                    pgrepr_type.name().to_string()
+                } else {
+                    // If PG_CATALOG_SCHEMA is not in search path, you need
+                    // qualified object name to refer to type.
+                    self.get_item_by_oid(&pgrepr_type.oid()).name().to_string()
+                };
+                if let ScalarType::Decimal(p, s) = typ {
+                    format!("{}({},{})", res, p, s)
+                } else {
+                    res
+                }
+            }
+        }
+    }
+
+    fn humanize_column_type(&self, typ: &ColumnType) -> String {
+        format!(
+            "{}{}",
+            self.humanize_scalar_type(&typ.scalar_type),
+            if typ.nullable { "?" } else { "" }
+        )
+    }
+}
+
+impl SqlCatalog for ConnCatalog<'_> {
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
         if include_system_schemas {
             self.search_path.to_vec()
@@ -1798,8 +1921,54 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn type_exists(&self, name: &FullName) -> bool {
+    fn get_item_by_oid(&self, oid: &u32) -> &dyn sql::catalog::CatalogItem {
+        let id = self.catalog.by_oid[oid];
+        self.catalog.get_by_id(&id)
+    }
+
+    fn item_exists(&self, name: &FullName) -> bool {
         self.catalog.try_get(name, self.conn_id).is_some()
+    }
+
+    fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType> {
+        let entry = self.catalog.get_by_id(id);
+        let t = match entry.item() {
+            CatalogItem::Type(t) => t,
+            _ => return None,
+        };
+
+        Some(match t.inner {
+            TypeInner::Array { element_id } => {
+                let element_type = self
+                    .try_get_lossy_scalar_type_by_id(&element_id)
+                    .expect("array's element_id refers to a valid type");
+                ScalarType::Array(Box::new(element_type))
+            }
+            TypeInner::Base => pgrepr::Type::from_oid(entry.oid())?.to_scalar_type_lossy(),
+            TypeInner::List { element_id } => {
+                let element_type = self
+                    .try_get_lossy_scalar_type_by_id(&element_id)
+                    .expect("list's element_id refers to a valid type");
+                ScalarType::List {
+                    element_type: Box::new(element_type),
+                    custom_oid: Some(entry.oid),
+                }
+            }
+            TypeInner::Map { key_id, value_id } => {
+                let key_type = self
+                    .try_get_lossy_scalar_type_by_id(&key_id)
+                    .expect("map's key_id refers to a valid type");
+                assert!(matches!(key_type, ScalarType::String));
+                let value_type = Box::new(
+                    self.try_get_lossy_scalar_type_by_id(&value_id)
+                        .expect("map's value_id refers to a valid type"),
+                );
+                ScalarType::Map {
+                    value_type,
+                    custom_oid: Some(entry.oid),
+                }
+            }
+        })
     }
 
     fn config(&self) -> &sql::catalog::CatalogConfig {
@@ -1885,7 +2054,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn table_details(&self) -> Option<&[Expr]> {
+    fn table_details(&self) -> Option<&[Expr<Raw>]> {
         if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
             Some(defaults)
         } else {
@@ -1899,5 +2068,85 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn used_by(&self) -> &[GlobalId] {
         self.used_by()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::NamedTempFile;
+
+    use sql::names::{DatabaseSpecifier, FullName, PartialName};
+
+    use crate::catalog::{Catalog, MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA};
+    use crate::session::Session;
+
+    /// System sessions have an empty `search_path` so it's necessary to
+    /// schema-qualify all referenced items.
+    ///
+    /// Dummy (and ostensibly client) sessions contain system schemas in their
+    /// search paths, so do not require schema qualification on system objects such
+    /// as types.
+    #[test]
+    fn test_minimal_qualification() -> Result<(), anyhow::Error> {
+        struct TestCase {
+            input: FullName,
+            system_output: PartialName,
+            normal_output: PartialName,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                input: FullName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: PG_CATALOG_SCHEMA.to_string(),
+                    item: "numeric".to_string(),
+                },
+                system_output: PartialName {
+                    database: None,
+                    schema: Some(PG_CATALOG_SCHEMA.to_string()),
+                    item: "numeric".to_string(),
+                },
+                normal_output: PartialName {
+                    database: None,
+                    schema: None,
+                    item: "numeric".to_string(),
+                },
+            },
+            TestCase {
+                input: FullName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: MZ_CATALOG_SCHEMA.to_string(),
+                    item: "mz_array_types".to_string(),
+                },
+                system_output: PartialName {
+                    database: None,
+                    schema: Some(MZ_CATALOG_SCHEMA.to_string()),
+                    item: "mz_array_types".to_string(),
+                },
+                normal_output: PartialName {
+                    database: None,
+                    schema: None,
+                    item: "mz_array_types".to_string(),
+                },
+            },
+        ];
+
+        let catalog_file = NamedTempFile::new()?;
+        let catalog = Catalog::open_debug(catalog_file.path())?;
+        for tc in test_cases {
+            assert_eq!(
+                catalog
+                    .for_system_session()
+                    .minimal_qualification(&tc.input),
+                tc.system_output
+            );
+            assert_eq!(
+                catalog
+                    .for_session(&Session::dummy())
+                    .minimal_qualification(&tc.input),
+                tc.normal_output
+            );
+        }
+        Ok(())
     }
 }

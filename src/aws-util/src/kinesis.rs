@@ -14,41 +14,41 @@ use std::time::Duration;
 
 use anyhow::Context;
 use log::info;
-use rusoto_core::{HttpClient, Region};
-use rusoto_credential::{AutoRefreshingProvider, ChainProvider, StaticProvider};
+use rusoto_core::HttpClient;
+use rusoto_credential::{
+    AutoRefreshingProvider, AwsCredentials, ChainProvider, ProvideAwsCredentials, StaticProvider,
+};
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput, Shard};
 
-/// Constructs a KinesisClient from statically provided connection information. If connection
-/// information is not provided, falls back to using credentials gathered by aws::credentials.
+use crate::aws::ConnectInfo;
+
+/// Construct a KinesisClient
 ///
-/// The AutoRefreshingProvider caches the underlying provider's AWS credentials,
+/// If static connection information is not provided falls back to using
+/// credentials gathered by rusoto's [`ChainProvider] wrapped in an
+/// [`AutoRefreshingProvider`].
+///
+/// The [`AutoRefreshingProvider`] caches the underlying provider's AWS credentials,
 /// automatically fetching updated credentials if they've expired.
-pub async fn kinesis_client(
-    region: Region,
-    access_key_id: Option<String>,
-    secret_access_key: Option<String>,
-    token: Option<String>,
-) -> Result<KinesisClient, anyhow::Error> {
+pub async fn client(conn_info: ConnectInfo) -> Result<KinesisClient, anyhow::Error> {
     let request_dispatcher =
         HttpClient::new().context("creating HTTP client for Kinesis client")?;
-    let kinesis_client = match (access_key_id, secret_access_key) {
-        (Some(access_key_id), Some(secret_access_key)) => {
-            info!("Creating a new Kinesis client from provided access_key and secret_access_key");
-            KinesisClient::new_with(
-                request_dispatcher,
-                StaticProvider::new(access_key_id, secret_access_key, token, None),
-                region,
-            )
-        }
-        (_, _) => {
-            info!("AWS access_key_id and secret_access_key not provided, creating a new Kinesis client using a chain provider.");
-            let mut provider = ChainProvider::new();
-            provider.set_timeout(Duration::from_secs(10));
-            let provider =
-                AutoRefreshingProvider::new(provider).context("generating AWS credentials")?;
+    let kinesis_client = if let Some(creds) = conn_info.credentials {
+        info!("Creating a new Kinesis client from provided access_key and secret_access_key");
+        let provider = StaticProvider::from(AwsCredentials::from(creds));
+        KinesisClient::new_with(request_dispatcher, provider, conn_info.region)
+    } else {
+        info!(
+            "AWS access_key_id and secret_access_key not provided, \
+               creating a new Kinesis client using a chain provider."
+        );
+        let mut provider = ChainProvider::new();
+        provider.set_timeout(Duration::from_secs(10));
+        provider.credentials().await?; // ensure that credentials exist
+        let provider =
+            AutoRefreshingProvider::new(provider).context("generating AWS credentials")?;
 
-            KinesisClient::new_with(request_dispatcher, provider, region)
-        }
+        KinesisClient::new_with(request_dispatcher, provider, conn_info.region)
     };
     Ok(kinesis_client)
 }
@@ -74,6 +74,7 @@ pub async fn list_shards(
                 next_token,
                 stream_creation_timestamp: None,
                 stream_name: Some(stream_name.to_owned()),
+                shard_filter: None,
             })
             .await
             .context("fetching shard list")?;

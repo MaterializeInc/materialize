@@ -26,7 +26,8 @@ use std::panic;
 use std::panic::PanicInfo;
 use std::path::PathBuf;
 use std::process;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::{cmp, env};
@@ -67,7 +68,7 @@ fn run() -> Result<(), anyhow::Error> {
         opts.optflag("", "dev", "allow running this dev (unoptimized) build");
     }
 
-    // Timely and Differential worker options.
+    // Dataflow worker options.
     opts.optopt(
         "w",
         "workers",
@@ -117,7 +118,19 @@ fn run() -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "cache-max-pending-records",
-        "maximum number of records that have to be present before materialize will cache them immediately. (default 1000000)",
+        "maximum number of records that have to be present before materialize will cache them immediately (default 1000000)",
+        "N",
+    );
+    opts.optopt(
+        "",
+        "timely-progress-mode",
+        "[advanced] timely progress tracking mode (default: demand)",
+        "<demand|eager>",
+    );
+    opts.optopt(
+        "",
+        "differential-idle-merge-effort",
+        "[advanced] amount of compaction to perform when idle",
         "N",
     );
 
@@ -125,7 +138,9 @@ fn run() -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "log-file",
-        "where materialized will write logs (default <data directory>/materialized.log)",
+        "where materialized will write logs, \
+         can be either a file or the special value 'stderr' \
+         (default <data directory>/materialized.log)",
         "PATH",
     );
 
@@ -199,16 +214,7 @@ fn run() -> Result<(), anyhow::Error> {
             None => match env::var("MZ_WORKERS") {
                 Ok(val) => val.parse()?,
                 Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_WORKERS"),
-                Err(VarError::NotPresent) => match env::var("MZ_THREADS") {
-                    Ok(val) => {
-                        warn!("MZ_THREADS is a deprecated alias for MZ_WORKERS");
-                        val.parse()?
-                    }
-                    Err(VarError::NotUnicode(_)) => {
-                        bail!("non-unicode character found in MZ_THREADS")
-                    }
-                    Err(VarError::NotPresent) => cmp::max(1, num_cpus::get_physical() / 2),
-                },
+                Err(VarError::NotPresent) => cmp::max(1, num_cpus::get_physical() / 2),
             },
         },
     };
@@ -251,6 +257,14 @@ fn run() -> Result<(), anyhow::Error> {
         Some(d) => parse_duration::parse(&d)?,
     };
     let cache_max_pending_records = popts.opt_get_default("cache-max-pending-records", 1000000)?;
+    let timely_progress_mode = popts
+        .opt_get_default(
+            "timely-progress-mode",
+            timely::worker::ProgressMode::default(),
+        )
+        .map_err(|e| anyhow!(e))?;
+    let differential_idle_merge_effort =
+        popts.opt_get::<isize>("differential-idle-merge-effort")?;
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
@@ -376,7 +390,7 @@ fn run() -> Result<(), anyhow::Error> {
         }
     }
 
-    // configure prometheus process metrics
+    // Configure prometheus process metrics.
     mz_process_collector::register_default_process_collector()?;
 
     // Print system information as the very first thing in the logs. The goal is
@@ -398,13 +412,8 @@ swap: {swap_total}KB total, {swap_used}KB used",
         dep_versions = build_info().join("\n"),
         invocation = {
             use shell_words::quote as escape;
-            // TODO - make this only check for "MZ_" if #1223 is fixed.
             env::vars()
-                .filter(|(name, _value)| {
-                    name.starts_with("MZ_")
-                        || name.starts_with("DIFFERENTIAL_")
-                        || name == "DEFAULT_PROGRESS_MODE"
-                })
+                .filter(|(name, _value)| name.starts_with("MZ_"))
                 .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
                 .chain(args.into_iter().map(|arg| escape(&arg).into_owned()))
                 .join(" ")
@@ -424,33 +433,48 @@ swap: {swap_total}KB total, {swap_used}KB used",
 
     sys::adjust_rlimits();
 
-    // Start Tokio runtime.
-    let mut runtime = tokio::runtime::Builder::new()
-        .threaded_scheduler()
-        // The default thread name exceeds the Linux limit on thread name
-        // length, so pick something shorter.
-        //
-        // TODO(benesch): use `thread_name_fn` to get unique names if that
-        // lands upstream: https://github.com/tokio-rs/tokio/pull/1921.
-        .thread_name("tokio:worker")
-        .enable_all()
-        .build()?;
+    // Build Timely worker configuration.
+    let mut timely_worker = timely::WorkerConfig::default().progress_mode(timely_progress_mode);
+    differential_dataflow::configure(
+        &mut timely_worker,
+        &differential_dataflow::Config {
+            idle_merge_effort: differential_idle_merge_effort,
+        },
+    );
 
-    let server = runtime.block_on(materialized::serve(materialized::Config {
-        threads,
-        process,
-        addresses,
-        logging,
-        logical_compaction_window,
-        timestamp_frequency,
-        cache,
-        listen_addr,
-        tls,
-        data_directory: Some(data_directory),
-        symbiosis_url,
-        experimental_mode,
-        telemetry_url,
-    }))?;
+    // Start Tokio runtime.
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            // The default thread name exceeds the Linux limit on thread name
+            // length, so pick something shorter.
+            .thread_name_fn(|| {
+                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                format!("tokio:work-{}", id)
+            })
+            .enable_all()
+            .build()?,
+    );
+
+    let server = runtime.block_on(materialized::serve(
+        materialized::Config {
+            threads,
+            process,
+            addresses,
+            timely_worker,
+            logging,
+            logical_compaction_window,
+            timestamp_frequency,
+            cache,
+            listen_addr,
+            tls,
+            data_directory,
+            symbiosis_url,
+            experimental_mode,
+            telemetry_url,
+        },
+        runtime.clone(),
+    ))?;
 
     eprintln!(
         "=======================================================================
@@ -488,6 +512,23 @@ For more details, see https://materialize.com/docs/cli#experimental-mode
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 "
         );
+    }
+
+    for (key, _val) in env::vars() {
+        // TODO(benesch): remove these hints about deprecated environment
+        // variables once a sufficient amount of time has passed, say, March
+        // 2021.
+        match key.as_str() {
+            "DIFFERENTIAL_EAGER_MERGE" => warn!(
+                "Materialize no longer respects the DIFFERENTIAL_EAGER_MERGE environment variable \
+                 (hint: use the --differential-idle-merge-effort command-line option instead)",
+            ),
+            "DEFAULT_PROGRESS_MODE" => warn!(
+                "Materialize no longer respects the DEFAULT_PROGRESS_MODE environment variable \
+                 (hint: use the --timely-progress-mode command-line option instead)",
+            ),
+            _ => (),
+        }
     }
 
     println!(

@@ -11,12 +11,12 @@ version: "3.7"
 services:
   materialized:
     mzbuild: materialized
-    command: -w1
+    command: -w1 --disable-telemetry
     ports: [6875]
     volumes:
       - tbshare:/tbshare
   mysql:
-    image: debezium/example-mysql:1.2
+    image: debezium/example-mysql:1.4
     ports: [3306]
     environment:
       - MYSQL_ROOT_PASSWORD=rootpw

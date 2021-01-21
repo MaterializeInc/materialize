@@ -22,10 +22,22 @@ query error value_type parameter required
 CREATE TYPE custom AS MAP (key_type=text)
 
 query error key_type parameter required
-CREATE TYPE custom AS MAP (value_type='bool')
+CREATE TYPE custom AS MAP (value_type=bool)
 
 query error unknown catalog item 'customthing'
-CREATE TYPE custom AS MAP (key_type=text, value_type='bool', extra_type=customthing)
+CREATE TYPE custom AS MAP (key_type=text, value_type=bool, extra_type=customthing)
+
+query error key_type must be of class type, but received pg_catalog.pg_enum which is of class view
+CREATE TYPE tbl_map AS MAP (key_type=pg_enum, value_type=text)
+
+query error value_type must be of class type, but received pg_catalog.pg_enum which is of class view
+CREATE TYPE tbl_map AS MAP (key_type=text, value_type=pg_enum)
+
+query error CREATE TYPE ... AS MAP option "value_type" cannot accept type modifier on numeric, you must use the default type
+CREATE TYPE typ_mod_map AS MAP (key_type=text, value_type=numeric(38,0))
+
+query error CREATE TYPE ... AS LIST option "value_type" can only use named data types, but found unnamed data type int4 list. Use CREATE TYPE to create a named type first
+CREATE TYPE unnamed_element_map AS MAP (key_type=text, value_type=int4 list)
 
 query error CREATE TYPE not yet supported
 CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
@@ -43,7 +55,7 @@ SELECT ('{  c  =>3, a=>     2, a => 1 }'::map[text=>int])::text
 ----
 {a=>1,c=>3}
 
-query error Expected TEXT, found INT
+query error map key type must be text, got integer
 SELECT '{1=>true}'::map[int=>bool]
 
 query T
@@ -56,7 +68,7 @@ SELECT ('{}'::map[text=>int])::text
 ----
 {}
 
-query error invalid input syntax for bool: "2.0"
+query error invalid input syntax for boolean: "2.0"
 SELECT ('{a=>1, b=>false, c=>2.0}'::map[text=>bool])::text
 
 query T
@@ -120,7 +132,7 @@ SELECT ('{hello=>{world=>nested}}'::map[text=>map[text=>text]])::text
 ----
 {hello=>{world=>nested}}
 
-query error expected TEXT, found INT
+query error map key type must be text, got integer
 SELECT '{hello=>{1=>false}}'::map[text=>map[int=>bool]]
 
 query T
@@ -170,7 +182,7 @@ SELECT '{hello=>{world=>false}}'::map[text=>map[text=>bool]] -> 'hello'::text ? 
 true
 
 ## ?&
-query error string literal does not support casting from string to string\[\]
+query error string literal does not support casting from text to text\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& 'a'
 
 query error arguments cannot be implicitly cast to any implementation's parameters
@@ -228,7 +240,7 @@ SELECT '{hello=>{world=>1293}}'::map[text=>map[text=>smallint]] -> 'hello'::text
 false
 
 ## ?|
-query error string literal does not support casting from string to string\[\]
+query error string literal does not support casting from text to text\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| 'a'
 
 query error arguments cannot be implicitly cast to any implementation's parameters
@@ -431,3 +443,150 @@ query T
 SELECT '{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'hello'::text -> 'world'::text
 ----
 nested
+
+# 🔬 CREATE TYPE .. AS MAP
+
+statement ok
+CREATE TYPE int4_map AS MAP (key_type=text, value_type=int4);
+
+query T
+SELECT '{a=>1,b=>2}'::int4_map::text;
+----
+{a=>1,b=>2}
+
+query T
+SELECT pg_typeof(NULL::int4_map);
+----
+int4_map
+
+# 🔬🔬 Check each valid value type
+
+statement ok
+CREATE TYPE bool_map_c AS MAP (key_type=text, value_type=bool);
+
+query T
+SELECT '{a=>true}'::bool_map_c::text
+----
+{a=>t}
+
+statement ok
+CREATE TYPE int8_map_c AS MAP (key_type=text, value_type=int8);
+
+query T
+SELECT '{a=>1}'::int8_map_c::text
+----
+{a=>1}
+
+statement ok
+CREATE TYPE int4_map_c AS MAP (key_type=text, value_type=int4);
+
+query T
+SELECT '{a=>1}'::int4_map_c::text
+----
+{a=>1}
+
+statement ok
+CREATE TYPE text_map_c AS MAP (key_type=text, value_type=text);
+
+query T
+SELECT '{a=>a}'::text_map_c::text
+----
+{a=>a}
+
+statement ok
+CREATE TYPE float4_map_c AS MAP (key_type=text, value_type=float4);
+
+query T
+SELECT '{a=>1.2}'::float4_map_c::text
+----
+{a=>1.2}
+
+statement ok
+CREATE TYPE float8_map_c AS MAP (key_type=text, value_type=float8);
+
+query T
+SELECT '{a=>1.2}'::float8_map_c::text
+----
+{a=>1.2}
+
+statement ok
+CREATE TYPE date_map_c AS MAP (key_type=text, value_type=date);
+
+query T
+SELECT '{a=>2001-01-01}'::date_map_c::text
+----
+{a=>2001-01-01}
+
+statement ok
+CREATE TYPE time_map_c AS MAP (key_type=text, value_type=time);
+
+query T
+SELECT '{a=>12:34:56}'::time_map_c::text
+----
+{a=>12:34:56}
+
+statement ok
+CREATE TYPE timestamp_map_c AS MAP (key_type=text, value_type=timestamp);
+
+query T
+SELECT '{a=>2001-01-01 12:34:56}'::timestamp_map_c::text
+----
+{a=>"2001-01-01 12:34:56"}
+
+statement ok
+CREATE TYPE timestamptz_map_c AS MAP (key_type=text, value_type=timestamptz);
+
+query T
+SELECT '{a=>2001-01-01 12:34:56}'::timestamptz_map_c::text
+----
+{a=>"2001-01-01 12:34:56+00"}
+
+statement ok
+CREATE TYPE interval_map_c AS MAP (key_type=text, value_type=interval);
+
+query T
+SELECT '{a=>1y 2d 3h 4m}'::interval_map_c::text
+----
+{a=>"1 year 2 days 03:04:00"}
+
+statement ok
+CREATE TYPE numeric_map_c AS MAP (key_type=text, value_type=numeric);
+
+query T
+SELECT '{a=>1.23}'::numeric_map_c::text
+----
+{a=>1}
+
+statement ok
+CREATE TYPE jsonb_map_c AS MAP (key_type=text, value_type=jsonb);
+
+query T
+SELECT '{a=>\{\"1\":2\}}'::jsonb_map_c::text;
+----
+{a=>"{\"1\":2.0}"}
+
+# 🔬🔬 Check custom type name resolution
+
+statement ok
+CREATE TYPE bool AS MAP (key_type=text, value_type=int4)
+
+query error invalid input syntax for boolean: "\{a=>1\}"
+SELECT '{a=>1}'::bool;
+
+query T
+SELECT '{a=>1}'::public.bool::text;
+----
+{a=>1}
+
+# 🔬🔬 Check subtype resolution
+
+# Supports qualified subtypes
+statement ok
+CREATE TYPE qualified_int4_map AS MAP (key_type=pg_catalog.text, value_type=pg_catalog.int4)
+
+statement ok
+CREATE TYPE qualified_qualified_int4_map AS MAP (key_type=pg_catalog.text, value_type=public.qualified_int4_map)
+
+# Supports type aliases
+statement ok
+CREATE TYPE int_map AS MAP (key_type=pg_catalog.text, value_type=int)

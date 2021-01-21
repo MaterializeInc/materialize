@@ -39,7 +39,7 @@ use mz_avro::{
     give_value,
     types::{DecimalValue, Scalar, Value},
     AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess, AvroRead, AvroRecordAccess,
-    GeneralDeserializer, StatefulAvroDecodeable, TrivialDecoder, ValueDecoder, ValueOrReader,
+    GeneralDeserializer, StatefulAvroDecodable, TrivialDecoder, ValueDecoder, ValueOrReader,
 };
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
@@ -133,6 +133,7 @@ enum RowCoordinates {
     },
     Postgres {
         lsn: usize,
+        total_order: Option<usize>,
     },
     MSSql {
         change_lsn: MSSqlLsn,
@@ -146,9 +147,18 @@ pub struct DebeziumSourceCoordinates {
     snapshot: bool,
     row: RowCoordinates,
 }
+
+#[derive(Debug)]
+pub struct DebeziumTransactionMetadata {
+    // The order of the record within the transaction
+    total_order: usize,
+}
+
 struct DebeziumSourceDecoder<'a> {
     file_buf: &'a mut Vec<u8>,
 }
+
+struct DebeziumTransactionDecoder;
 
 struct AvroStringDecoder<'a> {
     pub buf: &'a mut Vec<u8>,
@@ -266,6 +276,47 @@ fn decode_change_lsn(input: &str) -> Option<MSSqlLsn> {
         slot_num,
     })
 }
+
+// TODO - If #[derive(AvroDecodable)] supported optional fields, we wouldn't need to do this by hand.
+impl AvroDecode for DebeziumTransactionDecoder {
+    type Out = Option<DebeziumTransactionMetadata>;
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(
+        self,
+        a: &mut A,
+    ) -> Result<Self::Out, AvroError> {
+        let mut total_order = None;
+        while let Some((name, _, field)) = a.next_field()? {
+            match name {
+                "total_order" => {
+                    let val = field.decode_field(ValueDecoder)?;
+                    total_order = Some(val.into_usize().ok_or_else(|| {
+                        DecodeError::Custom("\"total_order\" is not an integer".to_string())
+                    })?);
+                }
+                _ => field.decode_field(TrivialDecoder)?,
+            }
+        }
+        Ok(total_order.map(|total_order| DebeziumTransactionMetadata { total_order }))
+    }
+    fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
+        self,
+        idx: usize,
+        _n_variants: usize,
+        null_variant: Option<usize>,
+        deserializer: D,
+        reader: &'a mut R,
+    ) -> Result<Self::Out, AvroError> {
+        if Some(idx) == null_variant {
+            Ok(None)
+        } else {
+            deserializer.deserialize(reader, self)
+        }
+    }
+    define_unexpected! {
+        array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+    }
+}
+
 impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
     type Out = DebeziumSourceCoordinates;
     fn record<R: AvroRead, A: AvroRecordAccess<R>>(
@@ -395,7 +446,10 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
             RowCoordinates::MySql { pos, row }
         } else if pg_any {
             let lsn = lsn.ok_or_else(|| DecodeError::Custom("no lsn".to_string()))? as usize;
-            RowCoordinates::Postgres { lsn }
+            RowCoordinates::Postgres {
+                lsn,
+                total_order: None,
+            }
         } else if mssql_any {
             let change_lsn =
                 change_lsn.ok_or_else(|| DecodeError::Custom("no change_lsn".to_string()))?;
@@ -464,6 +518,7 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
         let mut before = None;
         let mut after = None;
         let mut coords = None;
+        let mut transaction = None;
         while let Some((name, _, field)) = a.next_field()? {
             match name {
                 "before" => {
@@ -500,9 +555,22 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
                     };
                     coords = Some(field.decode_field(d)?);
                 }
+                "transaction" => {
+                    let d = DebeziumTransactionDecoder;
+                    transaction = field.decode_field(d)?;
+                }
                 _ => {
                     field.decode_field(TrivialDecoder)?;
                 }
+            }
+        }
+        if let Some(transaction) = transaction {
+            if let Some(DebeziumSourceCoordinates {
+                row: RowCoordinates::Postgres { total_order, .. },
+                ..
+            }) = coords.as_mut()
+            {
+                *total_order = Some(transaction.total_order);
             }
         }
         Ok((DiffPair { before, after }, coords))
@@ -541,7 +609,7 @@ impl AvroDecode for RowDecoder {
 // Get around orphan rule
 #[derive(Debug)]
 struct RowWrapper(Row);
-impl StatefulAvroDecodeable for RowWrapper {
+impl StatefulAvroDecodable for RowWrapper {
     type Decoder = RowDecoder;
     // TODO - can we make this some sort of &'a mut (RowPacker, Vec<u8>) without
     // running into lifetime crap?
@@ -1050,7 +1118,11 @@ fn validate_schema_2(
                     seen_avro_nodes.remove(&named_idx);
                 }
             }
-            ScalarType::Record { fields: columns }
+            ScalarType::Record {
+                fields: columns,
+                custom_oid: None,
+                custom_name: None,
+            }
         }
         SchemaPiece::Array(inner) => {
             let named_idx = match inner.as_ref() {
@@ -1066,7 +1138,10 @@ fn validate_schema_2(
                 }
             }
             let next_node = schema.step(inner);
-            let ret = ScalarType::List(Box::new(validate_schema_2(seen_avro_nodes, next_node)?));
+            let ret = ScalarType::List {
+                element_type: Box::new(validate_schema_2(seen_avro_nodes, next_node)?),
+                custom_oid: None,
+            };
             if let Some(named_idx) = named_idx {
                 seen_avro_nodes.remove(&named_idx);
             }
@@ -1074,6 +1149,7 @@ fn validate_schema_2(
         }
         SchemaPiece::Map(inner) => ScalarType::Map {
             value_type: Box::new(validate_schema_2(seen_avro_nodes, schema.step(inner))?),
+            custom_oid: None,
         },
 
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
@@ -1193,7 +1269,7 @@ fn unwrap_record_fields(n: SchemaNode) -> &[RecordField] {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DiffPair<T> {
     pub before: Option<T>,
     pub after: Option<T>,
@@ -1321,10 +1397,17 @@ impl DebeziumDeduplicationStrategy {
 }
 
 /// Track whether or not we should skip a specific debezium message
+///
+/// The goal of deduplication is to omit sending true duplicates -- the exact
+/// same record being sent into materialize twice. That means that we create
+/// one deduplicator per timely worker and use use timely key sharding
+/// normally. But it also means that no single deduplicator knows the
+/// highest-ever seen binlog offset.
 #[derive(Debug)]
 struct DebeziumDeduplicationState {
-    /// Last recorded (pos, row, offset) for each MySQL binlog file.
-    /// (Or "", in the Postgres case)
+    /// Last recorded (pos, row, offset) for each binlog stream.
+    ///
+    /// A binlog stream is either a file name (for mysql) or "" for postgres.
     ///
     /// [`DebeziumDeduplicationstrategy`] determines whether messages that are not ahead
     /// of the last recorded pos/row will be skipped.
@@ -1471,7 +1554,7 @@ impl DebeziumDeduplicationState {
     ) -> bool {
         let (pos, row) = match row {
             RowCoordinates::MySql { pos, row } => (pos, row),
-            RowCoordinates::Postgres { lsn } => (lsn, 0),
+            RowCoordinates::Postgres { lsn, total_order } => (lsn, total_order.unwrap_or(0)),
             RowCoordinates::MSSql {
                 change_lsn,
                 event_serial_no,
@@ -1592,13 +1675,13 @@ impl DebeziumDeduplicationState {
                             if let Some(upstream_time_millis) = upstream_time_millis {
                                 if upstream_time_millis < range.pad_start {
                                     if *started_padding {
-                                        warn!("went back to before padding start, after entering padding\
+                                        warn!("went back to before padding start, after entering padding \
                                                source={}:{} message_time={} messages_processed={}",
                                               debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
                                               self.messages_processed);
                                     }
                                     if *started {
-                                        warn!("went back to before padding start, after entering full dedupe\
+                                        warn!("went back to before padding start, after entering full dedupe \
                                                source={}:{} message_time={} messages_processed={}",
                                               debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
                                               self.messages_processed);
@@ -1611,7 +1694,7 @@ impl DebeziumDeduplicationState {
                                     // in the padding time range
                                     *started_padding = true;
                                     if *started {
-                                        warn!("went back to before padding start, after entering full dedupe\
+                                        warn!("went back to before padding start, after entering full dedupe \
                                                source={}:{} message_time={} messages_processed={}",
                                               debug_name, worker_idx, fmt_timestamp(upstream_time_millis),
                                               self.messages_processed);
@@ -2193,50 +2276,9 @@ impl Decoder {
 ///   * Union schemas are only used to represent nullability. The first
 ///     variant is always the null variant, and the second and last variant
 ///     is the non-null variant.
-fn build_schema(columns: &[(ColumnName, ColumnType)], include_transaction: bool) -> Schema {
-    let row_schema = build_row_schema_json(columns, "row");
-    let mut schema_fields = Vec::new();
-    schema_fields.push(json!({
-        "name": "before",
-        "type": [
-            "null",
-            row_schema
-        ]
-    }));
-
-    schema_fields.push(json!({
-        "name": "after",
-        "type": ["null", "row"],
-    }));
-
-    // TODO(rkhaitan): this schema omits the total_order and data collection_order
-    // fields found in Debezium's transaction metadata struct. We chose to omit
-    // those because the order is not stable across reruns and has no semantic
-    // meaning for records within a timestamp in Materialize. These fields may
-    // be useful in the future for deduplication.
-    if include_transaction {
-        schema_fields.push(json!({
-        "name": "transaction",
-            "type":
-                {
-                    "name": "transaction_metadata",
-                    "type": "record",
-                    "fields": [
-                        {
-                            "name": "id",
-                            "type": "string",
-                        }
-                    ]
-                }
-        }));
-    }
-
-    let schema = json!({
-        "type": "record",
-        "name": "envelope",
-        "fields": schema_fields,
-    });
-    Schema::parse(&schema).expect("valid schema constructed")
+fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
+    let row_schema = build_row_schema_json(&columns, "envelope");
+    Schema::parse(&row_schema).expect("valid schema constructed")
 }
 
 pub fn get_debezium_transaction_schema() -> &'static Schema {
@@ -2290,12 +2332,29 @@ fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
         .expect("writing to vec cannot fail");
 }
 
+struct KeyInfo {
+    columns: Vec<(ColumnName, ColumnType)>,
+    schema: Schema,
+}
+
+fn encode_message_unchecked(
+    schema_id: i32,
+    row: Row,
+    schema: &Schema,
+    columns: &[(ColumnName, ColumnType)],
+) -> Vec<u8> {
+    let mut buf = vec![];
+    encode_avro_header(&mut buf, schema_id);
+    let value = encode_datums_as_avro(row.iter(), columns);
+    mz_avro::encode_unchecked(&value, schema, &mut buf);
+    buf
+}
+
 /// Manages encoding of Avro-encoded bytes.
 pub struct Encoder {
-    columns: Vec<(ColumnName, ColumnType)>,
+    value_columns: Vec<(ColumnName, ColumnType)>,
+    key_info: Option<KeyInfo>,
     writer_schema: Schema,
-    include_transaction: bool,
-    key_schema_and_indices: Option<(Schema, Vec<usize>)>,
 }
 
 impl fmt::Debug for Encoder {
@@ -2307,173 +2366,80 @@ impl fmt::Debug for Encoder {
 }
 
 impl Encoder {
-    fn key_indices(&self) -> Option<&[usize]> {
-        self.key_schema_and_indices
-            .as_ref()
-            .map(|(_, indices)| indices.as_slice())
-    }
     pub fn new(
-        desc: RelationDesc,
+        key_desc: Option<RelationDesc>,
+        value_desc: RelationDesc,
         include_transaction: bool,
-        key_indices: Option<Vec<usize>>,
     ) -> Self {
-        let columns = column_names_and_types(desc);
-        let writer_schema = build_schema(&columns, include_transaction);
-        let key_schema_and_indices = key_indices.map(|key_indices| {
-            let key_columns = key_indices
-                .iter()
-                .map(|&key_idx| columns[key_idx].clone())
-                .collect::<Vec<_>>();
-            let row_schema = build_row_schema_json(&key_columns, "row");
-            (
-                Schema::parse(&row_schema).expect("valid schema constructed"),
-                key_indices,
-            )
+        let mut value_columns = column_names_and_types(value_desc);
+        if include_transaction {
+            // TODO(rkhaitan): this schema omits the total_order and data collection_order
+            // fields found in Debezium's transaction metadata struct. We chose to omit
+            // those because the order is not stable across reruns and has no semantic
+            // meaning for records within a timestamp in Materialize. These fields may
+            // be useful in the future for deduplication.
+            value_columns.push((
+                "transaction".into(),
+                ColumnType {
+                    nullable: false,
+                    scalar_type: ScalarType::Record {
+                        fields: vec![(
+                            "id".into(),
+                            ColumnType {
+                                scalar_type: ScalarType::String,
+                                nullable: false,
+                            },
+                        )],
+                        custom_oid: None,
+                        custom_name: Some("transaction".to_string()),
+                    },
+                },
+            ));
+        }
+        let writer_schema = build_schema(&value_columns);
+        let key_info = key_desc.map(|key_desc| {
+            let columns = column_names_and_types(key_desc);
+            let row_schema = build_row_schema_json(&columns, "row");
+            KeyInfo {
+                schema: Schema::parse(&row_schema).expect("valid schema constructed"),
+                columns,
+            }
         });
         Encoder {
-            columns,
+            value_columns,
+            key_info,
             writer_schema,
-            include_transaction,
-            key_schema_and_indices,
         }
     }
 
-    pub fn writer_schema(&self) -> &Schema {
+    pub fn value_writer_schema(&self) -> &Schema {
         &self.writer_schema
     }
 
+    pub fn value_columns(&self) -> &[(ColumnName, ColumnType)] {
+        &self.value_columns
+    }
+
     pub fn key_writer_schema(&self) -> Option<&Schema> {
-        self.key_schema_and_indices
+        self.key_info.as_ref().map(|KeyInfo { schema, .. }| schema)
+    }
+
+    pub fn key_columns(&self) -> Option<&[(ColumnName, ColumnType)]> {
+        self.key_info
             .as_ref()
-            .map(|(schema, _)| schema)
+            .map(|KeyInfo { columns, .. }| columns.as_slice())
     }
 
-    fn validate_transaction_id(&self, transaction_id: &Option<String>) {
-        // We need to preserve the invariant that transaction id is always Some(..)
-        // when users requested that we emit transaction information, and never
-        // otherwise.
-        assert_eq!(
-            self.include_transaction,
-            transaction_id.is_some(),
-            "Testing to make sure transaction IDs are always present only when required"
-        );
+    pub fn encode_key_unchecked(&self, schema_id: i32, row: Row) -> Vec<u8> {
+        let schema = self.key_writer_schema().unwrap();
+        let columns = self.key_columns().unwrap();
+        encode_message_unchecked(schema_id, row, schema, columns)
     }
 
-    pub fn encode_unchecked(
-        &self,
-        key_schema_id: Option<i32>,
-        value_schema_id: i32,
-        diff_pair: DiffPair<&Row>,
-        transaction_id: Option<String>,
-    ) -> (Option<Vec<u8>>, Vec<u8>) {
-        self.validate_transaction_id(&transaction_id);
-        let mut key_buf = vec![];
-        let mut buf = vec![];
-        encode_avro_header(&mut buf, value_schema_id);
-        let (avro_key, avro_value) = self.diff_pair_to_avro(diff_pair, transaction_id);
-        debug_assert!(avro_value.validate(self.writer_schema.top_node()));
-        mz_avro::encode_unchecked(&avro_value, &self.writer_schema, &mut buf);
-        let key_buf = avro_key.map(|avro_key| {
-            encode_avro_header(&mut key_buf, key_schema_id.unwrap());
-            let key_schema = self.key_writer_schema().unwrap();
-            debug_assert!(
-                avro_key.validate(key_schema.top_node()),
-                "{:#?}\n{}",
-                avro_key,
-                key_schema.canonical_form()
-            );
-            mz_avro::encode_unchecked(&avro_key, key_schema, &mut key_buf);
-            key_buf
-        });
-        (key_buf, buf)
-    }
-
-    pub fn diff_pair_to_avro(
-        &self,
-        diff_pair: DiffPair<&Row>,
-        transaction_id: Option<String>,
-    ) -> (Option<Value>, Value) {
-        let (before_key, before) = match diff_pair.before {
-            None => (
-                None,
-                Value::Union {
-                    index: 0,
-                    inner: Box::new(Value::Null),
-                    n_variants: 2,
-                    null_variant: Some(0),
-                },
-            ),
-            Some(row) => {
-                let (key, row) = self.row_to_avro(row.iter());
-                (
-                    key,
-                    Value::Union {
-                        index: 1,
-                        inner: Box::new(row),
-                        n_variants: 2,
-                        null_variant: Some(0),
-                    },
-                )
-            }
-        };
-        let (after_key, after) = match diff_pair.after {
-            None => (
-                None,
-                Value::Union {
-                    index: 0,
-                    inner: Box::new(Value::Null),
-                    n_variants: 2,
-                    null_variant: Some(0),
-                },
-            ),
-            Some(row) => {
-                let (key, row) = self.row_to_avro(row.iter());
-                (
-                    key,
-                    Value::Union {
-                        index: 1,
-                        inner: Box::new(row),
-                        n_variants: 2,
-                        null_variant: Some(0),
-                    },
-                )
-            }
-        };
-
-        // TODO [btv]: Decoding the key twice and then validating that they match is probably wasteful.
-        // But it doesn't matter for now since (1) in sinks we always have before or after populated, but not both,
-        // and (2) avro encoding for sinks is un-optimized anyway.
-        //
-        // Look into it if/when sink encoding becomes a bottleneck.
-        if let (Some(before_key), Some(after_key)) = (before_key.as_ref(), after_key.as_ref()) {
-            assert_eq!(before_key, after_key, "Mismatched keys in sink!");
-        }
-
-        let key = before_key.or(after_key);
-
-        let transaction = if let Some(transaction_id) = transaction_id {
-            let id = Value::String(transaction_id);
-            Some(Value::Record(vec![("id".into(), id)]))
-        } else {
-            None
-        };
-
-        let mut fields = Vec::new();
-        fields.push(("before".into(), before));
-        fields.push(("after".into(), after));
-
-        if let Some(transaction) = transaction {
-            fields.push(("transaction".into(), transaction));
-        }
-
-        (key, Value::Record(fields))
-    }
-
-    pub fn row_to_avro<'a, I>(&self, row: I) -> (Option<Value>, Value)
-    where
-        I: IntoIterator<Item = Datum<'a>>,
-    {
-        encode_datums_as_avro(row, &self.columns, self.key_indices())
+    pub fn encode_value_unchecked(&self, schema_id: i32, row: Row) -> Vec<u8> {
+        let schema = self.value_writer_schema();
+        let columns = self.value_columns();
+        encode_message_unchecked(schema_id, row, schema, columns)
     }
 }
 
@@ -2508,11 +2474,7 @@ pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType
 }
 
 /// Encodes a sequence of `Datum` as Avro (key and value), using supplied column names and types.
-pub fn encode_datums_as_avro<'a, I>(
-    datums: I,
-    names_types: &[(ColumnName, ColumnType)],
-    key_indices: Option<&[usize]>,
-) -> (Option<Value>, Value)
+pub fn encode_datums_as_avro<'a, I>(datums: I, names_types: &[(ColumnName, ColumnType)]) -> Value
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -2525,15 +2487,8 @@ where
             (name, TypedDatum::new(datum, typ.clone()).avro())
         })
         .collect();
-    let k = key_indices.map(|key_indices| {
-        let key_fields = key_indices
-            .iter()
-            .map(|&idx| value_fields[idx].clone())
-            .collect();
-        Value::Record(key_fields)
-    });
     let v = Value::Record(value_fields);
-    (k, v)
+    v
 }
 
 /// Bundled information sufficient to encode as Avro.
@@ -2597,9 +2552,22 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
                 ScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
                 ScalarType::Array(_t) => unimplemented!("array types"),
-                ScalarType::List(_t) => unimplemented!("list types"),
-                ScalarType::Record { .. } => unimplemented!("record types"),
+                ScalarType::List { .. } => unimplemented!("list types"),
                 ScalarType::Map { .. } => unimplemented!("map types"),
+                ScalarType::Record { fields, .. } => {
+                    let list = datum.unwrap_list();
+                    let fields = fields
+                        .iter()
+                        .zip(list.into_iter())
+                        .map(|((name, typ), datum)| {
+                            let name = name.to_string();
+                            let datum = TypedDatum::new(datum, typ.clone());
+                            let value = datum.avro();
+                            (name, value)
+                        })
+                        .collect();
+                    Value::Record(fields)
+                }
             };
             if typ.nullable {
                 val = Value::Union {
@@ -2671,11 +2639,11 @@ impl SchemaCache {
     }
 }
 
-/// Builds the JSON for the row schema, which can be independently useful.
-fn build_row_schema_json(
+fn build_row_schema_fields<F: FnMut() -> String>(
     columns: &[(ColumnName, ColumnType)],
-    name: &str,
-) -> serde_json::value::Value {
+    names_seen: &mut HashSet<String>,
+    namer: &mut F,
+) -> Vec<serde_json::value::Value> {
     let mut fields = Vec::new();
     for (name, typ) in columns.iter() {
         let mut field_type = match &typ.scalar_type {
@@ -2718,9 +2686,29 @@ fn build_row_schema_json(
                 "logicalType": "uuid",
             }),
             ScalarType::Array(_t) => unimplemented!("array types"),
-            ScalarType::List(_t) => unimplemented!("list types"),
-            ScalarType::Record { .. } => unimplemented!("record types"),
+            ScalarType::List { .. } => unimplemented!("list types"),
             ScalarType::Map { .. } => unimplemented!("map types"),
+            ScalarType::Record {
+                fields,
+                custom_name,
+                ..
+            } => {
+                let (name, name_seen) = match custom_name {
+                    Some(name) => (name.clone(), !names_seen.insert(name.clone())),
+                    None => (namer(), false),
+                };
+                if name_seen {
+                    json!(name)
+                } else {
+                    let fields = fields.to_vec();
+                    let json_fields = build_row_schema_fields(&fields, names_seen, namer);
+                    json!({
+                        "type": "record",
+                        "name": name,
+                        "fields": json_fields
+                    })
+                }
+            }
         };
         if typ.nullable {
             field_type = json!(["null", field_type]);
@@ -2730,6 +2718,19 @@ fn build_row_schema_json(
             "type": field_type,
         }));
     }
+    fields
+}
+/// Builds the JSON for the row schema, which can be independently useful.
+fn build_row_schema_json(
+    columns: &[(ColumnName, ColumnType)],
+    name: &str,
+) -> serde_json::value::Value {
+    let mut name_idx = 0;
+    let fields = build_row_schema_fields(columns, &mut Default::default(), &mut move || {
+        let ret = format!("com.materialize.sink.record{}", name_idx);
+        name_idx += 1;
+        ret
+    });
     json!({
         "type": "record",
         "fields": fields,
@@ -2748,15 +2749,15 @@ pub mod cdc_v2 {
     use super::RowWrapper;
 
     use anyhow::anyhow;
-    use avro_derive::AvroDecodeable;
+    use avro_derive::AvroDecodable;
     use differential_dataflow::capture::{Message, Progress};
     use mz_avro::schema::Schema;
     use mz_avro::types::Value;
     use mz_avro::{
         define_unexpected,
         error::{DecodeError, Error as AvroError},
-        ArrayAsVecDecoder, AvroDecode, AvroDecodeable, AvroDeserializer, AvroRead,
-        StatefulAvroDecodeable,
+        ArrayAsVecDecoder, AvroDecodable, AvroDecode, AvroDeserializer, AvroRead,
+        StatefulAvroDecodable,
     };
     use std::{cell::RefCell, rc::Rc};
 
@@ -2793,7 +2794,7 @@ pub mod cdc_v2 {
         pub fn encode_updates(&self, updates: &[(Row, i64, i64)]) -> Value {
             let mut enc_updates = Vec::new();
             for (data, time, diff) in updates {
-                let enc_data = super::encode_datums_as_avro(data, &self.columns, None).1;
+                let enc_data = super::encode_datums_as_avro(data, &self.columns);
                 let enc_time = Value::Long(time.clone());
                 let enc_diff = Value::Long(diff.clone());
                 let mut enc_update = Vec::new();
@@ -2845,7 +2846,7 @@ pub mod cdc_v2 {
         }
     }
 
-    #[derive(AvroDecodeable)]
+    #[derive(AvroDecodable)]
     #[state_type(Rc<RefCell<RowPacker>>, Rc<RefCell<Vec<u8>>>)]
     struct MyUpdate {
         #[state_expr(self._STATE.0.clone(), self._STATE.1.clone())]
@@ -2853,7 +2854,7 @@ pub mod cdc_v2 {
         time: Timestamp,
         diff: Diff,
     }
-    #[derive(AvroDecodeable)]
+    #[derive(AvroDecodable)]
     struct Count {
         time: Timestamp,
         count: usize,
@@ -2861,10 +2862,10 @@ pub mod cdc_v2 {
 
     fn make_counts_decoder() -> impl AvroDecode<Out = Vec<(Timestamp, usize)>> {
         ArrayAsVecDecoder::new(|| {
-            <Count as AvroDecodeable>::new_decoder().map_decoder(|ct| Ok((ct.time, ct.count)))
+            <Count as AvroDecodable>::new_decoder().map_decoder(|ct| Ok((ct.time, ct.count)))
         })
     }
-    #[derive(AvroDecodeable)]
+    #[derive(AvroDecodable)]
     struct MyProgress {
         lower: Vec<Timestamp>,
         upper: Vec<Timestamp>,
@@ -2887,7 +2888,7 @@ pub mod cdc_v2 {
                     let packer = Rc::new(RefCell::new(RowPacker::new()));
                     let buf = Rc::new(RefCell::new(vec![]));
                     let d = ArrayAsVecDecoder::new(|| {
-                        <MyUpdate as StatefulAvroDecodeable>::new_decoder((
+                        <MyUpdate as StatefulAvroDecodable>::new_decoder((
                             packer.clone(),
                             buf.clone(),
                         ))
@@ -2898,7 +2899,7 @@ pub mod cdc_v2 {
                 }
                 1 => {
                     let progress = deserializer
-                        .deserialize(r, <MyProgress as AvroDecodeable>::new_decoder())?;
+                        .deserialize(r, <MyProgress as AvroDecodable>::new_decoder())?;
                     let progress = Progress {
                         lower: progress.lower,
                         upper: progress.upper,
@@ -3146,8 +3147,8 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
-            let (_, avro_value) =
-                Encoder::new(desc, false, None).row_to_avro(std::iter::once(datum));
+            let encoder = Encoder::new(None, desc, false);
+            let avro_value = encode_datums_as_avro(std::iter::once(datum), encoder.value_columns());
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
                 avro_value

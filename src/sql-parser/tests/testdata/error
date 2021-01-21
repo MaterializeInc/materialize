@@ -91,9 +91,9 @@ SELECT 1 WHERE 1 < ANY SELECT 2
 parse-statement
 SELECT 1 WHERE 1 < NONE (SELECT 2)
 ----
-error: Expected right parenthesis, found number
+error: expected expression, but found reserved keyword
 SELECT 1 WHERE 1 < NONE (SELECT 2)
-                                ^
+                         ^
 
 parse-statement
 SELECT 1 WHERE 1 < ANY (SELECT 2

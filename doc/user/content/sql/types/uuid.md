@@ -12,6 +12,8 @@ Detail | Info
 -------|------
 **Quick Syntax** | `UUID 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'`
 **Size** | 16 bytes
+**Catalog name** | `pg_catalog.uuid`
+**OID** | 2950
 
 The `uuid` type is more space efficient than representing UUIDs as
 [`text`](../text). A UUID stored as `text` requires either 32 or 36 bytes,

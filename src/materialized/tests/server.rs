@@ -11,10 +11,9 @@
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs::File;
-use std::path::Path;
 
 use reqwest::{blocking::Client, StatusCode, Url};
+use tempfile::NamedTempFile;
 
 pub mod util;
 
@@ -23,24 +22,26 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let data_dir = tempfile::tempdir()?;
-    let config = util::Config::default().data_directory(data_dir.path().to_owned());
+    let config = util::Config::default().data_directory(data_dir.path());
 
-    let temp_dir = tempfile::tempdir()?;
-    let temp_file = Path::join(temp_dir.path(), "source.txt");
-    File::create(&temp_file)?;
+    let source_file = NamedTempFile::new()?;
 
     {
         let (_server, mut client) = util::start_server(config.clone())?;
         client.batch_execute(&format!(
-            "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES; \
-             CREATE VIEW constant AS SELECT 1; \
-             CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes; \
-             CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src; \
-             CREATE DATABASE d; \
-             CREATE SCHEMA d.s; \
-             CREATE VIEW d.s.v AS SELECT 1;",
-            temp_file.display(),
+            "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES",
+            source_file.path().display()
         ))?;
+        client.batch_execute("CREATE VIEW constant AS SELECT 1")?;
+        client.batch_execute(
+            "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
+        )?;
+        client.batch_execute(
+            "CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src",
+        )?;
+        client.batch_execute("CREATE DATABASE d")?;
+        client.batch_execute("CREATE SCHEMA d.s")?;
+        client.batch_execute("CREATE VIEW d.s.v AS SELECT 1")?;
     }
 
     {
@@ -118,7 +119,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_experimental_mode_reboot() -> Result<(), Box<dyn Error>> {
     let data_dir = tempfile::tempdir()?;
-    let config = util::Config::default().data_directory(data_dir.path().to_owned());
+    let config = util::Config::default().data_directory(data_dir.path());
 
     {
         let (_server, _) = util::start_server(config.clone().experimental_mode())?;
@@ -149,7 +150,7 @@ fn test_experimental_mode_reboot() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
     let data_dir = tempfile::tempdir()?;
-    let config = util::Config::default().data_directory(data_dir.path().to_owned());
+    let config = util::Config::default().data_directory(data_dir.path());
 
     {
         let (_server, _) = util::start_server(config.clone())?;

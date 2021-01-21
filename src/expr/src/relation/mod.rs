@@ -19,8 +19,8 @@ use ore::collections::CollectionExt;
 use repr::{ColumnType, Datum, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
-use crate::id::DummyHumanizer;
-use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
+use crate::explain::Explanation;
+use crate::{DummyHumanizer, ExprHumanizer, GlobalId, Id, LocalId, ScalarExpr};
 
 pub mod func;
 pub mod join_input_mapper;
@@ -999,16 +999,15 @@ impl RelationExpr {
 
     /// Pretty-print this RelationExpr to a string.
     ///
-    /// This method allows an additional IdHumanizer which can annotate
-    /// identifiers with additional information, perhaps human-meaningful names
-    /// for the identifiers.
-    pub fn pretty_humanized(&self, id_humanizer: &impl IdHumanizer) -> String {
-        self.explain(id_humanizer).to_string()
+    /// This method allows an additional `ExprHumanizer` which can annotate
+    /// identifiers with human-meaningful names for the identifiers.
+    pub fn pretty_humanized(&self, id_humanizer: &impl ExprHumanizer) -> String {
+        Explanation::new(self, id_humanizer).to_string()
     }
 
     /// Pretty-print this RelationExpr to a string.
     pub fn pretty(&self) -> String {
-        self.explain(&DummyHumanizer).to_string()
+        Explanation::new(self, &DummyHumanizer).to_string()
     }
 
     /// Take ownership of `self`, leaving an empty `RelationExpr::Constant` with the correct type.
@@ -1170,6 +1169,18 @@ impl AggregateExpr {
     /// Computes the type of this `AggregateExpr`.
     pub fn typ(&self, relation_type: &RelationType) -> ColumnType {
         self.func.output_type(self.expr.typ(relation_type))
+    }
+}
+
+impl fmt::Display for AggregateExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "{}({}{})",
+            self.func,
+            if self.distinct { "distinct " } else { "" },
+            self.expr
+        )
     }
 }
 

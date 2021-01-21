@@ -48,7 +48,7 @@ impl RetryState {
                     None => return Err(e),
                     Some(mut backoff) => {
                         total_backoff += backoff;
-                        time::delay_for(backoff).await;
+                        time::sleep(backoff).await;
                         self.i += 1;
                         backoff *= 2;
                         self.next_backoff = match self.max_sleep {

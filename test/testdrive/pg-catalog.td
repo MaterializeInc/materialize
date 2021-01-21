@@ -13,7 +13,7 @@ name     nullable  type
 oid      false     oid
 nspname  false     text
 nspowner true      oid
-nspacl   true      _text
+nspacl   true      text[]
 
 > SHOW COLUMNS FROM pg_class
 name         nullable  type
@@ -30,10 +30,10 @@ name         nullable  type
  oid         false     oid
  datname     false     text
  datdba      true      oid
- encoding    false     int4
+ encoding    false     integer
  datcollate  false     text
  datctype    false     text
- datacl      true      _text
+ datacl      true      text[]
 
 > SHOW COLUMNS FROM pg_index
 name        nullable  type
@@ -46,7 +46,7 @@ name         nullable  type
 ---------------------------
 objoid       false     oid
 classoid     true      oid
-objsubid     false     int4
+objsubid     false     integer
 description  true      text
 
 > SHOW COLUMNS FROM pg_attribute
@@ -54,10 +54,11 @@ name         nullable  type
 ---------------------------
 attrelid     false     oid
 attname      false     text
-attnum       false     int8
-attnotnull   false     bool
-attisdropped false     bool
-atttypid     true      oid
+attnum       false     bigint
+atttypmod    false     integer
+attnotnull   false     boolean
+attisdropped false     boolean
+atttypid     false     oid
 
 ! SELECT current_schemas()
 Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;

@@ -7,10 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryInto;
 use std::error::Error;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use openssl::asn1::Asn1Time;
@@ -20,6 +22,8 @@ use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
 use openssl::x509::extension::SubjectAlternativeName;
 use openssl::x509::{X509NameBuilder, X509};
+use postgres::types::{FromSql, Type};
+use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 #[derive(Clone)]
@@ -78,30 +82,46 @@ impl Config {
 }
 
 pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
-    let mut runtime = Runtime::new()?;
-    let inner = runtime.block_on(materialized::serve(materialized::Config {
-        logging: config
-            .logging_granularity
-            .map(|granularity| coord::LoggingConfig {
-                granularity,
-                log_logging: false,
-            }),
-        timestamp_frequency: Duration::from_millis(10),
-        cache: None,
-        logical_compaction_window: None,
-        threads: config.threads,
-        process: 0,
-        addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
-        data_directory: config.data_directory,
-        symbiosis_url: None,
-        listen_addr: None,
-        tls: config.tls,
-        experimental_mode: config.experimental_mode,
-        telemetry_url: None,
-    }))?;
+    let runtime = Arc::new(Runtime::new()?);
+    let (data_directory, temp_dir) = match config.data_directory {
+        None => {
+            // If no data directory is provided, we create a temporary
+            // directory. The temporary directory is cleaned up when the
+            // `TempDir` is dropped, so we keep it alive until the `Server` is
+            // dropped.
+            let temp_dir = tempfile::tempdir()?;
+            (temp_dir.path().to_path_buf(), Some(temp_dir))
+        }
+        Some(data_directory) => (data_directory, None),
+    };
+    let inner = runtime.block_on(materialized::serve(
+        materialized::Config {
+            logging: config
+                .logging_granularity
+                .map(|granularity| coord::LoggingConfig {
+                    granularity,
+                    log_logging: false,
+                }),
+            timestamp_frequency: Duration::from_millis(10),
+            cache: None,
+            logical_compaction_window: None,
+            threads: config.threads,
+            process: 0,
+            addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
+            timely_worker: timely::WorkerConfig::default(),
+            data_directory,
+            symbiosis_url: None,
+            listen_addr: None,
+            tls: config.tls,
+            experimental_mode: config.experimental_mode,
+            telemetry_url: None,
+        },
+        runtime.clone(),
+    ))?;
     let server = Server {
         inner,
-        _runtime: runtime,
+        runtime,
+        _temp_dir: temp_dir,
     };
     let client = server.connect()?;
     Ok((server, client))
@@ -109,7 +129,8 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
 
 pub struct Server {
     pub inner: materialized::Server,
-    _runtime: Runtime,
+    pub runtime: Arc<Runtime>,
+    _temp_dir: Option<TempDir>,
 }
 
 impl Server {
@@ -137,17 +158,19 @@ impl Server {
         Ok(self.pg_config().connect(postgres::NoTls)?)
     }
 
-    pub async fn connect_async(&self) -> Result<tokio_postgres::Client, Box<dyn Error>> {
+    pub async fn connect_async(
+        &self,
+    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), Box<dyn Error>> {
         let (client, conn) = self
             .pg_config_async()
             .connect(tokio_postgres::NoTls)
             .await?;
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             if let Err(err) = conn.await {
                 panic!("connection error: {}", err);
             }
         });
-        Ok(client)
+        Ok((client, handle))
     }
 }
 
@@ -178,4 +201,21 @@ pub fn generate_certs(cert_path: &Path, key_path: &Path) -> Result<(), Box<dyn E
     fs::write(cert_path, &cert.to_pem()?)?;
     fs::write(key_path, &pkey.private_key_to_pem_pkcs8()?)?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub struct MzTimestamp(pub u64);
+
+impl<'a> FromSql<'a> for MzTimestamp {
+    fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
+        let n = pgrepr::Numeric::from_sql(ty, raw)?;
+        if n.0.scale() != 0 {
+            return Err("scale of numeric was not 0".into());
+        }
+        Ok(MzTimestamp(n.0.significand().try_into()?))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        pgrepr::Numeric::accepts(ty)
+    }
 }

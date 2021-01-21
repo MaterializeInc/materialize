@@ -49,6 +49,10 @@ pub(crate) enum ErrorKind {
     TypeRename(String),
     ExperimentalModeRequired,
     ExperimentalModeUnavailable,
+    FailedMigration {
+        last_version: usize,
+        cause: String,
+    },
 }
 
 impl Error {
@@ -92,7 +96,8 @@ impl std::error::Error for Error {
             | ErrorKind::AmbiguousRename { .. }
             | ErrorKind::TypeRename(_)
             | ErrorKind::ExperimentalModeRequired
-            | ErrorKind::ExperimentalModeUnavailable => None,
+            | ErrorKind::ExperimentalModeUnavailable
+            | ErrorKind::FailedMigration { .. } => None,
             ErrorKind::Sql(e) => Some(e),
             ErrorKind::Storage(e) => Some(e),
         }
@@ -167,6 +172,14 @@ https://materialize.com/docs/cli#experimental-mode"#
                 f,
                 r#"Experimental mode is only available on new nodes. For
 more details, see https://materialize.com/docs/cli#experimental-mode"#
+            ),
+            ErrorKind::FailedMigration {
+                last_version,
+                cause,
+            } => write!(
+                f,
+                "migration from catalog content version {} failed: {}",
+                last_version, cause,
             ),
         }
     }

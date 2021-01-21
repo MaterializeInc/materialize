@@ -11,15 +11,15 @@
 
 //! Catalog abstraction layer.
 
-use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
 use std::time::SystemTime;
+use std::{error::Error, unimplemented};
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use expr::{GlobalId, ScalarExpr};
-use repr::RelationDesc;
-use sql_parser::ast::Expr;
+use expr::{DummyHumanizer, ExprHumanizer, GlobalId, ScalarExpr};
+use repr::{ColumnType, RelationDesc, ScalarType};
+use sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
 use crate::names::{FullName, PartialName, SchemaName};
@@ -49,7 +49,7 @@ use crate::plan::PlanContext;
 /// [`list_databases`]: Catalog::list_databases
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: Catalog::resolve_item
-pub trait Catalog: fmt::Debug {
+pub trait Catalog: fmt::Debug + ExprHumanizer {
     /// Returns the search path used by the catalog.
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str>;
 
@@ -102,8 +102,20 @@ pub trait Catalog: fmt::Debug {
     /// Panics if `id` does not specify a valid item.
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem;
 
+    /// Gets an item by its OID.
+    ///
+    /// Panics if `oid` does not specify a valid item.
+    fn get_item_by_oid(&self, oid: &u32) -> &dyn CatalogItem;
+
     /// Reports whether the specified type exists in the catalog.
-    fn type_exists(&self, name: &FullName) -> bool;
+    fn item_exists(&self, name: &FullName) -> bool;
+
+    /// Returns a lossy `ScalarType` associated with `id` if one exists.
+    ///
+    /// For example `pg_catalog.numeric` returns `ScalarType::Decimal(0,0)`,
+    /// meaning that its precision and scale need to be associated with values
+    /// from elsewhere.
+    fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType>;
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
@@ -194,7 +206,7 @@ pub trait CatalogItem {
 
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table.
-    fn table_details(&self) -> Option<&[Expr]>;
+    fn table_details(&self) -> Option<&[Expr<Raw>]>;
 }
 
 /// The type of a [`CatalogItem`].
@@ -228,7 +240,7 @@ impl fmt::Display for CatalogItemType {
 }
 
 /// An error returned by the catalog.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum CatalogError {
     /// Unknown database.
     UnknownDatabase(String),
@@ -323,11 +335,33 @@ impl Catalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn type_exists(&self, _: &FullName) -> bool {
+    fn get_item_by_oid(&self, _: &u32) -> &dyn CatalogItem {
+        unimplemented!();
+    }
+
+    fn item_exists(&self, _: &FullName) -> bool {
         false
+    }
+
+    fn try_get_lossy_scalar_type_by_id(&self, _: &GlobalId) -> Option<ScalarType> {
+        None
     }
 
     fn config(&self) -> &CatalogConfig {
         &DUMMY_CONFIG
+    }
+}
+
+impl ExprHumanizer for DummyCatalog {
+    fn humanize_id(&self, id: GlobalId) -> Option<String> {
+        DummyHumanizer.humanize_id(id)
+    }
+
+    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+        DummyHumanizer.humanize_scalar_type(ty)
+    }
+
+    fn humanize_column_type(&self, ty: &ColumnType) -> String {
+        DummyHumanizer.humanize_column_type(ty)
     }
 }

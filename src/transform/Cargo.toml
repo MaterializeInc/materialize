@@ -1,16 +1,16 @@
 [package]
 name = "transform"
 description = "Transformations of Materialize expressions."
-version = "0.1.0"
+version = "0.0.0"
 edition = "2018"
 publish = false
 
 [dependencies]
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
-itertools = "0.9"
+itertools = "0.9.0"
 repr = { path = "../repr" }
 
 [dev-dependencies]
-datadriven = "0.4.0"
-anyhow = "1.0.34"
+anyhow = "1.0.38"
+datadriven = "0.5.0"

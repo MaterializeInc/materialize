@@ -21,6 +21,8 @@ use repr::strconv::ParseError;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
+use crate::explain;
+use crate::scalar::func::parse_timezone;
 
 pub mod func;
 pub mod like_pattern;
@@ -73,7 +75,7 @@ impl ScalarExpr {
     }
 
     pub fn literal(res: Result<Datum, EvalError>, typ: ColumnType) -> Self {
-        let row = res.map(|datum| Row::pack(&[datum]));
+        let row = res.map(|datum| Row::pack_slice(&[datum]));
         ScalarExpr::Literal(row, typ)
     }
 
@@ -318,15 +320,18 @@ impl ScalarExpr {
                     *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
                 } else if let Some(err) = expr2.as_literal_err() {
                     *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
-                } else if *func == BinaryFunc::IsLikePatternMatch && expr2.is_literal() {
-                    // We can at least precompile the regex.
-                    let pattern = expr2.as_literal_str().unwrap();
-                    *e = match like_pattern::build_regex(&pattern) {
-                        Ok(regex) => expr1
-                            .take()
-                            .call_unary(UnaryFunc::IsRegexpMatch(Regex(regex))),
-                        Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
-                    };
+                } else if let BinaryFunc::IsLikePatternMatch { case_insensitive } = func {
+                    if expr2.is_literal() {
+                        // We can at least precompile the regex.
+                        let pattern = expr2.as_literal_str().unwrap();
+                        let flags = if *case_insensitive { "i" } else { "" };
+                        *e = match like_pattern::build_regex(&pattern, flags) {
+                            Ok(regex) => expr1
+                                .take()
+                                .call_unary(UnaryFunc::IsRegexpMatch(Regex(regex))),
+                            Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
+                        };
+                    }
                 } else if let BinaryFunc::IsRegexpMatch { case_insensitive } = func {
                     if let ScalarExpr::Literal(Ok(row), _) = &**expr2 {
                         let flags = if *case_insensitive { "i" } else { "" };
@@ -381,6 +386,36 @@ impl ScalarExpr {
                             expr: Box::new(expr2.take()),
                         },
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
+                    }
+                } else if *func == BinaryFunc::TimezoneTimestamp && expr1.is_literal() {
+                    // If the timezone argument is a literal, and we're applying the function on many rows at the same
+                    // time we really don't want to parse it again and again, so we parse it once and embed it into the
+                    // UnaryFunc enum. The memory footprint of Timezone is small (8 bytes).
+                    let tz = expr1.as_literal_str().unwrap();
+                    *e = match parse_timezone(tz) {
+                        Ok(tz) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::TimezoneTimestamp(tz),
+                            expr: Box::new(expr2.take()),
+                        },
+                        Err(err) => ScalarExpr::literal(Err(err), e.typ(&relation_type)),
+                    }
+                } else if *func == BinaryFunc::TimezoneTimestampTz && expr1.is_literal() {
+                    let tz = expr1.as_literal_str().unwrap();
+                    *e = match parse_timezone(tz) {
+                        Ok(tz) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::TimezoneTimestampTz(tz),
+                            expr: Box::new(expr2.take()),
+                        },
+                        Err(err) => ScalarExpr::literal(Err(err), e.typ(&relation_type)),
+                    }
+                } else if *func == BinaryFunc::TimezoneTime && expr1.is_literal() {
+                    let tz = expr1.as_literal_str().unwrap();
+                    *e = match parse_timezone(tz) {
+                        Ok(tz) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::TimezoneTime(tz),
+                            expr: Box::new(expr2.take()),
+                        },
+                        Err(err) => ScalarExpr::literal(Err(err), e.typ(&relation_type)),
                     }
                 } else if *func == BinaryFunc::And {
                     // If we are here, not both inputs are literals.
@@ -585,6 +620,35 @@ impl ScalarExpr {
     }
 }
 
+impl fmt::Display for ScalarExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        use ScalarExpr::*;
+        match self {
+            Column(i) => write!(f, "#{}", i)?,
+            Literal(Ok(row), _) => write!(f, "{}", row.unpack_first())?,
+            Literal(Err(e), _) => write!(f, "(err: {})", e)?,
+            CallNullary(func) => write!(f, "{}()", func)?,
+            CallUnary { func, expr } => {
+                write!(f, "{}({})", func, expr)?;
+            }
+            CallBinary { func, expr1, expr2 } => {
+                if func.is_infix_op() {
+                    write!(f, "({} {} {})", expr1, func, expr2)?;
+                } else {
+                    write!(f, "{}({}, {})", func, expr1, expr2)?;
+                }
+            }
+            CallVariadic { func, exprs } => {
+                write!(f, "{}({})", func, explain::separated(", ", exprs.clone()))?;
+            }
+            If { cond, then, els } => {
+                write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum EvalError {
     DivisionByZero,
@@ -593,6 +657,9 @@ pub enum EvalError {
     IntegerOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
+    InvalidTimezone(String),
+    InvalidTimezoneInterval,
+    InvalidTimezoneConversion,
     InvalidDimension {
         max_dim: usize,
         val: i64,
@@ -624,6 +691,11 @@ impl fmt::Display for EvalError {
             EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
+            EvalError::InvalidTimezone(tz) => write!(f, "invalid time zone '{}'", tz),
+            EvalError::InvalidTimezoneInterval => {
+                f.write_str("timezone interval must not contain months or years")
+            }
+            EvalError::InvalidTimezoneConversion => f.write_str("invalid timezone conversion"),
             EvalError::InvalidDimension { max_dim, val } => write!(
                 f,
                 "invalid dimension: {}; must use value within [1, {}]",

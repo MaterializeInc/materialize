@@ -22,16 +22,19 @@ use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context};
+use dataflow_types::SinkEnvelope;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
-use tokio::runtime::Handle;
+use tokio::runtime::{Handle, Runtime};
+use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use build_info::BuildInfo;
@@ -43,7 +46,7 @@ use dataflow_types::{
     SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use expr::{
-    GlobalId, Id, IdHumanizer, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
+    ExprHumanizer, GlobalId, Id, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
     ScalarExpr, SourceInstanceId,
 };
 use ore::collections::CollectionExt;
@@ -52,7 +55,7 @@ use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timest
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
-    FetchStatement, ObjectType, Statement,
+    FetchStatement, Ident, ObjectType, Raw, Statement,
 };
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName, SchemaName};
@@ -85,24 +88,30 @@ mod dataflow_builder;
 pub enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
-    AdvanceSourceTimestamp {
-        id: SourceInstanceId,
-        update: TimestampSourceUpdate,
-    },
-    StatementReady {
-        session: Session,
-        tx: ClientTransmitter<ExecuteResponse>,
-        result: Result<sql::ast::Statement, anyhow::Error>,
-        params: Params,
-    },
-    SinkConnectorReady {
-        session: Session,
-        tx: ClientTransmitter<ExecuteResponse>,
-        id: GlobalId,
-        oid: u32,
-        result: Result<SinkConnector, anyhow::Error>,
-    },
+    AdvanceSourceTimestamp(AdvanceSourceTimestamp),
+    StatementReady(StatementReady),
+    SinkConnectorReady(SinkConnectorReady),
     Shutdown,
+}
+
+pub struct AdvanceSourceTimestamp {
+    pub id: SourceInstanceId,
+    pub update: TimestampSourceUpdate,
+}
+
+pub struct StatementReady {
+    pub session: Session,
+    pub tx: ClientTransmitter<ExecuteResponse>,
+    pub result: Result<sql::ast::Statement<Raw>, anyhow::Error>,
+    pub params: Params,
+}
+
+pub struct SinkConnectorReady {
+    pub session: Session,
+    pub tx: ClientTransmitter<ExecuteResponse>,
+    pub id: GlobalId,
+    pub oid: u32,
+    pub result: Result<SinkConnector, anyhow::Error>,
 }
 
 #[derive(Clone, Debug)]
@@ -120,7 +129,7 @@ where
     pub num_timely_workers: usize,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
-    pub data_directory: Option<&'a Path>,
+    pub data_directory: &'a Path,
     pub timestamp: TimestampConfig,
     pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
@@ -258,7 +267,7 @@ where
                             .insert(*id, Frontiers::new(self.num_timely_workers, Some(1_000)));
                     } else {
                         self.ship_dataflow(self.dataflow_builder().build_index_dataflow(*id))
-                            .await;
+                            .await?;
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -283,7 +292,8 @@ where
                     )
                     .await
                     .with_context(|| format!("recreating sink {}", name))?;
-                    self.handle_sink_connector_ready(*id, *oid, connector).await;
+                    self.handle_sink_connector_ready(*id, *oid, connector)
+                        .await?;
                 }
                 _ => (), // Handled in prior loop.
             }
@@ -300,7 +310,7 @@ where
                     log.variant.desc().typ().keys.iter().enumerate().flat_map(
                         move |(index, key)| {
                             key.iter().map(move |k| {
-                                let row = Row::pack(&[
+                                let row = Row::pack_slice(&[
                                     Datum::String(log_id),
                                     Datum::Int64(*k as i64),
                                     Datum::Int64(index as i64),
@@ -323,7 +333,7 @@ where
                                 .id
                                 .to_string();
                             pairs.into_iter().map(move |(c, p)| {
-                                let row = Row::pack(&[
+                                let row = Row::pack_slice(&[
                                     Datum::String(&log_id),
                                     Datum::Int64(c as i64),
                                     Datum::String(&parent_id),
@@ -366,8 +376,11 @@ where
         let mut timestamper =
             Timestamper::new(&self.timestamp_config, internal_cmd_tx.clone(), ts_rx);
         let executor = Handle::current();
-        let _timestamper_thread =
-            thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
+        let _timestamper_thread = thread::spawn(move || {
+            let _executor_guard = executor.enter();
+            timestamper.update()
+        })
+        .join_on_drop();
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
@@ -380,242 +393,19 @@ where
 
         while let Some(msg) = messages.next().await {
             match msg {
-                Message::Command(Command::Startup { session, tx }) => {
-                    let mut messages = vec![];
-                    let catalog = self.catalog.for_session(&session);
-                    if catalog
-                        .resolve_database(catalog.default_database())
-                        .is_err()
-                    {
-                        messages.push(StartupMessage::UnknownSessionDatabase);
-                    }
-                    if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
-                        let _ = tx.send(Response {
-                            result: Err(anyhow::Error::from(e)),
-                            session,
-                        });
-                        return;
-                    }
-                    ClientTransmitter::new(tx).send(Ok(messages), session)
+                Message::Command(cmd) => self.message_command(cmd, &internal_cmd_tx).await,
+                Message::Worker(worker) => self.message_worker(worker, &ts_tx).await,
+                Message::StatementReady(ready) => {
+                    self.message_statement_ready(ready, &internal_cmd_tx).await
                 }
-                Message::Command(Command::Execute {
-                    portal_name,
-                    session,
-                    tx,
-                }) => {
-                    let result = session.get_portal(&portal_name).ok_or_else(|| {
-                        anyhow::format_err!("portal does not exist {:?}", portal_name)
-                    });
-                    let portal = match result {
-                        Ok(portal) => portal,
-                        Err(e) => {
-                            let _ = tx.send(Response {
-                                result: Err(e),
-                                session,
-                            });
-                            return;
-                        }
-                    };
-                    match &portal.stmt {
-                        Some(stmt) => {
-                            let mut internal_cmd_tx = internal_cmd_tx.clone();
-                            let stmt = stmt.clone();
-                            let params = portal.parameters.clone();
-                            tokio::spawn(async move {
-                                let result = sql::pure::purify(stmt).await;
-                                internal_cmd_tx
-                                    .send(Message::StatementReady {
-                                        session,
-                                        tx: ClientTransmitter::new(tx),
-                                        result,
-                                        params,
-                                    })
-                                    .await
-                                    .expect("sending to internal_cmd_tx cannot fail");
-                            });
-                        }
-                        None => {
-                            let _ = tx.send(Response {
-                                result: Ok(ExecuteResponse::EmptyQuery),
-                                session,
-                            });
-                        }
-                    }
+                Message::SinkConnectorReady(ready) => {
+                    self.message_sink_connector_ready(ready).await
                 }
-
-                // NoSessionExecute is designed to support a limited set of queries that
-                // run as the system user and are not associated with a user session. Due to
-                // that limitation, they do not support all plans (some of which require side
-                // effects in the session).
-                Message::Command(Command::NoSessionExecute { stmt, params, tx }) => {
-                    let res = async {
-                        let stmt = sql::pure::purify(stmt).await?;
-                        let catalog = self.catalog.for_system_session();
-                        let desc = describe(&catalog, stmt.clone(), &[], None)?;
-                        let pcx = PlanContext::default();
-                        let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
-                        // At time of writing this comment, Peeks use the connection id only for
-                        // logging, so it is safe to reuse the system id, which is the conn_id from
-                        // for_system_session().
-                        let conn_id = catalog.conn_id();
-                        let response = match plan {
-                            Plan::Peek {
-                                source,
-                                when,
-                                finishing,
-                                copy_to,
-                            } => {
-                                self.sequence_peek(conn_id, source, when, finishing, copy_to)
-                                    .await?
-                            }
-
-                            Plan::SendRows(rows) => send_immediate_rows(rows),
-
-                            _ => bail!("unsupported plan"),
-                        };
-                        Ok(NoSessionExecuteResponse {
-                            desc: desc.relation_desc,
-                            response,
-                        })
-                    }
-                    .await;
-                    let _ = tx.send(res);
-                }
-
-                Message::StatementReady {
-                    session,
-                    tx,
-                    result,
-                    params,
-                } => match future::ready(result)
-                    .and_then(|stmt| self.handle_statement(&session, stmt, &params))
-                    .await
-                {
-                    Ok((pcx, plan)) => {
-                        self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
-                            .await
-                    }
-                    Err(e) => tx.send(Err(e), session),
-                },
-
-                Message::SinkConnectorReady {
-                    session,
-                    tx,
-                    id,
-                    oid,
-                    result,
-                } => match result {
-                    Ok(connector) => {
-                        // NOTE: we must not fail from here on out. We have a
-                        // connector, which means there is external state (like
-                        // a Kafka topic) that's been created on our behalf. If
-                        // we fail now, we'll leak that external state.
-                        if self.catalog.try_get_by_id(id).is_some() {
-                            self.handle_sink_connector_ready(id, oid, connector).await;
-                        } else {
-                            // Another session dropped the sink while we were
-                            // creating the connector. Report to the client that
-                            // we created the sink, because from their
-                            // perspective we did, as there is state (e.g. a
-                            // Kafka topic) they need to clean up.
-                        }
-                        tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
-                    }
-                    Err(e) => {
-                        self.catalog_transact(vec![catalog::Op::DropItem(id)])
-                            .await
-                            .expect("deleting placeholder sink cannot fail");
-                        tx.send(Err(e), session);
-                    }
-                },
-
-                Message::Command(Command::Declare {
-                    name,
-                    stmt,
-                    param_types,
-                    mut session,
-                    tx,
-                }) => {
-                    let result = self.handle_declare(&mut session, name, stmt, param_types);
-                    let _ = tx.send(Response { result, session });
-                }
-
-                Message::Command(Command::Describe {
-                    name,
-                    stmt,
-                    param_types,
-                    mut session,
-                    tx,
-                }) => {
-                    let result = self.handle_describe(&mut session, name, stmt, param_types);
-                    let _ = tx.send(Response { result, session });
-                }
-
-                Message::Command(Command::CancelRequest { conn_id }) => {
-                    self.handle_cancel(conn_id).await;
-                }
-
-                Message::Command(Command::DumpCatalog { tx }) => {
-                    let _ = tx.send(self.catalog.dump());
-                }
-
-                Message::Command(Command::Terminate { mut session }) => {
-                    self.handle_terminate(&mut session).await;
-                }
-
-                Message::Worker(WorkerFeedbackWithMeta {
-                    worker_id: _,
-                    message: WorkerFeedback::FrontierUppers(updates),
-                }) => {
-                    for (name, changes) in updates {
-                        self.update_upper(&name, changes);
-                    }
-                    self.maintenance().await;
-                }
-
-                Message::Worker(WorkerFeedbackWithMeta {
-                    worker_id: _,
-                    message: WorkerFeedback::DroppedSource(source_id),
-                }) => {
-                    // Notify timestamping thread that source has been dropped
-                    ts_tx
-                        .send(TimestampMessage::DropInstance(source_id))
-                        .expect("Failed to send Drop Instance notice to timestamper");
-                }
-                Message::Worker(WorkerFeedbackWithMeta {
-                    worker_id: _,
-                    message: WorkerFeedback::CreateSource(src_instance_id),
-                }) => {
-                    if let Some(entry) = self.catalog.try_get_by_id(src_instance_id.source_id) {
-                        if let CatalogItem::Source(s) = entry.item() {
-                            ts_tx
-                                .send(TimestampMessage::Add(src_instance_id, s.connector.clone()))
-                                .expect("Failed to send CREATE Instance notice to timestamper");
-                        } else {
-                            panic!("A non-source is re-using the same source ID");
-                        }
-                    } else {
-                        // Someone already dropped the source
-                    }
-                }
-
-                Message::AdvanceSourceTimestamp { id, update } => {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::AdvanceSourceTimestamp { id, update },
-                    )
-                    .await;
+                Message::AdvanceSourceTimestamp(advance) => {
+                    self.message_advance_source_timestamp(advance).await
                 }
                 Message::Shutdown => {
-                    ts_tx.send(TimestampMessage::Shutdown).unwrap();
-
-                    if let Some(cache_tx) = &mut self.cache_tx {
-                        cache_tx
-                            .send(CacheMessage::Shutdown)
-                            .await
-                            .expect("failed to send shutdown message to caching thread");
-                    }
-                    broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown).await;
+                    self.message_shutdown(&ts_tx).await;
                     break;
                 }
             }
@@ -650,6 +440,363 @@ where
         // down.
         drop(internal_cmd_tx);
         while messages.next().await.is_some() {}
+    }
+
+    async fn message_worker(
+        &mut self,
+        WorkerFeedbackWithMeta {
+            worker_id: _,
+            message,
+        }: WorkerFeedbackWithMeta,
+        ts_tx: &std::sync::mpsc::Sender<TimestampMessage>,
+    ) {
+        match message {
+            WorkerFeedback::FrontierUppers(updates) => {
+                for (name, changes) in updates {
+                    self.update_upper(&name, changes);
+                }
+                self.maintenance().await;
+            }
+            WorkerFeedback::DroppedSource(source_id) => {
+                // Notify timestamping thread that source has been dropped
+                ts_tx
+                    .send(TimestampMessage::DropInstance(source_id))
+                    .expect("Failed to send Drop Instance notice to timestamper");
+            }
+            WorkerFeedback::CreateSource(src_instance_id) => {
+                if let Some(entry) = self.catalog.try_get_by_id(src_instance_id.source_id) {
+                    if let CatalogItem::Source(s) = entry.item() {
+                        ts_tx
+                            .send(TimestampMessage::Add(src_instance_id, s.connector.clone()))
+                            .expect("Failed to send CREATE Instance notice to timestamper");
+                    } else {
+                        panic!("A non-source is re-using the same source ID");
+                    }
+                } else {
+                    // Someone already dropped the source
+                }
+            }
+        }
+    }
+
+    async fn message_statement_ready(
+        &mut self,
+        StatementReady {
+            session,
+            tx,
+            result,
+            params,
+        }: StatementReady,
+        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+    ) {
+        match future::ready(result)
+            .and_then(|stmt| self.handle_statement(&session, stmt, &params))
+            .await
+        {
+            Ok((pcx, plan)) => {
+                self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
+                    .await
+            }
+            Err(e) => tx.send(Err(e), session),
+        }
+    }
+
+    async fn message_sink_connector_ready(
+        &mut self,
+        SinkConnectorReady {
+            session,
+            tx,
+            id,
+            oid,
+            result,
+        }: SinkConnectorReady,
+    ) {
+        match result {
+            Ok(connector) => {
+                // NOTE: we must not fail from here on out. We have a
+                // connector, which means there is external state (like
+                // a Kafka topic) that's been created on our behalf. If
+                // we fail now, we'll leak that external state.
+                if self.catalog.try_get_by_id(id).is_some() {
+                    // TODO(benesch): this `expect` here is possibly scary, but
+                    // no better solution presents itself. Possibly sinks should
+                    // have an error bit, and an error here would set the error
+                    // bit on the sink.
+                    self.handle_sink_connector_ready(id, oid, connector)
+                        .await
+                        .expect("marking sink ready should never fail");
+                } else {
+                    // Another session dropped the sink while we were
+                    // creating the connector. Report to the client that
+                    // we created the sink, because from their
+                    // perspective we did, as there is state (e.g. a
+                    // Kafka topic) they need to clean up.
+                }
+                tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
+            }
+            Err(e) => {
+                self.catalog_transact(vec![catalog::Op::DropItem(id)])
+                    .await
+                    .expect("deleting placeholder sink cannot fail");
+                tx.send(Err(e), session);
+            }
+        }
+    }
+
+    async fn message_shutdown(&mut self, ts_tx: &std::sync::mpsc::Sender<TimestampMessage>) {
+        ts_tx.send(TimestampMessage::Shutdown).unwrap();
+
+        if let Some(cache_tx) = &mut self.cache_tx {
+            cache_tx
+                .send(CacheMessage::Shutdown)
+                .await
+                .expect("failed to send shutdown message to caching thread");
+        }
+        broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown).await;
+    }
+
+    async fn message_advance_source_timestamp(
+        &mut self,
+        AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
+    ) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::AdvanceSourceTimestamp { id, update },
+        )
+        .await;
+    }
+
+    async fn message_command(
+        &mut self,
+        cmd: Command,
+        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+    ) {
+        match cmd {
+            Command::Startup { session, tx } => {
+                let mut messages = vec![];
+                let catalog = self.catalog.for_session(&session);
+                if catalog
+                    .resolve_database(catalog.default_database())
+                    .is_err()
+                {
+                    messages.push(StartupMessage::UnknownSessionDatabase);
+                }
+                if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+                    let _ = tx.send(Response {
+                        result: Err(anyhow::Error::from(e)),
+                        session,
+                    });
+                    return;
+                }
+                ClientTransmitter::new(tx).send(Ok(messages), session)
+            }
+
+            Command::Execute {
+                portal_name,
+                session,
+                tx,
+            } => {
+                let result = session
+                    .get_portal(&portal_name)
+                    .ok_or_else(|| anyhow::format_err!("portal does not exist {:?}", portal_name));
+                let portal = match result {
+                    Ok(portal) => portal,
+                    Err(e) => {
+                        let _ = tx.send(Response {
+                            result: Err(e),
+                            session,
+                        });
+                        return;
+                    }
+                };
+                match &portal.stmt {
+                    Some(stmt) => {
+                        // Verify that this statetement type can be executed in the current
+                        // transaction state.
+                        match session.transaction() {
+                            // Idle is almost always safe (idle means there's a single statement being
+                            // executed). Failed transactions have already been checked in pgwire for a
+                            // safe statement (COMMIT, ROLLBACK, etc.) and can also proceed.
+                            &TransactionStatus::Idle | &TransactionStatus::Failed => {
+                                if let Statement::Declare(_) = stmt {
+                                    // Declare is an exception. Although it's not against any spec to execute
+                                    // it, it will always result in nothing happening, since all portals will be
+                                    // immediately closed. Users don't know this detail, so this error helps them
+                                    // understand what's going wrong. Postgres does this too.
+                                    let _ = tx.send(Response {
+                                        result: Ok(ExecuteResponse::PgError {
+                                            code: SqlState::NO_ACTIVE_SQL_TRANSACTION,
+                                            message: "DECLARE CURSOR can only be used in transaction blocks".into(),
+                                        }),
+                                        session,
+                                    });
+                                    return;
+                                }
+                            }
+
+                            // Implicit or explicit transactions only allow reads for now.
+                            //
+                            // Implicit transactions happen when a multi-statement query is executed
+                            // (a "simple query"). However if a "BEGIN" appears somewhere in there,
+                            // then the existing implicit transaction will be upgraded to an explicit
+                            // transaction. Thus, we should not separate what implicit and explicit
+                            // transactions can do unless there's some additional checking to make sure
+                            // something disallowed in explicit transactions did not previously take place
+                            // in the implicit portion.
+                            &TransactionStatus::InTransactionImplicit
+                            | &TransactionStatus::InTransaction => match stmt {
+                                Statement::Close(_)
+                                | Statement::Commit(_)
+                                | Statement::Copy(_)
+                                | Statement::Declare(_)
+                                | Statement::Discard(_)
+                                | Statement::Explain(_)
+                                | Statement::Fetch(_)
+                                | Statement::Rollback(_)
+                                | Statement::Select(_)
+                                | Statement::SetTransaction(_)
+                                | Statement::ShowVariable(_)
+                                | Statement::StartTransaction(_)
+                                | Statement::Tail(_) => {}
+
+                                Statement::AlterIndexOptions(_)
+                                | Statement::AlterObjectRename(_)
+                                | Statement::CreateDatabase(_)
+                                | Statement::CreateIndex(_)
+                                | Statement::CreateSchema(_)
+                                | Statement::CreateSink(_)
+                                | Statement::CreateSource(_)
+                                | Statement::CreateTable(_)
+                                | Statement::CreateType(_)
+                                | Statement::CreateView(_)
+                                | Statement::Delete(_)
+                                | Statement::DropDatabase(_)
+                                | Statement::DropObjects(_)
+                                | Statement::Insert(_)
+                                | Statement::SetVariable(_)
+                                | Statement::ShowColumns(_)
+                                | Statement::ShowCreateIndex(_)
+                                | Statement::ShowCreateSink(_)
+                                | Statement::ShowCreateSource(_)
+                                | Statement::ShowCreateTable(_)
+                                | Statement::ShowCreateView(_)
+                                | Statement::ShowDatabases(_)
+                                | Statement::ShowIndexes(_)
+                                | Statement::ShowObjects(_)
+                                | Statement::Update(_) => {
+                                    let _ = tx.send(Response {
+                                        result: Ok(ExecuteResponse::PgError {
+                                            code: SqlState::ACTIVE_SQL_TRANSACTION,
+                                            message: format!(
+                                                "{} cannot be run inside a transaction block",
+                                                stmt
+                                            ),
+                                        }),
+                                        session,
+                                    });
+                                    return;
+                                }
+                            },
+                        }
+
+                        let mut internal_cmd_tx = internal_cmd_tx.clone();
+                        let stmt = stmt.clone();
+                        let params = portal.parameters.clone();
+                        tokio::spawn(async move {
+                            let result = sql::pure::purify(stmt).await;
+                            internal_cmd_tx
+                                .send(Message::StatementReady(StatementReady {
+                                    session,
+                                    tx: ClientTransmitter::new(tx),
+                                    result,
+                                    params,
+                                }))
+                                .await
+                                .expect("sending to internal_cmd_tx cannot fail");
+                        });
+                    }
+                    None => {
+                        let _ = tx.send(Response {
+                            result: Ok(ExecuteResponse::EmptyQuery),
+                            session,
+                        });
+                    }
+                }
+            }
+
+            // NoSessionExecute is designed to support a limited set of queries that
+            // run as the system user and are not associated with a user session. Due to
+            // that limitation, they do not support all plans (some of which require side
+            // effects in the session).
+            Command::NoSessionExecute { stmt, params, tx } => {
+                let res = async {
+                    let stmt = sql::pure::purify(stmt).await?;
+                    let catalog = self.catalog.for_system_session();
+                    let desc = describe(&catalog, stmt.clone(), &[], None)?;
+                    let pcx = PlanContext::default();
+                    let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
+                    // At time of writing this comment, Peeks use the connection id only for
+                    // logging, so it is safe to reuse the system id, which is the conn_id from
+                    // for_system_session().
+                    let conn_id = catalog.conn_id();
+                    let response = match plan {
+                        Plan::Peek {
+                            source,
+                            when,
+                            finishing,
+                            copy_to,
+                        } => {
+                            self.sequence_peek(conn_id, source, when, finishing, copy_to)
+                                .await?
+                        }
+
+                        Plan::SendRows(rows) => send_immediate_rows(rows),
+
+                        _ => bail!("unsupported plan"),
+                    };
+                    Ok(NoSessionExecuteResponse {
+                        desc: desc.relation_desc,
+                        response,
+                    })
+                }
+                .await;
+                let _ = tx.send(res);
+            }
+
+            Command::Declare {
+                name,
+                stmt,
+                param_types,
+                mut session,
+                tx,
+            } => {
+                let result = self.handle_declare(&mut session, name, stmt, param_types);
+                let _ = tx.send(Response { result, session });
+            }
+
+            Command::Describe {
+                name,
+                stmt,
+                param_types,
+                mut session,
+                tx,
+            } => {
+                let result = self.handle_describe(&mut session, name, stmt, param_types);
+                let _ = tx.send(Response { result, session });
+            }
+
+            Command::CancelRequest { conn_id } => {
+                self.handle_cancel(conn_id).await;
+            }
+
+            Command::DumpCatalog { tx } => {
+                let _ = tx.send(self.catalog.dump());
+            }
+
+            Command::Terminate { mut session } => {
+                self.handle_terminate(&mut session).await;
+            }
+        }
     }
 
     /// Updates the upper frontier of a named view.
@@ -716,7 +863,7 @@ where
     async fn handle_statement(
         &mut self,
         session: &Session,
-        stmt: sql::ast::Statement,
+        stmt: sql::ast::Statement<Raw>,
         params: &sql::plan::Params,
     ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
         let pcx = PlanContext::default();
@@ -766,7 +913,7 @@ where
         &self,
         session: &mut Session,
         name: String,
-        stmt: Statement,
+        stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         // handle_describe cares about symbiosis mode here. Declared cursors are
@@ -787,7 +934,7 @@ where
         &self,
         session: &mut Session,
         name: String,
-        stmt: Option<Statement>,
+        stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         let desc = if let Some(stmt) = stmt.clone() {
@@ -866,7 +1013,7 @@ where
         id: GlobalId,
         oid: u32,
         connector: SinkConnector,
-    ) {
+    ) -> Result<(), anyhow::Error> {
         // Update catalog entry with sink connector.
         let entry = self.catalog.get_by_id(&id);
         let name = entry.name().clone();
@@ -884,15 +1031,14 @@ where
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        self.catalog_transact(ops)
-            .await
-            .expect("replacing a sink cannot fail");
+        self.catalog_transact(ops).await?;
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
             name.to_string(),
             id,
             sink.from,
             connector,
+            sink.envelope,
         ))
         .await
     }
@@ -931,7 +1077,7 @@ where
         self.update_catalog_view(
             MZ_DATABASES.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::Int64(database_id),
                     Datum::Int32(oid as i32),
                     Datum::String(&name),
@@ -953,7 +1099,7 @@ where
         self.update_catalog_view(
             MZ_SCHEMAS.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::Int64(schema_id),
                     Datum::Int32(oid as i32),
                     match database_id {
@@ -978,7 +1124,7 @@ where
             self.update_catalog_view(
                 MZ_COLUMNS.id,
                 iter::once((
-                    Row::pack(&[
+                    Row::pack_slice(&[
                         Datum::String(&global_id.to_string()),
                         Datum::String(
                             &column_name
@@ -1045,7 +1191,7 @@ where
         self.update_catalog_view(
             MZ_INDEXES.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::String(name),
@@ -1075,7 +1221,7 @@ where
             self.update_catalog_view(
                 MZ_INDEX_COLUMNS.id,
                 iter::once((
-                    Row::pack(&[
+                    Row::pack_slice(&[
                         Datum::String(&global_id.to_string()),
                         Datum::Int64(seq_in_index),
                         field_number,
@@ -1100,7 +1246,7 @@ where
         self.update_catalog_view(
             MZ_TABLES.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
@@ -1123,7 +1269,7 @@ where
         self.update_catalog_view(
             MZ_SOURCES.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
@@ -1146,7 +1292,7 @@ where
         self.update_catalog_view(
             MZ_VIEWS.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
@@ -1169,7 +1315,7 @@ where
         self.update_catalog_view(
             MZ_SINKS.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&global_id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
@@ -1193,7 +1339,7 @@ where
         self.update_catalog_view(
             MZ_TYPES.id,
             iter::once((
-                Row::pack(&[
+                Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
@@ -1222,7 +1368,7 @@ where
         self.update_catalog_view(
             index_id,
             iter::once((
-                Row::pack(update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()),
+                Row::pack_slice(&update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()[..]),
                 diff,
             )),
         )
@@ -1398,15 +1544,17 @@ where
                 copy_to,
                 emit_progress,
                 object_columns,
+                desc,
             } => tx.send(
                 self.sequence_tail(
-                    session.conn_id(),
+                    &session,
                     id,
                     with_snapshot,
                     ts,
                     copy_to,
                     emit_progress,
                     object_columns,
+                    desc,
                 )
                 .await,
                 session,
@@ -1422,6 +1570,7 @@ where
                 options,
             } => tx.send(
                 self.sequence_explain_plan(
+                    &session,
                     raw_plan,
                     decorrelated_plan,
                     row_set_finishing,
@@ -1465,9 +1614,55 @@ where
             }
 
             Plan::DiscardAll => {
-                self.drop_temp_items(session.conn_id()).await;
-                session.reset();
-                tx.send(Ok(ExecuteResponse::DiscardedAll), session);
+                let ret = if session.transaction() != &TransactionStatus::Idle {
+                    ExecuteResponse::PgError {
+                        code: SqlState::ACTIVE_SQL_TRANSACTION,
+                        message: "DISCARD ALL cannot run inside a transaction block".to_string(),
+                    }
+                } else {
+                    self.drop_temp_items(session.conn_id()).await;
+                    session.reset();
+                    ExecuteResponse::DiscardedAll
+                };
+                tx.send(Ok(ret), session);
+            }
+
+            Plan::Declare { name, stmt } => {
+                let param_types = vec![];
+                let res = self
+                    .handle_declare(&mut session, name, stmt, param_types)
+                    .map(|()| ExecuteResponse::DeclaredCursor);
+                tx.send(res, session);
+            }
+
+            Plan::Fetch {
+                name,
+                count,
+                timeout,
+            } => tx.send(
+                Ok(ExecuteResponse::Fetch {
+                    name,
+                    count,
+                    timeout,
+                }),
+                session,
+            ),
+
+            Plan::Close { name } => {
+                if session.remove_portal(&name) {
+                    tx.send(Ok(ExecuteResponse::ClosedCursor), session)
+                } else {
+                    tx.send(
+                        Ok(ExecuteResponse::PgError {
+                            code: SqlState::INVALID_CURSOR_NAME,
+                            message: format!(
+                                "cursor {} does not exist",
+                                Ident::new(name).to_ast_string_stable()
+                            ),
+                        }),
+                        session,
+                    )
+                }
             }
         }
     }
@@ -1556,7 +1751,7 @@ where
         {
             Ok(_) => {
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                    .await;
+                    .await?;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1607,7 +1802,7 @@ where
             Ok(()) => {
                 if let Some(index_id) = index_id {
                     self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                        .await;
+                        .await?;
                 }
 
                 self.maybe_begin_caching(source_id, &source.connector).await;
@@ -1670,6 +1865,7 @@ where
                 plan_cx: pcx,
                 from: sink.from,
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
+                envelope: sink.envelope,
                 with_snapshot,
                 as_of,
             }),
@@ -1691,14 +1887,14 @@ where
         let connector_builder = sink.connector_builder;
         tokio::spawn(async move {
             internal_cmd_tx
-                .send(Message::SinkConnectorReady {
+                .send(Message::SinkConnectorReady(SinkConnectorReady {
                     session,
                     tx,
                     id,
                     oid,
                     result: sink_connector::build(connector_builder, with_snapshot, frontier, id)
                         .await,
-                })
+                }))
                 .await
                 .expect("sending to internal_cmd_tx cannot fail");
         });
@@ -1758,7 +1954,7 @@ where
             Ok(()) => {
                 if let Some(index_id) = index_id {
                     self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                        .await;
+                        .await?;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -1794,7 +1990,7 @@ where
         match self.catalog_transact(vec![op]).await {
             Ok(()) => {
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(id))
-                    .await;
+                    .await?;
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
@@ -1900,7 +2096,7 @@ where
         name: String,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let variable = session.vars().get(&name)?;
-        let row = Row::pack(&[Datum::String(&variable.value())]);
+        let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
 
@@ -2015,7 +2211,7 @@ where
                     .import_view_into_dataflow(&view_id, &source, &mut dataflow);
                 dataflow.add_index_to_build(index_id, view_id, typ.clone(), key.clone());
                 dataflow.add_index_export(index_id, view_id, typ, key);
-                self.ship_dataflow(dataflow).await;
+                self.ship_dataflow(dataflow).await?;
             }
 
             broadcast(
@@ -2074,13 +2270,14 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn sequence_tail(
         &mut self,
-        conn_id: u32,
+        session: &Session,
         source_id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
         copy_to: Option<CopyFormat>,
         emit_progress: bool,
         object_columns: usize,
+        desc: RelationDesc,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
@@ -2088,11 +2285,12 @@ where
         let sink_name = format!(
             "tail-source-{}",
             self.catalog
+                .for_session(session)
                 .humanize_id(source_id)
                 .expect("Source id is known to exist in catalog")
         );
         let sink_id = self.catalog.allocate_id()?;
-        self.active_tails.insert(conn_id, sink_id);
+        self.active_tails.insert(session.conn_id(), sink_id);
         let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
@@ -2105,9 +2303,11 @@ where
                 strict: !with_snapshot,
                 emit_progress,
                 object_columns,
+                value_desc: desc,
             }),
+            SinkEnvelope::Tail { emit_progress },
         ))
-        .await;
+        .await?;
 
         let resp = ExecuteResponse::Tailing { rx };
 
@@ -2275,15 +2475,16 @@ where
                 Antichain::from_elem(Timestamp::max_value())
             }
         } else {
-            // TODO: This should more carefully consider `since` frontiers of its input.
-            // This will be forcibly corrected if any inputs are compacted.
-            Antichain::from_elem(0)
+            // Use the earliest time that is still valid for all sources.
+            let (index_ids, _indexes_complete) = self.catalog.nearest_indexes(&[source_id]);
+            self.indexes.least_valid_since(index_ids)
         };
         Ok(frontier)
     }
 
     fn sequence_explain_plan(
         &mut self,
+        session: &Session,
         raw_plan: sql::plan::RelationExpr,
         decorrelated_plan: expr::RelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
@@ -2292,18 +2493,19 @@ where
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let explanation_string = match stage {
             ExplainStage::RawPlan => {
-                let mut explanation = raw_plan.explain(&self.catalog);
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = sql::plan::Explanation::new(&raw_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
                 if options.typed {
-                    // TODO(jamii) does this fail?
                     explanation.explain_types(&BTreeMap::new());
                 }
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
-                let mut explanation = decorrelated_plan.explain(&self.catalog);
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = expr::explain::Explanation::new(&decorrelated_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2316,7 +2518,8 @@ where
                 let optimized_plan = self
                     .prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?
                     .into_inner();
-                let mut explanation = optimized_plan.explain(&self.catalog);
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = expr::explain::Explanation::new(&optimized_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2326,7 +2529,7 @@ where
                 explanation.to_string()
             }
         };
-        let rows = vec![Row::pack(&[Datum::from(&*explanation_string)])];
+        let rows = vec![Row::pack_slice(&[Datum::from(&*explanation_string)])];
         Ok(send_immediate_rows(rows))
     }
 
@@ -2654,7 +2857,7 @@ where
                             .await;
                             match connector {
                                 SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                                    let row = Row::pack(&[
+                                    let row = Row::pack_slice(&[
                                         Datum::String(entry.id().to_string().as_str()),
                                         Datum::String(topic.as_str()),
                                     ]);
@@ -2665,7 +2868,7 @@ where
                                     .await;
                                 }
                                 SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                                    let row = Row::pack(&[
+                                    let row = Row::pack_slice(&[
                                         Datum::String(entry.id().to_string().as_str()),
                                         Datum::Bytes(&path.clone().into_os_string().into_vec()),
                                     ]);
@@ -2809,7 +3012,7 @@ where
     /// In particular, there are requirement on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
-    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) {
+    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) -> Result<(), anyhow::Error> {
         // The identity for `join` is the minimum element.
         let mut since = Antichain::from_elem(Timestamp::minimum());
 
@@ -2841,7 +3044,7 @@ where
         for (id, sink) in &dataflow.sink_exports {
             match &sink.connector {
                 SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                    let row = Row::pack(&[
+                    let row = Row::pack_slice(&[
                         Datum::String(&id.to_string()),
                         Datum::String(topic.as_str()),
                     ]);
@@ -2849,7 +3052,7 @@ where
                         .await;
                 }
                 SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                    let row = Row::pack(&[
+                    let row = Row::pack_slice(&[
                         Datum::String(&id.to_string()),
                         Datum::Bytes(&path.clone().into_os_string().into_vec()),
                     ]);
@@ -2872,16 +3075,12 @@ where
             // If we have requested a specific time that is invalid .. someone errored.
             use timely::order::PartialOrder;
             if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
-                // This can occur in SINK and TAIL at the moment. Their behaviors are fluid enough
-                // that we just correct to avoid producing incorrect output updates, but we should
-                // fix the root of the problem in a more principled manner.
-                log::error!(
-                    "Dataflow {} requested as_of ({:?}) not >= since ({:?}); correcting",
+                bail!(
+                    "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
                     dataflow.debug_name,
                     as_of,
                     since
                 );
-                as_of.join_assign(&since);
             }
         } else {
             // Bind the since frontier to the dataflow description.
@@ -2897,6 +3096,7 @@ where
             SequencedCommand::CreateDataflows(vec![dataflow]),
         )
         .await;
+        Ok(())
     }
 
     // Tell the cacher to start caching data for `id` if that source
@@ -2954,6 +3154,10 @@ pub async fn serve<C>(
         experimental_mode,
         build_info,
     }: Config<'_, C>,
+    // TODO(benesch): Don't pass runtime explicitly when
+    // `Handle::current().block_in_place()` lands. See:
+    // https://github.com/tokio-rs/tokio/pull/3097.
+    runtime: Arc<Runtime>,
 ) -> Result<(JoinHandle<()>, Uuid), anyhow::Error>
 where
     C: comm::Connection,
@@ -3014,9 +3218,9 @@ where
             None
         };
 
-        let catalog_path = data_directory.map(|d| d.join("catalog"));
-        let (catalog, initial_catalog_events) = Catalog::open(catalog::Config {
-            path: catalog_path.as_deref(),
+        let path = data_directory.join("catalog");
+        let (catalog, initial_catalog_events) = Catalog::open(&catalog::Config {
+            path: &path,
             experimental_mode: Some(experimental_mode),
             enable_logging: logging.is_some(),
             cache_directory: cache_config.map(|c| c.path),
@@ -3064,10 +3268,7 @@ where
     // can't use `tokio::spawn`, but instead have to spawn a dedicated thread to
     // run the future.
     Ok((
-        thread::spawn({
-            let executor = Handle::current();
-            move || executor.block_on(coord.serve(cmd_rx, feedback_rx))
-        }),
+        thread::spawn(move || runtime.block_on(coord.serve(cmd_rx, feedback_rx))),
         cluster_id,
     ))
 }
@@ -3124,9 +3325,9 @@ pub fn index_sql(
     view_desc: &RelationDesc,
     keys: &[usize],
 ) -> String {
-    use sql::ast::{Expr, Ident, Value};
+    use sql::ast::{Expr, Value};
 
-    CreateIndexStatement {
+    CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
         on_name: sql::normalize::unresolve(view_name),
         key_parts: Some(
@@ -3162,7 +3363,7 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
 /// through the session.
 pub fn describe(
     catalog: &dyn sql::catalog::Catalog,
-    stmt: Statement,
+    stmt: Statement<Raw>,
     param_types: &[Option<pgrepr::Type>],
     session: Option<&Session>,
 ) -> Result<StatementDesc, anyhow::Error> {

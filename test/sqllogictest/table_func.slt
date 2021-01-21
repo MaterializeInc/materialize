@@ -68,10 +68,10 @@ query error unable to determine which implementation to use
 SELECT generate_series FROM generate_series(null, null)
 ----
 
-statement error invalid input syntax for int4: invalid digit found in string: "foo"
+statement error invalid input syntax for integer: invalid digit found in string: "foo"
 SELECT generate_series FROM generate_series('foo', 2)
 
-statement error invalid input syntax for int4: invalid digit found in string: "foo"
+statement error invalid input syntax for integer: invalid digit found in string: "foo"
 SELECT generate_series FROM generate_series(1, 'foo')
 
 statement error arguments cannot be implicitly cast to any implementation's parameters

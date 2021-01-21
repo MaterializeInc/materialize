@@ -14,7 +14,9 @@ use derivative::Derivative;
 
 use dataflow_types::PeekResponse;
 use repr::Row;
-use sql::ast::{ObjectType, Statement};
+use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
+use sql::plan::ExecuteTimeout;
+use tokio_postgres::error::SqlState;
 
 use crate::session::Session;
 
@@ -28,7 +30,7 @@ pub enum Command {
 
     Declare {
         name: String,
-        stmt: Statement,
+        stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
         session: Session,
         tx: futures::channel::oneshot::Sender<Response<()>>,
@@ -36,7 +38,7 @@ pub enum Command {
 
     Describe {
         name: String,
-        stmt: Option<Statement>,
+        stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
         session: Session,
         tx: futures::channel::oneshot::Sender<Response<()>>,
@@ -61,7 +63,7 @@ pub enum Command {
     },
 
     NoSessionExecute {
-        stmt: Statement,
+        stmt: Statement<Raw>,
         params: sql::plan::Params,
         tx: futures::channel::oneshot::Sender<anyhow::Result<NoSessionExecuteResponse>>,
     },
@@ -101,6 +103,8 @@ pub enum ExecuteResponse {
     AlteredObject(ObjectType),
     // The index was altered.
     AlteredIndexLogicalCompaction,
+    /// The requested cursor was closed.
+    ClosedCursor,
     CopyTo {
         format: sql::plan::CopyFormat,
         #[derivative(Debug = "ignore")]
@@ -136,6 +140,8 @@ pub enum ExecuteResponse {
     },
     /// The requested type was created.
     CreatedType,
+    /// The requested cursor was declared.
+    DeclaredCursor,
     /// The specified number of rows were deleted from the requested table.
     Deleted(usize),
     /// The temporary objects associated with the session have been discarded.
@@ -160,8 +166,22 @@ pub enum ExecuteResponse {
     DroppedType,
     /// The provided query was empty.
     EmptyQuery,
+    /// Fetch results from a cursor.
+    Fetch {
+        /// The name of the cursor from which to fetch results.
+        name: String,
+        /// The number of results to fetch.
+        count: Option<FetchDirection>,
+        /// How long to wait for results to arrive.
+        timeout: ExecuteTimeout,
+    },
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
+    /// A SQL error occurred.
+    PgError {
+        code: SqlState,
+        message: String,
+    },
     /// Rows will be delivered via the specified future.
     SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
     /// The specified variable was set to a new value.

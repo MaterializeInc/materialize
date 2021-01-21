@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::fs;
 use std::path::PathBuf;
@@ -32,6 +32,7 @@ use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{debug, error, info, log_enabled, warn};
 use repr::{CachedRecord, CachedRecordIter, Timestamp};
+use uuid::Uuid;
 
 use crate::source::cache::{CacheSender, RecordFileMetadata, WorkerCacheData};
 use crate::source::{
@@ -172,7 +173,10 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     Ok(topic_list) => topic_list
                         .elements_for_topic(&self.topic_name)
                         .get(kafka_pid as usize)
-                        .map(|el| el.offset().to_raw() - 1),
+                        .map(|el| match el.offset() {
+                            Offset::Offset(o) => o - 1,
+                            _ => -1,
+                        }),
                     Err(_) => Some(-1),
                 }
                 .unwrap_or(-1),
@@ -270,6 +274,22 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
     ) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
+        // Poll the consumer once. Since we split the consumer's partitions out into separate queues and poll those individually,
+        // we expect this poll to always return None - but it's necessary to drive logic that consumes from rdkafka's internal
+        // event queue, such as statistics callbacks.
+        if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
+            match result {
+                Err(e) => error!(
+                    "kafka error when polling consumer for source: {} topic: {} : {}",
+                    self.source_name, self.topic_name, e
+                ),
+                Ok(m) => error!(
+                    "unexpected receipt of kafka message from non-partitioned queue for source: {} topic: {} partition: {} offset: {}",
+                    self.source_name, self.topic_name, m.partition(), m.offset()
+                ),
+            }
+        }
+
         let mut next_message = NextMessage::Pending;
         let consumer_count = self.get_partition_consumers_count();
         let mut attempts = 0;
@@ -445,12 +465,18 @@ impl KafkaSourceInfo {
             topic,
             config_options,
             group_id_prefix,
+            cluster_id,
             ..
         } = kc;
         let worker_id = worker_id.try_into().unwrap();
         let worker_count = worker_count.try_into().unwrap();
-        let kafka_config =
-            create_kafka_config(&source_name, &addrs, group_id_prefix, &config_options);
+        let kafka_config = create_kafka_config(
+            &source_name,
+            &addrs,
+            group_id_prefix,
+            cluster_id,
+            &config_options,
+        );
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
@@ -537,14 +563,14 @@ impl KafkaSourceInfo {
         // Create list from assignments
         let mut partition_list = TopicPartitionList::new();
         for partition in tpl.elements_for_topic(&self.topic_name) {
-            partition_list.add_partition_offset(
-                partition.topic(),
-                partition.partition(),
-                partition.offset(),
-            );
+            partition_list
+                .add_partition_offset(partition.topic(), partition.partition(), partition.offset())
+                .expect("offset known to be valid");
         }
         // Add new partition
-        partition_list.add_partition_offset(&self.topic_name, partition_id, Offset::Beginning);
+        partition_list
+            .add_partition_offset(&self.topic_name, partition_id, Offset::Beginning)
+            .expect("offset known to be valid");
         self.consumer
             .assign(&partition_list)
             .expect("assignment known to be valid");
@@ -578,13 +604,17 @@ impl KafkaSourceInfo {
         match res {
             Ok(_) => {
                 let res = self.consumer.position().unwrap_or_default().to_topic_map();
-                let position = res.get(&(self.topic_name.clone(), pid));
+                let position = res
+                    .get(&(self.topic_name.clone(), pid))
+                    .and_then(|p| match p {
+                        Offset::Offset(o) => Some(o),
+                        _ => None,
+                    });
                 if let Some(position) = position {
-                    let position = position.to_raw();
                     info!(
                         "Tried to fast-forward consumer on partition PID: {} to Kafka offset {}. Consumer is now at position {}",
                         pid, next_offset.offset, position);
-                    if position != next_offset.offset {
+                    if *position != next_offset.offset {
                         warn!("We did not seek to the expected Kafka offset. Current Kafka offset: {} Expected Kafka offset: {}", position, next_offset.offset);
                     }
                 } else {
@@ -605,19 +635,18 @@ fn create_kafka_config(
     name: &str,
     addrs: &KafkaAddrs,
     group_id_prefix: Option<String>,
-    config_options: &HashMap<String, String>,
+    cluster_id: Uuid,
+    config_options: &BTreeMap<String, String>,
 ) -> ClientConfig {
     let mut kafka_config = ClientConfig::new();
 
     // Broker configuration.
     kafka_config.set("bootstrap.servers", &addrs.to_string());
 
-    // Opt-out of Kafka's offset management facilities. Whenever we restart,
-    // we want to restart from the beginning of the topic.
-    //
-    // This is likely to change soon. See #3060 and #2490.
+    // Automatically commit read offsets back to Kafka for monitoring purposes,
+    // but on restart begin ingest at 0
     kafka_config
-        .set("enable.auto.commit", "false")
+        .set("enable.auto.commit", "true")
         .set("auto.offset.reset", "earliest");
 
     // How often to refresh metadata from the Kafka broker. This can have a
@@ -634,9 +663,9 @@ fn create_kafka_config(
 
     kafka_config.set("fetch.message.max.bytes", "134217728");
 
-    // Consumer group ID. We'd prefer not to set this at all, as we don't use
-    // Kafka's consumer group support, but librdkafka requires it, and users
-    // expect it.
+    // Consumer group ID. librdkafka requires this, and we use offset commiting
+    // to provide a way for users to monitor ingest progress (though we do not
+    // rely on the committed offsets for any functionality)
     //
     // This is partially dictated by the user and partially dictated by us.
     // Users can set a prefix so they can see which consumers belong to which
@@ -647,8 +676,9 @@ fn create_kafka_config(
     kafka_config.set(
         "group.id",
         &format!(
-            "{}materialize-{}",
+            "{}materialize-{}-{}",
             group_id_prefix.unwrap_or_else(String::new),
+            cluster_id,
             name
         ),
     );

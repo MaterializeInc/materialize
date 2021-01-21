@@ -33,6 +33,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops;
 use std::path::Path;
 use std::str;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -42,14 +43,14 @@ use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use postgres_protocol::types;
 use regex::Regex;
-
+use tempfile::TempDir;
+use tokio::runtime::Runtime;
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
-use tokio_postgres::{connect, Client, NoTls, Row};
+use tokio_postgres::{connect, NoTls, Row, SimpleQueryMessage};
 use uuid::Uuid;
 
-use materialized::{serve, Config, Server};
 use pgrepr::{Interval, Jsonb, Numeric, Value};
 use repr::ColumnName;
 use sql::ast::Statement;
@@ -268,12 +269,11 @@ impl Outcomes {
     }
 }
 
-const NUM_TIMELY_WORKERS: usize = 3;
-
 pub(crate) struct Runner {
     // Drop order matters for these fields.
-    client: Client,
-    _server: Server,
+    client: tokio_postgres::Client,
+    _server: materialized::Server,
+    _temp_dir: TempDir,
 }
 
 #[derive(Debug)]
@@ -497,23 +497,25 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 }
 
 impl Runner {
-    pub async fn start() -> Result<Self, anyhow::Error> {
-        let config = Config {
+    pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
+        let temp_dir = tempfile::tempdir()?;
+        let mz_config = materialized::Config {
             logging: None,
             timestamp_frequency: Duration::from_millis(10),
             cache: None,
             logical_compaction_window: None,
-            threads: NUM_TIMELY_WORKERS,
+            threads: config.workers,
             process: 0,
             addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
-            data_directory: None,
+            timely_worker: timely::WorkerConfig::default(),
+            data_directory: temp_dir.path().to_path_buf(),
             symbiosis_url: Some("postgres://".into()),
             listen_addr: None,
             tls: None,
             experimental_mode: true,
             telemetry_url: None,
         };
-        let server = serve(config).await?;
+        let server = materialized::serve(mz_config, config.runtime.clone()).await?;
         let addr = server.local_addr();
         let (client, connection) = connect(
             &format!("host={} port={} user=root", addr.ip(), addr.port()),
@@ -529,6 +531,7 @@ impl Runner {
 
         Ok(Runner {
             _server: server,
+            _temp_dir: temp_dir,
             client,
         })
     }
@@ -569,6 +572,12 @@ impl Runner {
                 output,
                 location,
             } => self.run_query(sql, output, location.clone()).await,
+            Record::Simple {
+                sql,
+                output,
+                location,
+                ..
+            } => self.run_simple(sql, output, location.clone()).await,
             _ => Ok(Outcome::Success),
         }
     }
@@ -791,32 +800,79 @@ impl Runner {
 
         Ok(Outcome::Success)
     }
+
+    async fn run_simple<'a>(
+        &mut self,
+        sql: &'a str,
+        output: &'a Output,
+        location: Location,
+    ) -> Result<Outcome<'a>, anyhow::Error> {
+        let actual = Output::Values(match self.client.simple_query(sql).await {
+            Ok(result) => result
+                .into_iter()
+                .map(|m| match m {
+                    SimpleQueryMessage::Row(row) => {
+                        let mut s = vec![];
+                        for i in 0..row.len() {
+                            s.push(row.get(i).unwrap_or("NULL"));
+                        }
+                        s.join(",")
+                    }
+                    SimpleQueryMessage::CommandComplete(count) => format!("COMPLETE {}", count),
+                    _ => panic!("unexpected"),
+                })
+                .collect::<Vec<_>>(),
+            Err(error) => vec![error.to_string()],
+        });
+        if *output != actual {
+            Ok(Outcome::OutputFailure {
+                expected_output: output,
+                actual_raw_output: vec![],
+                actual_output: actual,
+                location,
+            })
+        } else {
+            Ok(Outcome::Success)
+        }
+    }
 }
 
-fn print_record(record: &Record) {
+pub trait WriteFmt {
+    fn write_fmt(&self, fmt: fmt::Arguments<'_>);
+}
+
+pub struct RunConfig<'a> {
+    pub runtime: Arc<Runtime>,
+    pub stdout: &'a dyn WriteFmt,
+    pub stderr: &'a dyn WriteFmt,
+    pub verbosity: usize,
+    pub workers: usize,
+}
+
+fn print_record(config: &RunConfig<'_>, record: &Record) {
     match record {
         Record::Statement { sql, .. } | Record::Query { sql, .. } => {
-            println!("{}", crate::util::indent(sql, 4))
+            writeln!(config.stdout, "{}", crate::util::indent(sql, 4))
         }
         _ => (),
     }
 }
 
 pub async fn run_string(
+    config: &RunConfig<'_>,
     source: &str,
     input: &str,
-    verbosity: usize,
 ) -> Result<Outcomes, anyhow::Error> {
     let mut outcomes = Outcomes::default();
-    let mut state = Runner::start().await.unwrap();
+    let mut state = Runner::start(config).await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
-    println!("==> {}", source);
+    writeln!(config.stdout, "==> {}", source);
     for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
-        if verbosity >= 2 {
-            print_record(&record);
+        if config.verbosity >= 2 {
+            print_record(config, &record);
         }
 
         let outcome = state
@@ -826,18 +882,18 @@ pub async fn run_string(
             .unwrap();
 
         // Print failures in verbose mode.
-        if verbosity >= 1 && !outcome.success() {
-            if verbosity < 2 {
+        if config.verbosity >= 1 && !outcome.success() {
+            if config.verbosity < 2 {
                 // If `verbosity >= 2`, we'll already have printed the record,
                 // so don't print it again. Yes, this is an ugly bit of logic.
                 // Please don't try to consolidate it with the `print_record`
                 // call above, as it's important to have a mode in which records
                 // are printed before they are run, so that if running the
                 // record panics, you can tell which record caused it.
-                print_record(&record);
+                print_record(config, &record);
             }
-            println!("{}", util::indent(&outcome.to_string(), 4));
-            println!("{}", util::indent("----", 4));
+            writeln!(config.stdout, "{}", util::indent(&outcome.to_string(), 4));
+            writeln!(config.stdout, "{}", util::indent("----", 4));
         }
 
         outcomes.0[outcome.code()] += 1;
@@ -849,19 +905,19 @@ pub async fn run_string(
     Ok(outcomes)
 }
 
-pub async fn run_file(filename: &Path, verbosity: usize) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_file(config: &RunConfig<'_>, filename: &Path) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
-    run_string(&format!("{}", filename.display()), &input, verbosity).await
+    run_string(config, &format!("{}", filename.display()), &input).await
 }
 
-pub async fn run_stdin(verbosity: usize) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_stdin(config: &RunConfig<'_>) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     std::io::stdin().lock().read_to_string(&mut input)?;
-    run_string("<stdin>", &input, verbosity).await
+    run_string(config, "<stdin>", &input).await
 }
 
-pub async fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyhow::Error> {
+pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(), anyhow::Error> {
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
     let mut input = String::new();
@@ -869,9 +925,9 @@ pub async fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyh
 
     let mut buf = RewriteBuffer::new(&input);
 
-    let mut state = Runner::start().await?;
+    let mut state = Runner::start(config).await?;
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
-    println!("==> {}", filename.display());
+    writeln!(config.stdout, "==> {}", filename.display());
     for record in parser.parse_records()? {
         let record = record;
         let outcome = state.run_record(&record).await?;
@@ -930,6 +986,36 @@ pub async fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyh
                         }
                     }
                 }
+            }
+        } else if let (
+            Record::Simple {
+                output_str: expected_output,
+                ..
+            },
+            Outcome::OutputFailure {
+                actual_output: Output::Values(actual_output),
+                ..
+            },
+        ) = (&record, &outcome)
+        {
+            // Output everything before this record.
+            let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
+            buf.flush_to(offset);
+            buf.skip_to(offset + expected_output.len());
+
+            // Attempt to install the result separator (----), if it does
+            // not already exist.
+            if buf.peek_last(5) == "\n----" {
+                buf.append("\n");
+            } else if buf.peek_last(6) != "\n----\n" {
+                buf.append("\n----\n");
+            }
+
+            for (i, row) in actual_output.iter().enumerate() {
+                if i != 0 {
+                    buf.append("\n");
+                }
+                buf.append(row);
             }
         } else if let Outcome::Success = outcome {
             // Ok.

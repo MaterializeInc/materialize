@@ -96,6 +96,7 @@ impl Type {
             postgres_types::Type::INTERVAL => Some(Type::Interval),
             postgres_types::Type::JSONB => Some(Type::Jsonb),
             postgres_types::Type::NUMERIC => Some(Type::Numeric),
+            postgres_types::Type::OID => Some(Type::Oid),
             postgres_types::Type::TEXT | postgres_types::Type::VARCHAR => Some(Type::Text),
             postgres_types::Type::TIME => Some(Type::Time),
             postgres_types::Type::TIMESTAMP => Some(Type::Timestamp),
@@ -153,7 +154,34 @@ impl Type {
 
     /// Returns the name that PostgreSQL uses for this type.
     pub fn name(&self) -> &'static str {
-        self.inner().name()
+        // postgres_types' `name()` uses the pg_catalog name, and not the pretty
+        // SQL standard name.
+        match self.inner() {
+            &postgres_types::Type::BOOL_ARRAY => "boolean[]",
+            &postgres_types::Type::BYTEA_ARRAY => "bytea[]",
+            &postgres_types::Type::DATE_ARRAY => "date[]",
+            &postgres_types::Type::FLOAT4_ARRAY => "real[]",
+            &postgres_types::Type::FLOAT8_ARRAY => "double precision[]",
+            &postgres_types::Type::INT4_ARRAY => "integer[]",
+            &postgres_types::Type::INT8_ARRAY => "bigint[]",
+            &postgres_types::Type::INTERVAL_ARRAY => "interval[]",
+            &postgres_types::Type::JSONB_ARRAY => "jsonb[]",
+            &postgres_types::Type::NUMERIC_ARRAY => "numeric[]",
+            &postgres_types::Type::OID_ARRAY => "oid[]",
+            &postgres_types::Type::RECORD_ARRAY => "record[]",
+            &postgres_types::Type::TEXT_ARRAY => "text[]",
+            &postgres_types::Type::TIME_ARRAY => "time[]",
+            &postgres_types::Type::TIMESTAMP_ARRAY => "timestamp[]",
+            &postgres_types::Type::TIMESTAMPTZ_ARRAY => "timestamp with time zone[]",
+            &postgres_types::Type::UUID_ARRAY => "uuid[]",
+            &postgres_types::Type::BOOL => "boolean",
+            &postgres_types::Type::FLOAT4 => "real",
+            &postgres_types::Type::FLOAT8 => "double precision",
+            &postgres_types::Type::INT4 => "integer",
+            &postgres_types::Type::INT8 => "bigint",
+            &postgres_types::Type::TIMESTAMPTZ => "timestamp with time zone",
+            other => other.name(),
+        }
     }
 
     /// Returns the [OID] of this type.
@@ -189,6 +217,47 @@ impl Type {
             Type::Uuid => 16,
         }
     }
+
+    /// Provides a [`ScalarType`] from `self`, but without necessarily
+    /// associating any meaningful values within the returned type.
+    ///
+    /// For example `Type::Numeric` returns `ScalarType::Decimal(0,0)`, meaning
+    /// that its precision and scale need to be associated with values from
+    /// elsewhere.
+    pub fn to_scalar_type_lossy(&self) -> ScalarType {
+        match self {
+            Type::Array(t) => ScalarType::Array(Box::new(t.to_scalar_type_lossy())),
+            Type::Bool => ScalarType::Bool,
+            Type::Bytea => ScalarType::Bytes,
+            Type::Date => ScalarType::Date,
+            Type::Float4 => ScalarType::Float32,
+            Type::Float8 => ScalarType::Float64,
+            Type::Int4 => ScalarType::Int32,
+            Type::Int8 => ScalarType::Int64,
+            Type::Interval => ScalarType::Interval,
+            Type::Jsonb => ScalarType::Jsonb,
+            Type::List(t) => ScalarType::List {
+                element_type: Box::new(t.to_scalar_type_lossy()),
+                custom_oid: None,
+            },
+            Type::Map { value_type } => ScalarType::Map {
+                value_type: Box::new(value_type.to_scalar_type_lossy()),
+                custom_oid: None,
+            },
+            Type::Numeric => ScalarType::Decimal(0, 0),
+            Type::Oid => ScalarType::Oid,
+            Type::Record(_) => ScalarType::Record {
+                fields: vec![],
+                custom_oid: None,
+                custom_name: None,
+            },
+            Type::Text => ScalarType::String,
+            Type::Time => ScalarType::Time,
+            Type::Timestamp => ScalarType::Timestamp,
+            Type::TimestampTz => ScalarType::TimestampTz,
+            Type::Uuid => ScalarType::Uuid,
+        }
+    }
 }
 
 impl From<&ScalarType> for Type {
@@ -205,12 +274,14 @@ impl From<&ScalarType> for Type {
             ScalarType::Int64 => Type::Int8,
             ScalarType::Interval => Type::Interval,
             ScalarType::Jsonb => Type::Jsonb,
-            ScalarType::List(t) => Type::List(Box::new(From::from(&**t))),
-            ScalarType::Map { value_type } => Type::Map {
+            ScalarType::List { element_type, .. } => {
+                Type::List(Box::new(From::from(&**element_type)))
+            }
+            ScalarType::Map { value_type, .. } => Type::Map {
                 value_type: Box::new(From::from(&**value_type)),
             },
             ScalarType::Oid => Type::Oid,
-            ScalarType::Record { fields } => Type::Record(
+            ScalarType::Record { fields, .. } => Type::Record(
                 fields
                     .iter()
                     .map(|(_name, ty)| Type::from(&ty.scalar_type))

@@ -862,7 +862,7 @@ pub const MZ_PERF_PEEK_DURATIONS_CORE: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_perf_peek_durations_core AS SELECT
     d_upper.worker,
-    d_upper.duration_ns::text AS le,
+    d_upper.duration_ns::pg_catalog.text AS le,
     sum(d_summed.count) AS count
 FROM
     mz_catalog.mz_peek_durations AS d_upper,
@@ -931,14 +931,13 @@ pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_namespace AS SELECT
 oid,
 name AS nspname,
-NULL::oid AS nspowner,
-NULL::text[] AS nspacl
+NULL::pg_catalog.oid AS nspowner,
+NULL::pg_catalog.text[] AS nspacl
 FROM mz_catalog.mz_schemas",
     id: GlobalId::System(4015),
     needs_logs: false,
 };
 
-// TODO(jldlaughlin): add other fields - https://www.postgresql.org/docs/12/catalog-pg-class.html
 pub const PG_CLASS: BuiltinView = BuiltinView {
     name: "pg_class",
     schema: PG_CATALOG_SCHEMA,
@@ -946,7 +945,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     mz_objects.oid,
     mz_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
-    NULL::oid AS relowner,
+    NULL::pg_catalog.oid AS relowner,
     CASE
         WHEN mz_objects.type = 'table' THEN 'r'
         WHEN mz_objects.type = 'source' THEN 'r'
@@ -965,11 +964,11 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_database AS SELECT
     oid,
     name as datname,
-    NULL::oid AS datdba,
+    NULL::pg_catalog.oid AS datdba,
     6 as encoding,
     'C' as datcollate,
     'C' as datctype,
-    NULL::text[] as datacl
+    NULL::pg_catalog.text[] as datacl
 FROM mz_catalog.mz_databases",
     id: GlobalId::System(4017),
     needs_logs: false,
@@ -992,9 +991,9 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_description AS SELECT
     oid as objoid,
-    NULL::oid as classoid,
-    0::int4 as objsubid,
-    NULL::text as description
+    NULL::pg_catalog.oid as classoid,
+    0::pg_catalog.int4 as objsubid,
+    NULL::pg_catalog.text as description
 FROM pg_catalog.pg_class",
     id: GlobalId::System(4019),
     needs_logs: false,
@@ -1004,13 +1003,16 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     name: "pg_attribute",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_attribute AS SELECT
-    oid as attrelid,
+    mz_objects.oid as attrelid,
     mz_columns.name as attname,
-    NULL::oid AS atttypid,
+    mz_types.oid AS atttypid,
     position as attnum,
+    -1::pg_catalog.int4 as atttypmod,
     NOT nullable as attnotnull,
     FALSE as attisdropped
-FROM mz_catalog.mz_tables JOIN mz_catalog.mz_columns ON mz_tables.id = mz_columns.id",
+FROM mz_catalog.mz_objects
+JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
+JOIN mz_catalog.mz_types ON mz_columns.type = mz_types.name",
     id: GlobalId::System(4020),
     needs_logs: false,
 };
@@ -1022,27 +1024,35 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
-    CASE
-        WHEN EXISTS (SELECT 1 FROM mz_catalog.mz_array_types WHERE type_id = mz_types.id) THEN 'a'
-        WHEN EXISTS (SELECT 1 FROM mz_catalog.mz_base_types WHERE type_id = mz_types.id) THEN 'b'
-        WHEN EXISTS (SELECT 1 FROM mz_catalog.mz_map_types WHERE type_id = mz_types.id) THEN 'm'
-    END AS typtype,
-    0::oid AS typrelid,
-    NULL::oid AS typelem,
-    coalesce(
+    typtype,
+    0::pg_catalog.oid AS typrelid,
+    NULL::pg_catalog.oid AS typelem,
+    COALESCE(
         (
-            SELECT t.oid
-            FROM mz_catalog.mz_array_types a
-            JOIN mz_catalog.mz_types t ON a.type_id = t.id
-            WHERE a.element_id = mz_types.id
+            SELECT
+                t.oid
+            FROM
+                mz_catalog.mz_array_types AS a
+                JOIN mz_catalog.mz_types AS t ON a.type_id = t.id
+            WHERE
+                a.element_id = mz_types.id
         ),
         0
-    ) AS typarray,
-    NULL::oid AS typreceive,
-    false::bool AS typnotnull,
-    0::oid AS typbasetype
-FROM mz_catalog.mz_types
-JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id",
+    )
+        AS typarray,
+    NULL::pg_catalog.oid AS typreceive,
+    false::pg_catalog.bool AS typnotnull,
+    0::pg_catalog.oid AS typbasetype
+FROM
+    mz_catalog.mz_types
+    JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id
+    JOIN (
+            SELECT type_id, 'a' AS typtype FROM mz_catalog.mz_array_types
+            UNION ALL SELECT type_id, 'b' FROM mz_catalog.mz_base_types
+            UNION ALL SELECT type_id, 'l' FROM mz_catalog.mz_list_types
+            UNION ALL SELECT type_id, 'm' FROM mz_catalog.mz_map_types
+        )
+            AS t ON mz_types.id = t.type_id",
     id: GlobalId::System(4021),
     needs_logs: false,
 };
@@ -1051,8 +1061,8 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     name: "pg_proc",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_proc AS SELECT
-    NULL::oid AS oid,
-    NULL::text AS proname
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS proname
     WHERE false",
     id: GlobalId::System(4022),
     needs_logs: false,
@@ -1062,8 +1072,8 @@ pub const PG_RANGE: BuiltinView = BuiltinView {
     name: "pg_range",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_range AS SELECT
-    NULL::oid AS rngtypid,
-    NULL::oid AS rngsubtype
+    NULL::pg_catalog.oid AS rngtypid,
+    NULL::pg_catalog.oid AS rngsubtype
     WHERE false",
     id: GlobalId::System(4023),
     needs_logs: false,
@@ -1073,10 +1083,10 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
     name: "pg_enum",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_enum AS SELECT
-    NULL::oid AS oid,
-    NULL::oid AS enumtypid,
-    NULL::float4 AS enumsortorder,
-    NULL::text AS enumlabel
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.oid AS enumtypid,
+    NULL::pg_catalog.float4 AS enumsortorder,
+    NULL::pg_catalog.text AS enumlabel
     WHERE false",
     id: GlobalId::System(4024),
     needs_logs: false,

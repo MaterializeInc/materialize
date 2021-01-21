@@ -54,6 +54,7 @@ _target&lowbar;elem_ | Return identified columns or functions.
 _join&lowbar;expr_ | A join expression; for more details, see our [`JOIN` documentation](../join).
 **WHERE** _expression_ | Filter tuples by _expression_.
 **GROUP BY** _col&lowbar;ref_ | Group aggregations by _col&lowbar;ref_.
+**OPTION (** _hint&lowbar;list_ **)** | Specify one or more [query hints](#query-hints).
 **HAVING** _expression_ | Filter aggregations by _expression_.
 **ORDER BY** _col&lowbar;ref_... | Order results in either **ASC** or **DESC** order (_**ASC** is implied default_).<br/><br>
 **LIMIT** | Limit the number of returned results to _expr_.
@@ -121,6 +122,20 @@ CTEs). This can enhance legibility of complex queries, but doesn't alter the
 queries' semantics.
 
 For an example, see [Using CTEs](#using-ctes).
+
+### Query hints
+
+Users can specify any query hints to help Materialize optimize
+query planning more efficiently.
+
+The following query hints are valid within the `OPTION` clause.
+
+Hint | Value type | Description
+------|------------|------------
+`expected_group_size` | `int` | How many rows will have the same group key. Materialize
+can render `min` and `max` expressions more efficiently with this information.
+
+For an example, see [Using query hints](#using-query-hints).
 
 #### Known limitations
 
@@ -210,6 +225,20 @@ names, but the CTEs make the entire query simpler to understand.
 
 With regard to dataflows, this is similar to [Querying views](#querying-views)
 above: Materialize tears down the created dataflow after returning the results.
+
+### Using query hints
+
+```sql
+SELECT a,
+       min(b) AS min
+FROM example
+GROUP BY a
+OPTION (expected_group_size = 100)
+```
+
+Here the hint indicates that there may be up to a hundred distinct `(a, b)` pairs
+for each `a` value, and Materialize can optimize its dataflow rendering with that
+knowledge.
 
 ## Related pages
 

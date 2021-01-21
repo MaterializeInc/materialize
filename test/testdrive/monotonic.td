@@ -25,29 +25,36 @@ $ kafka-create-topic topic=non-dbz-data
 
 $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp=1
 {"a": 1, "b": 2}
+{"a": 1, "b": 1048576}
 {"a": 2, "b": 3}
 {"a": 2, "b": 4}
 
-> CREATE MATERIALIZED SOURCE non_dbz_data
+> CREATE SOURCE non_dbz_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
-> SELECT a, min(b) FROM non_dbz_data group by a
+> CREATE MATERIALIZED VIEW monotonic_min AS SELECT a, min(b) FROM non_dbz_data group by a
+
+> SELECT * FROM monotonic_min
 a min
 ---
 1 2
 2 3
 
-> SELECT a, max(b) FROM non_dbz_data group by a
+> CREATE MATERIALIZED VIEW monotonic_max AS SELECT a, max(b) FROM non_dbz_data group by a
+
+> SELECT * FROM monotonic_max
 a max
 ---
-1 2
+1 1048576
 2 4
 
 # Smoke test for aggregate fusion
-> SELECT a, min(b), max(b + 1)  FROM non_dbz_data group by a
+> CREATE MATERIALIZED VIEW monotonic_fused AS SELECT a, min(b), max(b + 1)  FROM non_dbz_data group by a
+
+> SELECT * FROM monotonic_fused
 a min max
 ---
-1 2 3
+1 2 1048577
 2 3 5

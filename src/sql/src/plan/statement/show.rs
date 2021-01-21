@@ -7,31 +7,46 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Handlers for `SHOW ...` queries.
+//! Queries that show the state of the database system.
+//!
+//! This module houses the handlers for the `SHOW` suite of statements, like
+//! `SHOW CREATE TABLE` and `SHOW VIEWS`. Note that `SHOW <var>` is considered
+//! an SCL statement.
 
 use anyhow::bail;
 
 use ore::collections::CollectionExt;
-use repr::{Datum, Row};
-use sql_parser::ast::{
-    ObjectName, ObjectType, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
+use repr::{Datum, RelationDesc, Row, ScalarType};
+
+use crate::ast::{
+    ObjectName, ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowStatementFilter, Statement, Value,
 };
-
 use crate::catalog::CatalogItemType;
 use crate::parse;
-use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::statement::{dml, StatementContext, StatementDesc};
 use crate::plan::{Params, Plan};
 
-pub fn handle_show_create_view(
+pub fn describe_show_create_view(
+    _: &StatementContext,
+    _: ShowCreateViewStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("View", ScalarType::String.nullable(false))
+            .with_column("Create View", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_view(
     scx: &StatementContext,
     ShowCreateViewStatement { view_name }: ShowCreateViewStatement,
 ) -> Result<Plan, anyhow::Error> {
     let view = scx.resolve_item(view_name)?;
     if let CatalogItemType::View = view.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack(&[
+        Ok(Plan::SendRows(vec![Row::pack_slice(&[
             Datum::String(&view.name().to_string()),
             Datum::String(view.create_sql()),
         ])]))
@@ -40,13 +55,24 @@ pub fn handle_show_create_view(
     }
 }
 
-pub fn handle_show_create_table(
+pub fn describe_show_create_table(
+    _: &StatementContext,
+    _: ShowCreateTableStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Table", ScalarType::String.nullable(false))
+            .with_column("Create Table", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_table(
     scx: &StatementContext,
     ShowCreateTableStatement { table_name }: ShowCreateTableStatement,
 ) -> Result<Plan, anyhow::Error> {
     let table = scx.resolve_item(table_name)?;
     if let CatalogItemType::Table = table.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack(&[
+        Ok(Plan::SendRows(vec![Row::pack_slice(&[
             Datum::String(&table.name().to_string()),
             Datum::String(table.create_sql()),
         ])]))
@@ -55,13 +81,24 @@ pub fn handle_show_create_table(
     }
 }
 
-pub fn handle_show_create_source(
+pub fn describe_show_create_source(
+    _: &StatementContext,
+    _: ShowCreateSourceStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Source", ScalarType::String.nullable(false))
+            .with_column("Create Source", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_source(
     scx: &StatementContext,
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement,
 ) -> Result<Plan, anyhow::Error> {
     let source = scx.resolve_item(source_name)?;
     if let CatalogItemType::Source = source.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack(&[
+        Ok(Plan::SendRows(vec![Row::pack_slice(&[
             Datum::String(&source.name().to_string()),
             Datum::String(source.create_sql()),
         ])]))
@@ -70,13 +107,24 @@ pub fn handle_show_create_source(
     }
 }
 
-pub fn handle_show_create_sink(
+pub fn describe_show_create_sink(
+    _: &StatementContext,
+    _: ShowCreateSinkStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Sink", ScalarType::String.nullable(false))
+            .with_column("Create Sink", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_sink(
     scx: &StatementContext,
     ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement,
 ) -> Result<Plan, anyhow::Error> {
     let sink = scx.resolve_item(sink_name)?;
     if let CatalogItemType::Sink = sink.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack(&[
+        Ok(Plan::SendRows(vec![Row::pack_slice(&[
             Datum::String(&sink.name().to_string()),
             Datum::String(sink.create_sql()),
         ])]))
@@ -85,13 +133,24 @@ pub fn handle_show_create_sink(
     }
 }
 
-pub fn handle_show_create_index(
+pub fn describe_show_create_index(
+    _: &StatementContext,
+    _: ShowCreateIndexStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Index", ScalarType::String.nullable(false))
+            .with_column("Create Index", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_index(
     scx: &StatementContext,
     ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement,
 ) -> Result<Plan, anyhow::Error> {
     let index = scx.resolve_item(index_name)?;
     if let CatalogItemType::Index = index.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack(&[
+        Ok(Plan::SendRows(vec![Row::pack_slice(&[
             Datum::String(&index.name().to_string()),
             Datum::String(index.create_sql()),
         ])]))
@@ -102,7 +161,7 @@ pub fn handle_show_create_index(
 
 pub fn show_databases<'a>(
     scx: &'a StatementContext<'a>,
-    ShowDatabasesStatement { filter }: ShowDatabasesStatement,
+    ShowDatabasesStatement { filter }: ShowDatabasesStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
     Ok(ShowSelect::new(scx, query, filter))
@@ -117,7 +176,7 @@ pub fn show_objects<'a>(
         object_type,
         from,
         filter,
-    }: ShowObjectsStatement,
+    }: ShowObjectsStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     match object_type {
         ObjectType::Schema => show_schemas(scx, extended, full, from, filter),
@@ -136,7 +195,7 @@ fn show_schemas<'a>(
     extended: bool,
     full: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let database = if let Some(from) = from {
         scx.resolve_database(from)?
@@ -178,7 +237,7 @@ fn show_tables<'a>(
     extended: bool,
     full: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED TABLES");
@@ -211,7 +270,7 @@ fn show_sources<'a>(
     full: bool,
     materialized: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
@@ -257,7 +316,7 @@ fn show_views<'a>(
     full: bool,
     materialized: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
@@ -302,7 +361,7 @@ fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
@@ -331,7 +390,7 @@ fn show_types<'a>(
     extended: bool,
     full: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
@@ -361,7 +420,7 @@ fn show_all_objects<'a>(
     extended: bool,
     full: bool,
     from: Option<ObjectName>,
-    filter: Option<ShowStatementFilter>,
+    filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
@@ -392,7 +451,7 @@ pub fn show_indexes<'a>(
         extended,
         table_name,
         filter,
-    }: ShowIndexesStatement,
+    }: ShowIndexesStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED INDEXES")
@@ -437,7 +496,7 @@ pub fn show_columns<'a>(
         full,
         table_name,
         filter,
-    }: ShowColumnsStatement,
+    }: ShowColumnsStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED COLUMNS");
@@ -465,7 +524,7 @@ pub fn show_columns<'a>(
 /// Can be interrogated for its columns, or converted into a proper [`Plan`].
 pub struct ShowSelect<'a> {
     scx: &'a StatementContext<'a>,
-    stmt: SelectStatement,
+    stmt: SelectStatement<Raw>,
 }
 
 impl<'a> ShowSelect<'a> {
@@ -479,7 +538,7 @@ impl<'a> ShowSelect<'a> {
     fn new(
         scx: &'a StatementContext,
         query: String,
-        filter: Option<ShowStatementFilter>,
+        filter: Option<ShowStatementFilter<Raw>>,
     ) -> ShowSelect<'a> {
         let filter = match filter {
             Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
@@ -497,11 +556,11 @@ impl<'a> ShowSelect<'a> {
 
     /// Computes the shape of this `ShowSelect`.
     pub fn describe(self) -> Result<StatementDesc, anyhow::Error> {
-        super::describe_statement(self.scx.catalog, Statement::Select(self.stmt), &[])
+        dml::describe_select(self.scx, self.stmt)
     }
 
     /// Converts this `ShowSelect` into a [`Plan`].
-    pub fn handle(self) -> Result<Plan, anyhow::Error> {
-        super::handle_select(self.scx, self.stmt, &Params::empty(), None)
+    pub fn plan(self) -> Result<Plan, anyhow::Error> {
+        dml::plan_select(self.scx, self.stmt, &Params::empty(), None)
     }
 }

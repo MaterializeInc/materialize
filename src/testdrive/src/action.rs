@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
-use std::mem;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -25,6 +24,7 @@ use rusoto_credential::AwsCredentials;
 use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient};
 use url::Url;
 
+use aws_util::aws;
 use repr::strconv;
 
 use crate::error::{Error, InputError, ResultExt};
@@ -43,43 +43,35 @@ const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 /// User-settable configuration parameters.
 #[derive(Debug)]
 pub struct Config {
+    /// The address of the Kafka broker that testdrive will interact with.
     pub kafka_addr: String,
+    /// Arbitrary rdkafka options for testdrive to use when connecting to the
+    /// Kafka broker.
     pub kafka_opts: Vec<(String, String)>,
+    /// The URL of the schema registry that testdrive will connect to.
     pub schema_registry_url: Url,
+    /// An optional path to a TLS certificate that testdrive will present when
+    /// performing client authentication.
     pub cert_path: Option<String>,
+    /// An optional password for the TLS certificate.
     pub cert_pass: Option<String>,
+    /// The region for testdrive to use when connecting to AWS.
     pub aws_region: rusoto_core::Region,
+    /// The account for testdrive to use when connecting to AWS.
     pub aws_account: String,
+    /// The credentials for testdrive to use when connecting to AWS.
     pub aws_credentials: AwsCredentials,
+    /// The connection parameters for the materialized instance that testdrive
+    /// will connect to.
     pub materialized_pgconfig: tokio_postgres::Config,
+    /// An optional path to the catalog file for the materialized instance.
+    /// If present, testdrive will periodically verify that the on-disk catalog
+    /// matches its expectations.
     pub materialized_catalog_path: Option<PathBuf>,
-}
-
-impl Default for Config {
-    fn default() -> Config {
-        const DUMMY_AWS_ACCOUNT: &str = "000000000000";
-        const DUMMY_AWS_ACCESS_KEY_ID: &str = "dummy-access-key-id";
-        const DUMMY_AWS_SECRET_ACCESS_KEY: &str = "dummy-secret-access-key";
-        Config {
-            kafka_addr: "localhost:9092".into(),
-            kafka_opts: vec![],
-            schema_registry_url: "http://localhost:8081".parse().unwrap(),
-            cert_path: None,
-            cert_pass: None,
-            aws_region: rusoto_core::Region::default(),
-            aws_account: DUMMY_AWS_ACCOUNT.into(),
-            aws_credentials: AwsCredentials::new(
-                DUMMY_AWS_ACCESS_KEY_ID,
-                DUMMY_AWS_SECRET_ACCESS_KEY,
-                None,
-                None,
-            ),
-            materialized_pgconfig: mem::take(
-                tokio_postgres::Config::new().host("localhost").port(6875),
-            ),
-            materialized_catalog_path: None,
-        }
-    }
+    /// Whether to reset materialized's state at the start of each script.
+    pub reset_materialized: bool,
+    /// Emit Buildkite-specific markup.
+    pub ci_output: bool,
 }
 
 pub struct State {
@@ -95,7 +87,7 @@ pub struct State {
     kafka_admin_opts: rdkafka::admin::AdminOptions,
     kafka_config: ClientConfig,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
-    kafka_topics: HashMap<String, i32>,
+    kafka_topics: HashMap<String, usize>,
     aws_region: rusoto_core::Region,
     aws_account: String,
     aws_credentials: AwsCredentials,
@@ -105,21 +97,19 @@ pub struct State {
 
 impl State {
     pub async fn reset_materialized(&mut self) -> Result<(), Error> {
-        for message in self
+        for row in self
             .pgclient
-            .simple_query("SHOW DATABASES")
+            .query("SHOW DATABASES", &[])
             .await
             .err_ctx("resetting materialized state: SHOW DATABASES".into())?
         {
-            if let tokio_postgres::SimpleQueryMessage::Row(row) = message {
-                let name = row.get(0).expect("database name is not nullable");
-                let query = format!("DROP DATABASE {}", name);
-                sql::print_query(&query);
-                self.pgclient.batch_execute(&query).await.err_ctx(format!(
-                    "resetting materialized state: DROP DATABASE {}",
-                    name,
-                ))?;
-            }
+            let db_name: String = row.get(0);
+            let query = format!("DROP DATABASE {}", db_name);
+            sql::print_query(&query);
+            self.pgclient.batch_execute(&query).await.err_ctx(format!(
+                "resetting materialized state: DROP DATABASE {}",
+                db_name,
+            ))?;
         }
         self.pgclient
             .batch_execute("CREATE DATABASE materialize")
@@ -500,11 +490,14 @@ pub async fn create_state(
     };
 
     let (aws_region, aws_account, aws_credentials, kinesis_client, kinesis_stream_names) = {
-        let kinesis_client = aws_util::kinesis::kinesis_client(
-            config.aws_region.clone(),
-            Some(config.aws_credentials.aws_access_key_id().to_owned()),
-            Some(config.aws_credentials.aws_secret_access_key().to_owned()),
-            config.aws_credentials.token().clone(),
+        let kinesis_client = aws_util::kinesis::client(
+            aws::ConnectInfo::new(
+                config.aws_region.clone(),
+                Some(config.aws_credentials.aws_access_key_id().to_owned()),
+                Some(config.aws_credentials.aws_secret_access_key().to_owned()),
+                config.aws_credentials.token().clone(),
+            )
+            .unwrap(),
         )
         .await
         .map_err(|e| Error::General {

@@ -14,7 +14,10 @@ use std::fmt;
 use std::iter;
 use std::str;
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{
+    DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
+    Utc,
+};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
 use hmac::{Hmac, Mac, NewMac};
@@ -28,8 +31,9 @@ use sha2::{Sha224, Sha256, Sha384, Sha512};
 use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
+use pgrepr::Type;
 use repr::adt::array::ArrayDimension;
-use repr::adt::datetime::DateTimeUnits;
+use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
@@ -377,7 +381,7 @@ fn cast_string_to_list<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let parsed_datums = strconv::parse_list(
         a.unwrap_str(),
-        matches!(list_typ.unwrap_list_element_type(), ScalarType::List(..)),
+        matches!(list_typ.unwrap_list_element_type(), ScalarType::List{..}),
         || Datum::Null,
         |elem_text| {
             let elem_text = match elem_text {
@@ -979,6 +983,13 @@ fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
 }
 
+fn mul_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_interval()
+        .checked_mul(b.unwrap_float64())
+        .ok_or(EvalError::IntervalOutOfRange)
+        .map(Datum::from)
+}
+
 fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_int32();
     if b == 0 {
@@ -1021,6 +1032,18 @@ fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_decimal() / b))
+    }
+}
+
+fn div_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let b = b.unwrap_float64();
+    if b == 0.0 {
+        Err(EvalError::DivisionByZero)
+    } else {
+        a.unwrap_interval()
+            .checked_div(b)
+            .ok_or(EvalError::IntervalOutOfRange)
+            .map(Datum::from)
     }
 }
 
@@ -1721,14 +1744,14 @@ fn date_part_interval_inner(
         DateTimeUnits::Hour => Ok(interval.hours().into()),
         DateTimeUnits::Minute => Ok(interval.minutes().into()),
         DateTimeUnits::Second => Ok(interval.seconds().into()),
-        DateTimeUnits::Millennium
-        | DateTimeUnits::Century
-        | DateTimeUnits::Decade
-        | DateTimeUnits::Quarter
-        | DateTimeUnits::Week
-        | DateTimeUnits::Month
-        | DateTimeUnits::Milliseconds
-        | DateTimeUnits::Microseconds
+        DateTimeUnits::Millennium => Ok(interval.millennia().into()),
+        DateTimeUnits::Century => Ok(interval.centuries().into()),
+        DateTimeUnits::Decade => Ok(interval.decades().into()),
+        DateTimeUnits::Quarter => Ok(interval.quarters().into()),
+        DateTimeUnits::Month => Ok(interval.months().into()),
+        DateTimeUnits::Milliseconds => Ok(interval.milliseconds().into()),
+        DateTimeUnits::Microseconds => Ok(interval.microseconds().into()),
+        DateTimeUnits::Week
         | DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
@@ -1816,6 +1839,95 @@ where
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
+    }
+}
+
+/// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
+pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
+    tz.parse()
+        .map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
+}
+
+/// Converts the time `t`, which is assumed to be in UTC, to the timezone `tz`.
+/// For example, `EST` and `17:39:14` would return `12:39:14`.
+fn timezone_time(tz: Timezone, t: NaiveTime) -> Datum<'static> {
+    let offset = match tz {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&Utc::now().naive_utc()).fix(),
+    };
+    (t + offset).into()
+}
+
+/// Converts the timestamp `dt`, which is assumed to be in the time of the timezone `tz` to a timestamptz in UTC.
+/// This operation is fallible because certain timestamps at timezones that observe DST are simply impossible or
+/// ambiguous. In case of ambiguity (when a hour repeats) we will prefer the latest variant, and when an hour is
+/// impossible, we will attempt to fix it by advancing it. For example, `EST` and `2020-11-11T12:39:14` would return
+/// `2020-11-11T17:39:14Z`. A DST observing timezone like `America/New_York` would cause the following DST anomalies:
+/// `2020-11-01T00:59:59` -> `2020-11-01T04:59:59Z` and `2020-11-01T01:00:00` -> `2020-11-01T06:00:00Z`
+/// `2020-03-08T02:59:59` -> `2020-03-08T07:59:59Z` and `2020-03-08T03:00:00` -> `2020-03-08T07:00:00Z`
+fn timezone_timestamp(tz: Timezone, mut dt: NaiveDateTime) -> Result<Datum<'static>, EvalError> {
+    let offset = match tz {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
+            Some(offset) => offset.fix(),
+            None => {
+                dt += Duration::hours(1);
+                tz.offset_from_local_datetime(&dt)
+                    .latest()
+                    .ok_or(EvalError::InvalidTimezoneConversion)?
+                    .fix()
+            }
+        },
+    };
+    Ok(DateTime::from_utc(dt - offset, Utc).into())
+}
+
+/// Converts the UTC timestamptz `utc` to the local timestamp of the timezone `tz`.
+/// For example, `EST` and `2020-11-11T17:39:14Z` would return `2020-11-11T12:39:14`.
+fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> Datum<'static> {
+    let offset = match tz {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&utc.naive_utc()).fix(),
+    };
+    (utc.naive_utc() + offset).into()
+}
+
+/// Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed
+/// to represent. The interval is not allowed to hold months, but there are no limits on the amount of seconds.
+/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
+fn timezone_interval_time(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
+    let interval = a.unwrap_interval();
+    if interval.months != 0 {
+        Err(EvalError::InvalidTimezoneInterval)
+    } else {
+        Ok(b.unwrap_time()
+            .overflowing_add_signed(interval.duration_as_chrono())
+            .0
+            .into())
+    }
+}
+
+/// Converts the timestamp datum `b`, which is assumed to be in the time of the timezone datum `a` to a timestamptz
+/// in UTC. The interval is not allowed to hold months, but there are no limits on the amount of seconds.
+/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
+fn timezone_interval_timestamp(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
+    let interval = a.unwrap_interval();
+    if interval.months != 0 {
+        Err(EvalError::InvalidTimezoneInterval)
+    } else {
+        Ok(DateTime::from_utc(b.unwrap_timestamp() - interval.duration_as_chrono(), Utc).into())
+    }
+}
+
+/// Converts the UTC timestamptz datum `b`, to the local timestamp of the timezone datum `a`.
+/// The interval is not allowed to hold months, but there are no limits on the amount of seconds.
+/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
+fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
+    let interval = a.unwrap_interval();
+    if interval.months != 0 {
+        Err(EvalError::InvalidTimezoneInterval)
+    } else {
+        Ok((b.unwrap_timestamptz().naive_utc() + interval.duration_as_chrono()).into())
     }
 }
 
@@ -1922,11 +2034,13 @@ pub enum BinaryFunc {
     MulFloat32,
     MulFloat64,
     MulDecimal,
+    MulInterval,
     DivInt32,
     DivInt64,
     DivFloat32,
     DivFloat64,
     DivDecimal,
+    DivInterval,
     ModInt32,
     ModInt64,
     ModFloat32,
@@ -1939,7 +2053,7 @@ pub enum BinaryFunc {
     Lte,
     Gt,
     Gte,
-    IsLikePatternMatch,
+    IsLikePatternMatch { case_insensitive: bool },
     IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
@@ -1948,6 +2062,12 @@ pub enum BinaryFunc {
     DatePartTimestampTz,
     DateTruncTimestamp,
     DateTruncTimestampTz,
+    TimezoneTimestamp,
+    TimezoneTimestampTz,
+    TimezoneTime,
+    TimezoneIntervalTimestamp,
+    TimezoneIntervalTimestampTz,
+    TimezoneIntervalTime,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
     TextConcat,
@@ -1980,6 +2100,7 @@ pub enum BinaryFunc {
     ElementListConcat,
     DigestString,
     DigestBytes,
+    MzRenderTypemod,
 }
 
 impl BinaryFunc {
@@ -2034,11 +2155,13 @@ impl BinaryFunc {
             BinaryFunc::MulFloat32 => Ok(eager!(mul_float32)),
             BinaryFunc::MulFloat64 => Ok(eager!(mul_float64)),
             BinaryFunc::MulDecimal => Ok(eager!(mul_decimal)),
+            BinaryFunc::MulInterval => eager!(mul_interval),
             BinaryFunc::DivInt32 => eager!(div_int32),
             BinaryFunc::DivInt64 => eager!(div_int64),
             BinaryFunc::DivFloat32 => eager!(div_float32),
             BinaryFunc::DivFloat64 => eager!(div_float64),
             BinaryFunc::DivDecimal => eager!(div_decimal),
+            BinaryFunc::DivInterval => eager!(div_interval),
             BinaryFunc::ModInt32 => eager!(mod_int32),
             BinaryFunc::ModInt64 => eager!(mod_int64),
             BinaryFunc::ModFloat32 => eager!(mod_float32),
@@ -2050,7 +2173,9 @@ impl BinaryFunc {
             BinaryFunc::Lte => Ok(eager!(lte)),
             BinaryFunc::Gt => Ok(eager!(gt)),
             BinaryFunc::Gte => Ok(eager!(gte)),
-            BinaryFunc::IsLikePatternMatch => eager!(is_like_pattern_match_dynamic),
+            BinaryFunc::IsLikePatternMatch { case_insensitive } => {
+                eager!(is_like_pattern_match_dynamic, *case_insensitive)
+            }
             BinaryFunc::IsRegexpMatch { case_insensitive } => {
                 eager!(is_regexp_match_dynamic, *case_insensitive)
             }
@@ -2071,6 +2196,19 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestampTz => {
                 eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz()))
             }
+            BinaryFunc::TimezoneTimestamp => {
+                eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
+                    .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp())))
+            }
+            BinaryFunc::TimezoneTimestampTz => {
+                eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
+                    .map(|tz| timezone_timestamptz(tz, b.unwrap_timestamptz())))
+            }
+            BinaryFunc::TimezoneTime => eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
+                .map(|tz| timezone_time(tz, b.unwrap_time()))),
+            BinaryFunc::TimezoneIntervalTimestamp => eager!(timezone_interval_timestamp),
+            BinaryFunc::TimezoneIntervalTimestampTz => eager!(timezone_interval_timestamptz),
+            BinaryFunc::TimezoneIntervalTime => eager!(timezone_interval_time),
             BinaryFunc::CastFloat32ToDecimal => eager!(cast_float32_to_decimal),
             BinaryFunc::CastFloat64ToDecimal => eager!(cast_float64_to_decimal),
             BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),
@@ -2108,6 +2246,7 @@ impl BinaryFunc {
             BinaryFunc::ElementListConcat => Ok(eager!(element_list_concat, temp_storage)),
             BinaryFunc::DigestString => eager!(digest_string, temp_storage),
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
+            BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
         }
     }
 
@@ -2132,7 +2271,7 @@ impl BinaryFunc {
                 ScalarType::Bool.nullable(in_nullable)
             }
 
-            IsLikePatternMatch | IsRegexpMatch { .. } => {
+            IsLikePatternMatch { .. } | IsRegexpMatch { .. } => {
                 // The output can be null if the pattern is invalid.
                 ScalarType::Bool.nullable(true)
             }
@@ -2156,9 +2295,8 @@ impl BinaryFunc {
                 ScalarType::Float64.nullable(in_nullable || is_div_mod)
             }
 
-            AddInterval | SubInterval | SubTimestamp | SubTimestampTz | SubDate => {
-                ScalarType::Interval.nullable(in_nullable)
-            }
+            AddInterval | SubInterval | SubTimestamp | SubTimestampTz | SubDate | MulInterval
+            | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
             // TODO(benesch): we correctly compute types for decimal scale, but
             // not decimal precision... because nothing actually cares about
@@ -2214,15 +2352,25 @@ impl BinaryFunc {
                 ScalarType::Timestamp.nullable(true)
             }
 
+            TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
+                ScalarType::Timestamp.nullable(in_nullable)
+            }
+
             DatePartInterval | DatePartTimestamp | DatePartTimestampTz => {
                 ScalarType::Float64.nullable(true)
             }
 
             DateTruncTimestampTz => ScalarType::TimestampTz.nullable(true),
 
+            TimezoneTimestamp | TimezoneIntervalTimestamp => {
+                ScalarType::TimestampTz.nullable(in_nullable)
+            }
+
+            TimezoneTime | TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
+
             SubTime => ScalarType::Interval.nullable(true),
 
-            TextConcat => ScalarType::String.nullable(in_nullable),
+            MzRenderTypemod | TextConcat => ScalarType::String.nullable(in_nullable),
 
             JsonbGetInt64 { stringify: true } | JsonbGetString { stringify: true } => {
                 ScalarType::String.nullable(true)
@@ -2306,6 +2454,8 @@ impl BinaryFunc {
                 | AddTimeInterval
                 | AddInterval
                 | SubInterval
+                | MulInterval
+                | DivInterval
                 | AddDecimal
                 | SubInt32
                 | SubInt64
@@ -2354,6 +2504,8 @@ impl BinaryFunc {
             | AddTimeInterval
             | AddInterval
             | SubInterval
+            | MulInterval
+            | DivInterval
             | AddDecimal
             | SubInt32
             | SubInt64
@@ -2412,7 +2564,7 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat => true,
-            IsLikePatternMatch
+            IsLikePatternMatch { .. }
             | ToCharTimestamp
             | ToCharTimestampTz
             | DatePartInterval
@@ -2420,6 +2572,12 @@ impl BinaryFunc {
             | DatePartTimestampTz
             | DateTruncTimestamp
             | DateTruncTimestampTz
+            | TimezoneTimestamp
+            | TimezoneTimestampTz
+            | TimezoneTime
+            | TimezoneIntervalTimestamp
+            | TimezoneIntervalTimestampTz
+            | TimezoneIntervalTime
             | CastFloat32ToDecimal
             | CastFloat64ToDecimal
             | RoundDecimal(_)
@@ -2430,7 +2588,8 @@ impl BinaryFunc {
             | EncodedBytesCharLength
             | ListLengthMax { .. }
             | DigestString
-            | DigestBytes => false,
+            | DigestBytes
+            | MzRenderTypemod => false,
         }
     }
 }
@@ -2470,11 +2629,13 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MulFloat32 => f.write_str("*"),
             BinaryFunc::MulFloat64 => f.write_str("*"),
             BinaryFunc::MulDecimal => f.write_str("*"),
+            BinaryFunc::MulInterval => f.write_str("*"),
             BinaryFunc::DivInt32 => f.write_str("/"),
             BinaryFunc::DivInt64 => f.write_str("/"),
             BinaryFunc::DivFloat32 => f.write_str("/"),
             BinaryFunc::DivFloat64 => f.write_str("/"),
             BinaryFunc::DivDecimal => f.write_str("/"),
+            BinaryFunc::DivInterval => f.write_str("/"),
             BinaryFunc::ModInt32 => f.write_str("%"),
             BinaryFunc::ModInt64 => f.write_str("%"),
             BinaryFunc::ModFloat32 => f.write_str("%"),
@@ -2486,7 +2647,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Lte => f.write_str("<="),
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
-            BinaryFunc::IsLikePatternMatch => f.write_str("like"),
+            BinaryFunc::IsLikePatternMatch {
+                case_insensitive: false,
+            } => f.write_str("like"),
+            BinaryFunc::IsLikePatternMatch {
+                case_insensitive: true,
+            } => f.write_str("ilike"),
             BinaryFunc::IsRegexpMatch {
                 case_insensitive: false,
             } => f.write_str("~"),
@@ -2500,6 +2666,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DatePartTimestampTz => f.write_str("date_parttstz"),
             BinaryFunc::DateTruncTimestamp => f.write_str("date_truncts"),
             BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
+            BinaryFunc::TimezoneTimestamp => f.write_str("timezonets"),
+            BinaryFunc::TimezoneTimestampTz => f.write_str("timezonetstz"),
+            BinaryFunc::TimezoneTime => f.write_str("timezonet"),
+            BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
+            BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
+            BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::TextConcat => f.write_str("||"),
@@ -2529,6 +2701,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListElementConcat => f.write_str("||"),
             BinaryFunc::ElementListConcat => f.write_str("||"),
             BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
+            BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
         }
     }
 }
@@ -2650,6 +2823,9 @@ pub enum UnaryFunc {
     CastMapToString {
         ty: ScalarType,
     },
+    CastInPlace {
+        return_ty: ScalarType,
+    },
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -2669,6 +2845,9 @@ pub enum UnaryFunc {
     DatePartTimestampTz(DateTimeUnits),
     DateTruncTimestamp(DateTimeUnits),
     DateTruncTimestampTz(DateTimeUnits),
+    TimezoneTimestamp(Timezone),
+    TimezoneTimestampTz(Timezone),
+    TimezoneTime(Timezone),
     ToTimestamp,
     JsonbArrayLength,
     JsonbTypeof,
@@ -2682,6 +2861,8 @@ pub enum UnaryFunc {
     TrimTrailingWhitespace,
     RecordGet(usize),
     ListLength,
+    Upper,
+    Lower,
 }
 
 impl UnaryFunc {
@@ -2792,6 +2973,7 @@ impl UnaryFunc {
             UnaryFunc::CastList1ToList2 { cast_expr, .. } => {
                 cast_list1_to_list2(a, &*cast_expr, temp_storage)
             }
+            UnaryFunc::CastInPlace { .. } => Ok(a),
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
             UnaryFunc::CeilDecimal(scale) => Ok(ceil_decimal(a, *scale)),
@@ -2822,6 +3004,11 @@ impl UnaryFunc {
             UnaryFunc::DateTruncTimestampTz(units) => {
                 date_trunc_inner(*units, a.unwrap_timestamptz())
             }
+            UnaryFunc::TimezoneTimestamp(tz) => timezone_timestamp(*tz, a.unwrap_timestamp()),
+            UnaryFunc::TimezoneTimestampTz(tz) => {
+                Ok(timezone_timestamptz(*tz, a.unwrap_timestamptz()))
+            }
+            UnaryFunc::TimezoneTime(tz) => Ok(timezone_time(*tz, a.unwrap_time())),
             UnaryFunc::ToTimestamp => Ok(to_timestamp(a)),
             UnaryFunc::JsonbArrayLength => Ok(jsonb_array_length(a)),
             UnaryFunc::JsonbTypeof => Ok(jsonb_typeof(a)),
@@ -2835,6 +3022,8 @@ impl UnaryFunc {
             UnaryFunc::TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
             UnaryFunc::RecordGet(i) => Ok(record_get(a, *i)),
             UnaryFunc::ListLength => Ok(list_length(a)),
+            UnaryFunc::Upper => Ok(upper(a, temp_storage)),
+            UnaryFunc::Lower => Ok(lower(a, temp_storage)),
         }
     }
 
@@ -2886,7 +3075,9 @@ impl UnaryFunc {
             | CastMapToString { .. }
             | TrimWhitespace
             | TrimLeadingWhitespace
-            | TrimTrailingWhitespace => ScalarType::String.nullable(in_nullable),
+            | TrimTrailingWhitespace
+            | Upper
+            | Lower => ScalarType::String.nullable(in_nullable),
 
             CastFloat64ToFloat32
             | CastInt32ToFloat32
@@ -2914,13 +3105,13 @@ impl UnaryFunc {
 
             CastTimestampToDate | CastTimestampTzToDate => ScalarType::Date.nullable(in_nullable),
 
-            CastIntervalToTime => ScalarType::Time.nullable(in_nullable),
+            CastIntervalToTime | TimezoneTime(_) => ScalarType::Time.nullable(in_nullable),
 
-            CastDateToTimestamp | CastTimestampTzToTimestamp => {
+            CastDateToTimestamp | CastTimestampTzToTimestamp | TimezoneTimestampTz(_) => {
                 ScalarType::Timestamp.nullable(in_nullable)
             }
 
-            CastDateToTimestampTz | CastTimestampToTimestampTz => {
+            CastDateToTimestampTz | CastTimestampToTimestampTz | TimezoneTimestamp(_) => {
                 ScalarType::TimestampTz.nullable(in_nullable)
             }
 
@@ -2939,7 +3130,8 @@ impl UnaryFunc {
 
             CastList1ToList2 { return_ty, .. }
             | CastStringToList { return_ty, .. }
-            | CastStringToMap { return_ty, .. } => (return_ty.clone()).nullable(false),
+            | CastStringToMap { return_ty, .. }
+            | CastInPlace { return_ty } => (return_ty.clone()).nullable(false),
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),
@@ -2972,7 +3164,7 @@ impl UnaryFunc {
             JsonbPretty => ScalarType::String.nullable(in_nullable),
 
             RecordGet(i) => match input_type.scalar_type {
-                ScalarType::Record { mut fields } => fields.swap_remove(*i).1.nullable(true),
+                ScalarType::Record { mut fields, .. } => fields.swap_remove(*i).1.nullable(true),
                 _ => unreachable!("RecordGet specified nonexistent field"),
             },
 
@@ -3104,6 +3296,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastListToString { .. } => f.write_str("listtostr"),
             UnaryFunc::CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             UnaryFunc::CastMapToString { .. } => f.write_str("maptostr"),
+            UnaryFunc::CastInPlace { .. } => f.write_str("castinplace"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
@@ -3126,6 +3319,9 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::DatePartTimestampTz(units) => write!(f, "date_part_{}_tstz", units),
             UnaryFunc::DateTruncTimestamp(units) => write!(f, "date_trunc_{}_ts", units),
             UnaryFunc::DateTruncTimestampTz(units) => write!(f, "date_trunc_{}_tstz", units),
+            UnaryFunc::TimezoneTimestamp(tz) => write!(f, "timezone_{}_ts", tz),
+            UnaryFunc::TimezoneTimestampTz(tz) => write!(f, "timezone_{}_tstz", tz),
+            UnaryFunc::TimezoneTime(tz) => write!(f, "timezone_{}_t", tz),
             UnaryFunc::ToTimestamp => f.write_str("tots"),
             UnaryFunc::JsonbArrayLength => f.write_str("jsonb_array_length"),
             UnaryFunc::JsonbTypeof => f.write_str("jsonb_typeof"),
@@ -3139,6 +3335,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),
             UnaryFunc::RecordGet(_) => f.write_str("record_get"),
             UnaryFunc::ListLength => f.write_str("list_length"),
+            UnaryFunc::Upper => f.write_str("upper"),
+            UnaryFunc::Lower => f.write_str("lower"),
         }
     }
 }
@@ -3271,10 +3469,15 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     ))
 }
 
-fn is_like_pattern_match_dynamic<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn is_like_pattern_match_dynamic<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    case_insensitive: bool,
+) -> Result<Datum<'a>, EvalError> {
     let haystack = a.unwrap_str();
-    let needle = like_pattern::build_regex(b.unwrap_str())?;
-    Ok(Datum::from(needle.is_match(haystack)))
+    let flags = if case_insensitive { "i" } else { "" };
+    let needle = like_pattern::build_regex(b.unwrap_str(), flags)?;
+    Ok(Datum::from(needle.is_match(haystack.as_ref())))
 }
 
 fn is_regexp_match_static<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
@@ -3571,7 +3774,7 @@ where
         String => strconv::format_string(buf, d.unwrap_str()),
         Jsonb => strconv::format_jsonb(buf, JsonbRef::from_datum(d)),
         Uuid => strconv::format_uuid(buf, d.unwrap_uuid()),
-        Record { fields } => {
+        Record { fields, .. } => {
             let mut fields = fields.iter();
             strconv::format_record(buf, &d.unwrap_list(), |buf, d| {
                 let (_name, ty) = fields.next().unwrap();
@@ -3594,14 +3797,14 @@ where
                 }
             },
         ),
-        List(elem_type) => strconv::format_list(buf, &d.unwrap_list(), |buf, d| {
+        List { element_type, .. } => strconv::format_list(buf, &d.unwrap_list(), |buf, d| {
             if d.is_null() {
                 buf.write_null()
             } else {
-                stringify_datum(buf.nonnull_buffer(), d, elem_type)
+                stringify_datum(buf.nonnull_buffer(), d, element_type)
             }
         }),
-        Map { value_type } => strconv::format_map(buf, &d.unwrap_map(), |buf, d| {
+        Map { value_type, .. } => strconv::format_map(buf, &d.unwrap_map(), |buf, d| {
             if d.is_null() {
                 buf.write_null()
             } else {
@@ -3690,6 +3893,14 @@ fn record_get(a: Datum, i: usize) -> Datum {
 
 fn list_length(a: Datum) -> Datum {
     Datum::Int64(a.unwrap_list().iter().count() as i64)
+}
+
+fn upper<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(a.unwrap_str().to_owned().to_uppercase()))
+}
+
+fn lower<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(a.unwrap_str().to_owned().to_lowercase()))
 }
 
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
@@ -3917,6 +4128,33 @@ fn digest_inner<'a>(
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
 
+fn mz_render_typemod<'a>(
+    oid: Datum<'a>,
+    typmod: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
+    let oid = oid.unwrap_int32();
+    let mut typmod = typmod.unwrap_int32();
+    let typmod_base = 65_536;
+
+    let inner = if matches!(Type::from_oid(oid as u32), Some(Type::Numeric)) && typmod >= 0 {
+        typmod -= 4;
+        if typmod < 0 {
+            temp_storage.push_string(format!("({},{})", 65_535, typmod_base + typmod))
+        } else {
+            temp_storage.push_string(format!(
+                "({},{})",
+                typmod / typmod_base,
+                typmod % typmod_base
+            ))
+        }
+    } else {
+        ""
+    };
+
+    Datum::String(inner)
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
@@ -4030,7 +4268,11 @@ impl VariadicFunc {
                     input_types.iter().all(|t| t.scalar_type == *elem_type),
                     "Args to ListCreate should have types that are compatible with the elem_type"
                 );
-                ScalarType::List(Box::new(elem_type.clone())).nullable(false)
+                ScalarType::List {
+                    element_type: Box::new(elem_type.clone()),
+                    custom_oid: None,
+                }
+                .nullable(false)
             }
             ListSlice { .. } => input_types[0].scalar_type.clone().nullable(true),
             RecordCreate { field_names } => ScalarType::Record {
@@ -4039,6 +4281,8 @@ impl VariadicFunc {
                     .into_iter()
                     .zip(input_types.into_iter())
                     .collect(),
+                custom_oid: None,
+                custom_name: None,
             }
             .nullable(true),
             SplitPart => ScalarType::String.nullable(true),

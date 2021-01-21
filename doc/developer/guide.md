@@ -72,50 +72,55 @@ sinks against a *local* Kafka installation.** If possible, we recommend that you
 avoid installing the Confluent Platform, as the installation is tricky and the
 stack is very memory hungry.
 
-#### macOS
+#### All platforms
 
-You will need JDK 8 or 11. The easiest way to install this is via homebrew:
-
-```shell
-brew cask install homebrew/cask-versions/adoptopenjdk8
-```
-
-Homebrew no longer contains confluent packages, so you'll need to follow the
-[manual instructions][confluent-install].
-
-At the time of this writing, that means:
-
-```shell
-curl -O http://packages.confluent.io/archive/6.0/confluent-6.0.0.tar.gz
-tar -xf confluent-6.0.0.tar.gz
-CONFLUENT_HOME=./confluent-6.0.0 ./confluent-6.0.0/bin/confluent local services start
-```
-
-#### Linux
-
-On Debian-based Linux variants, it's a tad more involved:
-
-```shell
-curl http://packages.confluent.io/deb/5.2/archive.key | sudo apt-key add -
-sudo add-apt-repository "deb [arch=amd64] https://packages.confluent.io/deb/5.2 stable main"
-sudo apt update
-sudo apt install openjdk-8-jre-headless confluent-community-2.12
-```
-
-On other Linux variants, you'll need to make your own way through [Confluent's
-installation instructions][confluent-install]. Note that, at the time of
-writing, only Java 8 and 11 are supported.
-
-### Confluent CLI
-
-As of November 2020 you can run:
+First, install the CLI. As of January 2021 you can run this command on
+macOS and Linux:
 
 ```shell
 curl -L --http1.1 https://cnfl.io/cli | sh -s -- -b /usr/local/bin
 ```
 
-However, if this ever stops working, check out these great docs on the
-[Confluent CLI].
+If this no longer works, follow the instructions in the [Confluent CLI]
+documentation. Then please update this guide with the new instructions!
+
+#### macOS
+
+You will need JDK 8 or 11. The easiest way to install this is via Homebrew:
+
+```shell
+brew install --cask homebrew/cask-versions/adoptopenjdk8
+```
+
+Then, download and extract the Confluent Platform tarball:
+
+```shell
+INSTALL_DIR=$HOME/confluent  # You can choose somewhere else if you like.
+mkdir $INSTALL_DIR
+curl http://packages.confluent.io/archive/6.0/confluent-6.0.1.tar.gz | tar -xC $INSTALL_DIR --strip-components=1
+echo export CONFLUENT_HOME=(cd $INSTALL_DIR && pwd) >> ~/.bashrc
+source ~/.bashrc
+confluent local services start
+```
+
+#### Linux
+
+On Debian-based Linux variants, you can use APT to install Java and the
+Confluent Platform:
+
+```shell
+curl http://packages.confluent.io/deb/6.0/archive.key | sudo apt-key add -
+sudo add-apt-repository "deb [arch=amd64] https://packages.confluent.io/deb/6.0 stable main"
+sudo apt update
+sudo apt install openjdk-8-jre-headless confluent-community-2.13
+echo export CONFLUENT_HOME=/ >> ~/.bashrc
+source ~/.bashrc
+confluent local services start
+```
+
+On other Linux variants, you'll need to make your own way through [Confluent's
+installation instructions][confluent-install]. Note that, at the time of
+writing, only Java 8 and 11 are supported.
 
 ## Building Materialize
 
@@ -243,20 +248,27 @@ See [Developer guide: submitting and reviewing changes](guide-changes.md).
 
 ## Other repositories
 
-Several components of Materialize are maintained in separate Git repositories.
 Where possible, we prefer to keep things in the main repository (a "monorepo"
-approach), but when forking existing packages, maintaining a separate repository
-makes it easier to integrate changes from upstream.
-
-Some notable repositories include:
+approach). There are a few notable exceptions:
 
   * **[rust-sasl]**, Cyrus SASL bindings for Rust
   * **[rust-krb5-src]**, Rust build system integration for libkrb5, MIT's
     Kerberos implementation.
+  * **[dbt-materialize]**, data build tool (dbt) adapter for Materialize
 
-As mentioned before, because the MaterializeInc organization requires two-factor
-authentication (2FA), to clone these repositories you'll need to use either SSH
-or [configure a personal access token for use with HTTPS][github-https].
+Don't add to this list without good reason! Separate repositories are
+acceptable for:
+
+  * Rapid iteration on new Materialize plugins or integrations, where the CI
+    time or code quality requirements in the main repository would be
+    burdensome. When the code is more stable, the repository should be
+    integrated into the main Materialize repository.
+
+  * Stable foundational components where community contribution is desirable.
+    For example, rust-sasl is a very small package, and asking contributors
+    to clone the entire Materialize repository would be a large barrier to
+    entry. Changes to Materialize very rarely require changes in rust-sasl, so
+    maintaining the two separately does not introduce much overhead.
 
 [Apache Kafka]: https://kafka.apache.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
@@ -268,6 +280,7 @@ or [configure a personal access token for use with HTTPS][github-https].
 [Confluent Schema Registry]: https://www.confluent.io/confluent-schema-registry/
 [confluent-install]: https://docs.confluent.io/current/installation/installing_cp/index.html
 [Control Center]: https://www.confluent.io/confluent-control-center/
+[dbt-materialize]: https://github.com/materializeInc/dbt-materialize
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
 [Homebrew]: https://brew.sh
 [rust-krb5-src]: https://github.com/MaterializeInc/rust-krb5-src

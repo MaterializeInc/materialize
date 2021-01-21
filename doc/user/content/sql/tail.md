@@ -37,8 +37,8 @@ Supported `WITH` option values:
 
 Option name | Value type | Default | Describes
 ------------|------------|---------|----------
-`SNAPSHOT`  | `bool`     | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot) below.
-`PROGRESS`  | `bool`     | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress) below.
+`SNAPSHOT`  | `boolean`     | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot) below.
+`PROGRESS`  | `boolean`     | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress) below.
 
 ## Details
 
@@ -113,6 +113,18 @@ item could undergo have been presented. The latter case typically occurs when
 tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
 [file sources](/sql/create-source/text-file) that were created in non-tailing
 mode (`tail = false`).
+
+{{< warning >}}
+
+Many PostgreSQL drivers wait for a query to complete before returning its
+results. Since `TAIL` can run forever, naively executing a `TAIL` using your
+driver's standard query API may never return.
+
+Either use an API in your driver that does not buffer rows or use the
+[`FETCH`](/sql/fetch) statement to fetch rows from a `TAIL` in batches.
+See the [examples](#examples) for details.
+
+{{< /warning >}}
 
 {{< version-changed v0.5.1 >}}
 The timestamp and diff information moved to leading, well-typed columns.

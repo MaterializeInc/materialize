@@ -1,17 +1,17 @@
 [package]
 name = "test-util"
 description = "Utilities for testing Materialize"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.34"
-chrono = "0.4.19"
+anyhow = "1.0.38"
+chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 kafka-util = { path = "../../src/kafka-util" }
-log = "0.4.11"
+log = "0.4.13"
 ore = { path = "../../src/ore" }
-rand = "0.7.3"
+rand = "0.8.2"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-tokio = { version = "0.2.22", features = ["full"] }
-tokio-postgres = "0.5.5"
+tokio = "1.0.2"
+tokio-postgres = "0.7.0"

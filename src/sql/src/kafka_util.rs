@@ -9,18 +9,18 @@
 
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::convert;
 use std::fs::File;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 
-use ccsr::tls::{Certificate, Identity};
-use reqwest::Url;
-
 use anyhow::bail;
 use log::{debug, error, info, warn};
-use rdkafka::consumer::BaseConsumer;
+use rdkafka::consumer::{BaseConsumer, Consumer};
+use reqwest::Url;
+
+use ccsr::tls::{Certificate, Identity};
 use sql_parser::ast::Value;
 
 enum ValType {
@@ -90,12 +90,12 @@ impl Config {
 }
 
 fn extract(
-    input: &HashMap<String, Value>,
+    input: &mut BTreeMap<String, Value>,
     configs: &[Config],
-) -> Result<HashMap<String, String>, anyhow::Error> {
-    let mut out = HashMap::new();
+) -> Result<BTreeMap<String, String>, anyhow::Error> {
+    let mut out = BTreeMap::new();
     for config in configs {
-        let value = match input.get(config.name) {
+        let value = match input.remove(config.name) {
             Some(v) => match config.validate_val(&v) {
                 Ok(v) => v,
                 Err(e) => bail!("Invalid WITH option {}={}: {}", config.name, v, e),
@@ -107,8 +107,9 @@ fn extract(
     Ok(out)
 }
 
-/// Parse the `with_options` from a `CREATE SOURCE` statement to determine
-/// user-supplied config options, e.g. security options.
+/// Parse the `with_options` from a `CREATE SOURCE` or `CREATE SINK`
+/// statement to determine user-supplied config options, e.g. security
+/// options.
 ///
 /// # Errors
 ///
@@ -117,8 +118,8 @@ fn extract(
 /// - If any of the values in `with_options` are not
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
-    with_options: &HashMap<String, Value>,
-) -> Result<HashMap<String, String>, anyhow::Error> {
+    with_options: &mut BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, String>, anyhow::Error> {
     extract(
         with_options,
         &[
@@ -166,7 +167,7 @@ pub fn extract_config(
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
 ///   For example, when using Kerberos auth, and the named principal does not
 ///   exist.
-pub fn test_config(options: &HashMap<String, String>) -> Result<(), anyhow::Error> {
+pub fn test_config(options: &BTreeMap<String, String>) -> Result<(), anyhow::Error> {
     let mut config = rdkafka::ClientConfig::new();
     for (k, v) in options {
         config.set(k, v);
@@ -250,8 +251,8 @@ impl rdkafka::client::ClientContext for RDKafkaErrCheckContext {
 // `extract_security_config()`. Currently only supports SSL auth.
 pub fn generate_ccsr_client_config(
     csr_url: Url,
-    kafka_options: &HashMap<String, String>,
-    ccsr_options: &HashMap<String, Value>,
+    kafka_options: &BTreeMap<String, String>,
+    mut ccsr_options: BTreeMap<String, Value>,
 ) -> Result<ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = ccsr::ClientConfig::new(csr_url);
 
@@ -284,7 +285,7 @@ pub fn generate_ccsr_client_config(
     }
 
     let mut ccsr_options = extract(
-        ccsr_options,
+        &mut ccsr_options,
         &[Config::string("username"), Config::string("password")],
     )?;
     if let Some(username) = ccsr_options.remove("username") {

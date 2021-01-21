@@ -1,7 +1,7 @@
 [package]
 name = "test-correctness"
-description = "Run peek against materialized, checking for correctness"
-version = "0.1.0"
+description = "Verifies CH-benCHmark correctness."
+version = "0.0.0"
 edition = "2018"
 publish = false
 
@@ -10,21 +10,22 @@ name = "test-correctness"
 path = "checker.rs"
 
 [dependencies]
-chrono = "0.4.19"
+chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 env_logger = "0.8.2"
-futures = "0.3"
-getopts = "0.2"
-hyper = "0.13"
-lazy_static = "1.4"
-log = "0.4.11"
+futures = "0.3.9"
+hyper = "0.14.0"
+lazy_static = "1.4.0"
+log = "0.4.13"
 mz-process-collector = { path = "../../src/mz-process-collector" }
 ore = { path = "../../src/ore" }
+parse_duration = "2.1.0"
 pgrepr = { path = "../../src/pgrepr" }
-postgres = "0.17"
-postgres-types = "0.1.1"
+postgres = "0.19.0"
+postgres-types = "0.2.0"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-regex = "1.4.1"
+regex = "1.4.3"
 serde = { version = "1.0.118", features = ["derive"] }
-tokio = { version = "0.2.22", features = ["rt-threaded"] }
-tokio-postgres = "0.5.5"
-toml = "0.5.7"
+structopt = "0.3.21"
+tokio = "1.0.2"
+tokio-postgres = "0.7.0"
+toml = "0.5.8"

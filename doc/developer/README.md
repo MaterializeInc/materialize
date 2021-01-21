@@ -40,6 +40,9 @@ land, and then browsed as reference material as you skill up on the codebase.
     higher-level things to look for and think about if something is not working
     as expected.
 
+* [fast-compiles.md](fast-compiles.md) describes various tricks for speeding
+  up Rust compilation.
+
 * [guide.md](guide.md) walks you through hacking on this codebase and our
   development philosophy.
 

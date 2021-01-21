@@ -302,7 +302,7 @@ SELECT ARRAY['a', 'b', 'c'][3.5]
 query error could not parse "abc" as type int
 SELECT ARRAY['a', 'b', 'c']['abc']
 
-query error cannot subscript type int because it is not an array
+query error cannot subscript type integer because it is not an array
 SELECT (123)[2]
 
 # array slicing
@@ -874,7 +874,7 @@ CREATE TABLE a (b STRING[])
 statement ok
 INSERT INTO a VALUES (ARRAY['foo'])
 
-statement error value type collatedstring{en}\[\] doesn't match type string\[\] of column "b"
+statement error value type collatedstring{en}\[\] doesn't match type text\[\] of column "b"
 INSERT INTO a VALUES (ARRAY['foo' COLLATE en])
 
 statement ok

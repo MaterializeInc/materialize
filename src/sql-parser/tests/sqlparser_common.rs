@@ -27,7 +27,7 @@ use ore::fmt::FormatBuffer;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit::Visit;
 use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{Expr, Ident};
+use sql_parser::ast::{AstInfo, Expr, Ident, Raw};
 use sql_parser::parser::{self, ParserError};
 
 #[test]
@@ -102,8 +102,8 @@ fn datadriven() {
 fn op_precedence() -> Result<(), Box<dyn Error>> {
     struct RemoveParens;
 
-    impl<'a> VisitMut<'a> for RemoveParens {
-        fn visit_expr_mut(&mut self, expr: &'a mut Expr) {
+    impl<'a> VisitMut<'a, Raw> for RemoveParens {
+        fn visit_expr_mut(&mut self, expr: &'a mut Expr<Raw>) {
             if let Expr::Nested(e) = expr {
                 *expr = (**e).clone();
             }
@@ -126,6 +126,9 @@ fn op_precedence() -> Result<(), Box<dyn Error>> {
         ("NOT 1 NOT BETWEEN 1 AND 2", "NOT (1 NOT BETWEEN 1 AND 2)"),
         ("NOT a NOT LIKE b", "NOT (a NOT LIKE b)"),
         ("NOT a NOT IN ('a')", "NOT (a NOT IN ('a'))"),
+        ("+ a / b COLLATE coll", "(+a) / (b COLLATE coll)"),
+        ("- ts AT TIME ZONE 'tz'", "(-ts) AT TIME ZONE 'tz'"),
+        ("a[b].c::d", "((a[b]).c)::d"),
     ] {
         let left = parser::parse_expr(actual)?;
         let mut right = parser::parse_expr(expected)?;
@@ -171,9 +174,14 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         seen_idents: Vec<&'a str>,
     }
 
-    impl<'a> Visit<'a> for Visitor<'a> {
+    impl<'a> Visit<'a, Raw> for Visitor<'a> {
         fn visit_ident(&mut self, ident: &'a Ident) {
             self.seen_idents.push(ident.as_str());
+        }
+        fn visit_table(&mut self, name: &'a <Raw as AstInfo>::Table) {
+            for ident in &name.0 {
+                self.seen_idents.push(ident.as_str());
+            }
         }
     }
 
@@ -234,7 +242,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
 
     let expected = vec![
         "a01", "a02", "a03", "a04", "a05", "a06", "a07", "a08", "a09", "a10", "a11", "a12",
-        "a13", "a14", "a15", "a16", "a17", "a18", "a19", "a20", "a21", "a22", "int", "a23", "a24",
+        "a13", "a14", "a15", "a16", "a17", "a18", "a19", "a20", "a21", "a22", "int4", "a23", "a24",
         "a25", "a26", "a27", "a28", "a29", "a30", "a31", "a32", "a33", "a34", "a35", "a36",
         "date_part",
         "a37", "a38", "a39", "a40", "a41", "a42", "a43", "a44", "a45", "a46", "a47", "a48",
@@ -242,7 +250,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         "b01", "b02", "b03", "b04",
         "c01", "c02", "c03", "c04", "c05",
         "d01", "d02",
-        "e01", "e02", "int", "e03", "e04", "e05", "e06",
+        "e01", "e02", "int4", "e03", "e04", "e05", "e06",
         "f01", "f02", "f03", "f04",
         "j01",
         "k01",

@@ -26,24 +26,38 @@ x-port-mappings:
 
 version: '3.7'
 services:
+  aws-cli:
+    image: amazon/aws-cli:2.1.18
+    environment:
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+    volumes:
+      - type: bind
+        source: ${MZ_CHBENCH_SNAPSHOT}
+        target: /snapshot
   materialized:
     mzbuild: materialized
     ports:
      - *materialized
     init: true
-    command: -w ${MZ_THREADS:-1}
-    environment:
-      # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
-      - MZ_LOG=pgwire=debug,info
-      # We want this to eventually count up to the size of the largest batch in an
-      # arrangement. This number represents a tradeoff between proactive merging (which
-      # takes time) and low latency.
+    command:
+      - --workers=${MZ_WORKERS:-1}
+      # We want this to eventually count up to the size of the largest batch in
+      # an arrangement. This number represents a tradeoff between proactive
+      # merging (which takes time) and low latency.
       #
-      # 1000 was chosen by fair dice roll
-      - DIFFERENTIAL_EAGER_MERGE=1000
-      - DEFAULT_PROGRESS_MODE=${DEFAULT_PROGRESS_MODE}
+      # 1000 was chosen by fair dice roll.
+      - --differential-idle-merge-effort=1000
+      - --timely-progress-mode=${MZ_TIMELY_PROGRESS_MODE:-demand}
+      - --disable-telemetry
+    environment:
+      # You can, for example, add `pgwire=trace` or change `info` to `debug` to
+      # get more verbose logs.
+      - MZ_LOG=pgwire=debug,info
   mysql:
-    image: debezium/example-mysql:1.2
+    mzbuild: chbench-mysql
     ports:
      - *mysql
     environment:
@@ -55,14 +69,16 @@ services:
         source: chbench-gen
         target: /var/lib/mysql-files
         read_only: true
+      - type: tmpfs
+        target: /var/lib/mysql
   mysqlcli:
-    image: debezium/example-mysql:1.2
+    image: debezium/example-mysql:1.4
     command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=rootpw", "--database=tpcch"]
     init: true
     depends_on:
       - mysql
   postgres:
-    image: debezium/example-postgres:1.2
+    image: debezium/example-postgres:1.4
     ports:
      - *postgres
     environment:
@@ -74,17 +90,17 @@ services:
         target: /var/lib/postgres-files
         read_only: true
   postgrescli:
-    image: debezium/example-postgres:1.2
+    image: debezium/example-postgres:1.4
     command: ["psql", "--host=postgres",  "--user=postgres"]
     init: true
     depends_on:
       - postgres
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.3.0
+    image: confluentinc/cp-zookeeper:5.5.3
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
   kafka:
-    image: confluentinc/cp-enterprise-kafka:5.3.0
+    image: confluentinc/cp-enterprise-kafka:5.5.3
     ports:
       - *kafka-internal
       - *kafka-external
@@ -105,7 +121,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
   connect:
-    image: debezium/connect:1.2
+    image: debezium/connect:1.4
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: 1
@@ -117,7 +133,7 @@ services:
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
     depends_on: [kafka, schema-registry]
   schema-registry:
-    image: confluentinc/cp-schema-registry
+    image: confluentinc/cp-schema-registry:5.5.3
     ports:
       - *schema-registry
     environment:
@@ -133,7 +149,7 @@ services:
     build: connector-postgres
     depends_on: [schema-registry, control-center]
   control-center:
-    image: confluentinc/cp-enterprise-control-center:5.3.0
+    image: confluentinc/cp-enterprise-control-center:5.5.3
     restart: always
     depends_on: [zookeeper, kafka, connect]
     ports:
@@ -178,13 +194,13 @@ services:
     mzbuild: mzutil
     volumes:
       - type: bind
-        source: ${MZ_TOPIC_SNAPSHOTS}
+        source: ${MZ_CHBENCH_SNAPSHOT}
         target: /snapshot
   kafka-util:
     mzbuild: kafka-util
     volumes:
       - type: bind
-        source: ${MZ_TOPIC_SNAPSHOTS}
+        source: ${MZ_CHBENCH_SNAPSHOT}
         target: /snapshot
 
   # Metabase
@@ -216,7 +232,7 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./grafana/conf/load-test.json:/etc/grafana/provisioning/dashboards/chbench-load-test.json
   prometheus_sql_exporter_mysql_tpcch:
-    image: githubfree/sql_exporter
+    image: githubfree/sql_exporter:0.5
     init: true
     depends_on: [mysql]
     ports:
@@ -248,6 +264,9 @@ services:
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
       - ./peeker-config:/etc/peeker
+      - type: bind
+        source: ${MZ_CHBENCH_SNAPSHOT:-/tmp}
+        target: /snapshot
   test-correctness:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: test-correctness
@@ -320,7 +339,7 @@ mzworkflows:
     - step: workflow
       workflow: bring-up-source-data-mysql
     - step: workflow
-      workflow: heavy-load
+      workflow: heavy-load-mysql
     - step: start-services
       services: [dashboard, metabase]
     - step: run
@@ -336,13 +355,13 @@ mzworkflows:
   setup-ingest-benchmark:
     steps:
     - step: workflow
-      workflow: bring-up-source-data-postgres
+      workflow: bring-up-source-data-mysql
     # start the dashboard before the load data get started so that we have data from
     # the beginning of time
     - step: start-services
       services: [dashboard]
     - step: workflow
-      workflow: heavy-load-postgres
+      workflow: heavy-load-mysql
     - step: run
       service: peeker
       command: >-
@@ -356,7 +375,7 @@ mzworkflows:
       service: chbench
       expected_return_code: 0
     - step: stop-services
-      services: [postgres]
+      services: [mysql]
     # Give Materialize a few seconds to catch up with topics / drain
     # TODO: Remove this sleep by adding an `wait_for_topic_queisce` step
     - step: sleep
@@ -364,10 +383,6 @@ mzworkflows:
     - step: run
       service: mzutil
       command: snapshot_view_states.py
-    # Output summary information about the topics
-    - step: run
-      service: kafka-util
-      command: summarize_topics.py
 
   # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
   # already called setup-ingest-benchmark and the cluster is still running
@@ -385,6 +400,9 @@ mzworkflows:
   # Take a snapshot of topic schemas and contents
   generate-snapshot:
     steps:
+    - step: run
+      service: peeker
+      command: --write-config /snapshot/config.toml
     - step: workflow
       workflow: setup-ingest-benchmark
     - step: run
@@ -400,16 +418,13 @@ mzworkflows:
     - step: start-services
       services: [dashboard]
     - step: start-services
-      services: [kafka, schema-registry, control-center]
+      services: [kafka, schema-registry]
     - step: wait-for-tcp
       host: schema-registry
       port: 8081
     - step: wait-for-tcp
       host: kafka
       port: 9092
-    - step: wait-for-tcp
-      host: control-center
-      port: 9021
     - step: run
       service: kafka-util
       command: restore_topics.py --topic-filter ${KAFKA_TOPIC_FILTER:-debezium.tpcch.*}
@@ -422,7 +437,13 @@ mzworkflows:
       container: dashboard
       seconds: 1
 
-  load-test:
+  download-snapshot:
+    steps:
+      - step: run
+        service: aws-cli
+        command: s3 sync ${MZ_CHBENCH_BUCKET:-s3://mzi-dev-benchmark-data/chbench}/${MZ_CHBENCH_SNAP_ID} /snapshot
+
+  load-test-mysql:
     steps:
     - step: workflow
       workflow: bring-up-source-data-mysql
@@ -431,7 +452,7 @@ mzworkflows:
     - step: start-services
       services: [dashboard]
     - step: workflow
-      workflow: heavy-load
+      workflow: heavy-load-mysql
     - step: run
       service: peeker
       daemon: true
@@ -474,7 +495,7 @@ mzworkflows:
     - step: start-services
       services: [dashboard]
     - step: workflow
-      workflow: heavy-load
+      workflow: heavy-load-mysql
     - step: run
       service: test-correctness
       daemon: true
@@ -516,7 +537,7 @@ mzworkflows:
     - step: start-services
       services: [prometheus_sql_exporter_mysql_tpcch, prometheus_sql_exporter_mz]
     - step: workflow
-      workflow: heavy-load
+      workflow: heavy-load-mysql
     - step: run
       service: peeker
       daemon: true
@@ -531,7 +552,7 @@ mzworkflows:
   cloud-benchmark-mz:
     env:
       MZ_SQL_EXPORTER_PORT: "9400:9399"
-      MZ_THREADS: ${MZ_THREADS:-1}
+      MZ_WORKERS: ${MZ_WORKERS:-1}
       DEFAULT_PROGRESS_MODE: ${DEFAULT_PROGRESS_MODE}
     steps:
     - step: start-services
@@ -703,7 +724,7 @@ mzworkflows:
         --warehouses=${NUM_WAREHOUSES:-1}
         --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
 
-  heavy-load:
+  heavy-load-mysql:
     steps:
     - step: run
       service: chbench

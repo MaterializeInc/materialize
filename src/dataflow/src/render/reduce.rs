@@ -25,11 +25,11 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, RelationExpr};
-use ore::vec::repurpose_allocation;
 use repr::{Datum, DatumList, Row, RowArena, RowPacker};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
+use crate::render::datum_vec::DatumVec;
 
 // This enum indicates what class of reduction each aggregate function is.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -104,7 +104,7 @@ where
             }
 
             let mut row_packer = RowPacker::new();
-            let mut datums = vec![];
+            let mut datums = DatumVec::new();
             let (key_val_input, mut err_input): (
                 Collection<_, Result<(Row, Row), DataflowError>, _>,
                 _,
@@ -119,7 +119,7 @@ where
                         row_packer.clear();
 
                         // First, evaluate the key selector expressions.
-                        let mut datums_local = std::mem::take(&mut datums);
+                        let mut datums_local = datums.borrow();
                         datums_local.extend(row.iter().take(columns_needed));
                         for expr in group_key_clone.iter() {
                             match expr.eval(&datums_local, &temp_storage) {
@@ -142,7 +142,7 @@ where
                                 }
                             }
                         }
-                        datums = repurpose_allocation(datums_local);
+                        drop(datums_local);
 
                         // Mint the final row, ideally re-using resources.
                         // TODO(mcsherry): This can perhaps be extracted for
@@ -152,7 +152,7 @@ where
                             RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
                             RefOrMut::Mut(row) => {
                                 row_packer.finish_into(row);
-                                std::mem::replace(row, Row::new(vec![]))
+                                std::mem::take(row)
                             }
                         };
                         return Some(Ok((key, row)));
@@ -341,7 +341,7 @@ where
     // Otherwise we need to render each individually and stitch them together.
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
-        let result = build_basic_aggregate(collection.clone(), index, &aggr, prepend_key);
+        let result = build_basic_aggregate(collection.clone(), index, &aggr, false);
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
     differential_dataflow::collection::concatenate(&mut collection.scope(), to_collect)
@@ -810,7 +810,7 @@ where
                         (_, 0) => Datum::Null,
                         // If any non-nulls, just report the aggregate.
                         (AggregateFunc::SumInt32, _) => Datum::Int64(agg1 as i64),
-                        (AggregateFunc::SumInt64, _) => Datum::Int64(agg1 as i64),
+                        (AggregateFunc::SumInt64, _) => Datum::from(agg1),
                         (AggregateFunc::SumFloat32, _) => {
                             Datum::Float32((((agg1 as f64) / float_scale) as f32).into())
                         }

@@ -19,7 +19,7 @@ pub struct BuildInfo {
     pub version: &'static str,
     /// The 40-character SHA-1 hash identifying the Git commit of the build.
     pub sha: &'static str,
-    /// The time of the build in UTC as an ISO 8601-complaint string.
+    /// The time of the build in UTC as an ISO 8601-compliant string.
     pub time: &'static str,
     /// The target triple of the platform.
     pub target_triple: &'static str,

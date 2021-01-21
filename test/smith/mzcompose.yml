@@ -14,10 +14,9 @@ services:
     ports:
      - 6875
     init: true
-    command: --workers 1
+    command: --workers 1 --differential-idle-merge-effort=1000 --disable-telemetry
     environment:
       - MZ_LOG=dataflow=error,info
-      - DIFFERENTIAL_EAGER_MERGE=1000
   smith-fuzz:
     mzbuild: smith-fuzz
     environment:
@@ -34,4 +33,4 @@ mzworkflows:
       port: 6875
     - step: run
       service: smith-fuzz
-      command: --query-count=10000
+      command: --query-count=${SMITH_QUERY_COUNT:-100000}

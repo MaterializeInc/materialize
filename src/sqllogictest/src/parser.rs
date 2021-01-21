@@ -88,6 +88,8 @@ impl<'a> Parser<'a> {
 
             "query" => self.parse_query(words, first_line),
 
+            "simple" => self.parse_simple(),
+
             "hash-threshold" => {
                 let threshold = words
                     .next()
@@ -314,6 +316,24 @@ impl<'a> Parser<'a> {
                 output_str,
             }),
             location,
+        })
+    }
+
+    fn parse_simple(&mut self) -> Result<Record<'a>, anyhow::Error> {
+        let location = self.location();
+
+        lazy_static! {
+            static ref QUERY_OUTPUT_REGEX: Regex = Regex::new(r"\r?\n----").unwrap();
+            static ref DOUBLE_LINE_REGEX: Regex = Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
+        }
+        let sql = self.split_at(&QUERY_OUTPUT_REGEX)?;
+        let output_str = self.split_at(&DOUBLE_LINE_REGEX)?.trim_start();
+        let output = Output::Values(output_str.lines().map(String::from).collect());
+        Ok(Record::Simple {
+            location,
+            sql,
+            output,
+            output_str,
         })
     }
 }

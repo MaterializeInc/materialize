@@ -24,6 +24,7 @@ import os
 import sys
 import pathlib
 import time
+import toml
 import typing
 
 import psycopg2  # type: ignore
@@ -41,9 +42,11 @@ def view_names(
             yield row[0]
 
 
-def view_matches(
-    cursor: psycopg2.extensions.cursor, view: str, expected: str, timestamp: int
-) -> bool:
+class ViewNotReady(Exception):
+    pass
+
+
+def view_contents(cursor: psycopg2.extensions.cursor, view: str, timestamp: int) -> str:
     """Return True if a SELECT from the VIEW matches the expected string."""
     stream = io.StringIO()
     query = f"COPY (SELECT * FROM {view} WHERE mz_logical_timestamp() > {timestamp}) TO STDOUT"
@@ -51,19 +54,27 @@ def view_matches(
         cursor.copy_expert(query, stream)
     except psycopg2.errors.InternalError_:
         # The view is not yet ready to be queried
-        return False
-    return stream.getvalue() == expected
+        raise ViewNotReady()
+    return stream.getvalue().strip()
+
+
+class SourceInfo:
+    """Container class containing information about a source."""
+
+    def __init__(self, topic_name: str, offset: int):
+        self.topic_name = topic_name
+        self.offset = offset
 
 
 def source_at_offset(
-    cursor: psycopg2.extensions.cursor, source_name: str, desired_offset: int
+    cursor: psycopg2.extensions.cursor, source_info: SourceInfo
 ) -> typing.Union[None, int]:
     """Return the mz timestamp from a source if it has reached the desired offset."""
     query = (
-        "SELECT timestamp FROM mz_source_info WHERE source_name = %s and offset = %s"
+        'SELECT timestamp FROM mz_source_info WHERE source_name = %s and "offset" = %s'
     )
     try:
-        cursor.execute(query, (source_name, desired_offset))
+        cursor.execute(query, (source_info.topic_name, source_info.offset))
         if cursor.rowcount > 1:
             print("ERROR: More than one row returned when querying source offsets:")
             for row in cursor:
@@ -81,18 +92,64 @@ def source_at_offset(
 def wait_for_materialize_views(args: argparse.Namespace) -> None:
     """Record the current table status of all views installed in Materialize."""
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
     # Create a dictionary mapping view names (as calculated from the filename) to expected contents
-    view_snapshots = {
-        p.stem: p.read_text() for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
+    view_snapshots: typing.Dict[str, str] = {
+        p.stem: p.read_text().strip()
+        for p in pathlib.Path(args.snapshot_dir).glob("*.sql")
+    }
+
+    source_offsets: typing.Dict[str, int] = {
+        p.stem: int(p.read_text().strip())
+        for p in pathlib.Path(args.snapshot_dir).glob("*.offset")
     }
 
     # Create a dictionary mapping view names to source name and offset
-    with open(os.path.join(args.snapshot_dir, "offsets.json")) as fd:
-        source_offsets = json.load(fd)
+    view_sources: typing.Dict[str, SourceInfo] = {}
+    with open(os.path.join(args.snapshot_dir, "config.toml")) as fd:
+        conf = toml.load(fd)
+
+        if len(conf["sources"]) != 1:
+            print(f"ERROR: Expected just one source block: {conf['sources']}")
+            sys.exit(1)
+
+        source_info = conf["sources"][0]
+        topic_prefix: str = source_info["topic_namespace"]
+        source_names: typing.List[str] = source_info["names"]
+
+        for query_info in conf["queries"]:
+
+            # Ignore views not in this snapshot (they likely have multiple sources...)
+            view: str = query_info["name"]
+            if view not in view_snapshots:
+                continue
+
+            sources: typing.List[str] = query_info["sources"]
+            if len(query_info["sources"]) != 1:
+                print(
+                    f"ERROR: Expected just one source for view {view}: {query_info['sources']}"
+                )
+                sys.exit(1)
+
+            source_name: str = query_info["sources"][0]
+            if source_name not in source_name:
+                print(
+                    f"ERROR: No matching source {source_name} for view {view}: {source_names}"
+                )
+                sys.exit(1)
+
+            topic_name = f"{topic_prefix}{source_name}"
+            if topic_name not in source_offsets:
+                print(
+                    f"ERROR: Missing offset information for source {topic_name}: {source_offsets}"
+                )
+                sys.exit(1)
+
+            view_sources[view] = SourceInfo(topic_name, source_offsets[topic_name])
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
+        conn.autocommit = True
         installed_views = set(view_names(conn))
 
     # Verify that we have snapshots for all views installed
@@ -107,21 +164,38 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
 
     pending_views = installed_views
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
+        conn.autocommit = True
         while pending_views:
             views_to_remove = []
+            time_taken = time.monotonic() - start_time
             for view in pending_views:
                 with conn.cursor() as cursor:
 
-                    desired_offset = source_offsets[view]["offset"]
-                    source_name = source_offsets[view]["topic"]
-                    timestamp = source_at_offset(cursor, source_name, desired_offset)
+                    # Determine if the source is at the desired offset and identify the
+                    # mz_logical_timestamp associated with the offset
+                    timestamp = source_at_offset(cursor, view_sources[view])
                     if not timestamp:
                         continue
 
-                    if view_matches(cursor, view, view_snapshots[view], timestamp):
-                        time_taken = time.time() - start_time
-                        print(f"{time_taken:>6.1f}s: {view}")
-                        views_to_remove.append(view)
+                    # Get the contents of the view at the desired timestamp, where an empty result
+                    # implies that the desired timestamp is not yet incorporated into the view
+                    try:
+                        contents = view_contents(cursor, view, timestamp)
+                        if not contents:
+                            continue
+                    except ViewNotReady:
+                        continue
+
+                    views_to_remove.append(view)
+                    expected = view_snapshots[view]
+                    if contents == expected:
+                        print(
+                            f"PASSED: {time_taken:>6.1f}s: {view} (result={contents})"
+                        )
+                    else:
+                        print(
+                            f"FAILED: {time_taken:>6.1f}s: {view} ({contents} != {expected})"
+                        )
 
             for view in views_to_remove:
                 pending_views.remove(view)

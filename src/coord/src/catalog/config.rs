@@ -12,13 +12,10 @@ use std::path::{Path, PathBuf};
 use build_info::BuildInfo;
 
 /// Configures a catalog.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Config<'a> {
     /// The path to the catalog on disk.
-    ///
-    /// If set to `None`, indicates that an ephemeral in-memory catalog should
-    /// be used.
-    pub path: Option<&'a Path>,
+    pub path: &'a Path,
     /// Whether to enable experimental mode.
     pub experimental_mode: Option<bool>,
     /// Whether to enable logging sources and the views that depend upon them.

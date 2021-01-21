@@ -10,6 +10,9 @@
 mode cockroach
 
 statement ok
+BEGIN
+
+statement ok
 DECLARE c CURSOR FOR VALUES (1), (2), (3)
 
 query I
@@ -32,6 +35,9 @@ FETCH c
 ----
 
 statement ok
+COMMIT
+
+statement ok
 CREATE VIEW v AS VALUES ('a', 'b'), ('c', 'd'), ('e', 'f'), ('g', 'h')
 ----
 
@@ -42,6 +48,9 @@ TAIL v
 0  1  c  d
 0  1  e  f
 0  1  g  h
+
+statement ok
+BEGIN
 
 statement ok
 DECLARE c CURSOR FOR TAIL v
@@ -71,8 +80,14 @@ FETCH c WITH (TIMEOUT = '1s')
 statement error timeout out of range
 FETCH c WITH (TIMEOUT = '-1s')
 
-statement error timeout out of range
-FETCH c WITH (TIMEOUT = '25h')
+statement ok
+ROLLBACK
 
 statement ok
-CLOSE c
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR TAIL v
+
+statement error timeout out of range
+FETCH c WITH (TIMEOUT = '25h')

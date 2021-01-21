@@ -49,10 +49,13 @@
     description: Sample standard deviation of `T`'s values. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
-      same typ as `x`.
+      same type as `x`.
 
-  - signature: 'sum(x: T) -> T'
+  - signature: 'sum(x: T) -> U'
     description: Sum of `T`'s values
+      <br><br>
+      Returns `bigint` if `x` is `int`, `numeric` if `x` is `bigint`, else returns
+      same type as `x`.
 
   - signature: 'variance(x: T) -> U'
     description: Historical alias for `variance_samp`. *(imprecise)*
@@ -90,7 +93,6 @@
 
     - signature: 'list_prepend(e: listelementany, l: listany) -> listany'
       description: Prepends `e` to `l`.
-
 
 - type: Numbers
   description: Number functions take number-like arguments, e.g. [`int`](../types/int),
@@ -147,6 +149,9 @@
     description: Number of code points in `s` after encoding
     url: length
 
+  - signature: 'lower(s: str) -> str'
+    description: Convert `s` to lowercase.
+
   - signature: 'lpad(s: str, len: int) -> str'
     description: "Prepend `s` with spaces up to length `len`,
       or right truncate if `len` is less than the length of `s`."
@@ -198,6 +203,9 @@
     description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
       &bull; Side: `BOTH`<br/>
       &bull; `'c'`: `' '` (space)"
+
+  - signature: 'upper(s: str) -> str'
+    description: Convert `s` to uppercase.
 
 - type: Scalar
   description: Scalar functions take a list of scalar expressions
@@ -252,10 +260,10 @@
 
 - type: Date and Time
   description: Time functions take or produce a time-like type, e.g. [`date`](../types/date),
-    [`timestamp`](../types/timestamp), [`timestamptz`](../types/timestamptz).
+    [`timestamp`](../types/timestamp), [`timestamp with time zone`](../types/timestamptz).
   functions:
   - signature: current_timestamp() -> timestamptz
-    description: 'The `timestamptz` representing when the query was executed.<br/><br/>**NOTE**:
+    description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
       Users cannot define views with queries containing `current_timestamp()`.'
 
   - signature: 'date_trunc(time_component: str, val: timestamp) -> timestamp'
@@ -271,7 +279,7 @@
       cannot define views with queries containing `mz_logical_timestamp()`.'
 
   - signature: now() -> timestamptz
-    description: 'The `timestamptz` representing when the query was executed.<br/><br/>**NOTE**:
+    description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
       Users cannot define views with queries containing `now()`.'
 
   - signature: 'to_timestamp(val: double precision) -> timestamptz'
@@ -381,6 +389,8 @@
   functions:
   - signature: 'mz_version() -> text'
     description: Returns the server's version information as a human-readable string.
+  - signature: 'format_type(oid: int, typemod: int) -> text'
+    description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
 
 - type: PostgreSQL compatibility
   description: Functions whose primary purpose is to facilitate compatibility with PostgreSQL tools

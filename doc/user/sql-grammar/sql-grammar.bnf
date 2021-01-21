@@ -8,6 +8,9 @@ avro_schema_spec ::=
   'SCHEMA' ('FILE' schema_file_path | inline_schema)
 close ::=
   'CLOSE' cursor_name
+col_option ::=
+  'NOT' 'NULL' |
+  'DEFAULT' expr
 connector_spec ::=
   'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
   'KAFKA BROKER' host 'TOPIC' topic?
@@ -129,13 +132,15 @@ create_source_text_kinesis ::=
       ('UPSERT' ('FORMAT' ('BYTES' | 'TEXT'))?)
     )
   )?
+create_type ::=
+    'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
 create_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'VIEW' view_name 'AS' select_stmt
 create_table ::=
   'CREATE' 'TABLE' table_name
-  ('(' (col_name col_type ('NOT NULL')?) ( ( ',' col_name col_type ('NOT NULL')?) )* ')')?
+  '(' ((col_name col_type col_option*) (',' col_name col_type col_option*)*)? ')'
 declare ::=
   'DECLARE' cursor_name 'CURSOR' ('WITHOUT' 'HOLD')? 'FOR' query
 insert ::=
@@ -212,15 +217,21 @@ op_cast ::=
 schema_spec ::=
   'SCHEMA' ('FILE' schema_file_path | inline_schema)
 select_stmt ::=
-    ('WITH' cte_ident ('(' col_ident (',' col_ident )* ')')? 'AS' '(' select_stmt ')'
-      (',' cte_ident ('(' col_ident (',' col_ident )*')')? 'AS' '(' select_stmt ')') * )
-    'SELECT'  (
-        ( 'ALL' )? ( ( target_elem ) ( ( ',' target_elem ) )* ) ( 'FROM' ( ( table_expr ) ( ( ',' table_expr ) )* )  )? join_expr? ( ( 'WHERE' expr ) )? ( 'GROUP' 'BY' ( ( col_ref ) ( ( ',' col_ref ) )* ) )? ( 'HAVING' expr )? ( 'ORDER' 'BY' ( ( col_ref ( 'ASC' | 'DESC' )? ) ( ( ',' col_ref ( 'ASC' | 'DESC' )? ) )* ) )? ( 'LIMIT' expr )? ( 'OFFSET' expr )?
-	    | ( 'DISTINCT' ) ( ( target_elem ) ( ( ',' target_elem ) )* ) ( 'FROM' ( ( table_expr ) ( ( ',' table_expr ) )* )  )? join_expr? ( ( 'WHERE' expr ) )? ( 'GROUP' 'BY' ( ( col_ref ) ( ( ',' col_ref ) )* ) )? ( 'HAVING' expr )? ( 'ORDER' 'BY' ( ( col_ref ( 'ASC' | 'DESC' )? ) ( ( ',' col_ref ( 'ASC' | 'DESC' )? ) )* ) )? ( 'LIMIT' expr )? ( 'OFFSET' expr )?
-        | ( 'DISTINCT' 'ON' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' ) ( ( target_elem ) ( ( ',' target_elem ) )* ) ( 'FROM' ( ( table_expr ) ( ( ',' table_expr ) )* )  )? join_expr? ( ( 'WHERE' expr ) )? ( 'GROUP' 'BY' ( ( col_ref ) ( ( ',' col_ref ) )* ) )? ( 'HAVING' expr )? ( 'ORDER' 'BY' ( ( col_ref ( 'ASC' | 'DESC' )? ) ( ( ',' col_ref ( 'ASC' | 'DESC' )? ) )* ) )?  ( 'LIMIT' expr )? ( 'OFFSET' expr )?
-    )
-    ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ('ALL' | 'DISTINCT')? another_select_stmt)?
-    ( 'AS OF' timestamp_expression)?
+  'WITH' cte_ident ( '(' col_ident ( ',' col_ident )* ')' )?
+  'AS' '(' select_stmt ')' ( ',' cte_ident ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' '(' select_stmt ')' )*
+  'SELECT' ( 'ALL' | 'DISTINCT' ( 'ON' '(' col_ref ( ',' col_ref )* ')' )? )?
+  target_elem ( ',' target_elem )*
+  ( 'FROM' table_expr ( ',' table_expr )* )?
+  join_expr?
+  ( 'WHERE' expr )?
+  ( 'GROUP' 'BY' col_ref ( ',' col_ref )* )?
+  ( 'OPTION' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
+  ( 'HAVING' expr )?
+  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )?
+  ( 'LIMIT' expr )?
+  ( 'OFFSET' expr )?
+  ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
+  ( 'AS OF' timestamp_expression )?
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)
 show_create_index ::=
@@ -294,7 +305,7 @@ type_escape_text ::=
 type_time ::=
   'TIME' "'" time_str "'"
 type_timestamp ::=
-  ('TIMESTAMP' 'WITH TIME ZONE'? | 'TIMESTAMPTZ')
+  ('TIMESTAMP' | 'TIMESTAMPTZ')
   "'" date_str
     ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
   "'"

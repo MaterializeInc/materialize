@@ -14,6 +14,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::mem;
 
 use anyhow::bail;
@@ -186,7 +187,12 @@ impl CoercibleScalarExpr {
         let expr = typeconv::plan_coerce(ecx, self, ty)?;
         let expr_ty = ecx.scalar_type(&expr);
         if ty != &expr_ty {
-            bail!("{} must have type {}, not type {}", ecx.name, ty, expr_ty);
+            bail!(
+                "{} must have type {}, not type {}",
+                ecx.name,
+                ecx.humanize_scalar_type(ty),
+                ecx.humanize_scalar_type(&expr_ty),
+            );
         }
         Ok(expr)
     }
@@ -300,6 +306,23 @@ pub enum JoinKind {
     LeftOuter { lateral: bool },
     RightOuter,
     FullOuter,
+}
+
+impl fmt::Display for JoinKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                JoinKind::Inner { lateral: false } => "Inner",
+                JoinKind::Inner { lateral: true } => "InnerLateral",
+                JoinKind::LeftOuter { lateral: false } => "LeftOuter",
+                JoinKind::LeftOuter { lateral: true } => "LeftOuterLateral",
+                JoinKind::RightOuter => "RightOuter",
+                JoinKind::FullOuter => "FullOuter",
+            }
+        )
+    }
 }
 
 impl JoinKind {

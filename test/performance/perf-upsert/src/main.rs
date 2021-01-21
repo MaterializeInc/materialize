@@ -13,11 +13,11 @@
 
 use std::process;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
 use rand::Rng;
 use structopt::StructOpt;
+use tokio::time::{self, Duration};
 use tokio_postgres::Client;
 
 use test_util::kafka::kafka_client;
@@ -96,7 +96,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     while messages_remaining > 0 {
         let messages_to_send = std::cmp::min(config.messages_per_second, messages_remaining);
         log::info!("producing {} records", messages_to_send);
-        let backoff = tokio::time::delay_for(Duration::from_secs(1));
+        let backoff = time::sleep(Duration::from_secs(1));
         for i in 0..messages_to_send {
             // Artificially create a skewed distribution of keys where 33% of
             // inserts to the topic are from keys drawn uniformly from [0, 10_000)
@@ -105,9 +105,9 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
             // are "hot" and present in the topic ~500 times more frequently
             // than the "cold" keys.
             let key: i32 = if i % 3 != 0 {
-                rng.gen_range(0, 10_000)
+                rng.gen_range(0..10_000)
             } else {
-                rng.gen_range(0, 10_000_000)
+                rng.gen_range(0..10_000_000)
             };
             let res = k_client.send_key_value(
                 &config.topic,
@@ -120,7 +120,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
                 }
                 Err(e) => {
                     log::error!("failed to produce message: {}", e);
-                    tokio::time::delay_for(Duration::from_millis(100)).await;
+                    time::sleep(Duration::from_millis(100)).await;
                 }
             }
         }
@@ -192,7 +192,7 @@ async fn create_and_query_source(config: MzConfig) -> Result<()> {
 
         if let Err(e) = client.execute(&*peek, &[]).await {
             log::error!("failed to produce message: {}", e);
-            tokio::time::delay_for(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     }
     Ok(())

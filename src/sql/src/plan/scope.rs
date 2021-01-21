@@ -48,6 +48,7 @@ use repr::ColumnName;
 use crate::names::PartialName;
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
+use sql_parser::ast::Raw;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScopeItemName {
@@ -86,7 +87,7 @@ pub struct ScopeItem {
     // table must appear before names that specify non-canonical tables.
     // This impacts the behavior of the `is_from_table` test.
     pub names: Vec<ScopeItemName>,
-    pub expr: Option<sql_parser::ast::Expr>,
+    pub expr: Option<sql_parser::ast::Expr<Raw>>,
     // Whether this item is actually resolveable by its name. Non-nameable scope
     // items are used e.g. in the scope created by an inner join, so that the
     // duplicated key columns from the right relation do not cause ambiguous
@@ -273,7 +274,7 @@ impl Scope {
 
     /// Look to see if there is an already-calculated instance of this expr.
     /// Failing to find one is not an error, so this just returns Option
-    pub fn resolve_expr<'a>(&'a self, expr: &sql_parser::ast::Expr) -> Option<ColumnRef> {
+    pub fn resolve_expr<'a>(&'a self, expr: &sql_parser::ast::Expr<Raw>) -> Option<ColumnRef> {
         self.items
             .iter()
             .enumerate()

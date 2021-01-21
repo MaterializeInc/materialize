@@ -46,7 +46,21 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-{{% version-header v0.5.5 %}}
+{{% version-header v0.6.2 %}}
+
+- Commit consumed offsets to Kafka to facilitate source ingest progress
+  monitoring.
+
+- Fix a bug that would cause `DROP` statements targeting multiple objects to fail
+  when those objects had dependent objects in common {{% gh 5316 %}}.
+
+- Prevent a bug that would allow `CREATE OR REPLACE` statements to create dependencies
+  on objects that were about to be dropped {{% gh 5272 %}}.
+
+{{% version-header v0.6.1 %}}
+
+- Add the advanced [`--timely-progress-mode` and `--differential-idle-merge-effort` command-line arguments](/cli/#dataflow-tuning)
+  to tune dataflow performance.
 
 - Add `ALL` to [`FETCH`](/sql/fetch).
 
@@ -55,23 +69,68 @@ Wrap your release notes at the 80 character mark.
 
   **Backwards-incompatible change.**
 
-{{% version-header v0.5.4 %}}
+- Consider the following keywords to be fully reserved: `WITH`, `SELECT`,
+  `WHERE`, `GROUP`, `HAVING`, `ORDER`, `LIMIT`, `OFFSET`, `FETCH`, `OPTION`,
+  `UNION`, `EXCEPT`, `INTERSECT`. Previously only the `FROM` keyword was
+  considered fully reserved.
 
-- Add the [`version`](/sql/functions#postgresql-compatibility-func) and
-  [`mz_version`](/sql/functions/#system-information-func) functions to report
-  PostgreSQL-specific and Materialize-specific version information,
-  respectively.
+  These keywords can no longer be used as bare identifiers anywhere in a SQL
+  statement, except following an `AS` keyword in a table or column alias. They
+  can continue to be used as identifiers if escaped. See the
+  [Keyword collision](/sql/identifiers#keyword-collision) documentation for
+  details.
 
-- Add the [`hmac` and `digest` cryptography functions](/sql/functions#cryptography-func).
-  These functions are based on the [`pgcrypto`] PostgreSQL extension.
+  **Backwards-incompatible change.**
 
-- Add a `timeout` option to [`FETCH`](/sql/fetch/).
+- Validate `WITH` clauses in `CREATE SOURCE` and `CREATE SINK` statements. This
+  is a potentially backwards-incompatible change as previously any invalid
+  `WITH` clauses would be silently ignored. Upgrading materialize in-place
+  on a persisted catalog that has an invalid `WITH` clause will now fail.
 
-- Fix a bug when requesting binary-formatted values with
-  [`FETCH`](/sql/fetch/) {{% gh 4976 %}}.
+  **Backwards-incompatible change.**
 
-- Fix a bug when using COPY with TAIL that could cause some drivers to
-  fail if the TAIL was idle for at least 1 second {{% gh 4976 %}}.
+- Add `upper` and `lower` to the [string function](/sql/functions#string-func) suite.
+
+- Change [`sum`](/sql/functions/#aggregate-func) over `bigint` to return `numeric`.
+  Previously, `sum` over `bigint` returned `bigint`.
+
+  **Backwards-incompatible change**
+
+{{% version-header v0.6.0 %}}
+
+- Support specifying default values for table columns via the new
+  [`DEFAULT` column option](/sql/create-table#syntax) in `CREATE TABLE`.
+  Thanks to external contributor [@petrosagg](https://github.com/petrosagg).
+
+- Add a `timeout` option to [`FETCH`](/sql/fetch/) to facilitate using `FETCH`
+  to poll a [`TAIL`](/sql/tail) operation for new records.
+
+- Add several new SQL functions:
+
+  - The [`digest`](/sql/functions#cryptography-func) and
+    [`hmac`](/sql/functions#cryptography-func) cryptography functions
+    compute message digests and authentication codes, respectively. These
+    functions are based on the [`pgcrypto`] PostgreSQL extension.
+
+  - The [`version`](/sql/functions#postgresql-compatibility-func) and
+    [`mz_version`](/sql/functions/#system-information-func) functions report
+    PostgreSQL-specific and Materialize-specific version information,
+    respectively.
+
+  - The [`current_schema`](/sql/functions#postgresql-compatibility-func)
+    function reports the name of the SQL schema that appears first in the
+    search path.
+
+- Fix a bug that would cause invalid data to be returned when requesting
+  binary-formatted values with [`FETCH`](/sql/fetch/) {{% gh 4976 %}}.
+
+- Fix a bug when using `COPY` with `TAIL` that could cause some drivers to
+  fail if the `TAIL` was idle for at least one second {{% gh 4976 %}}.
+
+- Avoid panicking if a record in a regex-formatted source fails to decode
+  as UTF-8 {{% gh 5008 %}}.
+
+- Allow [query hints](/sql/select#query-hints) in `SELECT` statements.
 
 {{% version-header v0.5.3 %}}
 
@@ -99,7 +158,7 @@ Wrap your release notes at the 80 character mark.
 
   would fail to parse {{% gh 4827 %}}.
 
-- Fix a bug that caused the [`real`]/[`float4`] types to be incorrectly
+- Fix a bug that caused the [`real`]/[`real`] types to be incorrectly
   interpreted as [`double precision`] {{% gh 4918 %}}.
 
 {{% version-header v0.5.2 %}}
@@ -385,8 +444,7 @@ Wrap your release notes at the 80 character mark.
     `~*`, `!~`, and `!~*`, which report whether a string does or does not match
     a regular expression.
 
-  - Support casts from [`boolean`](/sql/types/boolean) to
-    [`int`](/sql/types/int).
+  - Support casts from [`boolean`](/sql/types/boolean) to [`int`](/sql/types/int).
 
   - Add the [`split_part`](/sql/functions/#string-func) function, which splits a
     string on a delimiter and returns one of the resulting chunks.
@@ -407,7 +465,7 @@ Wrap your release notes at the 80 character mark.
 
 - Fix two PostgreSQL compatibility issues:
 
-  - Change the text format of the [`timestamptz`](/sql/types/timestamptz)
+  - Change the text format of the [`timestamp with time zone`](/sql/types/timestamptz)
     type to match PostgreSQL {{% gh 3798 %}}.
 
   - Respect client-provided parameter types in prepared statements
@@ -428,7 +486,7 @@ Wrap your release notes at the 80 character mark.
   features that require experimental mode will be marked as such in their
   documentation.
 
-- Support [SASL PLAIN authentication for Kafka sources](/sql/create-source/avro-kafka/#connecting-to-a-kafka-broker-using-sasl-plain-authentication).
+- Support [SASL PLAIN authentication for Kafka sources](/sql/create-source/avro-kafka/#connecting-to-a-kafka-broker-using-sasl-authentication).
   Notably, this allows Materialize to connect to Kafka clusters hosted by
   Confluent Cloud.
 
@@ -716,10 +774,9 @@ Wrap your release notes at the 80 character mark.
   control the address and port that `materialized` binds to.
 
 - Make formatting and parsing for [`real`](/sql/types/float) and
-  [`double precision`](/sql/types/float) numbers more
-  consistent with PostgreSQL. The strings `NaN`, and `[+-]Infinity` are
-  accepted as input, to select the special not-a-number and infinity states,
-  respectively,  of floating-point numbers.
+  [`double precision`](/sql/types/float) numbers more consistent with PostgreSQL. The
+  strings `NaN`, and `[+-]Infinity` are accepted as input, to select the special
+  not-a-number and infinity states, respectively,  of floating-point numbers.
 
 - Allow [CSV-formatted sources](/sql/create-source/csv-file/#csv-format-details)
   to include a header row (`CREATE SOURCE ... FORMAT CSV WITH HEADER`).
@@ -774,7 +831,7 @@ Wrap your release notes at the 80 character mark.
 - Raise the maximum SQL statement length from approximately 8KiB to
   approximately 64MiB.
 
-- Support casts from [`text`] to [`date`], [`timestamp`], [`timestamptz`], and
+- Support casts from [`text`] to [`date`], [`timestamp`], [`timestamp with time zone`], and
   [`interval`].
 
 - Support the `IF NOT EXISTS` clause in [`CREATE VIEW`] and
@@ -806,16 +863,16 @@ Wrap your release notes at the 80 character mark.
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE VIEW`]: /sql/create-view
 [`date`]: /sql/types/date
-[`double precision`]: /sql/types/float
+[`double precision`]: /sql/types/float8
 [`interval`]: /sql/types/interval
-[`float4`]: /sql/types/float
+[`real`]: /sql/types/float4
 [`pgcrypto`]: https://www.postgresql.org/docs/current/pgcrypto.html
 [`real`]: /sql/types/real
 [`SHOW CREATE SOURCE`]: /sql/show-create-source
 [`SHOW CREATE VIEW`]: /sql/show-create-view
 [`text`]: /sql/types/text
 [`timestamp`]: /sql/types/timestamp
-[`timestamptz`]: /sql/types/timestamptz
+[`timestamp with time zone`]: /sql/types/timestamptz
 [pg-copy]: https://www.postgresql.org/docs/current/sql-copy.html
 [pgwire-simple]: https://www.postgresql.org/docs/current/protocol-flow.html#id-1.10.5.7.4
 [pgwire-extended]: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY

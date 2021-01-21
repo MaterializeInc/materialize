@@ -17,6 +17,7 @@
 
 pub mod ascii;
 pub mod cast;
+pub mod cli;
 pub mod codegen;
 pub mod collections;
 pub mod env;
@@ -35,5 +36,4 @@ pub mod stats;
 pub mod sync;
 pub mod test;
 pub mod thread;
-pub mod tokio;
 pub mod vec;

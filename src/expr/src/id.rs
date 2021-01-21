@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{anyhow, Error};
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
+
+use anyhow::{anyhow, Error};
+use serde::{Deserialize, Serialize};
 
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`RelationExpr::Get`](crate::RelationExpr::Get).
@@ -29,12 +30,6 @@ impl fmt::Display for Id {
             Id::Global(id) => id.fmt(f),
         }
     }
-}
-
-/// A trait for turning [`GlobalId`]s into human-readable strings.
-pub trait IdHumanizer {
-    /// Attempts to return the a human-readable string for `id`.
-    fn humanize_id(&self, id: GlobalId) -> Option<String>;
 }
 
 /// The identifier for a local component of a dataflow.
@@ -129,11 +124,15 @@ impl fmt::Display for SourceInstanceId {
 /// Unique identifier for each part of a whole source.
 ///     Kafka -> partition
 ///     Kinesis -> shard
+///     File -> only one
+///     S3 -> only one
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
     Kinesis(String),
     File,
+    // TODO(bwm): should this partition based on object keys?
+    S3,
 }
 
 impl fmt::Display for PartitionId {
@@ -150,27 +149,6 @@ impl PartitionId {
         match self {
             PartitionId::Kafka(id) => Some(*id),
             _ => None,
-        }
-    }
-}
-
-/// Humanizer that provides no additional information.
-#[derive(Debug)]
-pub struct DummyHumanizer;
-
-impl IdHumanizer for DummyHumanizer {
-    fn humanize_id(&self, _: GlobalId) -> Option<String> {
-        None
-    }
-}
-
-#[cfg(test)]
-pub mod test_utils {
-    use super::*;
-
-    impl From<&LocalId> for char {
-        fn from(id: &LocalId) -> char {
-            id.0 as u8 as char
         }
     }
 }

@@ -32,12 +32,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
-use dataflow_types::{SinkConnectorBuilder, SourceConnector};
+use dataflow_types::{SinkConnectorBuilder, SinkEnvelope, SourceConnector};
 use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
-use sql_parser::ast::Expr;
 
-use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
-use crate::catalog::Catalog;
+use crate::ast::{ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement};
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 
 pub(crate) mod decorrelate;
@@ -45,6 +43,7 @@ pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod func;
+pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
 pub(crate) mod statement;
@@ -54,9 +53,10 @@ pub(crate) mod typeconv;
 
 pub use self::expr::RelationExpr;
 pub use error::PlanError;
+pub use explain::Explanation;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
-pub use query::scalar_type_from_sql;
-pub use statement::{describe_statement, FetchOptions, StatementContext, StatementDesc};
+pub use query::{scalar_type_from_sql, unwrap_numeric_typ_mod};
+pub use statement::{describe, plan, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
@@ -141,6 +141,7 @@ pub enum Plan {
         copy_to: Option<CopyFormat>,
         emit_progress: bool,
         object_columns: usize,
+        desc: RelationDesc,
     },
     SendRows(Vec<Row>),
     ExplainPlan {
@@ -166,13 +167,25 @@ pub enum Plan {
         object_type: ObjectType,
     },
     AlterIndexLogicalCompactionWindow(Option<AlterIndexLogicalCompactionWindow>),
+    Declare {
+        name: String,
+        stmt: Statement<Raw>,
+    },
+    Fetch {
+        name: String,
+        count: Option<FetchDirection>,
+        timeout: ExecuteTimeout,
+    },
+    Close {
+        name: String,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
-    pub defaults: Vec<Expr>,
+    pub defaults: Vec<Expr<Raw>>,
 }
 
 #[derive(Clone, Debug)]
@@ -187,6 +200,7 @@ pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
     pub connector_builder: SinkConnectorBuilder,
+    pub envelope: SinkEnvelope,
 }
 
 #[derive(Clone, Debug)]
@@ -245,6 +259,13 @@ pub enum CopyFormat {
     Binary,
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum ExecuteTimeout {
+    None,
+    Seconds(f64),
+    WaitOnce,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct AlterIndexLogicalCompactionWindow {
     pub index: GlobalId,
@@ -272,7 +293,7 @@ impl Params {
     /// Returns a `Params` with no parameters.
     pub fn empty() -> Params {
         Params {
-            datums: Row::pack(&[]),
+            datums: Row::pack_slice(&[]),
             types: vec![],
         }
     }
@@ -290,29 +311,4 @@ impl Default for PlanContext {
             wall_time: Utc::now(),
         }
     }
-}
-
-/// Produces a [`Plan`] from the purified statement `stmt`.
-///
-/// Planning is a pure, synchronous function and so requires that the provided
-/// `stmt` does does not depend on any external state. To purify a statement,
-/// use [`crate::pure::purify`].
-pub fn plan(
-    pcx: &PlanContext,
-    catalog: &dyn Catalog,
-    stmt: Statement,
-    params: &Params,
-) -> Result<Plan, anyhow::Error> {
-    statement::handle_statement(pcx, catalog, stmt, params)
-}
-
-/// Creates a description of the purified statement `stmt`.
-///
-/// See the documentation of [`StatementDesc`] for details.
-pub fn describe(
-    catalog: &dyn Catalog,
-    stmt: Statement,
-    param_types: &[Option<pgrepr::Type>],
-) -> Result<StatementDesc, anyhow::Error> {
-    statement::describe_statement(catalog, stmt, param_types)
 }

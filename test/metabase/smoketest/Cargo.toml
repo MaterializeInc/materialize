@@ -1,15 +1,15 @@
 [package]
 name = "metabase-smoketest"
 description = "A simple smoke test for Metabase and Materialize."
-version = "0.1.0"
+version = "0.0.0"
 edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.34"
-metabase = { path = "../../../src/metabase"}
-itertools = "0.9"
-log = "0.4.11"
+anyhow = "1.0.38"
+itertools = "0.9.0"
+log = "0.4.13"
+metabase = { path = "../../../src/metabase" }
 ore = { path = "../../../src/ore" }
-tokio = "0.2"
-tokio-postgres = "0.5.5"
+tokio = "1.0.2"
+tokio-postgres = "0.7.0"

@@ -1,10 +1,11 @@
 [package]
 name = "dataflow-bin"
 description = "Utility binaries for the dataflow crate."
-version = "0.1.0"
+version = "0.0.0"
 edition = "2018"
 publish = false
 
 [dependencies]
-getopts = "0.2"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+ore = { path = "../ore" }
+structopt = "0.3.21"
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
