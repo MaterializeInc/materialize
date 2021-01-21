@@ -1712,6 +1712,7 @@ ORDER BY
 | Get %8 (l1)
 | Reduce group=(#1, #0, #7)
 | | agg count(true)
+| ArrangeBy (#1, #2)
 
 %11 =
 | Get materialize.public.lineitem (u21)
@@ -1727,12 +1728,10 @@ ORDER BY
 
 %13 =
 | Union %12 %9
-| Distinct group=(#1, #0)
-| ArrangeBy (#0, #1)
 
 %14 =
-| Join %10 %13 (= #1 #4) (= #2 #5)
-| | implementation = Differential %10 %13.(#0, #1)
+| Join %10 %13 (= #1 #5) (= #2 #4)
+| | implementation = Differential %13 %10.(#1, #2)
 | | demand = (#0, #3)
 | Reduce group=(#0)
 | | agg sum(#3)
