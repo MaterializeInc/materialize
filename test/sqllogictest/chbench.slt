@@ -1500,6 +1500,7 @@ ORDER BY numwait DESC, su_name
 | Get %5 (l0)
 | Reduce group=(#1, #7, #8, #9, #13)
 | | agg count(true)
+| ArrangeBy (#1, #2, #3, #4)
 
 %8 =
 | Get materialize.public.orderline (u19)
@@ -1515,12 +1516,10 @@ ORDER BY numwait DESC, su_name
 
 %10 =
 | Union %9 %6
-| Distinct group=(#0, #1, #2, #3)
-| ArrangeBy (#0, #1, #2, #3)
 
 %11 =
 | Join %7 %10 (= #1 #6) (= #2 #7) (= #3 #8) (= #4 #9)
-| | implementation = Differential %7 %10.(#0, #1, #2, #3)
+| | implementation = Differential %10 %7.(#1, #2, #3, #4)
 | | demand = (#0, #5)
 | Reduce group=(#0)
 | | agg sum(#5)

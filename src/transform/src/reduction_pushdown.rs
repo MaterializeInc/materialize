@@ -265,7 +265,17 @@ impl<'a> ReductionPusher<'a> {
                 }
             } else {
                 // an aggregation involving no inputs
-                no_input_aggs_to_push.push((agg_num, agg.clone()));
+                if agg.func.row_count_dependent() {
+                    no_input_aggs_to_push.push((agg_num, agg.clone()));
+                } else {
+                    // it is not worthwhile to push down a reduce on a constant
+                    // whose result does not change based on the input to the
+                    // reduce.
+                    // TODO: an aggregation on a literal whose result does not
+                    // change based on the input of the reduce should be
+                    // converted into a map
+                    outer_aggs.push((agg_num, agg.clone()));
+                }
             }
         }
 
@@ -432,6 +442,7 @@ impl<'a> ReductionPusher<'a> {
     fn try_pushdown(&mut self, idx: usize, single_input_aggs_exist: bool) {
         if (self.is_delta && self.join_graph[idx].len() > 1)
             || (single_input_aggs_exist && self.single_input_aggs_to_push[idx].is_empty())
+            || (!single_input_aggs_exist && self.no_input_aggs_to_push.is_empty())
         {
             self.skip_pushdown_on_input(idx);
             return;
@@ -534,6 +545,7 @@ impl<'a> ReductionPusher<'a> {
         let mut inner_aggs = Vec::new();
         inner_aggs.extend(self.single_input_aggs_to_push[idx].drain(0..));
         inner_aggs.extend(self.no_input_aggs_to_push.drain(0..));
+        assert_eq!(inner_aggs.is_empty(), false);
         while let RelationExpr::ArrangeBy { input: inner, .. } = &mut self.new_inputs[idx] {
             self.new_inputs[idx] = inner.take_dangerous();
         }
@@ -594,13 +606,13 @@ impl<'a> ReductionPusher<'a> {
 /// to and on which join keys.
 /// Example:
 /// For the query
-/// ```
+/// """
 /// select *
 /// from foo, bar, baz
 /// where foo.a = bar.b
 /// and foo.c = bar.d
 /// and bar.e = baz.f
-/// ```
+/// """
 /// The corresponding graph will be
 /// "foo" -> ["bar" -> ["a", "c"]]
 /// "bar" -> ["foo" -> ["b", "d"], "baz" -> ["e"]]
