@@ -95,6 +95,9 @@ main() {
     export OLTP_THREADS="${oltp_threads}"
     export CHBENCH_RUN_SECONDS="${chbench_seconds}"
 
+    # Record the arguments used to generate this snapshot
+    env > "${snapshot}/snapshot.env"
+
     "$project"/mzcompose run generate-snapshot
 
     if [[ "${cleanup}" = "yes" ]]; then
