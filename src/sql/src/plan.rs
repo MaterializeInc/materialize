@@ -34,9 +34,8 @@ use serde::{Deserialize, Serialize};
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SourceConnector};
 use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
-use sql_parser::ast::Expr;
 
-use crate::ast::{ExplainOptions, ExplainStage, FetchDirection, ObjectType, Statement};
+use crate::ast::{ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement};
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 
 pub(crate) mod decorrelate;
@@ -169,7 +168,7 @@ pub enum Plan {
     AlterIndexLogicalCompactionWindow(Option<AlterIndexLogicalCompactionWindow>),
     Declare {
         name: String,
-        stmt: Statement,
+        stmt: Statement<Raw>,
     },
     Fetch {
         name: String,
@@ -185,7 +184,7 @@ pub enum Plan {
 pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
-    pub defaults: Vec<Expr>,
+    pub defaults: Vec<Expr<Raw>>,
 }
 
 #[derive(Clone, Debug)]

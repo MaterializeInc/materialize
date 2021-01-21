@@ -738,10 +738,11 @@ impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    /// Attempt to extract a chain of map/filter/project operators on top of a Get. Returns true if
-    /// it was successful and false otherwise. We still fall back to individual implementations for
-    /// the various operators so that ones like Filter, that special-case being on top of a join,
-    /// can still do so.
+    /// Attempt to render a chain of map/filter/project operators on top of another operator.
+    ///
+    /// Returns true if it was successful, and false otherwise. If this method returns false,
+    /// we should continue with the traditional individual render implementations of each
+    /// operator.
     fn try_render_map_filter_project(
         &mut self,
         relation_expr: &RelationExpr,
@@ -811,6 +812,33 @@ where
                 self.ensure_rendered(&input2, scope, worker_index);
                 let (oks, err) = self.render_flat_map(input, Some(mfp));
                 self.collections.insert(relation_expr.clone(), (oks, err));
+                true
+            }
+
+            RelationExpr::Join {
+                inputs,
+                implementation,
+                ..
+            } => {
+                for input in inputs {
+                    self.ensure_rendered(input, scope, worker_index);
+                }
+                match implementation {
+                    expr::JoinImplementation::Differential(_start, _order) => {
+                        let collection = self.render_join(input, mfp, scope);
+                        self.collections.insert(relation_expr.clone(), collection);
+                    }
+                    expr::JoinImplementation::DeltaQuery(_orders) => {
+                        let collection =
+                            self.render_delta_join(input, mfp, scope, worker_index, |t| {
+                                t.saturating_sub(1)
+                            });
+                        self.collections.insert(relation_expr.clone(), collection);
+                    }
+                    expr::JoinImplementation::Unimplemented => {
+                        panic!("Attempt to render unimplemented join");
+                    }
+                }
                 true
             }
             _ => false,
@@ -932,50 +960,22 @@ where
 
                 RelationExpr::Filter { input, predicates } => {
                     if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
-                        let collections = if let RelationExpr::Join {
-                            inputs,
-                            implementation,
-                            ..
-                        } = &**input
-                        {
-                            for input in inputs {
-                                self.ensure_rendered(input, scope, worker_index);
-                            }
-                            let (ok_collection, err_collection) = match implementation {
-                                expr::JoinImplementation::Differential(_start, _order) => {
-                                    self.render_join(input, predicates, scope)
-                                }
-                                expr::JoinImplementation::DeltaQuery(_orders) => self
-                                    .render_delta_join(
-                                        input,
-                                        predicates,
-                                        scope,
-                                        worker_index,
-                                        |t| t.saturating_sub(1),
-                                    ),
-                                expr::JoinImplementation::Unimplemented => {
-                                    panic!("Attempt to render unimplemented join");
-                                }
-                            };
-                            (ok_collection, err_collection.map(Into::into))
-                        } else {
-                            self.ensure_rendered(input, scope, worker_index);
-                            let temp_storage = RowArena::new();
-                            let predicates = predicates.clone();
-                            let (ok_collection, err_collection) = self.collection(input).unwrap();
-                            let (ok_collection, new_err_collection) = ok_collection
-                                .filter_fallible(move |input_row| {
-                                    let datums = input_row.unpack();
-                                    for p in &predicates {
-                                        if p.eval(&datums, &temp_storage)? != Datum::True {
-                                            return Ok(false);
-                                        }
+                        self.ensure_rendered(input, scope, worker_index);
+                        let temp_storage = RowArena::new();
+                        let predicates = predicates.clone();
+                        let (ok_collection, err_collection) = self.collection(input).unwrap();
+                        let (ok_collection, new_err_collection) =
+                            ok_collection.filter_fallible(move |input_row| {
+                                let datums = input_row.unpack();
+                                for p in &predicates {
+                                    if p.eval(&datums, &temp_storage)? != Datum::True {
+                                        return Ok(false);
                                     }
-                                    Ok::<_, DataflowError>(true)
-                                });
-                            let err_collection = err_collection.concat(&new_err_collection);
-                            (ok_collection, err_collection)
-                        };
+                                }
+                                Ok::<_, DataflowError>(true)
+                            });
+                        let err_collection = err_collection.concat(&new_err_collection);
+                        let collections = (ok_collection, err_collection);
                         self.collections.insert(relation_expr.clone(), collections);
                     }
                 }
@@ -988,15 +988,17 @@ where
                     for input in inputs {
                         self.ensure_rendered(input, scope, worker_index);
                     }
+                    let input_mapper = expr::JoinInputMapper::new(inputs);
+                    let mfp = MapFilterProject::new(input_mapper.total_columns());
                     match implementation {
                         expr::JoinImplementation::Differential(_start, _order) => {
-                            let collection = self.render_join(relation_expr, &[], scope);
+                            let collection = self.render_join(relation_expr, mfp, scope);
                             self.collections.insert(relation_expr.clone(), collection);
                         }
                         expr::JoinImplementation::DeltaQuery(_orders) => {
                             let collection = self.render_delta_join(
                                 relation_expr,
-                                &[],
+                                mfp,
                                 scope,
                                 worker_index,
                                 |t| t.saturating_sub(1),
@@ -1061,6 +1063,75 @@ where
                     self.render_arrangeby(relation_expr, None);
                 }
             };
+        }
+    }
+}
+
+/// A re-useable vector of `Datum` with varying lifetimes.
+///
+/// This type is meant to allow us to recycle an underlying allocation with
+/// a specific lifetime, under the condition that the vector is emptied before
+/// this happens (to prevent leaking of invalid references).
+///
+/// It uses `ore::vec::repurpose_allocation` to accomplish this, which contains
+/// unsafe code.
+pub mod datum_vec {
+
+    use repr::{Datum, Row};
+
+    /// A re-useable vector of `Datum` with no particular lifetime.
+    pub struct DatumVec {
+        outer: Vec<Datum<'static>>,
+    }
+
+    impl DatumVec {
+        /// Allocate a new instance.
+        pub fn new() -> Self {
+            Self { outer: Vec::new() }
+        }
+        /// Borrow an instance with a specific lifetime.
+        ///
+        /// When the result is dropped, its allocation will be returned to `self`.
+        pub fn borrow<'a>(&'a mut self) -> DatumVecBorrow<'a> {
+            let inner = std::mem::take(&mut self.outer);
+            DatumVecBorrow {
+                outer: &mut self.outer,
+                inner,
+            }
+        }
+        /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`.
+        pub fn borrow_with<'a>(&'a mut self, row: &'a Row) -> DatumVecBorrow<'a> {
+            let mut borrow = self.borrow();
+            borrow.extend(row.iter());
+            borrow
+        }
+    }
+
+    /// A borrowed allocation of `Datum` with a specific lifetime.
+    ///
+    /// When an instance is dropped, its allocation is returned to the vector from
+    /// which it was extracted.
+    pub struct DatumVecBorrow<'outer> {
+        outer: &'outer mut Vec<Datum<'static>>,
+        inner: Vec<Datum<'outer>>,
+    }
+
+    impl<'outer> Drop for DatumVecBorrow<'outer> {
+        fn drop(&mut self) {
+            *self.outer = ore::vec::repurpose_allocation(std::mem::take(&mut self.inner));
+        }
+    }
+
+    impl<'outer> std::ops::Deref for DatumVecBorrow<'outer> {
+        type Target = Vec<Datum<'outer>>;
+        fn deref(&self) -> &Self::Target {
+            &self.inner
+        }
+    }
+
+    impl<'outer> std::ops::DerefMut for DatumVecBorrow<'outer> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.inner
         }
     }
 }

@@ -80,7 +80,7 @@ main() {
 
     parse_args "$@"
 
-    export MZ_THREADS="${workers}"
+    export MZ_WORKERS="${workers}"
     export OLTP_THREADS="${oltp_threads}"
     export NUM_WAREHOUSES="${warehouses}"
     export CHBENCH_RUN_SECONDS="${chbench_seconds}"

@@ -1,7 +1,7 @@
 [package]
 name = "materialized"
 description = "Streaming SQL materialized views."
-version = "0.6.1-dev"
+version = "0.6.2-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2018"
@@ -94,7 +94,7 @@ jemallocator = { version = "0.3.0", features = ["profiling", "unprefixed_malloc_
 [dev-dependencies]
 assert_cmd = "1.0.2"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-datadriven = "0.4.0"
+datadriven = "0.5.0"
 fallible-iterator = "0.2.0"
 itertools = "0.9.0"
 pgrepr = { path = "../pgrepr" }

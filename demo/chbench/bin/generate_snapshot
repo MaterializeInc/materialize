@@ -89,7 +89,7 @@ main() {
     # Ensure the directory exists so that Docker can mount it
     mkdir -p "${snapshot}"
 
-    export MZ_THREADS="${workers}"
+    export MZ_WORKERS="${workers}"
     export MZ_CHBENCH_SNAPSHOT="${snapshot}"
     export NUM_WAREHOUSES="${warehouses}"
     export OLTP_THREADS="${oltp_threads}"

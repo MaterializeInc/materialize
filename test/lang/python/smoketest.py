@@ -25,10 +25,12 @@ class SmokeTest(unittest.TestCase):
     def test_psycopg2_tail(self):
         """Test TAIL with psycopg2 via server cursors."""
         with psycopg2.connect(MATERIALIZED_URL) as conn:
+            conn.set_session(autocommit=True)
             with conn.cursor() as cur:
                 # Create a table with one row of data.
                 cur.execute("CREATE TABLE psycopg2_tail (a int, b text)")
                 cur.execute("INSERT INTO psycopg2_tail VALUES (1, 'a')")
+                conn.set_session(autocommit=False)
 
                 # Start a tail using the binary copy protocol.
                 cur.execute("DECLARE cur CURSOR FOR TAIL psycopg2_tail")
@@ -44,6 +46,7 @@ class SmokeTest(unittest.TestCase):
                 # Insert another row from another connection to simulate an
                 # update arriving.
                 with psycopg2.connect(MATERIALIZED_URL) as conn2:
+                    conn2.set_session(autocommit=True)
                     with conn2.cursor() as cur2:
                         cur2.execute("INSERT INTO psycopg2_tail VALUES (2, 'b')")
 
@@ -58,10 +61,12 @@ class SmokeTest(unittest.TestCase):
     def test_psycopg3_tail(self):
         """Test tail with psycopg3 via its new binary COPY decoding support."""
         with psycopg3.connect(MATERIALIZED_URL) as conn:
+            conn.autocommit = True
             with conn.cursor() as cur:
                 # Create a table with one row of data.
                 cur.execute("CREATE TABLE psycopg3_tail (a int, b text)")
                 cur.execute("INSERT INTO psycopg3_tail VALUES (1, 'a')")
+                conn.autocommit = False
 
                 # Start a tail using the binary copy protocol.
                 with cur.copy(
@@ -85,6 +90,7 @@ class SmokeTest(unittest.TestCase):
                     # Insert another row from another connection to simulate an
                     # update arriving.
                     with psycopg3.connect(MATERIALIZED_URL) as conn2:
+                        conn2.autocommit = True
                         with conn2.cursor() as cur2:
                             cur2.execute("INSERT INTO psycopg3_tail VALUES (2, 'b')")
 

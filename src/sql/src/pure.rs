@@ -16,7 +16,7 @@ use tokio::io::AsyncBufReadExt;
 
 use repr::strconv;
 use sql_parser::ast::{
-    AvroSchema, Connector, CreateSourceStatement, CsrSeed, Format, Ident, Statement,
+    AvroSchema, Connector, CreateSourceStatement, CsrSeed, Format, Ident, Raw, Statement,
 };
 
 use crate::kafka_util;
@@ -28,7 +28,7 @@ use crate::normalize;
 ///
 /// Note that purification is asynchronous, and may take an unboundedly long
 /// time to complete.
-pub async fn purify(mut stmt: Statement) -> Result<Statement, anyhow::Error> {
+pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::Error> {
     if let Statement::CreateSource(CreateSourceStatement {
         col_names,
         connector,

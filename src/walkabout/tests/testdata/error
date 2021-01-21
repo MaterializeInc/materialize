@@ -18,7 +18,7 @@ struct Foo {
     ty: std::cell::Rc<Foo>,
 }
 ----
-error: Unable to analyze type path with more than one component: 'std :: cell :: Rc < Foo >'
+error: Unable to analyze type path with more than two components: 'std :: cell :: Rc < Foo >'
 
 visit
 struct Foo {

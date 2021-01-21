@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
+
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -20,11 +22,13 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
-use expr::{RelationExpr, ScalarExpr};
-use repr::{Datum, Row, RowArena};
+use expr::{MapFilterProject, RelationExpr, ScalarExpr};
+use repr::{Datum, Row, RowArena, RowPacker};
 
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
+use crate::render::datum_vec::DatumVec;
+use crate::render::delta_join::MyClosure;
 
 impl<G, T> Context<G, RelationExpr, Row, T>
 where
@@ -35,7 +39,7 @@ where
     pub fn render_join(
         &mut self,
         relation_expr: &RelationExpr,
-        predicates: &[ScalarExpr],
+        map_filter_project: MapFilterProject,
         // TODO(frank): use this argument to create a region surrounding the join.
         _scope: &mut G,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
@@ -46,9 +50,43 @@ where
             implementation: expr::JoinImplementation::Differential((start, start_arr), order),
         } = relation_expr
         {
-            let column_types = relation_expr.typ().column_types;
-            let arity = column_types.len();
+            let input_mapper = expr::JoinInputMapper::new(inputs);
+            let output_arity = input_mapper.total_columns();
 
+            // Determine dummy columns for un-demanded outputs, and a projection.
+            let (dummies, demand_projection) = if let Some(demand) = demand {
+                let mut dummies = Vec::new();
+                let mut demand_projection = Vec::new();
+                for (column, typ) in relation_expr.typ().column_types.into_iter().enumerate() {
+                    if demand.contains(&column) {
+                        demand_projection.push(column);
+                    } else {
+                        demand_projection.push(output_arity + dummies.len());
+                        dummies.push(ScalarExpr::literal_ok(Datum::Dummy, typ));
+                    }
+                }
+                (dummies, demand_projection)
+            } else {
+                (Vec::new(), (0..output_arity).collect::<Vec<_>>())
+            };
+
+            let (map, filter, project) = map_filter_project.as_map_filter_project();
+
+            let map_filter_project = MapFilterProject::new(output_arity)
+                .map(dummies)
+                .project(demand_projection)
+                .map(map)
+                .filter(filter)
+                .project(project);
+
+            // Other than the stream of updates, our loop-carried state are these
+            // three variables: `column_map`, `equivalences`, and `mfp`, which
+            // record the current locations of extended output columns, and what
+            // work remains to be done on them (other than the joining itself).
+            let mut column_map = HashMap::new();
+            for column in input_mapper.global_columns(*start) {
+                column_map.insert(column, column_map.len());
+            }
             // We maintain a private copy of `equivalences`, which we will digest
             // as we produce the join.
             let mut equivalences = equivalences.clone();
@@ -56,36 +94,46 @@ where
                 equivalence.sort();
                 equivalence.dedup();
             }
-
-            let input_mapper = expr::JoinInputMapper::new(inputs);
-
-            // Unwrap demand
-            // TODO: If we pushed predicates into the operator, we could have a
-            // more accurate view of demand that does not include the support of
-            // all predicates.
-            let demand = demand.clone().unwrap_or_else(|| (0..arity).collect());
+            // We maintain a private copy of `map_filter_project`, which we will
+            // digest as we produce the join.
+            let mut mfp = map_filter_project;
 
             // This collection will evolve as we join in more inputs.
+            // TODO(mcsherry): determine and apply closure here in `flat_map_ref` form.
+            // TODO(mcsherry): If we plan to use an arrangement, should one exist, then
+            // this is wasteful as it instantiates all rows which are then dropped.
             let (mut joined, mut errs) = self.collection(&inputs[*start]).unwrap();
 
-            // Maintain sources of each in-progress column.
-            let mut source_columns = input_mapper.global_columns(*start).collect::<Vec<_>>();
+            let use_leading_arrangement = start_arr.is_some() && inputs.len() > 1;
+            if !use_leading_arrangement {
+                // NOTE(mcsherry): ideally this code is rarely/never relevant, as the associated logic
+                // could be pushed down to the input and perhaps beyond. I'm not certain under what
+                // circumstance we should just delete it, though.
 
-            let mut predicates = predicates.to_vec();
-            if start_arr.is_none() || inputs.len() == 1 {
+                // At this point we are able to construct a per-row closure that can be applied once
+                // we have the first wave of columns in place. We will not apply it quite yet, because
+                // we have three code paths that might produce data and it is complicated.
+                let closure = MyClosure::build(&mut column_map, &mut equivalences, &mut mfp);
+
                 // If there is no starting arrangement, then we can run filters
                 // directly on the starting collection.
                 // If there is only one input, we are done joining, so run filters
-                let (j, es) = crate::render::delta_join::build_filter(
-                    joined,
-                    &source_columns,
-                    &mut predicates,
-                    &mut equivalences,
-                );
+                let (j, es) = joined.flat_map_fallible({
+                    // Reuseable allocation for unpacking.
+                    let mut datums = DatumVec::new();
+                    let mut row_packer = RowPacker::new();
+                    move |row| {
+                        let temp_storage = RowArena::new();
+                        let mut datums_local = datums.borrow_with(&row);
+                        // TODO(mcsherry): re-use `row` allocation.
+                        closure
+                            .apply(&mut datums_local, &temp_storage, &mut row_packer)
+                            .map_err(DataflowError::from)
+                            .transpose()
+                    }
+                });
                 joined = j;
-                if let Some(es) = es {
-                    errs.concat(&es);
-                }
+                errs.concat(&es);
             }
 
             // We track the input relations as they are
@@ -108,14 +156,7 @@ where
                             .find_bound_expr(expr, &bound_inputs, &equivalences)
                             .expect("Expression in join plan is not bound at time of use");
 
-                        bound_expr.visit_mut(&mut |e| {
-                            if let ScalarExpr::Column(c) = e {
-                                *c = source_columns
-                                    .iter()
-                                    .position(|x| x == c)
-                                    .expect("Did not find bound column in source_columns");
-                            }
-                        });
+                        bound_expr.permute_map(&column_map);
                         bound_expr
                     })
                     .collect::<Vec<_>>();
@@ -128,145 +169,105 @@ where
                 }
                 equivalences.retain(|e| e.len() > 1);
 
-                // Determine which columns from `joined` and `input` should be
-                // retained. Columns should be retained if they are required by
-                // `demand`, or are in the support of an equivalence class.
-                let mut column_demand = std::collections::HashSet::new();
-                for equivalence in equivalences.iter() {
-                    for expr in equivalence.iter() {
-                        column_demand.extend(expr.support());
-                    }
+                // Update our map of the sources of each column in the update stream.
+                for column in input_mapper.global_columns(*input) {
+                    column_map.insert(column, column_map.len());
                 }
-                column_demand.extend(demand.iter().cloned());
 
-                let next_source_vals = input_mapper
-                    .global_columns(*input)
-                    .filter(|c| column_demand.contains(c))
-                    .collect::<Vec<_>>();
+                // At this point we are able to construct a per-row closure that can be applied
+                // once we have added additional columns from `lookup`. We build it now so that
+                // it can be applied immediately in the `lookup` operator.
+                let closure = MyClosure::build(&mut column_map, &mut equivalences, &mut mfp);
 
-                let next_vals = next_source_vals
-                    .iter()
-                    .map(|c| input_mapper.map_column_to_local(*c).0)
-                    .collect::<Vec<_>>();
-
-                // When joining the first input, check to see if there is a
-                // convenient ready-made arrangement
-                let (j, es, prev_vals) =
-                    match (input_index, self.arrangement(&inputs[*start], &prev_keys)) {
-                        (0, Some(ArrangementFlavor::Local(oks, es))) => {
-                            let (j, next_es) = self.differential_join(
-                                oks,
-                                &inputs[*input],
-                                &next_keys[..],
-                                next_vals,
-                            );
-                            (
-                                j,
-                                es.as_collection(|k, _v| k.clone()).concat(&next_es),
-                                source_columns,
-                            )
-                        }
-                        (0, Some(ArrangementFlavor::Trace(_gid, oks, es))) => {
-                            let (j, next_es) = self.differential_join(
-                                oks,
-                                &inputs[*input],
-                                &next_keys[..],
-                                next_vals,
-                            );
-                            (
-                                j,
-                                es.as_collection(|k, _v| k.clone()).concat(&next_es),
-                                source_columns,
-                            )
-                        }
-                        _ => {
-                            // Otherwise, build a new arrangement from the collection of
-                            // joins of previous inputs.
-                            // We exploit the demand information to restrict `prev` to
-                            // its demanded columns.
-
-                            // Identify the *indexes* of columns that are demanded by any
-                            // remaining predicates and equivalence classes.
-                            let prev_vals = source_columns
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(i, c)| {
-                                    if column_demand.contains(c) {
-                                        Some(i)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-
-                            // Identify the columns we intend to retain.
-                            let prev_source_vals =
-                                prev_vals.iter().map(|i| source_columns[*i]).collect();
-
-                            let (prev_keyed, es) = joined.map_fallible({
-                                let mut row_packer = repr::RowPacker::new();
-                                move |row| {
-                                    let datums = row.unpack();
-                                    let temp_storage = RowArena::new();
-                                    let key = Row::try_pack(
-                                        prev_keys.iter().map(|e| e.eval(&datums, &temp_storage)),
-                                    )?;
-                                    let row = row_packer.pack(prev_vals.iter().map(|i| datums[*i]));
-                                    Ok((key, row))
-                                }
-                            });
-                            let prev_keyed = prev_keyed.arrange_named::<OrdValSpine<_, _, _, _>>(
-                                &format!("JoinStage: {}", input),
-                            );
-                            let (j, next_es) = self.differential_join(
-                                prev_keyed,
-                                &inputs[*input],
-                                &next_keys[..],
-                                next_vals,
-                            );
-                            (j, es.concat(&next_es), prev_source_vals)
-                        }
-                    };
+                // When joining the first input, check to see if we are meant to use an existing
+                // arrangement.
+                let (j, es) = match (
+                    input_index,
+                    use_leading_arrangement,
+                    self.arrangement(&inputs[*start], &prev_keys),
+                ) {
+                    (0, true, Some(ArrangementFlavor::Local(oks, es))) => {
+                        let (j, next_es) =
+                            self.differential_join(oks, &inputs[*input], &next_keys[..], closure);
+                        (j, es.as_collection(|k, _v| k.clone()).concat(&next_es))
+                    }
+                    (0, true, Some(ArrangementFlavor::Trace(_gid, oks, es))) => {
+                        let (j, next_es) =
+                            self.differential_join(oks, &inputs[*input], &next_keys[..], closure);
+                        (j, es.as_collection(|k, _v| k.clone()).concat(&next_es))
+                    }
+                    _ => {
+                        // Otherwise, build a new arrangement from the collection of
+                        // joins of previous inputs.
+                        // We exploit the demand information to restrict `prev` to
+                        // its demanded columns.
+                        let (prev_keyed, es) = joined.map_fallible({
+                            // Reuseable allocation for unpacking.
+                            let mut datums = DatumVec::new();
+                            move |row| {
+                                let temp_storage = RowArena::new();
+                                let datums_local = datums.borrow_with(&row);
+                                let key = Row::try_pack(
+                                    prev_keys
+                                        .iter()
+                                        .map(|e| e.eval(&datums_local, &temp_storage)),
+                                )?;
+                                // Explicit drop here to allow `row` to be returned.
+                                drop(datums_local);
+                                // TODO(mcsherry): We could remove any columns used only for `key`.
+                                // This cannot be done any earlier, for example in a prior closure,
+                                // because we need the columns for key production.
+                                Ok((key, row))
+                            }
+                        });
+                        let prev_keyed = prev_keyed.arrange_named::<OrdValSpine<_, _, _, _>>(
+                            &format!("JoinStage-input{}", input),
+                        );
+                        let (j, next_es) = self.differential_join(
+                            prev_keyed,
+                            &inputs[*input],
+                            &next_keys[..],
+                            closure,
+                        );
+                        (j, es.concat(&next_es))
+                    }
+                };
 
                 joined = j;
                 errs = errs.concat(&es);
-                source_columns = prev_vals.into_iter().chain(next_source_vals).collect();
-
-                let (j, es) = crate::render::delta_join::build_filter(
-                    joined,
-                    &source_columns,
-                    &mut predicates,
-                    &mut equivalences,
-                );
-                joined = j;
-                if let Some(es) = es {
-                    errs = errs.concat(&es);
-                }
-
                 bound_inputs.push(*input);
             }
 
-            // We are obliged to produce demanded columns in order, with dummy data allowed
-            // in non-demanded locations. They must all be in order, in any case. All demanded
-            // columns should be present in `source_columns` (and probably not much else).
-
-            let position_or = (0..arity)
-                .map(|col| source_columns.iter().position(|c| c == &col))
-                .collect::<Vec<_>>();
-
-            (
-                joined.map({
+            // We must now apply `mfp` as it *should* have sufficient support for
+            // full evaluation. Before we do this, we need to permute it to refer
+            // to the correct physical column locations.
+            mfp.permute(&column_map, column_map.len());
+            // The `mfp` has access to all columns at this point, and could
+            // plausibly be much simpler that a general `MapFilterProject`.
+            // As of this writing, the `mfp` will only contain literals and
+            // some projection to place them and potentially copy columns.
+            // These should not error (if the literals are non-errors) and
+            // could result in a simpler (non-erroring) operator.
+            if !mfp.is_identity() {
+                let (updates, errors) = joined.flat_map_fallible({
+                    // Reuseable allocation for unpacking.
+                    let mut datums = DatumVec::new();
                     let mut row_packer = repr::RowPacker::new();
                     move |row| {
-                        let datums = row.unpack();
-                        row_packer.pack(position_or.iter().map(|pos_or| match pos_or {
-                            Some(index) => datums[*index],
-                            None => Datum::Dummy,
-                        }))
+                        let temp_storage = RowArena::new();
+                        let mut datums_local = datums.borrow_with(&row);
+                        // TODO(mcsherry): re-use `row` allocation.
+                        mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer)
+                            .map_err(DataflowError::from)
+                            .transpose()
                     }
-                }),
-                errs,
-            )
+                });
+
+                joined = updates;
+                errs = errs.concat(&errors);
+            }
+
+            (joined, errs)
         } else {
             panic!("render_join called on invalid expression.")
         }
@@ -280,7 +281,7 @@ where
         prev_keyed: J,
         next_input: &RelationExpr,
         next_keys: &[ScalarExpr],
-        next_vals: Vec<usize>,
+        closure: MyClosure,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
         J: JoinCore<G, Row, Row, repr::Diff>,
@@ -303,14 +304,14 @@ where
         }
 
         match self.arrangement(next_input, next_keys) {
-            Some(ArrangementFlavor::Local(oks, es)) => (
-                self.differential_join_inner(prev_keyed, oks, next_vals),
-                es.as_collection(|k, _v| k.clone()),
-            ),
-            Some(ArrangementFlavor::Trace(_gid, oks, es)) => (
-                self.differential_join_inner(prev_keyed, oks, next_vals),
-                es.as_collection(|k, _v| k.clone()),
-            ),
+            Some(ArrangementFlavor::Local(oks, es)) => {
+                let (oks, err) = self.differential_join_inner(prev_keyed, oks, closure);
+                (oks, err.concat(&es.as_collection(|k, _v| k.clone())))
+            }
+            Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
+                let (oks, err) = self.differential_join_inner(prev_keyed, oks, closure);
+                (oks, err.concat(&es.as_collection(|k, _v| k.clone())))
+            }
             None => {
                 unreachable!("Arrangement absent despite explicit construction");
             }
@@ -324,8 +325,8 @@ where
         &mut self,
         prev_keyed: J,
         next_input: Arranged<G, Tr2>,
-        next_vals: Vec<usize>,
-    ) -> Collection<G, Row>
+        closure: MyClosure,
+    ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
         J: JoinCore<G, Row, Row, repr::Diff>,
         Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = repr::Diff>
@@ -334,19 +335,33 @@ where
         Tr2::Batch: BatchReader<Row, Tr2::Val, G::Timestamp, repr::Diff> + 'static,
         Tr2::Cursor: Cursor<Row, Tr2::Val, G::Timestamp, repr::Diff> + 'static,
     {
-        let mut row_packer = repr::RowPacker::new();
-        prev_keyed.join_core(&next_input, move |_keys, old, new| {
-            let prev_datums = old.unpack();
-            let next_datums = new.unpack();
-            // TODO: We could in principle apply some predicates here, and avoid
-            // constructing output rows that will be filtered out soon.
-            Some(
-                row_packer.pack(
-                    prev_datums
-                        .iter()
-                        .chain(next_vals.iter().map(|i| &next_datums[*i])),
-                ),
-            )
-        })
+        use differential_dataflow::AsCollection;
+        use timely::dataflow::operators::OkErr;
+
+        // Reuseable allocation for unpacking.
+        let mut datums = DatumVec::new();
+        let mut row_packer = RowPacker::new();
+        let (oks, err) = prev_keyed
+            .join_core(&next_input, move |_keys, old, new| {
+                let temp_storage = RowArena::new();
+                let mut datums_local = datums.borrow();
+                datums_local.extend(old.iter());
+                datums_local.extend(new.iter());
+
+                closure
+                    .apply(&mut datums_local, &temp_storage, &mut row_packer)
+                    .map_err(DataflowError::from)
+                    .transpose()
+            })
+            .inner
+            .ok_err(|(x, t, d)| {
+                // TODO(mcsherry): consider `ok_err()` for `Collection`.
+                match x {
+                    Ok(x) => Ok((x, t, d)),
+                    Err(x) => Err((x, t, d)),
+                }
+            });
+
+        (oks.as_collection(), err.as_collection())
     }
 }

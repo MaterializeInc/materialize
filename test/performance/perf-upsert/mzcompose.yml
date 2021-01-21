@@ -19,7 +19,7 @@ services:
     ports:
      - *materialized
     init: true
-    command: --workers ${MZ_THREADS:-1} --differential-idle-merge-effort=1000 --disable-telemetry
+    command: --workers ${MZ_WORKERS:-1} --differential-idle-merge-effort=1000 --disable-telemetry
     environment:
       - MZ_LOG=dataflow=error,info
   zookeeper:

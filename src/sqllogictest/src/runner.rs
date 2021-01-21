@@ -48,7 +48,7 @@ use tokio::runtime::Runtime;
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
-use tokio_postgres::{connect, NoTls, Row};
+use tokio_postgres::{connect, NoTls, Row, SimpleQueryMessage};
 use uuid::Uuid;
 
 use pgrepr::{Interval, Jsonb, Numeric, Value};
@@ -572,6 +572,12 @@ impl Runner {
                 output,
                 location,
             } => self.run_query(sql, output, location.clone()).await,
+            Record::Simple {
+                sql,
+                output,
+                location,
+                ..
+            } => self.run_simple(sql, output, location.clone()).await,
             _ => Ok(Outcome::Success),
         }
     }
@@ -794,6 +800,41 @@ impl Runner {
 
         Ok(Outcome::Success)
     }
+
+    async fn run_simple<'a>(
+        &mut self,
+        sql: &'a str,
+        output: &'a Output,
+        location: Location,
+    ) -> Result<Outcome<'a>, anyhow::Error> {
+        let actual = Output::Values(match self.client.simple_query(sql).await {
+            Ok(result) => result
+                .into_iter()
+                .map(|m| match m {
+                    SimpleQueryMessage::Row(row) => {
+                        let mut s = vec![];
+                        for i in 0..row.len() {
+                            s.push(row.get(i).unwrap_or("NULL"));
+                        }
+                        s.join(",")
+                    }
+                    SimpleQueryMessage::CommandComplete(count) => format!("COMPLETE {}", count),
+                    _ => panic!("unexpected"),
+                })
+                .collect::<Vec<_>>(),
+            Err(error) => vec![error.to_string()],
+        });
+        if *output != actual {
+            Ok(Outcome::OutputFailure {
+                expected_output: output,
+                actual_raw_output: vec![],
+                actual_output: actual,
+                location,
+            })
+        } else {
+            Ok(Outcome::Success)
+        }
+    }
 }
 
 pub trait WriteFmt {
@@ -945,6 +986,36 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
                         }
                     }
                 }
+            }
+        } else if let (
+            Record::Simple {
+                output_str: expected_output,
+                ..
+            },
+            Outcome::OutputFailure {
+                actual_output: Output::Values(actual_output),
+                ..
+            },
+        ) = (&record, &outcome)
+        {
+            // Output everything before this record.
+            let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
+            buf.flush_to(offset);
+            buf.skip_to(offset + expected_output.len());
+
+            // Attempt to install the result separator (----), if it does
+            // not already exist.
+            if buf.peek_last(5) == "\n----" {
+                buf.append("\n");
+            } else if buf.peek_last(6) != "\n----\n" {
+                buf.append("\n----\n");
+            }
+
+            for (i, row) in actual_output.iter().enumerate() {
+                if i != 0 {
+                    buf.append("\n");
+                }
+                buf.append(row);
             }
         } else if let Outcome::Success = outcome {
             // Ok.

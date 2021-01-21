@@ -42,8 +42,8 @@ use crate::ast::{
     ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement,
     CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, DataType, DropDatabaseStatement,
-    DropObjectsStatement, Expr, Format, Ident, IfExistsBehavior, ObjectName, ObjectType, SqlOption,
-    Statement, Value,
+    DropObjectsStatement, Expr, Format, Ident, IfExistsBehavior, ObjectName, ObjectType, Raw,
+    SqlOption, Statement, Value,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -113,14 +113,14 @@ pub fn plan_create_schema(
 
 pub fn describe_create_table(
     _: &StatementContext,
-    _: CreateTableStatement,
+    _: CreateTableStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_table(
     scx: &StatementContext,
-    stmt: CreateTableStatement,
+    stmt: CreateTableStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateTableStatement {
         name,
@@ -684,14 +684,14 @@ pub fn plan_create_source(
 
 pub fn describe_create_view(
     _: &StatementContext,
-    _: CreateViewStatement,
+    _: CreateViewStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_view(
     scx: &StatementContext,
-    mut stmt: CreateViewStatement,
+    mut stmt: CreateViewStatement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateView(stmt.clone()))?;
@@ -712,8 +712,20 @@ pub fn plan_create_view(
     } else {
         scx.allocate_name(normalize::object_name(name.to_owned())?)
     };
+    let (mut relation_expr, mut desc, finishing) =
+        query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
+    relation_expr.bind_parameters(&params)?;
+    //TODO: materialize#724 - persist finishing information with the view?
+    relation_expr.finish(finishing);
+    let relation_expr = relation_expr.decorrelate();
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
+            if relation_expr.global_uses().contains(&item.id()) {
+                bail!(
+                    "cannot replace view {0}: depended upon by new {0} definition",
+                    item.name()
+                );
+            }
             let cascade = false;
             plan_drop_item(scx, ObjectType::View, item, cascade)?
         } else {
@@ -722,12 +734,6 @@ pub fn plan_create_view(
     } else {
         None
     };
-    let (mut relation_expr, mut desc, finishing) =
-        query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
-    relation_expr.bind_parameters(&params)?;
-    //TODO: materialize#724 - persist finishing information with the view?
-    relation_expr.finish(finishing);
-    let relation_expr = relation_expr.decorrelate();
     desc = plan_utils::maybe_rename_columns(format!("view {}", name), desc, columns)?;
     let temporary = *temporary;
     let materialize = *materialized; // Normalize for `raw_sql` below.
@@ -845,14 +851,14 @@ fn avro_ocf_sink_builder(
 
 pub fn describe_create_sink(
     _: &StatementContext,
-    _: CreateSinkStatement,
+    _: CreateSinkStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    stmt: CreateSinkStatement,
+    stmt: CreateSinkStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
@@ -949,14 +955,14 @@ pub fn plan_create_sink(
 
 pub fn describe_create_index(
     _: &StatementContext,
-    _: CreateIndexStatement,
+    _: CreateIndexStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_index(
     scx: &StatementContext,
-    mut stmt: CreateIndexStatement,
+    mut stmt: CreateIndexStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateIndexStatement {
         name,

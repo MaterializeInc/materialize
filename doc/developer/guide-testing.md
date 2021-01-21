@@ -308,7 +308,7 @@ and materialized binaries if you have changed them locally. From the
 
 ```
 ./mzcompose down -v
-BUILD_MODE=debug AWS_REGION= ./mzcompose run testdrive
+AWS_REGION= ./mzcompose run testdrive --build-mode=debug
 ```
 
 The `down` subcommand is needed to destroy any existing materialize

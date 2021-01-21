@@ -84,6 +84,8 @@ fn gen_root(c: &Config, ir: &Ir) -> String {
 
     let mut buf = CodegenBuf::new();
 
+    let mut extra_methods = BTreeSet::new();
+
     let mut generics_to_bounds: BTreeMap<Ident, BTreeSet<Ident>> = BTreeMap::new();
     // For each occurrence of a generic (we assume they are named consistently
     // througout) compute the union of all trait bounds ever required of it.
@@ -130,8 +132,45 @@ fn gen_root(c: &Config, ir: &Ir) -> String {
             "fn {fn_name}(&mut self, node: &'ast {muta}{name}{generics})"
         ));
         buf.writeln(f!("{fn_name}(self, node)"));
+
+        match item {
+            Item::Struct(s) => {
+                for (_, f) in s.fields.iter().enumerate() {
+                    if let Type::Abstract(name) = &f.ty {
+                        extra_methods.insert(name);
+                    }
+                }
+            }
+            Item::Enum(e) => {
+                for v in &e.variants {
+                    for (_, f) in v.fields.iter().enumerate() {
+                        if let Type::Abstract(name) = &f.ty {
+                            extra_methods.insert(name);
+                        }
+                    }
+                }
+            }
+        }
+
         buf.end_block();
     }
+
+    for name in &extra_methods {
+        let type_name = name.to_vec().join("::");
+        let fn_name = visit_fn_name(
+            c,
+            &name
+                .iter()
+                .skip(1)
+                .cloned()
+                .collect::<Vec<String>>()
+                .join(""),
+        );
+        buf.start_block(f!("fn {fn_name}(&mut self, node: &'ast {muta}{type_name})"));
+        buf.writeln(f!("{fn_name}(self, node)"));
+        buf.end_block();
+    }
+
     buf.end_block();
 
     for (name, item) in ir {
@@ -177,12 +216,39 @@ fn gen_root(c: &Config, ir: &Ir) -> String {
         buf.end_block();
     }
 
+    for name in extra_methods {
+        let type_name = name.to_vec().join("::");
+        let fn_name = visit_fn_name(
+            c,
+            &name
+                .iter()
+                .skip(1)
+                .cloned()
+                .collect::<Vec<String>>()
+                .join(""),
+        );
+        buf.writeln(f!(
+            "pub fn {fn_name}<'ast, V{all_generics_with_bounds_str}>(visitor: &mut V, node: &'ast {muta}{type_name})"
+        ));
+        buf.writeln(f!("where"));
+        buf.writeln(f!(
+            "    V: {trait_name}<'ast{all_generics_no_bounds_str}> + ?Sized,"
+        ));
+        buf.start_block("");
+        buf.end_block();
+    }
+
     buf.into_string()
 }
 
 fn gen_element(c: &Config, buf: &mut CodegenBuf, binding: &str, ty: &Type) {
     match ty {
         Type::Primitive => (),
+        Type::Abstract(s) => {
+            let name = s.iter().skip(1).cloned().collect::<Vec<String>>().join("");
+            let fn_name = visit_fn_name(c, &name);
+            buf.writeln(f!("visitor.{fn_name}({binding});"));
+        }
         Type::Option(ty) => {
             buf.start_block(f!("if let Some(v) = {binding}"));
             gen_element(c, buf, "v", ty);
