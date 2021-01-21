@@ -521,11 +521,11 @@ impl AggregateFunc {
         match self {
             AggregateFunc::Count => (
                 AggregateFunc::SumInt64,
-                Some(crate::UnaryFunc::CastDecimalToInt64(MAX_DECIMAL_PRECISION)),
+                Some(crate::UnaryFunc::CastDecimalToInt64(0)),
             ),
             AggregateFunc::SumInt32 => (
                 AggregateFunc::SumInt64,
-                Some(crate::UnaryFunc::CastDecimalToInt64(MAX_DECIMAL_PRECISION)),
+                Some(crate::UnaryFunc::CastDecimalToInt64(0)),
             ),
             AggregateFunc::SumInt64 => (AggregateFunc::SumDecimal, None),
             _ => (self.clone(), None),
@@ -557,6 +557,20 @@ impl AggregateFunc {
             AggregateFunc::MinTimestamp => true,
             AggregateFunc::MinTimestampTz => true,
             AggregateFunc::Dummy => true,
+            _ => false,
+        }
+    }
+
+    /// returns true for a function f if the result of aggregating
+    /// f(literal) depends on the row count of the set being aggregated on
+    pub fn row_count_dependent(&self) -> bool {
+        match self {
+            AggregateFunc::SumInt32 => true,
+            AggregateFunc::SumInt64 => true,
+            AggregateFunc::SumFloat32 => true,
+            AggregateFunc::SumFloat64 => true,
+            AggregateFunc::SumDecimal => true,
+            AggregateFunc::Count => true,
             _ => false,
         }
     }
