@@ -149,6 +149,7 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
             view_sources[view] = SourceInfo(topic_name, source_offsets[topic_name])
 
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
+        conn.autocommit = True
         installed_views = set(view_names(conn))
 
     # Verify that we have snapshots for all views installed
@@ -163,6 +164,7 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
 
     pending_views = installed_views
     with psycopg2.connect(f"postgresql://{args.host}:{args.port}/materialize") as conn:
+        conn.autocommit = True
         while pending_views:
             views_to_remove = []
             time_taken = time.monotonic() - start_time
