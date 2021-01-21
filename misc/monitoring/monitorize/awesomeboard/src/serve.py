@@ -9,12 +9,22 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""AwesomeBoard!
+"""Demonstration Tornado Web Server for Materialize Wikirecent Use Case.
 
-This Python Webserver is responsible for serving operational metrics scraped from one materialized
-intance and inserted into another materialized instance.
+This file is written in a bottom-up structure. The code flows as follows:
 
-This code is almost identical to the code in `play/wikirecent`.
+- Call `run` to create a Tornado application with HTTP and websocket handlers, start background
+  TAIL VIEW coroutines and start the event loop.
+- `IndexHandler` is responsible for serving our HTML / Javacript page.
+- `StreamHandler` is responsible for accepting new client connections, adding them as listeners on
+  `View` objects and removing them when connections are closed.
+- `Application` is responsible for creating an internal `View` object per materialized view that
+  we are interesting in tailing. It's also the class that enables `StreamHandler` objects to
+  locate `View` objects.
+- `View` objects represents a mirror copy of a materialized view in materialized. Views spawn a
+  background coroutine that runs the `TAIL` command, processing rows and turning them into updates
+  that can be broadcast to listeners. The background thread is also responsible for maintaining an
+  internal copy of the view that can be used to initialize state for new listeners.
 """
 
 import collections
@@ -40,7 +50,7 @@ class View:
             - `view_name`: The name of the materialized view to TAIL.
         """
         self.current_rows = []
-        self.current_timestamp = []
+        self.current_timestamp = None
         self.dsn = dsn
         self.listeners = set([])
         self.view_name = view_name
@@ -91,44 +101,39 @@ class View:
         log.info('Spawning coroutine to TAIL VIEW "%s"', self.view_name)
         async with await self.mzql_connection() as conn:
             async with await conn.cursor() as cursor:
-                query = f"COPY (TAIL {self.view_name} WITH (PROGRESS)) TO STDOUT"
-                async with cursor.copy(query) as tail:
-                    await self.tail_view_inner(tail)
+                query = f"DECLARE cur CURSOR FOR TAIL {self.view_name} WITH (SNAPSHOT, PROGRESS)"
+                await cursor.execute(query)
+                await self.tail_view_inner(cursor)
 
-    async def tail_view_inner(self, tail):
+    async def tail_view_inner(self, cursor):
         """Read rows from TAIL, converting them to updates and broadcasting to listeners.
 
         :Params:
-            - `tail`: An asynchronous cursor that is configured to read rows from a TAIL query.
+            - `cursor`: A psycopg3 cursor that is configured to read rows from a TAIL query.
         """
         inserted = []
         deleted = []
-        async for row in tail:
-            row = row.decode("utf-8")
-            (timestamp, progressed, diff, *columns) = row.strip().split("\t")
+        while True:
+            await cursor.execute(f"FETCH ALL cur")
+            async for (timestamp, progressed, diff, *columns) in cursor:
+                # The progressed column serves as a synchronization primitive indicating that all
+                # rows for an update have been read. We should publish this update.
+                if progressed:
+                    self.update(deleted, inserted, timestamp)
+                    inserted = []
+                    deleted = []
+                    continue
 
-            # This row serves as a synchronization primitive indicating that all
-            # rows for an update have been read. We should publish this update.
-            if progressed == "t" and diff == "\\N":
-                self.update(deleted, inserted, timestamp)
-                inserted = []
-                deleted = []
-                continue
-
-            # This is a row that we should insert or delete "diff" number of times
-            try:
-                diff = int(diff)
-            except ValueError:
-                raise
-
-            # Simplify our implementation by creating "diff" copies of each row instead
-            # of tracking counts per row
-            if diff < 0:
-                deleted.extend([columns] * abs(diff))
-            elif diff > 0:
-                inserted.extend([columns] * diff)
-            else:
-                raise ValueError(f"Bad data from TAIL: {row.strip()}")
+                # Simplify our implementation by creating "diff" copies of each row instead
+                # of tracking counts per row
+                if diff < 0:
+                    deleted.extend([columns] * abs(diff))
+                elif diff > 0:
+                    inserted.extend([columns] * diff)
+                else:
+                    raise ValueError(
+                        f"Bad data in TAIL: {timestamp}, {progressed}, {diff}, {columns}"
+                    )
 
     def update(self, deleted, inserted, timestamp):
         """Update our internal view based on this diff and broadcast the update to listeners.
@@ -136,9 +141,9 @@ class View:
         :Params:
             - `deleted`: The list of rows that need to be removed.
             - `inserted`: The list of rows that need to be added.
-            - `timestamp`: The materialized timestamp for which this update is valid.
+            - `timestamp`: The materialize internal timestamp for this view.
         """
-        self.current_timestamp = timestamp
+        self.current_timestamp = int(timestamp)
 
         # Remove any rows that have been deleted
         for r in deleted:
@@ -149,8 +154,11 @@ class View:
 
         # If we have listeners configured, broadcast this diff
         if self.listeners:
-            payload = {"deleted": deleted, "inserted": inserted, "timestamp": timestamp}
-
+            payload = {
+                "deleted": deleted,
+                "inserted": inserted,
+                "timestamp": self.current_timestamp,
+            }
             self.broadcast(payload)
 
 
