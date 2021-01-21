@@ -17,27 +17,25 @@ use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
-use globset::GlobBuilder;
-
 use aws_arn::{Resource, ARN};
-use dataflow_types::SinkEnvelope;
-use dataflow_types::SourceEnvelope;
+use globset::GlobBuilder;
+use itertools::Itertools;
+use reqwest::Url;
+use rusoto_core::Region;
+
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
     DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
     KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding, RegexEncoding,
-    S3SourceConnector, SinkConnectorBuilder, SourceConnector,
+    S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceEnvelope,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
-use interchange::envelopes::dbz_desc;
-use itertools::Itertools;
+use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
 use regex::Regex;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
-use reqwest::Url;
-use rusoto_core::Region;
 use sql_parser::ast::Envelope;
 
 use crate::ast::display::AstDisplay;
@@ -530,7 +528,7 @@ pub fn plan_create_source(
 
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
-        sql_parser::ast::Envelope::None => dataflow_types::SourceEnvelope::None,
+        sql_parser::ast::Envelope::None => SourceEnvelope::None,
         sql_parser::ast::Envelope::Debezium => {
             let dedup_strat = match with_options.remove("deduplication") {
                 None => DebeziumDeduplicationStrategy::Ordered,
@@ -571,7 +569,7 @@ pub fn plan_create_source(
                 }
                 _ => bail!("deduplication must be one of 'ordered', 'full' or 'full_in_range'."),
             };
-            dataflow_types::SourceEnvelope::Debezium(dedup_strat)
+            SourceEnvelope::Debezium(dedup_strat)
         }
         sql_parser::ast::Envelope::Upsert(key_format) => match connector {
             Connector::Kafka { .. } => {
@@ -593,7 +591,7 @@ pub fn plan_create_source(
                     DataEncoding::Bytes | DataEncoding::Text => {}
                     _ => unsupported!("format for upsert key"),
                 }
-                dataflow_types::SourceEnvelope::Upsert(key_encoding)
+                SourceEnvelope::Upsert(key_encoding)
             }
             _ => unsupported!("upsert envelope for non-Kafka sources"),
         },
@@ -608,11 +606,11 @@ pub fn plan_create_source(
                 Some(Format::Avro(_)) => {}
                 _ => unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
-            dataflow_types::SourceEnvelope::CdcV2
+            SourceEnvelope::CdcV2
         }
     };
 
-    if let dataflow_types::SourceEnvelope::Upsert(key_encoding) = &envelope {
+    if let SourceEnvelope::Upsert(key_encoding) = &envelope {
         match &mut encoding {
             DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
                 *key_schema = None;
@@ -955,7 +953,7 @@ pub fn plan_create_sink(
     });
 
     let value_desc = match envelope {
-        SinkEnvelope::Debezium => dbz_desc(desc.clone()),
+        SinkEnvelope::Debezium => envelopes::dbz_desc(desc.clone()),
         SinkEnvelope::Upsert => desc.clone(),
         SinkEnvelope::Tail { .. } => {
             unreachable!("SinkEnvelope::Tail is only used when creating tails, not sinks")
