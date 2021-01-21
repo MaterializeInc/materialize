@@ -418,16 +418,13 @@ mzworkflows:
     - step: start-services
       services: [dashboard]
     - step: start-services
-      services: [kafka, schema-registry, control-center]
+      services: [kafka, schema-registry]
     - step: wait-for-tcp
       host: schema-registry
       port: 8081
     - step: wait-for-tcp
       host: kafka
       port: 9092
-    - step: wait-for-tcp
-      host: control-center
-      port: 9021
     - step: run
       service: kafka-util
       command: restore_topics.py --topic-filter ${KAFKA_TOPIC_FILTER:-debezium.tpcch.*}
