@@ -246,7 +246,11 @@ impl Type {
             },
             Type::Numeric => ScalarType::Decimal(0, 0),
             Type::Oid => ScalarType::Oid,
-            Type::Record(_) => ScalarType::Record { fields: vec![] },
+            Type::Record(_) => ScalarType::Record {
+                fields: vec![],
+                custom_oid: None,
+                custom_name: None,
+            },
             Type::Text => ScalarType::String,
             Type::Time => ScalarType::Time,
             Type::Timestamp => ScalarType::Timestamp,
@@ -277,7 +281,7 @@ impl From<&ScalarType> for Type {
                 value_type: Box::new(From::from(&**value_type)),
             },
             ScalarType::Oid => Type::Oid,
-            ScalarType::Record { fields } => Type::Record(
+            ScalarType::Record { fields, .. } => Type::Record(
                 fields
                     .iter()
                     .map(|(_name, ty)| Type::from(&ty.scalar_type))

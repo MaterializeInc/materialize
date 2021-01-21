@@ -14,6 +14,7 @@ use std::time::SystemTime;
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
+use dataflow_types::SinkEnvelope;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
@@ -163,6 +164,7 @@ pub struct Sink {
     pub plan_cx: PlanContext,
     pub from: GlobalId,
     pub connector: SinkConnectorState,
+    pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub as_of: Option<u64>,
 }
@@ -1528,6 +1530,7 @@ impl Catalog {
                 plan_cx: pcx,
                 from: sink.from,
                 connector: SinkConnectorState::Pending(sink.connector_builder),
+                envelope: sink.envelope,
                 with_snapshot,
                 as_of,
             }),
@@ -1810,7 +1813,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.humanize_scalar_type(&ScalarType::String),
                 self.humanize_scalar_type(value_type)
             ),
-            Record { fields } => format!(
+            Record { fields, .. } => format!(
                 "record({})",
                 fields
                     .iter()

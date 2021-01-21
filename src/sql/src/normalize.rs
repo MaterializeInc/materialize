@@ -250,6 +250,7 @@ pub fn create_statement(
             connector: _,
             with_options: _,
             format: _,
+            envelope: _,
             with_snapshot: _,
             as_of: _,
             if_not_exists,

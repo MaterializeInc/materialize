@@ -20,14 +20,17 @@ use anyhow::{anyhow, bail};
 use globset::GlobBuilder;
 
 use aws_arn::{Resource, ARN};
+use dataflow_types::SinkEnvelope;
+use dataflow_types::SourceEnvelope;
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
-    DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
-    KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding,
-    RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SourceConnector,
+    DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
+    KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding, RegexEncoding,
+    S3SourceConnector, SinkConnectorBuilder, SourceConnector,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
+use interchange::envelopes::dbz_desc;
 use itertools::Itertools;
 use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
@@ -35,6 +38,7 @@ use regex::Regex;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
 use reqwest::Url;
 use rusoto_core::Region;
+use sql_parser::ast::Envelope;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -526,7 +530,7 @@ pub fn plan_create_source(
 
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
-        sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
+        sql_parser::ast::Envelope::None => dataflow_types::SourceEnvelope::None,
         sql_parser::ast::Envelope::Debezium => {
             let dedup_strat = match with_options.remove("deduplication") {
                 None => DebeziumDeduplicationStrategy::Ordered,
@@ -567,7 +571,7 @@ pub fn plan_create_source(
                 }
                 _ => bail!("deduplication must be one of 'ordered', 'full' or 'full_in_range'."),
             };
-            dataflow_types::Envelope::Debezium(dedup_strat)
+            dataflow_types::SourceEnvelope::Debezium(dedup_strat)
         }
         sql_parser::ast::Envelope::Upsert(key_format) => match connector {
             Connector::Kafka { .. } => {
@@ -589,7 +593,7 @@ pub fn plan_create_source(
                     DataEncoding::Bytes | DataEncoding::Text => {}
                     _ => unsupported!("format for upsert key"),
                 }
-                dataflow_types::Envelope::Upsert(key_encoding)
+                dataflow_types::SourceEnvelope::Upsert(key_encoding)
             }
             _ => unsupported!("upsert envelope for non-Kafka sources"),
         },
@@ -604,11 +608,11 @@ pub fn plan_create_source(
                 Some(Format::Avro(_)) => {}
                 _ => unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
-            dataflow_types::Envelope::CdcV2
+            dataflow_types::SourceEnvelope::CdcV2
         }
     };
 
-    if let dataflow_types::Envelope::Upsert(key_encoding) = &envelope {
+    if let dataflow_types::SourceEnvelope::Upsert(key_encoding) = &envelope {
         match &mut encoding {
             DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
                 *key_schema = None;
@@ -642,7 +646,7 @@ pub fn plan_create_source(
     match (&encoding, &envelope) {
         (DataEncoding::Avro { .. }, _)
         | (DataEncoding::Protobuf { .. }, _)
-        | (_, Envelope::Debezium(_)) => (),
+        | (_, SourceEnvelope::Debezium(_)) => (),
         _ => {
             for (name, ty) in external_connector.metadata_columns() {
                 desc = desc.with_column(name, ty);
@@ -752,14 +756,15 @@ pub fn plan_create_view(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
     format: Option<Format>,
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
     topic_prefix: String,
-    desc: RelationDesc,
+    key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    value_desc: RelationDesc,
     topic_suffix: String,
-    key_indices: Option<Vec<usize>>,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let (schema_registry_url, ccsr_with_options) = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
@@ -783,8 +788,14 @@ fn kafka_sink_builder(
         Some(_) => bail!("consistency must be a boolean"),
     };
 
-    let encoder = Encoder::new(desc, include_consistency, key_indices.clone());
-    let value_schema = encoder.writer_schema().canonical_form();
+    let encoder = Encoder::new(
+        key_desc_and_indices
+            .as_ref()
+            .map(|(desc, _indices)| desc.clone()),
+        value_desc.clone(),
+        include_consistency,
+    );
+    let value_schema = encoder.value_writer_schema().canonical_form();
     let key_schema = encoder
         .key_writer_schema()
         .map(|key_schema| key_schema.canonical_form());
@@ -823,8 +834,9 @@ fn kafka_sink_builder(
         consistency_value_schema,
         config_options,
         ccsr_config,
-        key_indices,
         key_schema,
+        key_desc_and_indices,
+        value_desc,
     }))
 }
 
@@ -832,6 +844,7 @@ fn avro_ocf_sink_builder(
     format: Option<Format>,
     path: String,
     file_name_suffix: String,
+    value_desc: RelationDesc,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     if format.is_some() {
         bail!("avro ocf sinks cannot specify a format");
@@ -846,6 +859,7 @@ fn avro_ocf_sink_builder(
     Ok(SinkConnectorBuilder::AvroOcf(AvroOcfSinkConnectorBuilder {
         path,
         file_name_suffix,
+        value_desc,
     }))
 }
 
@@ -867,10 +881,19 @@ pub fn plan_create_sink(
         connector,
         with_options,
         format,
+        envelope,
         with_snapshot,
         as_of,
         if_not_exists,
     } = stmt;
+
+    let envelope = match envelope {
+        None | Some(Envelope::Debezium) => SinkEnvelope::Debezium,
+        Some(Envelope::Upsert(None)) => SinkEnvelope::Upsert,
+        Some(Envelope::CdcV2) => unsupported!("CDCv2 sinks"),
+        Some(Envelope::None) => unsupported!("\"ENVELOPE NONE\" sinks"),
+        Some(Envelope::Upsert(Some(_))) => unsupported!("Upsert sinks with custom key encodings"),
+    };
     let name = scx.allocate_name(normalize::object_name(name)?);
     let from = scx.resolve_item(from)?;
     let suffix = format!(
@@ -885,12 +908,11 @@ pub fn plan_create_sink(
 
     let mut with_options = normalize::options(&with_options);
 
-    let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
-    let connector_builder = match connector {
-        Connector::File { .. } => unsupported!("file sinks"),
-        Connector::Kafka { broker, topic, key } => {
-            let desc = from.desc()?;
-            let key_indices = if let Some(key) = key {
+    let desc = from.desc()?;
+    let key_indices = match &connector {
+        Connector::File { .. } => None,
+        Connector::Kafka { key, .. } => {
+            if let Some(key) = key.clone() {
                 let key = key
                     .into_iter()
                     .map(normalize::column_name)
@@ -917,19 +939,43 @@ pub fn plan_create_sink(
                 Some(indices)
             } else {
                 None
-            };
-            kafka_sink_builder(
-                format,
-                &mut with_options,
-                broker,
-                topic,
-                desc.clone(),
-                suffix,
-                key_indices,
-            )?
+            }
         }
-        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
+        Connector::Kinesis { .. } => None,
+        Connector::AvroOcf { .. } => None,
+        Connector::S3 { .. } => None,
+    };
+
+    let key_desc_and_indices = key_indices.map(|key_indices| {
+        let cols = desc.clone().into_iter().collect::<Vec<_>>();
+        let (names, types): (Vec<_>, Vec<_>) =
+            key_indices.iter().map(|&idx| cols[idx].clone()).unzip();
+        let typ = RelationType::new(types);
+        (RelationDesc::new(typ, names), key_indices)
+    });
+
+    let value_desc = match envelope {
+        SinkEnvelope::Debezium => dbz_desc(desc.clone()),
+        SinkEnvelope::Upsert => desc.clone(),
+        SinkEnvelope::Tail { .. } => {
+            unreachable!("SinkEnvelope::Tail is only used when creating tails, not sinks")
+        }
+    };
+
+    let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
+    let connector_builder = match connector {
+        Connector::File { .. } => unsupported!("file sinks"),
+        Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
+            format,
+            &mut with_options,
+            broker,
+            topic,
+            key_desc_and_indices,
+            value_desc,
+            suffix,
+        )?,
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
+        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix, value_desc)?,
         Connector::S3 { .. } => unsupported!("S3 sinks"),
     };
 
@@ -946,6 +992,7 @@ pub fn plan_create_sink(
             create_sql,
             from: from.id(),
             connector_builder,
+            envelope,
         },
         with_snapshot,
         as_of,

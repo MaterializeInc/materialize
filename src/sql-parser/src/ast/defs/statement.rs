@@ -397,6 +397,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub connector: Connector,
     pub with_options: Vec<SqlOption>,
     pub format: Option<Format>,
+    pub envelope: Option<Envelope>,
     pub with_snapshot: bool,
     pub as_of: Option<Expr<T>>,
     pub if_not_exists: bool,
@@ -421,6 +422,10 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         if let Some(format) = &self.format {
             f.write_str(" FORMAT ");
             f.write_node(format);
+        }
+        if let Some(envelope) = &self.envelope {
+            f.write_str(" ENVELOPE ");
+            f.write_node(envelope);
         }
         if self.with_snapshot {
             f.write_str(" WITH SNAPSHOT");

@@ -27,7 +27,7 @@ use timely::{
 
 use ::mz_avro::{types::Value, Schema};
 use dataflow_types::LinearOperator;
-use dataflow_types::{DataEncoding, Envelope, RegexEncoding};
+use dataflow_types::{DataEncoding, RegexEncoding, SourceEnvelope};
 use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState, DiffPair};
 use log::error;
 use repr::Datum;
@@ -45,7 +45,7 @@ mod regex;
 
 pub fn decode_avro_values<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Value>>,
-    envelope: &Envelope,
+    envelope: &SourceEnvelope,
     schema: Schema,
     debug_name: &str,
 ) -> Stream<G, (Row, Timestamp, Diff)>
@@ -57,7 +57,7 @@ where
     // so that we can spread the decoding among all the workers.
     // See #2133
     let envelope = envelope.clone();
-    let mut dbz_state = if let Envelope::Debezium(dedup_strat) = envelope {
+    let mut dbz_state = if let SourceEnvelope::Debezium(dedup_strat) = envelope {
         DebeziumDecodeState::new(
             &schema,
             debug_name.to_string(),
@@ -80,13 +80,13 @@ where
         )| {
             let top_node = schema.top_node();
             let diffs = match envelope {
-                Envelope::None => {
+                SourceEnvelope::None => {
                     extract_row(value, index.map(Datum::from), top_node).map(|r| DiffPair {
                         before: None,
                         after: r,
                     })
                 }
-                Envelope::Debezium(_) => {
+                SourceEnvelope::Debezium(_) => {
                     if let Some(dbz_state) = dbz_state.as_mut() {
                         dbz_state.extract(value, top_node, index, upstream_time_millis)
                     } else {
@@ -95,8 +95,8 @@ where
                         ))
                     }
                 }
-                Envelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
-                Envelope::CdcV2 => unreachable!("CDC envelope is not supported for AvroOCF"),
+                SourceEnvelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
+                SourceEnvelope::CdcV2 => unreachable!("CDC envelope is not supported for AvroOCF"),
             }
             .unwrap_or_else(|e| {
                 // TODO(#489): Handle this in a better way,
@@ -485,7 +485,7 @@ pub fn decode_values<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     encoding: DataEncoding,
     debug_name: &str,
-    envelope: &Envelope,
+    envelope: &SourceEnvelope,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
@@ -502,24 +502,24 @@ where
         .ok()
         .and_then(|desc| desc.typ().keys.get(0).cloned());
     match (encoding, envelope) {
-        (_, Envelope::Upsert(_)) => {
+        (_, SourceEnvelope::Upsert(_)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
         }
-        (DataEncoding::Csv(enc), Envelope::None) => (
+        (DataEncoding::Csv(enc), SourceEnvelope::None) => (
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators),
             None,
         ),
-        (DataEncoding::Avro(enc), Envelope::CdcV2) => {
+        (DataEncoding::Avro(enc), SourceEnvelope::CdcV2) => {
             decode_cdcv2(stream, &enc.value_schema, enc.schema_registry_config)
         }
-        (_, Envelope::CdcV2) => {
+        (_, SourceEnvelope::CdcV2) => {
             unreachable!("Internal error: CDCv2 is not supported yet on non-Avro sources.")
         }
-        (DataEncoding::Avro(enc), Envelope::Debezium(_)) => {
+        (DataEncoding::Avro(enc), SourceEnvelope::Debezium(_)) => {
             // can't get this from the above match arm because:
             // `error[E0658]: binding by-move and by-ref in the same pattern is unstable`
             let dedup_strat = match envelope {
-                Envelope::Debezium(ds) => *ds,
+                SourceEnvelope::Debezium(ds) => *ds,
                 _ => unreachable!(),
             };
 
@@ -565,13 +565,13 @@ where
         (DataEncoding::AvroOcf { .. }, _) => {
             unreachable!("Internal error: Cannot decode Avro OCF separately from reading")
         }
-        (_, Envelope::Debezium(_)) => unreachable!(
+        (_, SourceEnvelope::Debezium(_)) => unreachable!(
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
-        (DataEncoding::Regex(RegexEncoding { regex }), Envelope::None) => {
+        (DataEncoding::Regex(RegexEncoding { regex }), SourceEnvelope::None) => {
             (regex_fn(stream, regex, debug_name), None)
         }
-        (DataEncoding::Protobuf(enc), Envelope::None) => (
+        (DataEncoding::Protobuf(enc), SourceEnvelope::None) => (
             decode_values_inner(
                 stream,
                 protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
@@ -580,7 +580,7 @@ where
             ),
             None,
         ),
-        (DataEncoding::Bytes, Envelope::None) => (
+        (DataEncoding::Bytes, SourceEnvelope::None) => (
             decode_values_inner(
                 stream,
                 OffsetDecoderState::from(bytes_to_datum),
@@ -589,7 +589,7 @@ where
             ),
             None,
         ),
-        (DataEncoding::Text, Envelope::None) => (
+        (DataEncoding::Text, SourceEnvelope::None) => (
             decode_values_inner(
                 stream,
                 OffsetDecoderState::from(text_to_datum),
