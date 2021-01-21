@@ -43,7 +43,7 @@ def main(argv: List[str]) -> int:
 
     # Load repository.
     root = Path(os.environ["MZ_ROOT"])
-    repo = mzbuild.Repository(root)
+    repo = mzbuild.Repository(root, release_mode=(args.mz_build_mode == "release"))
 
     # Handle special mzcompose commands that apply to the repo.
     if args.command == "gen-shortcuts":
@@ -221,6 +221,7 @@ class ArgumentParser(argparse.ArgumentParser):
         super().__init__(add_help=False)
         self.add_argument("--mz-quiet", action="store_true", default=None)
         self.add_argument("--mz-find")
+        self.add_argument("--mz-build-mode", default="release")
         self.add_argument("-f", "--file")
         self.add_argument("--project-directory")
         self.add_argument("command", nargs="?")
@@ -234,7 +235,12 @@ class ArgumentParser(argparse.ArgumentParser):
     ) -> Tuple[argparse.Namespace, List[str]]:
         ns = argparse.Namespace()
         try:
-            return super().parse_known_args(args, namespace=ns)
+            (pargs, unknown_args) = super().parse_known_args(args, namespace=ns)
+            if pargs.mz_build_mode not in ["dev", "release"]:
+                raise errors.BadSpec(
+                    f'unknown build mode {pargs.mz_build_mode!r} (expected "dev" or "release")'
+                )
+            return (pargs, unknown_args)
         except ValueError:
             return (ns, [])
 
