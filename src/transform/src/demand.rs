@@ -224,6 +224,7 @@ impl Demand {
                             func: AggregateFunc::Dummy,
                             expr: ScalarExpr::literal_ok(Datum::Dummy, typ),
                             distinct: false,
+                            nullable: AggregateFunc::Dummy.nullable(),
                         };
                     }
                 }

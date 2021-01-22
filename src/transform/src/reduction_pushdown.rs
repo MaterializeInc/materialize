@@ -462,7 +462,7 @@ impl<'a> ReductionPusher<'a> {
                     .map(|c| self.old_join_mapper.map_column_to_local(*c))
                     .collect::<Vec<_>>();
                 if !support.is_empty() && support.iter().all(|(_, src)| *src == idx) {
-                    vec![gk.clone()]
+                    vec![self.old_join_mapper.map_expr_to_local(gk.clone())]
                 } else {
                     support
                         .iter()
@@ -477,6 +477,7 @@ impl<'a> ReductionPusher<'a> {
                 }
             })
             .collect::<Vec<_>>();
+
         // add the join keys to input group keys if not done so already
         for (_, join_keys) in self.join_graph[idx].iter() {
             for join_key in join_keys {
@@ -586,6 +587,7 @@ impl<'a> ReductionPusher<'a> {
                 func: outer_agg_func,
                 expr: ScalarExpr::Column(agg_lookup_key),
                 distinct: agg.distinct,
+                nullable: agg.nullable,
             };
             if let Some(downcast) = downcast {
                 self.downcast_partial_reduce.push(ScalarExpr::CallUnary {

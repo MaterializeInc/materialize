@@ -380,6 +380,7 @@ where
         func,
         expr: _,
         distinct,
+        nullable: _,
     } = aggr.clone();
 
     let mut partial = if !prepend_key {

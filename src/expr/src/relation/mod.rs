@@ -1163,12 +1163,16 @@ pub struct AggregateExpr {
     pub expr: ScalarExpr,
     /// Should the aggregation be applied only to distinct results in each group.
     pub distinct: bool,
+    /// Can the aggregation return null
+    pub nullable: bool,
 }
 
 impl AggregateExpr {
     /// Computes the type of this `AggregateExpr`.
     pub fn typ(&self, relation_type: &RelationType) -> ColumnType {
-        self.func.output_type(self.expr.typ(relation_type))
+        self.func
+            .output_type(self.expr.typ(relation_type))
+            .nullable(self.nullable)
     }
 }
 

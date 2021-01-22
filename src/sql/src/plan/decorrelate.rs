@@ -853,10 +853,13 @@ impl AggregateExpr {
             distinct,
         } = self;
 
+        let nullable = func.nullable();
+
         expr::AggregateExpr {
             func,
             expr: expr.applied_to(id_gen, col_map, inner),
             distinct,
+            nullable,
         }
     }
 }

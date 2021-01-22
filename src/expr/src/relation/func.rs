@@ -505,9 +505,12 @@ impl AggregateFunc {
             AggregateFunc::SumInt64 => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
             _ => input_type.scalar_type,
         };
+        scalar_type.nullable(self.nullable())
+    }
+
+    pub fn nullable(&self) -> bool {
         // max/min/sum return null on empty sets
-        let nullable = !matches!(self, AggregateFunc::Count);
-        scalar_type.nullable(nullable)
+        !matches!(self, AggregateFunc::Count)
     }
 
     /// get the function that combines the results of partially
